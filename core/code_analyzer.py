@@ -8,6 +8,7 @@ import os
 import re
 import json
 import hashlib
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Set
@@ -256,15 +257,22 @@ class CodeAnalyzer:
         safe_name = hashlib.md5(project_path.encode('utf-8')).hexdigest()
         return os.path.join(self._cache_dir, f"{safe_name}_snapshot.json")
     
-    def _compute_file_snapshot(self, project_path: str) -> Dict[str, float]:
-        """计算项目所有代码文件的最新修改时间快照"""
+    def _compute_file_snapshot(self, project_path: str) -> Dict[str, Dict[str, float]]:
+        """计算项目所有代码文件的快照（mtime + size），用于判断缓存是否过期
+
+        仅依赖 mtime 会在以下场景产生 stale 缓存：
+        - 文件系统时间戳精度不足（如 FAT 粒度为 2 秒），同秒内内容修改无法被感知
+        - 文件被复制/恢复后 mtime 未变化但内容不同
+        因此同时记录文件大小，size 变化也判定缓存失效，降低与持久化记忆不一致的风险。
+        """
         snapshot = {}
         code_files = self.scan_directory(project_path)
         for fp in code_files:
             try:
                 mtime = os.path.getmtime(fp)
-                snapshot[fp] = mtime
-            except:
+                size = os.path.getsize(fp)
+                snapshot[fp] = {"mtime": mtime, "size": size}
+            except OSError:
                 pass
         return snapshot
     
@@ -279,16 +287,24 @@ class CodeAnalyzer:
         try:
             with open(snapshot_path, 'r', encoding='utf-8') as f:
                 saved_snapshot = json.load(f)
-        except:
+        except Exception:
             return False
         current_snapshot = self._compute_file_snapshot(project_path)
         # 文件数不同 = 过期
         if set(saved_snapshot.keys()) != set(current_snapshot.keys()):
             return False
-        # 修改时间不同 = 过期
-        for fp, mtime in current_snapshot.items():
-            if abs(saved_snapshot.get(fp, 0) - mtime) > 0.1:
+        # mtime 或 size 不同 = 过期（兼容旧版仅存 mtime 的快照）
+        for fp, cur in current_snapshot.items():
+            old = saved_snapshot.get(fp)
+            if old is None:
                 return False
+            if isinstance(old, dict):
+                if abs(old.get("mtime", 0) - cur["mtime"]) > 0.1 or old.get("size") != cur["size"]:
+                    return False
+            else:
+                # 旧快照格式：仅存 mtime
+                if abs(old - cur["mtime"]) > 0.1:
+                    return False
         return True
     
     def save_cache(self, analysis: ProjectAnalysis):
@@ -523,13 +539,12 @@ class CodeAnalyzer:
             # 超大文件跳过详细解析，只记录基本信息
             if self._should_skip_large_file(file_path):
                 logger.debug(f"跳过超大文件详细解析: {file_path}")
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read(2000)  # 只读开头用于统计
                 code_file = CodeFile(file_path=file_path, language=lang, raw_content="[超大文件，已跳过详细分析]")
-                # 粗略估算行数
+                # 只读一遍估算行数，避免对超大文件二次读取
                 try:
-                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f2:
-                        code_file.raw_content = f"[超大文件，已跳过详细分析，约 {sum(1 for _ in f2)} 行]"
+                    with open(file_path, 'rb') as f_large:
+                        line_count = sum(1 for _ in f_large)
+                    code_file.raw_content = f"[超大文件，已跳过详细分析，约 {line_count} 行]"
                 except OSError:
                     pass
                 return code_file
@@ -750,8 +765,11 @@ class CodeAnalyzer:
         for f in analysis.files:
             if 'MODE_METADATA' not in (getattr(f, 'raw_content', '') or ''):
                 # raw_content 只有500字符，可能不包含 MODE_METADATA
-                # 直接从磁盘读取
+                # 直接从磁盘读取（超大文件跳过，避免整读大文件占用内存）
                 try:
+                    if os.path.getsize(f.file_path) > self.MAX_PARSE_FILE_SIZE:
+                        logger.debug(f"跳过超大文件 MODE_METADATA 提取: {f.file_path}")
+                        continue
                     with open(f.file_path, 'r', encoding='utf-8') as fh:
                         content = fh.read()
                 except Exception:
@@ -2374,6 +2392,43 @@ class CodeAnalyzer:
                 return result
             return f"```text\n{result}\n```"
 
+    def _run_gitnexus(self, cmd: List[str], project_path: str) -> Optional[str]:
+        """执行 gitnexus 命令行并返回 stdout（列表式参数，无 shell 注入面）
+
+        Args:
+            cmd: gitnexus 子命令参数列表（如 ["export", "--entry", "main", ...]）
+            project_path: GitNexus 索引所在的项目目录
+
+        Returns:
+            命令 stdout 字符串；失败返回 None
+        """
+        try:
+            argv = list(cmd)
+            if not argv or argv[0] != "gitnexus":
+                argv = ["gitnexus"] + argv
+            result = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+                cwd=project_path,
+            )
+            if result.returncode != 0:
+                logger.warning(f"[CodeAnalyzer] gitnexus 命令失败: {result.stderr.strip()[:200]}")
+                return None
+            return result.stdout
+        except FileNotFoundError:
+            logger.warning("[CodeAnalyzer] gitnexus CLI 未安装，请执行: npm install -g gitnexus")
+            return None
+        except subprocess.TimeoutExpired:
+            logger.warning("[CodeAnalyzer] gitnexus 命令执行超时（120s）")
+            return None
+        except Exception as e:
+            logger.warning(f"[CodeAnalyzer] gitnexus 调用异常: {e}")
+            return None
+
     def generate_mermaid_diagram(self, analysis: ProjectAnalysis) -> str:
         """基于分析结果生成Mermaid架构图
         
@@ -2614,13 +2669,15 @@ class CodeAnalyzer:
                     continue  # 文件已删除/移动，移除该 finding
                 
                 try:
+                    # 只读取到目标行（采样），避免大文件整读 `readlines()` 造成内存峰值
+                    from itertools import islice
                     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        file_lines = f.readlines()
-                    
+                        file_lines = list(islice(f, line_no))
+
                     # 检查行号是否在文件范围内
-                    if line_no < 1 or line_no > len(file_lines):
+                    if line_no < 1 or len(file_lines) < line_no:
                         continue
-                    
+
                     actual_line = file_lines[line_no - 1]
                     
                     # 从 description 中提取反引号内的关键词，检查该行是否仍包含它们

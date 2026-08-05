@@ -27,8 +27,8 @@ import re
 import hashlib
 import difflib
 from datetime import datetime, timedelta
-from typing import Dict, List, Set, Tuple, Optional
-from dataclasses import dataclass, field
+from typing import Dict, List, Set
+from dataclasses import dataclass
 from collections import defaultdict
 
 from loguru import logger

@@ -610,6 +610,7 @@ class InnovationPropagationDetector:
         logger.info(f"Step 1 完成: {len(signatures)} 个模块已签名")
 
         if len(signatures) < 2:
+            self.gaps = []
             return self._format_report([], [], signatures, use_llm)
 
         # Step 2: 聚类
@@ -619,6 +620,7 @@ class InnovationPropagationDetector:
         logger.info(f"Step 2 完成: {len(clusters)} 个有效聚类（≥2模块）")
 
         if not clusters:
+            self.gaps = []
             return self._format_report([], clusters, signatures, use_llm)
 
         # Step 3: 模式提取（LLM）
@@ -666,6 +668,8 @@ class InnovationPropagationDetector:
         unique_gaps.sort(key=lambda g: g.adoption_rate)
 
         logger.info(f"Step 4 完成: {len(unique_gaps)} 个传播缺口")
+        # 暴露结构化结果，供管线统一收集
+        self.gaps = unique_gaps
         return self._format_report(unique_gaps, clusters, signatures, use_llm)
 
     # ─── 辅助方法 ────────────────────────────────────────────────

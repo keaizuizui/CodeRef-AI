@@ -263,11 +263,13 @@ class SCAChecker:
             dependencies.extend(deps)
 
         if not dependencies:
-            return SCAReport(
+            report = SCAReport(
                 project_path=project_path,
                 total_deps=0, scanned_deps=0, vulnerable_deps=0,
                 total_vulnerabilities=0, dependencies=[],
             )
+            self.report = report
+            return report
 
         # 去重
         seen = {}
@@ -293,7 +295,7 @@ class SCAChecker:
         medium = sum(1 for d in vulnerable for v in d.vulnerabilities if v.severity == "medium")
         low = sum(1 for d in vulnerable for v in d.vulnerabilities if v.severity == "low")
 
-        return SCAReport(
+        report = SCAReport(
             project_path=project_path,
             total_deps=len(unique_deps),
             scanned_deps=len(unique_deps),
@@ -306,6 +308,9 @@ class SCAChecker:
             low_count=low,
             offline_mode=self.offline,
         )
+        # 暴露结构化结果，供管线统一收集
+        self.report = report
+        return report
 
     def _find_dep_files(self, project_path: str) -> List[str]:
         """查找依赖文件"""
