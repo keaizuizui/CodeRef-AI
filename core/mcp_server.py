@@ -138,6 +138,42 @@ class Server:
                     "limit": {"type": "integer", "description": "返回数量上限（search 默认30）", "default": 30},
                 }, "required": ["project_path", "query_type"]},
             },
+            {
+                "name": "coderef_review",
+                "description": (
+                    "代码审查（Code Review）= 基于 diff 的变更审查 + 新项目全量语义首查。\n"
+                    "mode=diff（默认）：审变更范围，给出行内评论（file:line + 分级 + 证据标记）。\n"
+                    "mode=full：新项目无 git 历史时一次性全量语义审查，按模块分块 batching。\n"
+                    "用 LLM 语义判断 + 上下文增强，结论带 evidence 标记（pending-human/static-confirmed）供交叉验证。\n"
+                    "支持 background=True 后台执行。"
+                ),
+                "inputSchema": {"type": "object", "properties": {
+                    "project_path": {"type": "string", "description": "目标项目路径"},
+                    "mode": {"type": "string", "enum": ["diff", "full"], "default": "diff", "description": "diff=审变更；full=新项目全量语义首查"},
+                    "diff": {"type": "string", "description": "git diff 文本；与 changed_files 二选一（mode=diff 用）"},
+                    "changed_files": {"type": "array", "items": {"type": "string"}, "description": "变更文件列表（无 diff 时用）"},
+                    "dimensions": {"type": "array", "items": {"type": "string"}, "description": "审查维度，默认全部（bug/security/cross_module/maintainability/consistency/testing/regression）"},
+                    "background": {"type": "boolean", "description": "后台执行", "default": True},
+                }, "required": ["project_path"]},
+            },
+            {
+                "name": "coderef_frontend",
+                "description": (
+                    "前端交互审查（Frontend Review）= 静态清单全量枚举 + LLM 审查（可选运行时抽查）。\n"
+                    "静态枚举 HTML/JS 所有按钮（含事件/确认弹窗/禁用）与 L1-L5 菜单树，再按 6 维度审查。\n"
+                    "mode=static（默认）：静态清单 + LLM 审查，不依赖浏览器，100% 覆盖。\n"
+                    "mode=runtime：需 url，用浏览器抽查关键路径，失败自动降级为静态结论。\n"
+                    "支持 background=True 后台执行。"
+                ),
+                "inputSchema": {"type": "object", "properties": {
+                    "project_path": {"type": "string", "description": "前端项目路径"},
+                    "entry": {"type": "string", "description": "入口 HTML/路由文件；不填则自动扫描"},
+                    "mode": {"type": "string", "enum": ["static", "runtime"], "default": "static"},
+                    "url": {"type": "string", "description": "运行 URL（mode=runtime 时必填）"},
+                    "check_levels": {"type": "array", "items": {"type": "integer"}, "description": "要审查的菜单层级，默认 [1,2,3,4,5]"},
+                    "background": {"type": "boolean", "description": "后台执行", "default": True},
+                }, "required": ["project_path"]},
+            },
         ]
         self._tasks: Dict[str, Any] = {}
         # 并发保护：多 Agent 后台任务可能同时读写 _tasks，用可重入锁保证一致性
@@ -205,9 +241,40 @@ class Server:
             r = Pipe().audit(p, output_dir=o)
         elif n == "coderef_docs":
             r = Pipe().docs(p, output_dir=o)
+        elif n == "coderef_review":
+            return self._review(a)
+        elif n == "coderef_frontend":
+            return self._frontend(a)
         else: return "未知"
         logger.info(f"[{n}] 完成: {r.elapsed}s")
         return r.report
+
+    def _review(self, a) -> str:
+        """执行代码审查（coderef_review），返回结构化 JSON 文本"""
+        from core.code_review import CodeReviewer
+        pp = a["project_path"]
+        mode = a.get("mode", "diff")
+        dims = a.get("dimensions") or None
+        changed_files = a.get("changed_files") or None
+        diff = a.get("diff") or None
+        r = CodeReviewer().review(
+            pp, mode=mode, diff=diff,
+            changed_files=changed_files, dimensions=dims,
+        )
+        return json.dumps(r, ensure_ascii=False)
+
+    def _frontend(self, a) -> str:
+        """执行前端交互审查（coderef_frontend），返回结构化 JSON 文本"""
+        from core.frontend_inspector import FrontendInspector
+        pp = a["project_path"]
+        mode = a.get("mode", "static")
+        url = a.get("url") or None
+        entry = a.get("entry") or None
+        levels = a.get("check_levels") or None
+        r = FrontendInspector().inspect(
+            pp, entry=entry, mode=mode, url=url, check_levels=levels,
+        )
+        return json.dumps(r, ensure_ascii=False)
 
     def _arch(self, a) -> str:
         from core.pipeline_runner import Pipe

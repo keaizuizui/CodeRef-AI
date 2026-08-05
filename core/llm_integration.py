@@ -5,6 +5,7 @@ LLM集成模块
 """
 
 import os
+import re
 import json
 import time
 from typing import Dict, List, Any, Optional, Literal
@@ -253,7 +254,9 @@ class LLMIntegration:
 
         依次尝试：
         1. 整体解析；
-        2. 修复：截取花括号/方括号平衡的合法片段后再解析。
+        2. 截取花括号/方括号平衡的合法片段后再解析；
+        3. 修复截断值（LLM 常因 max_tokens 截断）：补全字符串引号、
+           裸 token（tru→true/fals→false/nul→null）与未闭合括号后解析。
         解析失败返回 None。
         """
         if not text:
@@ -263,7 +266,7 @@ class LLMIntegration:
             return json.loads(text)
         except (json.JSONDecodeError, ValueError):
             pass
-        # 2. 修复：截取平衡片段（对象优先，其次数组）
+        # 2. 截取平衡片段（对象优先，其次数组）
         for open_char, close_char in (('{', '}'), ('[', ']')):
             fragment = cls._extract_balanced_json_fragment(text, open_char, close_char)
             if fragment:
@@ -271,7 +274,114 @@ class LLMIntegration:
                     return json.loads(fragment)
                 except (json.JSONDecodeError, ValueError):
                     continue
+        # 3. 修复截断值后重试
+        repaired = cls._repair_truncated_json(text)
+        if repaired and repaired != text:
+            try:
+                return json.loads(repaired)
+            except (json.JSONDecodeError, ValueError):
+                pass
         return None
+
+    @staticmethod
+    def _complete_bare_token(tok: str) -> str:
+        """补全被截断的裸 token：tr/tru → true，fa/fal/fals → false，nu/nul → null。"""
+        t = tok.strip()
+        low = t.lower()
+        for prefix, full in (("true", "true"), ("false", "false"), ("null", "null")):
+            if prefix.startswith(low) and low:
+                return full
+        if re.fullmatch(r"-?\d*\.?\d*(?:[eE][+-]?\d*)?", t):
+            return t
+        return tok
+
+    @classmethod
+    def _repair_truncated_json(cls, text: str) -> str:
+        """尽力修复被截断的 JSON 文本（LLM 因 max_tokens 截断的常见残缺）。
+
+        处理三类残缺：
+        1. 字符串字面量被截断（如 `{"a": "unfin`，缺闭合引号）；
+        2. 裸 token 被截断（如 `"verified": tr`，缺结尾）；
+        3. 数组/对象括号未闭合（如 `[{"x":1`，缺 `}]`）。
+
+        仅当能修复时返回修复后的文本，否则返回原文本（由调用方判定）。
+        """
+        if not text:
+            return text
+        # 定位第一个结构起点（{ 或 [），丢弃前缀杂文
+        start = -1
+        for i, ch in enumerate(text):
+            if ch in "{[":
+                start = i
+                break
+        if start < 0:
+            return text
+        frag = text[start:]
+        out: List[str] = []
+        stack: List[str] = []
+        in_string = False
+        escape = False
+        token: List[str] = []   # value 位置的裸 token 缓冲（补全前不写入 out）
+
+        def flush_token() -> None:
+            """把已缓冲的裸 token 补全后写入 out。"""
+            if token:
+                out.append(cls._complete_bare_token("".join(token)))
+                token.clear()
+
+        i = 0
+        n = len(frag)
+        while i < n:
+            ch = frag[i]
+            if in_string:
+                out.append(ch)
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                i += 1
+                continue
+            if ch == '"':
+                flush_token()
+                in_string = True
+                out.append(ch)
+                i += 1
+                continue
+            if ch in "{[":
+                flush_token()
+                stack.append("}" if ch == "{" else "]")
+                out.append(ch)
+                i += 1
+                continue
+            if ch in "}]":
+                flush_token()
+                if stack:
+                    stack.pop()
+                out.append(ch)
+                i += 1
+                continue
+            if ch in ",:":
+                flush_token()
+                out.append(ch)
+                i += 1
+                continue
+            if ch.isspace():
+                flush_token()
+                out.append(ch)
+                i += 1
+                continue
+            token.append(ch)
+            i += 1
+        # 扫描结束：补全残余
+        if in_string:
+            out.append('"')          # 补闭合引号
+        else:
+            flush_token()
+        while stack:                 # 补未闭合括号
+            out.append(stack.pop())
+        return "".join(out)
 
     @staticmethod
     def _validate_analysis_dict(data: Any) -> bool:

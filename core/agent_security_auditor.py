@@ -454,6 +454,10 @@ class AgentSecurityAuditor:
             is_logger = bool(re.match(r'logger\.', stripped))
             # 判断是否为报告生成代码（lines.append 构建 Markdown 报告，不是真正的注入）
             is_report_gen = bool(re.match(r'lines\.append\(', stripped))
+            # 判断是否为净化函数包裹的注入点（sanitize/escape/净化 等，视为已安全处理）
+            is_sanitized = bool(
+                re.search(r'(?:sanitize|escape|净化|_clean|neutralize|safe_)[a-z_\w]*\s*\(', stripped, re.IGNORECASE)
+            )
 
             # 检测所有维度
             for patterns, category_key in [
@@ -476,6 +480,9 @@ class AgentSecurityAuditor:
                     if pattern.search(stripped):
                         # 跳过模式定义自身（如类中的正则表达式定义）
                         if self._is_pattern_definition(stripped, risk_name):
+                            continue
+                        # 提示注入/上下文操纵：若注入点已被净化函数包裹，视为已安全处理
+                        if is_sanitized and category_key in ("prompt_injection", "context_manipulation"):
                             continue
                         risks.append(AgentSecurityRisk(
                             risk_id=risk_id,
