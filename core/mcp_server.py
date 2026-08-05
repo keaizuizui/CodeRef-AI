@@ -11,6 +11,7 @@ CodeRef MCP Server v3.0 — 四功能
 import json, sys, os, logging, traceback, threading, uuid
 from datetime import datetime
 from typing import Dict, List, Any
+from contextlib import contextmanager
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -139,6 +140,18 @@ class Server:
             },
         ]
         self._tasks: Dict[str, Any] = {}
+        # 并发保护：多 Agent 后台任务可能同时读写 _tasks，用可重入锁保证一致性
+        self._lock = threading.RLock()
+
+    @contextmanager
+    def _locked_tasks(self):
+        """加锁访问运行中的任务状态字典，保证并发下读写一致。
+
+        用法: with self._locked_tasks() as tasks: ... 
+        所有对 self._tasks 的读写都通过该访问器完成，避免散落裸锁。
+        """
+        with self._lock:
+            yield self._tasks
 
     # ─── request ───
 
@@ -170,7 +183,9 @@ class Server:
             if bg:
                 tid = str(uuid.uuid4())[:8]; rc = {}
                 t = threading.Thread(target=lambda: self._bg(rc, n, a), daemon=True)
-                t.start(); self._tasks[tid] = {"thread":t,"result":rc,"tool":n}
+                t.start()
+                with self._locked_tasks() as tasks:
+                    tasks[tid] = {"thread":t,"result":rc,"tool":n}
                 logger.info(f"后台: {tid} {n}")
                 return self._ok(rid, json.dumps({"status":"running","task_id":tid,
                     "message":f"已启动。coderef_task_status(task_id='{tid}') 查询进度"}, ensure_ascii=False))
@@ -227,13 +242,16 @@ class Server:
 
     def _tsk(self, a) -> str:
         tid = a.get("task_id","")
-        if not tid: return json.dumps({"tasks":list(self._tasks.keys())})
-        t = self._tasks.get(tid)
-        if not t: return json.dumps({"error":f"不存在: {tid}"})
-        if t["thread"].is_alive(): return json.dumps({"status":"running","task_id":tid})
-        rc = t["result"]
-        if "error" in rc: return json.dumps({"status":"error","task_id":tid,"error":rc["error"]})
-        r = rc.get("result",""); del self._tasks[tid]
+        if not tid:
+            with self._locked_tasks() as tasks:
+                return json.dumps({"tasks":list(tasks.keys())})
+        with self._locked_tasks() as tasks:
+            t = tasks.get(tid)
+            if not t: return json.dumps({"error":f"不存在: {tid}"})
+            if t["thread"].is_alive(): return json.dumps({"status":"running","task_id":tid})
+            rc = t["result"]
+            if "error" in rc: return json.dumps({"status":"error","task_id":tid,"error":rc["error"]})
+            r = rc.get("result",""); del tasks[tid]
         return json.dumps({"status":"completed","task_id":tid,"content":r}, ensure_ascii=False)
 
     def _query(self, a) -> str:

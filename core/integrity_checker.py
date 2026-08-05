@@ -23,9 +23,9 @@
 
 import os
 import re
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Set
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from loguru import logger
 from core.shared_filter import SharedFilter
@@ -129,6 +129,9 @@ class IntegrityChecker:
         issues.sort(key=lambda i: (SEVERITY_ORDER.get(i.severity, 9), i.file_path, i.line))
 
         logger.info(f"[IntegrityChecker] 检查完成: {len(issues)} 个问题")
+
+        # 暴露结构化结果，供管线统一收集
+        self.issues = issues
 
         return self._generate_report(project_path, issues)
 

@@ -24,12 +24,19 @@
 import os
 import re
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple
-from dataclasses import dataclass, field
+from typing import Dict, List
+from dataclasses import dataclass
 from collections import defaultdict
 
 from loguru import logger
 from core.shared_filter import SharedFilter
+from config.settings import (
+    TECH_DEBT_COMPLEXITY_THRESHOLD,
+    TECH_DEBT_COGNITIVE_THRESHOLD,
+    TECH_DEBT_LONG_FUNCTION_THRESHOLD,
+    TECH_DEBT_NESTING_DEPTH_THRESHOLD,
+    TECH_DEBT_COMMENTED_CODE_MIN_LINES,
+)
 
 _sf = SharedFilter()
 
@@ -179,11 +186,11 @@ class TechDebtDetector:
     LLM 仅用于生成面向非技术用户的通俗解释。
     """
 
-    # 阈值配置
-    COMPLEXITY_THRESHOLD = 10       # 圈复杂度阈值（if/for/while/except 语句数）
-    LONG_FUNCTION_THRESHOLD = 100   # 函数行数阈值
-    NESTING_DEPTH_THRESHOLD = 4     # 嵌套深度阈值（缩进级别）
-    COMMENTED_CODE_MIN_LINES = 3    # 注释代码块最少行数
+    # 阈值配置（统一收敛到 config/settings.py）
+    COMPLEXITY_THRESHOLD = TECH_DEBT_COMPLEXITY_THRESHOLD       # 圈复杂度阈值（if/for/while/except 语句数）
+    LONG_FUNCTION_THRESHOLD = TECH_DEBT_LONG_FUNCTION_THRESHOLD   # 函数行数阈值
+    NESTING_DEPTH_THRESHOLD = TECH_DEBT_NESTING_DEPTH_THRESHOLD     # 嵌套深度阈值（缩进级别）
+    COMMENTED_CODE_MIN_LINES = TECH_DEBT_COMMENTED_CODE_MIN_LINES    # 注释代码块最少行数
 
     # TODO 标签正则
     TODO_TAG_PATTERN = re.compile(
@@ -433,7 +440,7 @@ class TechDebtDetector:
         评分规则：if/elif/for/while/except +1分，嵌套（每层+1分），break/continue/return打断 +1分。
         """
         debts = []
-        COG_THRESHOLD = 15  # SonarQube 默认阈值
+        COG_THRESHOLD = TECH_DEBT_COGNITIVE_THRESHOLD  # SonarQube 默认阈值
         # 报告生成函数豁免（to_report / generate_*_report / fmt_*）
         # 这些函数的复杂性来自格式化逻辑，非业务逻辑
         REPORT_FUNC_PATTERN = re.compile(

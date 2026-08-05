@@ -120,6 +120,9 @@ class BlindSpotDetector:
 
         logger.info(f"[BlindSpotDetector] 检测完成: {len(spots)} 个盲区")
 
+        # 暴露结构化结果，供管线统一收集
+        self.spots = spots
+
         return self._generate_report(project_path, spots)
 
     # ─── 项目信息收集 ─────────────────────────────────────────────
@@ -323,9 +326,20 @@ class BlindSpotDetector:
 
         # 尝试导入 GitNexus 客户端
         try:
-            from core.gitnexus_client import GitNexusClient
-            client = GitNexusClient()
-            indexed_files = client.get_indexed_files() if hasattr(client, "get_indexed_files") else set()
+            from core.gitnexus_client import GitNexusMCPClient
+            # 先检查 CLI 是否可用，不可用则直接跳过，避免启动遗留子进程造成资源泄漏
+            if not GitNexusMCPClient.is_cli_available():
+                logger.info("[BlindSpotDetector] GitNexus CLI 未安装，跳过符号索引盲区检测")
+                return spots
+            indexed_files = set()
+            with GitNexusMCPClient(project_path) as client:
+                result = client.query_cypher(
+                    "MATCH (n) RETURN DISTINCT n.filePath LIMIT 5000"
+                )
+                for row in client._parse_markdown_table(result, ["filePath"]):
+                    fp = row.get("filePath", "")
+                    if fp:
+                        indexed_files.add(fp)
             if not indexed_files:
                 logger.info("[BlindSpotDetector] GitNexus 索引为空，跳过符号索引盲区检测")
                 return spots

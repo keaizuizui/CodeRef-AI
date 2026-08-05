@@ -6,6 +6,7 @@ LLM集成模块
 
 import os
 import json
+import time
 from typing import Dict, List, Any, Optional, Literal
 from dataclasses import dataclass, field
 from enum import Enum
@@ -165,27 +166,171 @@ class LLMIntegration:
         """更新配置"""
         self.config = config
         self._init_client()
-    
+
+    @staticmethod
+    def _is_retryable_llm_error(e: Exception) -> bool:
+        """判断 LLM 调用错误是否可重试。
+
+        可重试：网络错误、超时、服务端 5xx、限流等临时性错误。
+        不可重试：API Key 缺失、认证失败、权限/参数错误等永久性错误。
+        """
+        # 优先按 openai SDK 的异常类型识别
+        try:
+            from openai import (
+                APIConnectionError, APITimeoutError, APIRetryError,
+                APIStatusError, RateLimitError,
+                AuthenticationError, PermissionDeniedError, BadRequestError,
+            )
+            if isinstance(e, (APIConnectionError, APITimeoutError, APIRetryError)):
+                return True
+            if isinstance(e, RateLimitError):
+                return True
+            if isinstance(e, (AuthenticationError, PermissionDeniedError, BadRequestError)):
+                return False
+            if isinstance(e, APIStatusError):
+                # 5xx 可重试；408/429 也可重试；其余 4xx 为永久性错误
+                return e.status_code >= 500 or e.status_code in (408, 429)
+        except ImportError:
+            pass
+
+        # 兜底：按状态码 / 关键字识别
+        status = getattr(e, "status_code", None)
+        if isinstance(status, int):
+            if 500 <= status < 600:
+                return True
+            if status in (408, 429):
+                return True
+            if 400 <= status < 500:
+                return False
+        name = type(e).__name__.lower()
+        msg = str(e).lower()
+        # 网络/超时类异常视为可重试
+        if ("connection" in name or "timeout" in name or "network" in name
+                or "socket" in name or "timed out" in msg):
+            return True
+        # 明确的服务端错误可重试
+        if "server" in name or "internal" in name:
+            return True
+        # 其余默认视为不可重试，避免对永久错误做无意义重试
+        return False
+
+    @staticmethod
+    def _extract_balanced_json_fragment(text: str, open_char: str = '{', close_char: str = '}') -> str:
+        """从文本中提取括号平衡的 JSON 片段。
+
+        从第一个开括号开始，逐字符扫描（正确处理字符串字面量与转义），
+        直到括号完全闭合；若无法闭合则返回空字符串。
+        """
+        start = text.find(open_char)
+        if start < 0:
+            return ""
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == '\\':
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == open_char:
+                depth += 1
+            elif ch == close_char:
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+        return ""
+
+    @classmethod
+    def _try_parse_json(cls, text: str) -> Optional[Any]:
+        """尝试从 LLM 返回文本中解析出 JSON 对象/数组。
+
+        依次尝试：
+        1. 整体解析；
+        2. 修复：截取花括号/方括号平衡的合法片段后再解析。
+        解析失败返回 None。
+        """
+        if not text:
+            return None
+        # 1. 整体解析
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            pass
+        # 2. 修复：截取平衡片段（对象优先，其次数组）
+        for open_char, close_char in (('{', '}'), ('[', ']')):
+            fragment = cls._extract_balanced_json_fragment(text, open_char, close_char)
+            if fragment:
+                try:
+                    return json.loads(fragment)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+        return None
+
+    @staticmethod
+    def _validate_analysis_dict(data: Any) -> bool:
+        """校验分析结果结构：必须为 dict 且核心字段存在、类型正确。"""
+        if not isinstance(data, dict):
+            return False
+        if not isinstance(data.get("file_purpose"), str):
+            return False
+        if not isinstance(data.get("key_functions"), list):
+            return False
+        return True
+
+    @staticmethod
+    def _validate_reference_points(data: Any) -> bool:
+        """校验借鉴点结果结构：必须为 list 且每个元素为包含核心字段的 dict。"""
+        if not isinstance(data, list):
+            return False
+        for item in data:
+            if not isinstance(item, dict):
+                return False
+            if not isinstance(item.get("title"), str) or not isinstance(item.get("description"), str):
+                return False
+        return True
+
     def chat_completion(self, messages: List[Dict[str, str]], **kwargs) -> str:
-        """执行聊天补全"""
+        """执行聊天补全（含有限重试与降级回退）"""
         if not self.client:
             if not self.config.api_key:
                 logger.warning("LLM不可用：未设置API Key。请在配置面板中填写API Key。")
                 return "LLM调用错误: 未设置API Key，请在配置面板中填写"
             logger.error("LLM客户端未初始化")
             return "LLM调用错误: 客户端初始化失败"
-        
-        try:
-            response = self.client.chat.completions.create(
-                model=kwargs.get('model', self.config.model),
-                messages=messages,
-                temperature=kwargs.get('temperature', self.config.temperature),
-                max_tokens=kwargs.get('max_tokens', self.config.max_tokens)
-            )
-            return response.choices[0].message.content or ""
-        except Exception as e:
-            logger.error(f"LLM调用失败: {e}")
-            return f"LLM调用错误: {str(e)}"
+
+        # 显式传入超时参数
+        timeout = kwargs.get('timeout', 120)
+        max_retries = 2  # 原始请求之外最多重试 2 次（含指数退避 1s/2s）
+        delay = 1
+        last_error = None
+        for attempt in range(max_retries + 1):
+            if attempt > 0:
+                time.sleep(delay)
+                delay *= 2  # 指数退避：1s、2s
+            try:
+                response = self.client.chat.completions.create(
+                    model=kwargs.get('model', self.config.model),
+                    messages=messages,
+                    temperature=kwargs.get('temperature', self.config.temperature),
+                    max_tokens=kwargs.get('max_tokens', self.config.max_tokens),
+                    timeout=timeout
+                )
+                return response.choices[0].message.content or ""
+            except Exception as e:
+                last_error = e
+                # 永久性错误（认证失败、API Key 缺失、参数错误等）不重试
+                if not self._is_retryable_llm_error(e) or attempt == max_retries:
+                    break
+                logger.warning(f"LLM调用临时失败，将重试({attempt + 1}/{max_retries}): {e}")
+        logger.error(f"LLM调用失败: {last_error}")
+        return f"LLM调用错误: {str(last_error)}"
     
     def analyze_code_context(self, code_content: str, file_path: str) -> Dict[str, Any]:
         """分析代码上下文"""
@@ -214,17 +359,9 @@ class LLMIntegration:
             {"role": "system", "content": "你是专业的代码分析专家，只返回JSON格式的分析结果。"},
             {"role": "user", "content": prompt}
         ])
-        
-        try:
-            # 尝试提取JSON
-            json_start = response.find('{')
-            json_end = response.rfind('}') + 1
-            if json_start >= 0 and json_end > json_start:
-                return json.loads(response[json_start:json_end])
-        except (json.JSONDecodeError, KeyError, ValueError):
-            pass
-        
-        return {
+
+        # 降级结构（默认值）
+        degraded = {
             "file_purpose": "代码分析",
             "key_functions": [],
             "code_style": "standard",
@@ -232,6 +369,23 @@ class LLMIntegration:
             "insertion_points": [],
             "optimization_points": []
         }
+
+        # 1. 解析（含修复：截取花括号平衡的合法片段）
+        data = self._try_parse_json(response)
+        # 2. 结构校验：字段存在、类型正确
+        if data is not None and self._validate_analysis_dict(data):
+            return data
+
+        # 3. 仍失败 → 记录降级原因，绝不静默吞掉
+        if data is None:
+            reason = "LLM 返回内容不含合法 JSON 或无法解析"
+        elif not isinstance(data, dict):
+            reason = "LLM 返回的 JSON 不是对象"
+        else:
+            reason = "LLM 返回的 JSON 结构不完整（缺少必需字段或类型错误）"
+        degraded["error"] = reason
+        logger.warning(f"analyze_code_context 结果降级: {reason}; 响应片段: {response[:200]}")
+        return degraded
     
     def generate_code_suggestion(
         self,
@@ -451,13 +605,17 @@ class LLMIntegration:
             {"role": "system", "content": "你是技术研究员，擅长从论文和开源项目中提取精华。只返回JSON。"},
             {"role": "user", "content": prompt}
         ])
-        
-        try:
-            json_start = response.find('[')
-            json_end = response.rfind(']') + 1
-            if json_start >= 0 and json_end > json_start:
-                return json.loads(response[json_start:json_end])
-        except (json.JSONDecodeError, KeyError, ValueError):
-            pass
-        
+
+        # 1. 解析（含修复：截取方括号平衡的合法片段）
+        data = self._try_parse_json(response)
+        # 2. 结构校验：必须为数组且每个元素结构正确
+        if isinstance(data, list) and self._validate_reference_points(data):
+            return data
+
+        # 3. 仍失败 → 记录降级原因到日志，返回空列表，绝不静默吞掉
+        if not isinstance(data, list):
+            reason = "LLM 返回内容不含合法 JSON 数组"
+        else:
+            reason = "LLM 返回的数组元素结构不完整（缺少必需字段或类型错误）"
+        logger.warning(f"extract_reference_points 结果降级: {reason}; 响应片段: {response[:200]}")
         return []
