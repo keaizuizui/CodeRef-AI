@@ -19,13 +19,17 @@
 
 import os
 import re
-import json
-from typing import Dict, List, Any, Optional, Tuple
+from typing import List, Optional
 from collections import defaultdict
 from dataclasses import dataclass, field
 
 from loguru import logger
 from core.shared_filter import SharedFilter
+from config.settings import (
+    GOVERNANCE_FUNCTION_TOO_LONG,
+    GOVERNANCE_FUNCTION_TOO_MANY_PARAMS,
+    GOVERNANCE_NESTING_TOO_DEEP,
+)
 
 # 创建共享过滤器实例
 _sf = SharedFilter()
@@ -408,14 +412,14 @@ class GovernanceAuditor:
 
     # ─── 质量铁律 ──────────────────────────────────────────────────
 
-    # 函数过长（>100行）
-    FUNCTION_TOO_LONG = 100
+    # 函数过长（>100行）（阈值收敛到 config/settings.py）
+    FUNCTION_TOO_LONG = GOVERNANCE_FUNCTION_TOO_LONG
 
     # 参数过多（>8个）
-    FUNCTION_TOO_MANY_PARAMS = 8
+    FUNCTION_TOO_MANY_PARAMS = GOVERNANCE_FUNCTION_TOO_MANY_PARAMS
 
     # 嵌套过深（>4层）
-    NESTING_TOO_DEEP = 4
+    NESTING_TOO_DEEP = GOVERNANCE_NESTING_TOO_DEEP
 
     # ─── 架构铁律：依赖方向检测 ────────────────────────────────────
 

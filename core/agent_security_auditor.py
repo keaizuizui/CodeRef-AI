@@ -47,8 +47,8 @@ Agent 安全审计器 —— 专为 AI Agent 系统设计的风险检测
 
 import os
 import re
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
+from typing import List
+from dataclasses import dataclass
 from collections import defaultdict
 
 
@@ -420,6 +420,8 @@ class AgentSecurityAuditor:
 
         # 按严重程度排序
         risks.sort(key=lambda r: (SEVERITY_ORDER.get(r.severity, 99), r.file_path, r.line_number))
+        # 暴露结构化结果，供管线统一收集
+        self.risks = risks
         return risks
 
     def _scan_file(self, filepath: str) -> List[AgentSecurityRisk]:

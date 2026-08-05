@@ -59,8 +59,11 @@ class Pipe:
 
     def _save(self, p: str, done: List[str]):
         try:
-            with open(self._ckpt(p), "w", encoding="utf-8") as f:
+            cp = self._ckpt(p)
+            tmp = cp + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({"done": done, "ts": datetime.now().isoformat()}, f)
+            os.replace(tmp, cp)  # 原子替换，避免多 Agent 并发时读到半写入的检查点
         except: pass
 
     def _load(self, p: str) -> set:
@@ -358,7 +361,14 @@ class Pipe:
         if "agent" in done: return
         try:
             from core.agent_security_auditor import AgentSecurityAuditor
-            AgentSecurityAuditor().audit(p)
+            a = AgentSecurityAuditor(); a.audit(p)
+            for s in getattr(a, "risks", []):
+                r.findings.append(Finding(id=f"agent-{len(r.findings)}", tool="agent",
+                    category=getattr(s,"category",""), severity=getattr(s,"severity","medium"),
+                    file_path=getattr(s,"file_path",""), line=getattr(s,"line_number",0),
+                    title=f"[{getattr(s,'risk_id','')}] {getattr(s,'risk_name','')}",
+                    detail=getattr(s,"detail",""), suggestion=getattr(s,"suggestion",""),
+                    tier=Tier.HIGH if getattr(s,"severity","") in ("blocker","critical") else Tier.MEDIUM))
             done.add("agent"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"agent: {e}")
 
@@ -366,7 +376,16 @@ class Pipe:
         if "sca" in done: return
         try:
             from core.sca_checker import SCAChecker
-            SCAChecker().scan(p)
+            c = SCAChecker(); c.scan(p)
+            rep = getattr(c, "report", None)
+            for dep in getattr(rep, "dependencies", []):
+                for v in getattr(dep, "vulnerabilities", []):
+                    r.findings.append(Finding(id=f"sca-{len(r.findings)}", tool="sca",
+                        category="dependency_vuln", severity=getattr(v,"severity","medium"),
+                        file_path=getattr(dep,"source_file",""), line=getattr(dep,"source_line",0),
+                        title=f"{getattr(dep,'package','')} {getattr(dep,'version','')} - {getattr(v,'cve_id','')}",
+                        detail=getattr(v,"summary",""), suggestion=f"升级到 {getattr(v,'fixed_version','最新版')} 修复漏洞",
+                        tier=Tier.HIGH if getattr(v,"severity","") in ("critical","high") else Tier.MEDIUM))
             done.add("sca"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"sca: {e}")
 
@@ -388,7 +407,13 @@ class Pipe:
         if "integ" in done: return
         try:
             from core.integrity_checker import IntegrityChecker
-            IntegrityChecker().check(p)
+            c = IntegrityChecker(); c.check(p)
+            for s in getattr(c, "issues", []):
+                r.findings.append(Finding(id=f"integ-{len(r.findings)}", tool="integ",
+                    category=getattr(s,"category",""), severity=getattr(s,"severity","medium"),
+                    file_path=getattr(s,"file_path",""), line=getattr(s,"line",0),
+                    title=getattr(s,"content",""), detail=getattr(s,"content",""),
+                    suggestion=getattr(s,"suggestion",""), tier=Tier.MEDIUM))
             done.add("integ"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"integ: {e}")
 
@@ -399,8 +424,11 @@ class Pipe:
             d = BlindSpotDetector(); d.detect(p)
             for s in getattr(d, "spots", []):
                 r.findings.append(Finding(id=f"bs-{len(r.findings)}", tool="blind",
-                    category=getattr(s,"category",""), file_path=getattr(s,"file_path",""),
-                    title=getattr(s,"item",""), detail=getattr(s,"detail",""), tier=Tier.MEDIUM))
+                    category=getattr(s,"category",""),
+                    severity=getattr(s,"risk_level","medium"),
+                    file_path=getattr(s,"file_path",""),
+                    title=getattr(s,"item",""), detail=getattr(s,"detail",""),
+                    suggestion=getattr(s,"user_should_know",""), tier=Tier.MEDIUM))
             done.add("blind"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"blind: {e}")
 
@@ -408,7 +436,14 @@ class Pipe:
         if "inn" in done: return
         try:
             from core.innovation_propagation_detector import InnovationPropagationDetector
-            InnovationPropagationDetector().detect(p, use_llm=True)
+            d = InnovationPropagationDetector(); d.detect(p, use_llm=True)
+            for s in getattr(d, "gaps", []):
+                r.findings.append(Finding(id=f"inn-{len(r.findings)}", tool="inn",
+                    category="propagation_gap", severity="medium",
+                    file_path=getattr(s,"target_file",""), line=0,
+                    title=f"{getattr(s,'target_module','')} 缺少 {getattr(getattr(s,'pattern',None),'pattern_name','')} 模式",
+                    detail=getattr(s,"suggestion",""), suggestion=getattr(s,"suggestion",""),
+                    tier=Tier.MEDIUM))
             done.add("inn"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"inn: {e}")
 
@@ -416,7 +451,14 @@ class Pipe:
         if "junk" in done: return
         try:
             from core.junk_detector import JunkDetector
-            JunkDetector().detect(p)
+            d = JunkDetector(); d.detect(p)
+            for s in getattr(d, "_items", []):
+                r.findings.append(Finding(id=f"junk-{len(r.findings)}", tool="junk",
+                    category=getattr(s,"category",""), severity="low",
+                    file_path=getattr(s,"file_path",""), line=0,
+                    title=f"{getattr(s,'category','')}: {getattr(s,'reason','')}",
+                    detail=getattr(s,"reason",""), suggestion="可安全删除" if getattr(s,"safe_to_delete",True) else "需人工确认",
+                    tier=Tier.LOW))
             done.add("junk"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"junk: {e}")
 
@@ -424,7 +466,13 @@ class Pipe:
         if "resgap" in done: return
         try:
             from core.resource_gap_detector import ResourceGapDetector
-            ResourceGapDetector().detect(p)
+            d = ResourceGapDetector(); d.detect(p)
+            for s in getattr(d, "_gaps", []):
+                r.findings.append(Finding(id=f"resgap-{len(r.findings)}", tool="resgap",
+                    category=getattr(s,"category",""), severity=getattr(s,"severity","medium"),
+                    file_path=getattr(s,"file_path",""), line=0,
+                    title=getattr(s,"item",""), detail=getattr(s,"detail",""),
+                    suggestion=getattr(s,"suggestion",""), tier=Tier.MEDIUM))
             done.add("resgap"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"resgap: {e}")
 
@@ -432,7 +480,19 @@ class Pipe:
         if "simp" in done: return
         try:
             from core.code_simplifier import CodeSimplifier
-            CodeSimplifier().analyze(p)
+            c = CodeSimplifier(); c.analyze(p)
+            for s in getattr(c, "last_items", []) or []:
+                lr = s.get("line_range", [0, 0]) if isinstance(s, dict) else [0, 0]
+                line = lr[0] if isinstance(lr, (list, tuple)) and lr else 0
+                r.findings.append(Finding(id=f"simp-{len(r.findings)}", tool="simp",
+                    category=(s.get("category","") if isinstance(s, dict) else getattr(s,"category","")),
+                    severity=(s.get("severity","medium") if isinstance(s, dict) else getattr(s,"severity","medium")),
+                    file_path=(s.get("file_path","") if isinstance(s, dict) else getattr(s,"file_path","")),
+                    line=line,
+                    title=(s.get("title","") if isinstance(s, dict) else getattr(s,"title","")),
+                    detail=(s.get("current","") if isinstance(s, dict) else getattr(s,"current","")),
+                    suggestion=(s.get("suggestion","") if isinstance(s, dict) else getattr(s,"suggestion","")),
+                    tier=Tier.LOW))
             done.add("simp"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"simp: {e}")
 
@@ -440,7 +500,17 @@ class Pipe:
         if "matu" in done: return
         try:
             from core.project_maturity_checker import ProjectMaturityChecker
-            ProjectMaturityChecker().check(p)
+            c = ProjectMaturityChecker(); c.check(p)
+            rep = getattr(c, "report", None)
+            for s in getattr(rep, "checks", []):
+                if getattr(s, "status", "") == "pass":
+                    continue  # 只上报未通过的成熟度检查
+                r.findings.append(Finding(id=f"matu-{len(r.findings)}", tool="matu",
+                    category=getattr(s,"category",""), severity="medium",
+                    file_path="", line=0,
+                    title=f"[{getattr(s,'check_id','')}] {getattr(s,'name','')} - {getattr(s,'status','')}",
+                    detail=getattr(s,"detail",""), suggestion=getattr(s,"suggestion",""),
+                    tier=Tier.MEDIUM))
             done.add("matu"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"matu: {e}")
 
@@ -691,8 +761,27 @@ class Pipe:
             lines.append(f"> 🤖 自动降噪: {'; '.join(parts)}")
             lines.append("")
         if r.errors:
-            lines.append("## ⚠️ 异常"); 
-            for e in r.errors: lines.append(f"- {e}")
+            lines.append("## ⚠️ 检测器异常")
+            lines.append(f"> 共 **{len(r.errors)}** 个错误，以下工具执行失败，对应发现可能缺失或不全，请优先排查。")
+            lines.append("")
+            # 按工具归类，快速定位失败的工具与异常摘要（"tool: message" 格式）
+            from collections import OrderedDict
+            grouped = OrderedDict()
+            for e in r.errors:
+                tool, sep, rest = e.partition(":")
+                key = tool.strip() if sep else "unknown"
+                grouped.setdefault(key, []).append(rest.strip() if sep else e)
+            lines.append("| 工具 | 失败数 | 异常摘要 |")
+            lines.append("|------|--------|----------|")
+            for tool, errs in grouped.items():
+                lines.append(f"| `{tool}` | {len(errs)} | `{errs[0][:80]}` |")
+            lines.append("")
+            lines.append("**错误明细：**")
+            for tool, errs in grouped.items():
+                for err in errs:
+                    lines.append(f"- `{tool}: {err}`")
+            lines.append("")
+            lines.append("> 提示：失败的工具不会写入 checkpoint 完成集合，`resume=true` 重新运行时将自动重试这些工具，异常不会被断点续跑永久隐藏。")
             lines.append("")
         if h:
             lines.append("## 🔴 HIGH（多工具交叉验证）");

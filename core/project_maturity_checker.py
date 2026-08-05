@@ -195,7 +195,7 @@ class ProjectMaturityChecker:
         else:
             grade = "F"
 
-        return MaturityReport(
+        result = MaturityReport(
             project_path=project_path,
             project_name=project_name,
             project_type=project_type,
@@ -204,6 +204,9 @@ class ProjectMaturityChecker:
             score=score,
             grade=grade,
         )
+        # 暴露结构化结果，供管线统一收集
+        self.report = result
+        return result
 
     # ─── 1. 测试设施 ───
 

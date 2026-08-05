@@ -188,8 +188,10 @@ class GitNexusMCPClient:
             # V2.0: 设置 cwd 为 project_path，让 gitnexus mcp 在正确的项目目录下启动
             # 这样才能找到 .gitnexus/ 索引数据
             cwd = self.project_path if self.project_path else None
-            # V2.1: 使用 npx -y gitnexus mcp，因为 gitnexus 通常通过 npx 运行而非全局安装
-            cmd = "npx -y gitnexus mcp"
+            # V2.1: 使用 npx --no-install（本地优先，仅用已安装/缓存的 gitnexus），
+            #       避免运行时 npx -y 盲拉远程任意版本代码造成的供应链注入风险。
+            #       若未安装会快速失败并给出安装指引，而非静默下载执行。
+            cmd = "npx --no-install gitnexus mcp"
             self._process = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
@@ -954,10 +956,10 @@ class GitNexusMCPClient:
 
     @staticmethod
     def is_cli_available() -> bool:
-        """检查GitNexus CLI是否可用（通过npx）"""
+        """检查GitNexus CLI是否可用（本地/缓存已安装，不用 -y 盲拉）"""
         try:
             result = subprocess.run(
-                "npx -y gitnexus --version",
+                "npx --no-install gitnexus --version",
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -969,10 +971,10 @@ class GitNexusMCPClient:
 
     @staticmethod
     def get_version() -> str:
-        """获取GitNexus版本号"""
+        """获取GitNexus版本号（仅本地已安装版本）"""
         try:
             result = subprocess.run(
-                "npx -y gitnexus --version",
+                "npx --no-install gitnexus --version",
                 capture_output=True,
                 text=True,
                 timeout=30,

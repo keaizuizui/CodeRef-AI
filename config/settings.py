@@ -3,13 +3,31 @@
 配置管理
 """
 
-import os
 import json
 from pathlib import Path
 from typing import Dict, Any, Optional
 from dataclasses import dataclass, asdict
 
 from loguru import logger
+
+
+# ═══════════════════════════════════════════════════════════════
+# 检测阈值常量
+# 收敛各检测器（core/*.py）中散落的阈值魔法数字，统一在此定义，
+# 各检测器通过 import 引用，避免重复硬编码。
+# ═══════════════════════════════════════════════════════════════
+
+# 技术债务检测器（tech_debt_detector.py）
+TECH_DEBT_COMPLEXITY_THRESHOLD = 10        # 圈复杂度阈值（if/for/while/except 语句数）
+TECH_DEBT_COGNITIVE_THRESHOLD = 15         # 认知复杂度阈值（SonarQube 默认）
+TECH_DEBT_LONG_FUNCTION_THRESHOLD = 100    # 函数行数阈值
+TECH_DEBT_NESTING_DEPTH_THRESHOLD = 4      # 嵌套深度阈值（缩进级别）
+TECH_DEBT_COMMENTED_CODE_MIN_LINES = 3     # 注释代码块最少行数
+
+# 治理审计质量铁律（governance_audit.py）
+GOVERNANCE_FUNCTION_TOO_LONG = 100         # 函数过长阈值（行数）
+GOVERNANCE_FUNCTION_TOO_MANY_PARAMS = 8    # 参数过多阈值（个数）
+GOVERNANCE_NESTING_TOO_DEEP = 4            # 嵌套过深阈值（缩进级别）
 
 
 @dataclass
