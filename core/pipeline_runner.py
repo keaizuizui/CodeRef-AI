@@ -386,6 +386,15 @@ class Pipe:
                         title=f"{getattr(dep,'package','')} {getattr(dep,'version','')} - {getattr(v,'cve_id','')}",
                         detail=getattr(v,"summary",""), suggestion=f"升级到 {getattr(v,'fixed_version','最新版')} 修复漏洞",
                         tier=Tier.HIGH if getattr(v,"severity","") in ("critical","high") else Tier.MEDIUM))
+            # 无漏洞时也追加一条"扫描完成"汇总 finding，确保 sca 结果不被静默丢弃
+            if not any(f.tool == "sca" for f in r.findings):
+                scanned = getattr(rep, "scanned_deps", 0)
+                r.findings.append(Finding(id=f"sca-{len(r.findings)}", tool="sca",
+                    category="dependency_scan", severity="low",
+                    file_path="", line=0,
+                    title=f"依赖扫描完成：扫描 {scanned} 个依赖，未发现已知漏洞",
+                    detail="SCA 工具已执行，本项目依赖未命中本地/OSV 已知漏洞库。",
+                    suggestion="", tier=Tier.LOW))
             done.add("sca"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"sca: {e}")
 
