@@ -5,15 +5,15 @@ This is a tool designed to help vibecoding personnel with no programming backgro
 
 # CodeRef AI — 编程 AI 外置大脑 & 非编程人员技术助理
 
-**Version 3.1** | Python 3.10+ | MCP Protocol
+**Version 3.2** | Python 3.10+ | MCP Protocol
 
-> 一键审计 · 架构图谱 · 项目文档 · 知识图谱 · 健康仪表盘
+> 一键审计 · 架构图谱 · 项目文档 · 知识图谱 · 健康仪表盘 · 代码审查 · 前端交互审查
 
 ---
 
 ## 一句话定位
 
-CodeRef AI 是**编程 AI 的外置大脑**和**非编程人员的技术助理**。它通过 MCP 协议暴露 6 个工具，让 AI 编程助手不需要逐文件读代码，而是像查数据库一样查询项目结构和风险；同时生成非技术人员也能看懂的项目健康仪表盘和 Wiki 文档。
+CodeRef AI 是**编程 AI 的外置大脑**和**非编程人员的技术助理**。它通过 MCP 协议暴露 8 个工具，让 AI 编程助手不需要逐文件读代码，而是像查数据库一样查询项目结构和风险；同时生成非技术人员也能看懂的项目健康仪表盘和 Wiki 文档。
 
 ## 为什么需要 CodeRef
 
@@ -34,6 +34,8 @@ CodeRef AI 是**编程 AI 的外置大脑**和**非编程人员的技术助理**
 | 架构分析图谱 | 开发者 | `coderef_architecture` | 交互式 HTML 模块画布（vis-network），可视化模块关系 |
 | 项目 Wiki 文档 | 非编程人员 | `coderef_docs` | 三级管线生成，通俗语言解释项目结构，支持子项目探测 |
 | 健康仪表盘 | 非编程人员 | （审计自动产出） | 一个 HTML 页面看懂安全评分、债务评分、风险清单 |
+| 代码审查 | 编程 AI + 开发者 | `coderef_review` | 基于 diff 的变更审查 + 新项目全量语义首查，结论带 evidence 标记 |
+| 前端交互审查 | 编程 AI + 开发者 | `coderef_frontend` | 静态全量枚举按钮/菜单 + 6 维度审查，可选浏览器运行时抽查 |
 | 误报管理 | 开发者 | `coderef_whitelist` | 白名单管理 + 核心模块规则配置，持续优化审计精度 |
 
 ## 快速开始
@@ -98,7 +100,7 @@ python -m core.mcp_server
 
 详细配置指南见 [MCP_SETUP.md](MCP_SETUP.md)。
 
-## 6 个 MCP 工具
+## 8 个 MCP 工具
 
 | 工具 | 功能 | 模式 | 需要 LLM |
 |------|------|------|---------|
@@ -106,8 +108,14 @@ python -m core.mcp_server
 | `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 同步 | 否 |
 | `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 后台 | 是 |
 | `coderef_query` | 知识图谱结构化查询（9 种查询类型） | 同步 | 否 |
+| `coderef_review` | 代码审查：diff 变更审查 / 新项目全量语义首查 | 后台 | 是 |
+| `coderef_frontend` | 前端交互审查：按钮/菜单静态枚举 + 6 维度审查 | 后台 | 是 |
 | `coderef_whitelist` | 白名单管理 + 核心模块规则配置 | 同步 | 否 |
 | `coderef_task_status` | 后台任务状态查询 | 同步 | 否 |
+
+`coderef_review` 支持 `mode=diff`（默认，基于 git diff / 变更文件的行内审查）与 `mode=full`（新项目一次性全量语义审查），审查维度覆盖 bug / security / cross_module / maintainability / consistency / testing / regression，每条结论带 evidence 标记（`pending-human` / `static-confirmed`）供交叉验证。
+
+`coderef_frontend` 支持 `mode=static`（默认，静态枚举 HTML/JS 全部按钮与 L1-L5 菜单树，100% 覆盖，不依赖浏览器）与 `mode=runtime`（可选，需 `url`，用浏览器抽查关键路径，失败自动降级为静态结论），按 6 个维度（交互正确性 / 反馈缺失 / 禁用与边界 / 可达性 / 错误处理 / 一致性）审查。
 
 ## 典型使用流程
 
@@ -123,10 +131,16 @@ coderef_query(project_path="/path/to/project", query_type="impact", file_path="u
 # 3. 生成项目文档（非编程人员阅读）
 coderef_docs(project_path="/path/to/project", background=True)
 
-# 4. 查看健康仪表盘
+# 4. 审查代码变更（AI 帮你自查 PR / 提交）
+coderef_review(project_path="/path/to/project", mode="diff", diff="<git diff 文本>", background=True)
+
+# 5. 审查前端交互（按钮 / 菜单）
+coderef_frontend(project_path="/path/to/project", mode="static", background=True)
+
+# 6. 查看健康仪表盘
 # → coderef-report/health_dashboard_{timestamp}.html
 
-# 5. 直接询问你的编程AI：请你阅读这个项目的报告，把误报写进白名单，把问题归类为4种（①你可以自行处理 ②需要我介入 ③很复杂或者很严重，需要我参与讨论 ④新建一个暂存区，看看是误报还是真没有意义需要删除的东西）
+# 7. 直接询问你的编程AI：请你阅读这个项目的报告，把误报写进白名单，把问题归类为4种（①你可以自行处理 ②需要我介入 ③很复杂或者很严重，需要我参与讨论 ④新建一个暂存区，看看是误报还是真没有意义需要删除的东西）
 ```
 
 
@@ -185,8 +199,10 @@ coderef_docs(project_path="/path/to/project", background=True)
 ```
 coderef-ai/
 ├── core/                              # 核心模块
-│   ├── mcp_server.py                  # MCP Server 入口（6 个工具）
+│   ├── mcp_server.py                  # MCP Server 入口（8 个工具）
 │   ├── pipeline_runner.py             # 管线引擎（audit/architecture/docs + 知识图谱）
+│   ├── code_review.py                 # 代码审查（diff 变更/全量语义首查，evidence 标记）
+│   ├── frontend_inspector.py          # 前端交互审查（按钮/菜单静态枚举 + LLM 审查）
 │   ├── code_knowledge_graph.py        # 知识图谱引擎（SQLite 持久化）
 │   ├── health_dashboard.py            # 项目健康仪表盘（零外部依赖 HTML）
 │   ├── wiki_generator.py              # Wiki 生成器（三级管线）
@@ -235,6 +251,13 @@ coderef-ai/
 | 开源友好 | 敏感数据集中 `cache/`，删除即清理，一行命令安全开源 |
 
 ## 更新日志
+
+### v3.2 — 代码审查 + 前端交互审查
+
+- 新增 `coderef_review` MCP 工具：基于 git diff 的变更行内审查（mode=diff）+ 新项目全量语义首查（mode=full），覆盖 7 个审查维度，结论带 evidence 标记供交叉验证
+- 新增 `coderef_frontend` MCP 工具：静态全量枚举 HTML/JS 全部按钮（事件/确认弹窗/禁用态）与 L1-L5 菜单树，按 6 维度审查；可选 `mode=runtime` 浏览器抽查（失败自动降级）
+- 内置 `demo-app/` 测试实例（含 6 个预置交互问题）用于功能验证
+- 回归测试：新增 `test_code_review.py`、`test_frontend_inspector.py`，`test_pipeline_runner.py` 扩展至 11 工具结果全收集断言
 
 ### v3.1 — 知识图谱 + 健康仪表盘
 
