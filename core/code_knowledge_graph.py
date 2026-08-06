@@ -614,6 +614,28 @@ class CodeKnowledgeGraph:
             "db_path": self._db_path,
         }
 
+    def get_node_ids(self) -> List[str]:
+        """返回全部节点 ID（供完整性校验等上层模块使用，避免直接访问私有 _conn）。"""
+        self._connect()
+        return [r["id"] for r in self._conn.execute("SELECT id FROM nodes").fetchall()]
+
+    def get_all_edges(self) -> List[Tuple[int, KGEdge]]:
+        """返回全部边（含主键 id 与 source/target/type/props），供完整性校验遍历。
+        返回 [(edge_id, KGEdge), ...]。"""
+        self._connect()
+        return [(r["id"], self._row_to_edge(r))
+                for r in self._conn.execute("SELECT * FROM edges").fetchall()]
+
+    def delete_orphan_edges(self, edge_ids: List[int]) -> int:
+        """按主键删除边（用于清除孤儿边）。返回删除条数。"""
+        if not edge_ids:
+            return 0
+        self._connect()
+        rows = self._conn.executemany(
+            "DELETE FROM edges WHERE id=?", [(eid,) for eid in edge_ids])
+        self._conn.commit()
+        return rows.rowcount if rows.rowcount != -1 else len(edge_ids)
+
     def search(self, keyword: str, limit: int = 30) -> KGQueryResult:
         """全文搜索：名称、文件路径、docstring"""
         self._connect()

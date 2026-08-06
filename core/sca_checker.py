@@ -247,6 +247,48 @@ class SCAChecker:
         },
     }
 
+    # 本地库各 CVE 的修复版本（CVE ID -> 修复版本）。
+    # 与 LOCAL_KNOWN_VULNS 配套使用：本地命中时也能给出可执行的升级目标，
+    # 避免报告出现"升级到 None"这类无意义建议。
+    LOCAL_FIXED_VERSIONS = {
+        "CVE-2023-44271": "10.1.0",   # pillow
+        "CVE-2023-50447": "10.1.0",   # pillow
+        "CVE-2022-22817": "9.0.0",    # pillow
+        "CVE-2022-22816": "9.0.0",    # pillow
+        "CVE-2023-32681": "2.31.0",   # requests
+        "CVE-2023-45803": "2.0.7",    # urllib3
+        "CVE-2023-43804": "2.0.7",    # urllib3
+        "CVE-2024-27306": "4.2.11",   # django
+        "CVE-2024-24680": "4.2.11",   # django
+        "CVE-2023-43665": "4.1.12",   # django
+        "CVE-2023-30861": "2.3.3",    # flask
+        "CVE-2024-22195": "3.1.3",    # jinja2
+        "CVE-2023-37920": "2023.7.22",# certifi
+        "CVE-2023-50782": "42.0.0",   # cryptography
+        "CVE-2023-49083": "42.0.0",   # cryptography
+        "CVE-2024-23334": "3.9.2",    # aiohttp
+        "CVE-2024-23829": "3.9.2",    # aiohttp
+        "CVE-2023-46229": "0.0.338",  # langchain
+        "CVE-2023-44467": "0.0.331",  # langchain
+        "CVE-2023-47129": "1.3.0",    # openai
+        "CVE-2023-32698": "1.25.0",   # numpy
+        "CVE-2023-32690": "2.0.3",    # pandas
+        "CVE-2023-49070": "2.15.0",   # tensorflow
+        "CVE-2023-49071": "2.15.0",   # tensorflow
+        "CVE-2024-21751": "2.2.0",    # torch
+        "CVE-2024-22052": "4.37.2",   # transformers
+        "CVE-2024-0964": "4.18.0",    # gradio
+        "CVE-2024-0965": "4.18.0",    # gradio
+        "CVE-2024-24762": "0.110.0",  # fastapi / starlette
+        "CVE-2023-45827": "2.5.0",    # pydantic
+        "CVE-2023-48795": "2.0.23",   # sqlalchemy
+        "CVE-2020-14343": "6.0.1",    # pyyaml
+        "CVE-2023-33733": "4.0.0",    # reportlab
+        "CVE-2023-29469": "5.0.0",    # lxml
+        "CVE-2023-46136": "3.0.0",    # werkzeug
+        "CVE-2024-1135": "22.0.0",    # gunicorn
+    }
+
     def __init__(self, offline: bool = False):
         self.offline = offline
 
@@ -398,6 +440,7 @@ class SCAChecker:
                         vulns.append(DependencyVulnerability(
                             package=package, version=version, cve_id=cve,
                             severity=severity, summary=summary,
+                            fixed_version=self.LOCAL_FIXED_VERSIONS.get(cve),
                             source="local_db",
                         ))
 

@@ -28,6 +28,18 @@ class Finding:
     detail: str = ""; suggestion: str = ""
     tier: Tier = Tier.LOW
     xval_by: List[str] = field(default_factory=list)
+    # 相邻行合并后记录真实行号区间，避免标题退化为 "(等多行)"
+    line_start: int = 0
+    line_end: int = 0
+
+    @property
+    def line_label(self) -> str:
+        """可读的行号定位：单行显示 Ln，区间显示 Ln~Lm"""
+        if self.line_end and self.line_end > self.line:
+            return f"{self.file_path}:{self.line}~{self.line_end}"
+        if self.line:
+            return f"{self.file_path}:{self.line}"
+        return self.file_path or ""
 
 @dataclass
 class PipeResult:
@@ -222,36 +234,49 @@ class Pipe:
     # ═══════════════════════════════════
 
     def audit(self, project_path: str, output_dir: str = None,
-              resume: bool = False) -> PipeResult:
-        """安全审计管线：11 工具"""
+              resume: bool = False, progress_cb=None) -> PipeResult:
+        """安全审计管线：11 工具
+
+        progress_cb: 可选回调 progress_cb(stage:str, done:int, total:int)
+        用于后台执行时向调用方回传阶段进度。
+        """
         self._t0 = time.time()
         r = PipeResult(project_path=project_path)
         d = self._load(project_path) if resume else set()
         out = output_dir or os.path.join(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))), "coderef-report")
 
+        def _prog(stage, done, total):
+            if progress_cb:
+                try: progress_cb(stage, done, total)
+                except Exception: pass
+
         try:
             tf, tl, analysis = self._scan(project_path)
             r.total_files, r.total_lines = tf, tl
+            _prog("扫描代码", 0, 11)
 
             # 构建知识图谱（持久化项目记忆）
             kg_stats = self._build_kg(project_path, analysis)
+            _prog("构建知识图谱", 1, 11)
 
-            self._gov(project_path, r, d)
-            self._agent(project_path, r, d)
-            self._sca(project_path, r, d)
-            self._td(project_path, r, d)
-            self._integ(project_path, r, d)
-            self._blind(project_path, r, d)
-            self._inn(project_path, r, d)
-            self._junk(project_path, r, d)
-            self._resgap(project_path, r, d)
-            self._simp(project_path, r, d)
-            self._matu(project_path, r, d)
+            # 11 个审计工具
+            tools = [
+                ("治理审计", self._gov), ("Agent安全", self._agent),
+                ("依赖扫描SCA", self._sca), ("技术债务", self._td),
+                ("完整性检查", self._integ), ("盲区检测", self._blind),
+                ("创新传播", self._inn), ("垃圾文件", self._junk),
+                ("资源遗漏", self._resgap), ("代码精简", self._simp),
+                ("项目成熟度", self._matu),
+            ]
+            for i, (name, fn) in enumerate(tools, start=2):
+                fn(project_path, r, d)
+                _prog(name, i, 11)
 
             self._xval(r)
             self._denoise(r)
             r.report = self._fmt(r, "审计报告")
+            _prog("生成报告", 12, 12)
 
             os.makedirs(out, exist_ok=True)
             fn = f"coderef_audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
@@ -273,6 +298,57 @@ class Pipe:
         except Exception as e:
             r.errors.append(str(e))
 
+        r.elapsed = round(time.time() - self._t0, 1)
+        return r
+
+    # ─── 单工具运行（供 MCP: coderef_scan_* 调用）───
+
+    # 11 个审计工具：短名 → (展示名, 检测器方法名)
+    SINGLE_TOOLS = {
+        "gov":    ("治理审计", "_gov"),
+        "agent":  ("Agent安全", "_agent"),
+        "sca":    ("依赖扫描SCA", "_sca"),
+        "td":     ("技术债务", "_td"),
+        "integ":  ("完整性检查", "_integ"),
+        "blind":  ("盲区检测", "_blind"),
+        "inn":    ("创新传播", "_inn"),
+        "junk":   ("垃圾文件", "_junk"),
+        "resgap": ("资源遗漏", "_resgap"),
+        "simp":   ("代码精简", "_simp"),
+        "matu":   ("项目成熟度", "_matu"),
+    }
+
+    @staticmethod
+    def list_single_tools() -> list:
+        """列出所有可单独运行的审计工具（短名 + 展示名）"""
+        return [{"name": k, "label": v[0]}
+                for k, v in Pipe.SINGLE_TOOLS.items()]
+
+    def run_single(self, project_path: str, tool: str) -> PipeResult:
+        """单独运行某一个审计工具 —— AI 写代码时的实时安全带。
+
+        相比 audit 全量管线，只跑一个工具：不构建知识图谱、不生成 dashboard，
+        只对该维度做 AST 扫描 + 检测 + 降噪，快速返回该维度的 findings，
+        供 AI 在写完一个模块后即时自查（客观第二意见）。
+        """
+        tool = (tool or "").lower()
+        if tool not in self.SINGLE_TOOLS:
+            raise ValueError(
+                f"未知工具 '{tool}'，支持: {', '.join(sorted(self.SINGLE_TOOLS))}")
+        self._t0 = time.time()
+        r = PipeResult(project_path=project_path)
+        try:
+            tf, tl, analysis = self._scan(project_path)
+            r.total_files, r.total_lines = tf, tl
+            label, method = self.SINGLE_TOOLS[tool]
+            fn = getattr(self, method)
+            # 全新 done 集合，不读 checkpoint，保证单工具独立、可复现
+            fn(project_path, r, set())
+            if r.findings:
+                self._denoise(r)
+            r.elapsed = round(time.time() - self._t0, 1)
+        except Exception as e:
+            r.errors.append(str(e))
         r.elapsed = round(time.time() - self._t0, 1)
         return r
 
@@ -384,7 +460,8 @@ class Pipe:
                         category="dependency_vuln", severity=getattr(v,"severity","medium"),
                         file_path=getattr(dep,"source_file",""), line=getattr(dep,"source_line",0),
                         title=f"{getattr(dep,'package','')} {getattr(dep,'version','')} - {getattr(v,'cve_id','')}",
-                        detail=getattr(v,"summary",""), suggestion=f"升级到 {getattr(v,'fixed_version','最新版')} 修复漏洞",
+                        detail=getattr(v,"summary",""),
+                        suggestion=f"升级到 {(getattr(v,'fixed_version',None) or '最新可用版本')} 修复漏洞",
                         tier=Tier.HIGH if getattr(v,"severity","") in ("critical","high") else Tier.MEDIUM))
             # 无漏洞时也追加一条"扫描完成"汇总 finding，确保 sca 结果不被静默丢弃
             if not any(f.tool == "sca" for f in r.findings):
@@ -445,7 +522,9 @@ class Pipe:
         if "inn" in done: return
         try:
             from core.innovation_propagation_detector import InnovationPropagationDetector
-            d = InnovationPropagationDetector(); d.detect(p, use_llm=True)
+            # 实战修复：缺口检测 _generate_suggestion 对每个缺口无条件调用 LLM 且无上限，
+            # 在含 vendored 库的大项目上会挂起数十分钟。审计管线改用纯结构对比（无 LLM）。
+            d = InnovationPropagationDetector(); d.detect(p, use_llm=False)
             for s in getattr(d, "gaps", []):
                 r.findings.append(Finding(id=f"inn-{len(r.findings)}", tool="inn",
                     category="propagation_gap", severity="medium",
@@ -715,9 +794,11 @@ class Pipe:
                         and f.tool == prev.tool
                         and f.category == prev.category
                         and f.line - prev.line <= Pipe.ADJACENT_LINE_WINDOW):
-                    # 合并
-                    prev.title = f"{prev.title} (等多行)"
-                    prev.line = max(prev.line, f.line)
+                    # 合并相邻行：记录真实行号区间，标题保持明确，不再退化为"(等多行)"
+                    if not prev.line_start:
+                        prev.line_start = prev.line
+                    prev.line_end = max(prev.line_end, f.line)
+                    prev.line = prev.line_start
                     if f.detail and f.detail not in prev.detail:
                         prev.detail += " | " + f.detail
                     continue
@@ -794,11 +875,11 @@ class Pipe:
             lines.append("")
         if h:
             lines.append("## 🔴 HIGH（多工具交叉验证）");
-            lines.append("|工具|分类|程度|文件|描述|");
+            lines.append("|工具|分类|程度|位置|描述|");
             lines.append("|---|---|---|---|---|")
             for f in h[:30]:
                 xv = f" ×{','.join(f.xval_by)}" if f.xval_by else ""
-                lines.append(f"|{f.tool}|{f.category}|{f.severity}|{f.file_path}:{f.line}|{f.title[:60]}{xv}|")
+                lines.append(f"|{f.tool}|{f.category}|{f.severity}|{f.line_label}|{f.title[:60]}{xv}|")
             lines.append("")
         if m:
             lines.append("## 🟡 MEDIUM");
