@@ -135,6 +135,18 @@ class InnovationPropagationDetector:
     # LLM 调用最大 token
     LLM_MAX_TOKENS = 2048
 
+    # 进入报告的缺口建议上限（只保留最值得传播的 top-N，每条都用 LLM 精建议）
+    MAX_GAP_SUGGESTIONS = 30
+
+    # 单次 LLM 排名调用中展示的最大候选缺口数（超过则先按采纳率预裁剪到该池，
+    # 避免一次 prompt 过长。LLM 在池内按真实价值重新挑选 top-N。）
+    LLM_RANK_POOL = 150
+
+    # LLM 总预算（Step 3 模式提取 + Step 4 排名 + Step 4 缺口建议共用），仅作极端兜底。
+    # 预算构成: Step3 至多 20 次 + Step4 排名 1 次 + 缺口精建议至多 30 次 = 51。
+    # 正常路径靠 MAX_GAP_SUGGESTIONS 截断，不会触达此预算。
+    LLM_TOTAL_BUDGET = 20 + 1 + 30
+
     def __init__(self, llm_client=None):
         """
         Args:
@@ -142,6 +154,11 @@ class InnovationPropagationDetector:
         """
         self._llm_client = llm_client
         self._llm_available = False
+        # 实例级签名缓存（按 project_path），避免同实例内重复收集（innovation_engine 复用）
+        self._sig_cache_path = None
+        self._sig_cache = None
+        # LLM 总预算兜底（跨 Step 3/4）
+        self._llm_budget = 0
 
     def _ensure_llm(self):
         """延迟初始化 LLM 客户端"""
@@ -149,16 +166,10 @@ class InnovationPropagationDetector:
             self._llm_available = True
             return
         try:
-            from core.llm_integration import LLMIntegration, LLMConfig, LLMProvider
-            config = LLMConfig(
-                provider=LLMProvider.DEEPSEEK,
-                api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
-                base_url="https://api.deepseek.com/v1",
-                model="deepseek-chat",
-                temperature=0.3,
-                max_tokens=self.LLM_MAX_TOKENS,
-            )
-            self._llm_client = LLMIntegration(config)
+            from core.llm_integration import LLMIntegration
+            # 统一走 _load_config_from_settings() 配置源（环境变量/QSettings/config.json），
+            # 不在此处手写 LLMConfig，避免凭据与配置散落各处。
+            self._llm_client = LLMIntegration()
             self._llm_available = bool(self._llm_client.client)
         except Exception as e:
             logger.warning(f"LLM 初始化失败，将使用纯结构对比模式: {e}")
@@ -453,8 +464,12 @@ class InnovationPropagationDetector:
                 # 找到一个代表性实例
                 ref = pattern_instances[0]
 
-                # 生成建议
-                suggestion = self._generate_suggestion(ref, sig)
+                # 生成建议（此处仅占位；真正的 LLM 精建议在 detect() 中
+                # 按价值截断后、受 LLM 预算约束地统一生成）
+                suggestion = (
+                    f"建议在 {sig.module_name} 中引入「{pattern_name}」模式："
+                    f"{ref.description}（参考 {ref.module_name} 的 {ref.source_location}）"
+                )
 
                 gaps.append(PropagationGap(
                     source_module=ref.module_name,
@@ -602,6 +617,9 @@ class InnovationPropagationDetector:
         if use_llm:
             self._ensure_llm()
 
+        # 重置类级 LLM 总预算（跨 Step 3 模式提取 + Step 4 缺口建议共用）
+        self._llm_budget = self.LLM_TOTAL_BUDGET
+
         # 加载项目专属的 cache 硬编码优化（白名单）
         SharedFilter.load_cache(project_path)
 
@@ -633,6 +651,9 @@ class InnovationPropagationDetector:
                     if llm_rounds >= max_llm_rounds:
                         logger.warning(f"LLM 调用达到上限 {max_llm_rounds}，停止模式提取")
                         break
+                    if self._llm_budget <= 0:
+                        logger.warning("LLM 总预算耗尽，停止模式提取")
+                        break
                     content = self._read_file(sig.file_path)
                     if not content:
                         continue
@@ -640,6 +661,7 @@ class InnovationPropagationDetector:
                     if patterns:
                         all_patterns[sig.module_name] = patterns
                     llm_rounds += 1
+                    self._llm_budget -= 1
             logger.info(f"Step 3 完成: LLM 调用 {llm_rounds} 轮，提取 {sum(len(v) for v in all_patterns.values())} 个模式")
 
         # Step 4: 缺口检测
@@ -664,8 +686,30 @@ class InnovationPropagationDetector:
                 seen.add(key)
                 unique_gaps.append(g)
 
-        # 按采用率排序（采用率越低，越值得传播）
-        unique_gaps.sort(key=lambda g: g.adoption_rate)
+        # ── 缺口价值挑选 ──
+        # 候选缺口超过上限时，拉一份完整清单让 LLM 一次看全，由它按真实价值
+        # 挑选 top-N（而非粗造的采纳率升序）。LLM 不可用/失败时回退采纳率截断。
+        if len(unique_gaps) > self.MAX_GAP_SUGGESTIONS:
+            logger.info(
+                f"候选缺口 {len(unique_gaps)} 超出上限 {self.MAX_GAP_SUGGESTIONS}，开始价值挑选"
+            )
+            unique_gaps = self._select_valuable_gaps(unique_gaps)
+
+        # ── 预算兜底：为幸存缺口生成 LLM 精建议（受类级 LLM 总预算约束） ──
+        if use_llm and self._llm_available:
+            sig_by_module = {s.module_name: s for s in signatures}
+            for g in unique_gaps:
+                if self._llm_budget <= 0:
+                    logger.warning(
+                        f"LLM 总预算耗尽，剩余缺口使用结构建议（{self._llm_budget}）"
+                    )
+                    break
+                target_sig = sig_by_module.get(g.target_module)
+                if target_sig is not None:
+                    llm_suggestion = self._generate_suggestion(g.pattern, target_sig)
+                    if llm_suggestion.strip():
+                        g.suggestion = llm_suggestion
+                    self._llm_budget -= 1
 
         logger.info(f"Step 4 完成: {len(unique_gaps)} 个传播缺口")
         # 暴露结构化结果，供管线统一收集
@@ -675,14 +719,30 @@ class InnovationPropagationDetector:
     # ─── 辅助方法 ────────────────────────────────────────────────
 
     def _collect_signatures(self, project_path: str) -> List[CapabilitySignature]:
-        """收集项目中所有 Python 文件的能力签名"""
+        """收集项目中所有 Python 文件的能力签名。
+
+        实战修复：复用 ProjectScope.should_scan() 过滤 vendored/内嵌第三方库、
+        虚拟环境、资源目录，避免把 site-packages 里的数千个第三方 .py 当项目代码，
+        导致签名爆炸（实测 16395 个模块）与聚类失真。
+        """
+        # 实例级签名缓存：同实例内重复调用（innovation_engine 的 detect/_find_adopters）
+        # 只收集一次，消除重复扫描。
+        if self._sig_cache_path == project_path and self._sig_cache is not None:
+            return self._sig_cache
+
+        # 复用 ProjectScope 判定哪些目录应被扫描（懒加载一次 analyze）
+        from core.project_scope import ProjectScope
+        scope = ProjectScope(project_path)
+        scope.analyze()
+
         signatures = []
         for root, dirs, files in os.walk(project_path):
-            # 过滤排除的目录
+            # 过滤排除的目录：叠加 ProjectScope 的 vendored/虚拟环境判定
             dirs[:] = [
                 d for d in dirs
                 if d not in self.EXCLUDED_DIRS
                 and not d.startswith(self.EXCLUDED_DIR_PREFIXES)
+                and scope.should_scan(os.path.join(root, d))
                 and self._is_code_dir(os.path.join(root, d))
             ]
             for f in files:
@@ -697,6 +757,9 @@ class InnovationPropagationDetector:
                 sig = self._extract_capability_signature(fpath, content)
                 if sig.tags:
                     signatures.append(sig)
+
+        self._sig_cache_path = project_path
+        self._sig_cache = signatures
         return signatures
 
     def _is_code_dir(self, dirpath: str) -> bool:
@@ -722,6 +785,111 @@ class InnovationPropagationDetector:
         except Exception as e:
             logger.debug(f"读取文件失败 [{file_path}]: {e}")
             return None
+
+    # ─── 缺口价值排序（LLM 一次看清单挑选 top-N） ────────────────
+
+    def _select_valuable_gaps(self, gaps: List[PropagationGap]) -> List[PropagationGap]:
+        """
+        从候选缺口中挑选最值得传播的 top-N（MAX_GAP_SUGGESTIONS）。
+
+        不再用"采纳率升序"这种粗糙代理，而是把完整候选清单一次性交给 LLM，
+        由它基于模式价值、缺失风险、复用成本做语义判断挑选。
+
+        策略：
+          - 候选数 <= MAX_GAP_SUGGESTIONS：全部保留，无需挑选。
+          - 候选数 <= LLM_RANK_POOL 且 LLM 可用：一次 LLM 调用读取整份清单，
+            返回它认为最值得的 top-N 序号。
+          - 候选数 > LLM_RANK_POOL：先按采纳率裁剪进池（兜底），LLM 在池内重选。
+          - LLM 不可用或挑选失败：回退为采纳率升序截断（保守兜底）。
+        """
+        if len(gaps) <= self.MAX_GAP_SUGGESTIONS:
+            return gaps
+
+        # 预裁剪：候选过多时先按采纳率升序收进池（保留最值得传播的），
+        # 与下方回退逻辑方向一致，避免 prompt 过长。
+        pool = gaps
+        if len(pool) > self.LLM_RANK_POOL:
+            pool = sorted(pool, key=lambda g: g.adoption_rate)[: self.LLM_RANK_POOL]
+
+        if not (self._llm_available and self._llm_budget > 0):
+            logger.warning("LLM 不可用或预算耗尽，缺口价值挑选回退为采纳率截断")
+            return sorted(pool, key=lambda g: g.adoption_rate)[: self.MAX_GAP_SUGGESTIONS]
+
+        # 构建完整清单（紧凑文本）
+        lines = []
+        for i, g in enumerate(pool):
+            lines.append(
+                f"{i}. [{g.pattern.pattern_category}] 模式「{g.pattern.pattern_name}」"
+                f" | 来源 {g.source_module} → 目标 {g.target_module}"
+                f" | 聚类 {g.cluster_size} 模块 | 采用率 {g.adoption_rate:.0%}"
+                f" | {g.pattern.description}"
+            )
+        listing = "\n".join(lines)
+
+        prompt = f"""你是一位资深技术负责人，正在决定哪些「设计模式传播缺口」最值得优先处理。
+
+所谓传播缺口：在同类型模块中，某个模块已经采用了某种设计模式（如校验链、重试逻辑、输入清洗），
+而同类型的其他模块却没有。补上这些缺口能让项目更健壮、更一致。
+
+下面是 {len(pool)} 个候选缺口清单。请挑选其中**最值得优先传播**的 {self.MAX_GAP_SUGGESTIONS} 个，
+评判依据（按重要性）：
+1. 该模式缺失带来的实际风险（越易导致线上故障/数据污染越优先）
+2. 该模式对健壮性与可维护性的价值
+3. 模式成熟度与复用成本（是否容易落地）
+
+候选清单：
+{listing}
+
+严格输出一个 JSON 数组，元素为所选缺口的序号（从 0 开始），共 {self.MAX_GAP_SUGGESTIONS} 个。
+只输出 JSON 数组，不要任何其他文字。例如: [3, 17, 5]"""
+
+        try:
+            messages = [{"role": "user", "content": prompt}]
+            response = self._llm_client.chat_completion(
+                messages,
+                temperature=0.2,
+                max_tokens=512,
+            )
+            self._llm_budget -= 1
+            selected = self._parse_rank_indices(response, len(pool))
+            if selected:
+                # 保持候选池原有顺序，仅保留被选中的序号，取前 top-N
+                chosen = [pool[i] for i in selected if 0 <= i < len(pool)]
+                chosen = chosen[: self.MAX_GAP_SUGGESTIONS]
+                if chosen:
+                    logger.info(
+                        f"LLM 排名挑选: {len(pool)} 个候选 → 保留 {len(chosen)} 个"
+                    )
+                    return chosen
+            logger.warning("LLM 排名结果无效，回退为采纳率截断")
+        except Exception as e:
+            logger.warning(f"LLM 缺口价值挑选失败: {e}")
+            self._llm_budget -= 1
+
+        return sorted(pool, key=lambda g: g.adoption_rate)[: self.MAX_GAP_SUGGESTIONS]
+
+    def _parse_rank_indices(self, response: str, pool_size: int) -> List[int]:
+        """解析 LLM 返回的序号数组，容错非法序号。"""
+        try:
+            start = response.find("[")
+            end = response.rfind("]") + 1
+            if start < 0 or end <= start:
+                return []
+            data = json.loads(response[start:end])
+            if not isinstance(data, list):
+                return []
+            indices = []
+            for x in data:
+                try:
+                    idx = int(x)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= idx < pool_size and idx not in indices:
+                    indices.append(idx)
+            return indices
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"排名结果解析失败: {e}")
+            return []
 
     # ─── 报告生成 ────────────────────────────────────────────────
 

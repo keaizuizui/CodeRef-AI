@@ -1,6 +1,9 @@
 # ─── Cache：用户专属数据，开源时删除此目录即可 ───
 cache/
 
+# ─── 敏感配置：含 LLM API 密钥，禁止提交 ───
+config/config.json
+
 # ─── Python ───
 __pycache__/
 *.pyc
@@ -10,11 +13,12 @@ dist/
 build/
 
 # ─── 运行时数据 ───
-data/analysis_cache/
-data/incremental_cache/
-data/chroma/
+data/
 logs/
 *.log
+
+# ─── 测试缓存 ───
+.pytest_cache/
 
 # ─── 报告输出 ───
 coderef-report/

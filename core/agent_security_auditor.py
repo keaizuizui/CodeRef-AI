@@ -458,6 +458,14 @@ class AgentSecurityAuditor:
             is_sanitized = bool(
                 re.search(r'(?:sanitize|escape|净化|_clean|neutralize|safe_)[a-z_\w]*\s*\(', stripped, re.IGNORECASE)
             )
+            # 判断是否为错误/诊断消息返回（结构化数据，非 LLM prompt）。
+            # 形如 {"error": f"..."} / "message": f"..." 的插值只是把选择器/状态拼进
+            # 返回给调用方的错误文本，从未进入任何 prompt。排除含 role 键的聊天消息，
+            # 后者（如 {"role":"user","message":f"..."}）仍是真实注入点，需继续检测。
+            is_error_msg = bool(
+                re.search(r'["\'](?:error|message)["\']\s*:\s*f?["\']', stripped)
+                and not re.search(r'role\s*[:=]', stripped)
+            )
 
             # 检测所有维度
             for patterns, category_key in [
@@ -483,6 +491,9 @@ class AgentSecurityAuditor:
                             continue
                         # 提示注入/上下文操纵：若注入点已被净化函数包裹，视为已安全处理
                         if is_sanitized and category_key in ("prompt_injection", "context_manipulation"):
+                            continue
+                        # 提示注入：若是错误/诊断消息返回（结构化数据，非 prompt），跳过
+                        if is_error_msg and category_key in ("prompt_injection", "context_manipulation"):
                             continue
                         risks.append(AgentSecurityRisk(
                             risk_id=risk_id,

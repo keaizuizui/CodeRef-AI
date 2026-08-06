@@ -313,10 +313,15 @@ def parse_diff(diff_text: str) -> List[Dict[str, Any]]:
     if current is not None:
         units.append(current)
 
-    # 过滤无实际变更或路径为空的单元
+    # 过滤无实际变更或路径为空的单元。
+    # 注意：纯删除（如 AI 删掉校验链）也是真实变更，须保留。
+    # 保留条件：有新增行，或任意 hunk 内有增删变更。
     result = [
         u for u in units
-        if u.get("file") and u.get("changed_lines")
+        if u.get("file") and (
+            u.get("changed_lines")
+            or any(h.get("changes") for h in u.get("hunks", []))
+        )
     ]
     logger.info(f"parse_diff 解析完成：共 {len(result)} 个变更单元")
     return result

@@ -41,6 +41,14 @@ try:
 except ImportError:
     HAS_REQUESTS = False
 
+# ═══════════════════════════════════════════════════════════════════
+# 模块级常量（熔断策略，集中管理 magic number）
+# ═══════════════════════════════════════════════════════════════════
+# 单次 embed 请求超时（秒）：半可用 Ollama 会挂起，缩短超时以快速失败
+_EMBED_TIMEOUT_S = 10
+# 连续失败触底熔断的阈值：达到后彻底降级为关键词检索，不再逐条请求
+_EMBED_CONSEC_FAIL_LIMIT = 3
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 数据结构
@@ -93,6 +101,7 @@ class OllamaEmbedder:
         self.model = model or os.environ.get("OLLAMA_EMBED_MODEL", self.DEFAULT_MODEL)
         self._available = None
         self._checked = False
+        self._fail_count = 0
 
     def is_available(self) -> bool:
         """检查 Ollama 是否可用"""
@@ -127,7 +136,7 @@ class OllamaEmbedder:
         return self._available
 
     def embed(self, text: str) -> Optional[np.ndarray]:
-        """将文本向量化"""
+        """将文本向量化。连续失败自动熔断，降级为关键词检索，避免半可用 Ollama 拖垮全量索引。"""
         if not self.is_available():
             return None
 
@@ -135,11 +144,12 @@ class OllamaEmbedder:
             resp = requests.post(
                 f"{self.base_url}/api/embeddings",
                 json={"model": self.model, "prompt": text},
-                timeout=30,
+                timeout=_EMBED_TIMEOUT_S,
             )
             if resp.status_code == 200:
                 embedding = resp.json().get("embedding", [])
                 if len(embedding) == self.EMBEDDING_DIM:
+                    self._fail_count = 0
                     return np.array(embedding, dtype=np.float32)
                 else:
                     logger.warning(f"[OllamaEmbedder] 向量维度不匹配: {len(embedding)} != {self.EMBEDDING_DIM}")
@@ -148,6 +158,12 @@ class OllamaEmbedder:
         except Exception as e:
             logger.warning(f"[OllamaEmbedder] 向量化失败: {e}")
 
+        # 熔断：连续失败达到阈值则彻底降级，不再逐条请求
+        self._fail_count += 1
+        if self._fail_count >= _EMBED_CONSEC_FAIL_LIMIT:
+            logger.warning(f"[OllamaEmbedder] 连续 {self._fail_count} 次失败，熔断降级为关键词检索")
+            self._available = False
+            self._checked = True
         return None
 
     def embed_batch(self, texts: List[str], batch_size: int = 10) -> List[Optional[np.ndarray]]:
