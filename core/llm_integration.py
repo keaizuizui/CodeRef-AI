@@ -50,6 +50,26 @@ class CodeSuggestion:
     source_reference: str = ""
 
 
+def _safe_float(raw, default: float) -> float:
+    """安全转换浮点，非法/空值回退默认，避免环境变量配置导致崩溃。"""
+    try:
+        if raw is None or str(raw).strip() == "":
+            return default
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(raw, default: int) -> int:
+    """安全转换整数，非法/空值回退默认。"""
+    try:
+        if raw is None or str(raw).strip() == "":
+            return default
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 class LLMIntegration:
     """LLM集成管理器"""
     
@@ -72,13 +92,20 @@ class LLMIntegration:
         # ── 优先级 1：环境变量 ──
         env_key = os.environ.get("CODEREF_API_KEY", "")
         if env_key:
+            provider_str = os.environ.get("CODEREF_PROVIDER", "deepseek")
+            provider_map = {
+                "deepseek": LLMProvider.DEEPSEEK,
+                "openai": LLMProvider.OPENAI,
+                "ollama": LLMProvider.OLLAMA,
+                "custom": LLMProvider.CUSTOM,
+            }
             return LLMConfig(
-                provider=LLMProvider(os.environ.get("CODEREF_PROVIDER", "deepseek")),
+                provider=provider_map.get(provider_str, LLMProvider.DEEPSEEK),
                 api_key=env_key,
                 base_url=os.environ.get("CODEREF_BASE_URL", "https://api.deepseek.com/v1"),
                 model=os.environ.get("CODEREF_MODEL", "deepseek-chat"),
-                temperature=float(os.environ.get("CODEREF_TEMPERATURE", "0.7")),
-                max_tokens=int(os.environ.get("CODEREF_MAX_TOKENS", "4096")),
+                temperature=_safe_float(os.environ.get("CODEREF_TEMPERATURE"), 0.7),
+                max_tokens=_safe_int(os.environ.get("CODEREF_MAX_TOKENS"), 4096),
             )
 
         

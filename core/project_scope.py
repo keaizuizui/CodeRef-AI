@@ -8,10 +8,12 @@
 检测规则（按优先级）：
 1. 项目根标志：包含 setup.py、pyproject.toml 等项目配置文件
 2. 已知非项目特征：__pycache__、.git、node_modules 等通用约定目录
-3. 虚拟环境检测：pyvenv.cfg 或 bin/activate + lib/ 结构
-4. 标准库/运行时检测：包含 os.py、sys.py 等标志性文件
-5. 包管理器缓存检测：路径包含 site-packages
-6. 数据/资源目录检测：只包含非代码文件
+3. 命名型环境目录：*_env / venv / .venv / conda 等命名约定（无需 pyvenv.cfg）
+4. vendored/内嵌第三方库：大量二进制或 *.{dist-info,egg-info} 打包元数据
+5. 大型二进制/资源目录：models / uploads / cache 等几乎无源码的目录
+6. 虚拟环境（pyvenv.cfg / bin+lib 结构）与标准库/运行时
+7. 打包元数据目录：*.dist-info / *.egg-info
+8. 数据/资源目录：只包含非代码文件
 
 作者: PersuadeAI Team
 版本: v1.0
@@ -41,6 +43,34 @@ KNOWN_NON_PROJECT_DIRS = {
     "__pycache__", ".git", "node_modules", ".pytest_cache",
     ".mypy_cache", ".ruff_cache", ".tox", "dist", "build",
 }
+
+# 命名型环境目录：即使没有 pyvenv.cfg，也能按命名识别。
+# 覆盖 *_env / *env / venv / .venv / conda / pyenv 等常见虚拟环境命名约定。
+ENV_DIR_PATTERN = re.compile(
+    r'^(?:[a-zA-Z0-9_.-]+_)?(?:env|venv|virtualenv|conda|pyenv|direnv)$',
+    re.IGNORECASE,
+)
+
+# vendored/内嵌第三方库目录的常见命名。
+# 命中后还会叠加"二进制比例"校验，避免误伤业务代码里的同名目录。
+VENDORED_DIR_NAMES = {
+    "site-packages", "vendor", "vendored", "third_party", "third-party",
+    "wheels", "wheelhouse", "packages", "eggs", ".deps", "deps",
+    "embedded", "embedded_python", "runtime", "redist", "libs", "external",
+}
+
+# 大型二进制/资源目录命名：多为模型权重、上传产物、缓存，扫描无意义。
+# 命中后校验目录内是否几乎不含源代码，才跳过。
+BINARY_RESOURCE_DIR_NAMES = {
+    "models", "weights", "checkpoints", "uploads", "static_uploads",
+    "media", "dataset", "datasets", "data_cache", "cache", "temp", "tmp",
+    "output", "outputs", "artifacts", "generated", "node_cache",
+}
+
+# 编译产物/二进制扩展名（用于 vendored 内嵌库判定）
+BINARY_EXTENSIONS = {".so", ".pyd", ".dll", ".dylib", ".a", ".lib", ".pyo"}
+# Python 打包元数据目录（*.dist-info / *.egg-info）
+DIST_INFO_PATTERN = re.compile(r'^.+\.(?:dist-info|egg-info)$')
 
 # *.egg-info 匹配模式
 EGG_INFO_PATTERN = re.compile(r'^.+\.egg-info$')
@@ -199,6 +229,14 @@ class ProjectScope:
         if EGG_INFO_PATTERN.match(dir_name):
             return f"Python 打包信息: {dir_name}"
 
+        # 规则 2.5: 命名型环境目录（无需 pyvenv.cfg）
+        if ENV_DIR_PATTERN.match(dir_name):
+            return f"命名型虚拟环境: {dir_name}"
+        if dir_name in VENDORED_DIR_NAMES and self._is_vendored_lib(dir_path):
+            return f"vendored/内嵌第三方库: {dir_name}"
+        if dir_name in BINARY_RESOURCE_DIR_NAMES and self._is_binary_resource_dir(dir_path):
+            return f"大型二进制/资源目录: {dir_name}"
+
         # 规则 3: 虚拟环境检测
         if self._is_virtual_env(dir_path):
             return "虚拟环境"
@@ -210,6 +248,10 @@ class ProjectScope:
         # 规则 5: 包管理器缓存检测
         if "site-packages" in dir_path.replace("\\", "/").split("/"):
             return "第三方包缓存 (site-packages)"
+
+        # 规则 5.5: 打包元数据目录（*.dist-info / *.egg-info）
+        if DIST_INFO_PATTERN.match(dir_name):
+            return f"Python 打包元数据: {dir_name}"
 
         # 规则 6: 数据/资源目录检测
         if self._is_data_only_dir(dir_path):
@@ -354,6 +396,76 @@ class ProjectScope:
 
         # 只有非代码文件且没有代码文件
         return has_data_file and not has_code_file
+
+    def _is_vendored_lib(self, dir_path: str) -> bool:
+        """检测是否为 vendored/内嵌第三方库目录。
+
+        特征：大量二进制文件(.so/.pyd/.dll)或打包元数据(*.dist-info/*.egg-info)，
+        且源代码占比低。加了"二进制比例"门槛，避免误伤业务代码里的同名目录。
+        """
+        try:
+            entries = os.listdir(dir_path)
+        except (PermissionError, OSError):
+            return False
+        if not entries:
+            return False
+
+        binary_count = 0
+        code_count = 0
+        pkg_meta_count = 0
+        for entry in entries:
+            full = os.path.join(dir_path, entry)
+            if os.path.isdir(full):
+                if DIST_INFO_PATTERN.match(entry):
+                    pkg_meta_count += 1
+                continue
+            ext = os.path.splitext(entry)[1].lower()
+            if ext in SOURCE_EXTENSIONS:
+                code_count += 1
+            elif ext in CODE_EXTENSIONS:  # 编译产物/二进制（非源码）
+                binary_count += 1
+
+        # 打包元数据大量出现 → 强信号
+        if pkg_meta_count >= 3:
+            return True
+        # 二进制文件占比高（考虑二进制 + 编译产物）
+        total = binary_count + code_count
+        if total >= 5 and pkg_meta_count >= 1:
+            return True
+        # 二进制文件数量显著多于源码
+        if binary_count >= 10 and code_count <= 2:
+            return True
+        return False
+
+    def _is_binary_resource_dir(self, dir_path: str) -> bool:
+        """检测是否为大型二进制/资源目录（模型权重、上传产物、缓存等）。
+
+        特征：几乎不含源代码文件（仅允许一两个配置文件），
+        且包含编译产物/二进制/大件资源。
+        """
+        try:
+            entries = os.listdir(dir_path)
+        except (PermissionError, OSError):
+            return False
+        if not entries:
+            return False
+
+        has_binary = False
+        code_count = 0
+        for entry in entries:
+            full = os.path.join(dir_path, entry)
+            if os.path.isdir(full):
+                continue
+            ext = os.path.splitext(entry)[1].lower()
+            if ext in SOURCE_EXTENSIONS:
+                code_count += 1
+                if code_count > 2:  # 含较多真源码 → 不跳过
+                    return False
+            elif ext in CODE_EXTENSIONS:  # 编译产物/二进制
+                has_binary = True
+
+        # 有二进制/编译产物，且几乎没有源码 → 视为资源目录
+        return has_binary and code_count == 0
 
     def should_scan(self, dir_path: str) -> bool:
         """
