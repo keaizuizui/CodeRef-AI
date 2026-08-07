@@ -1107,7 +1107,7 @@ class CodeAnalyzer:
             report.append("- 未检测到标准入口文件")
         
         report.append("\n---")
-        report.append("\n*报告由 CodeRef AI 代码分析引擎自动生成*")
+        report.append("\n*报告由 CodeRef-AI 代码分析引擎自动生成*")
         
         return '\n'.join(report)
 
@@ -2285,7 +2285,7 @@ class CodeAnalyzer:
         
         # 报告脚注
         now_str2 = datetime.now().strftime('%Y-%m-%d %H:%M')
-        lines.append(f'> **报告说明**: 本报告由 CodeRef AI 深度分析引擎自动生成于 {now_str2}')
+        lines.append(f'> **报告说明**: 本报告由 CodeRef-AI 深度分析引擎自动生成于 {now_str2}')
         lines.append(f'> **分析数据**: {total_files} 个代码文件，{len(analysis.modules)} 个模块，扫描范围全覆盖')
         lines.append(f'> **免责声明**: 本报告基于静态代码分析，不包含运行时动态信息')
         lines.append(f'> **过滤说明**: 已自动过滤 .git 仓库、本地 Python 库（site-packages/Lib）、编译缓存（__pycache__/node_modules）以及工具自身生成的报告文件（.md）')

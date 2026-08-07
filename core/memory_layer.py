@@ -862,7 +862,7 @@ body {{
     </div>
 </div>
 <div class="footer">
-    CodeRef MemoryLayer 认知记忆地图 &middot; 由 CodeRef AI 自动生成
+    CodeRef MemoryLayer 认知记忆地图 &middot; 由 CodeRef-AI 自动生成
 </div>
 </div>
 </body>
