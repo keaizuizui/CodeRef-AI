@@ -211,8 +211,8 @@ class AgentSecurityAuditor:
          "检测到 DEBUG=True，生产环境应关闭调试模式",
          "生产环境设置 DEBUG=False，或通过环境变量控制"),
         # 不安全的反序列化
-        (re.compile(r'(?:pickle\.loads|yaml\.load\s*\(|json\.loads\s*\(.*ensure_ascii)', re.IGNORECASE),
-         "AGENT-SEC-23", "不安全反序列化", "blocker",
+        (re.compile(r'(?:pickle\.loads\s*\(([^)]*)\)|yaml\.load\s*\(|json\.loads\s*\(.*ensure_ascii)', re.IGNORECASE),
+         "AGENT-SEC-23", "不安全反序列化", "medium",
          "检测到使用 pickle.loads 或 yaml.load（非 SafeLoader），可被利用执行任意代码",
          "使用 yaml.safe_load() 替代 yaml.load()，避免 pickle 反序列化不可信数据"),
         # CORS 配置过于宽松
@@ -221,7 +221,7 @@ class AgentSecurityAuditor:
          "检测到 CORS 配置允许所有来源（*），可能被恶意站点利用",
          "将 allow_origins 限制为具体域名白名单"),
         # 超时未设置
-        (re.compile(r'(?:requests\.(?:get|post|put|delete)|httpx\.(?:get|post))\s*\([^)]*\)', re.IGNORECASE),
+        (re.compile(r'(?:requests\.(?:get|post|put|delete)|httpx\.(?:get|post))\s*\(([^)]*)\)', re.IGNORECASE),
          "AGENT-SEC-25", "网络请求无超时", "medium",
          "检测到网络请求未设置 timeout 参数，可能导致请求永久挂起",
          "所有网络请求添加 timeout=30 参数"),
@@ -494,10 +494,22 @@ class AgentSecurityAuditor:
                 if is_report_gen:
                     continue
                 for pattern, risk_id, risk_name, severity, detail, suggestion in patterns:
-                    if pattern.search(stripped):
+                    m = pattern.search(stripped)
+                    if m:
                         # 跳过模式定义自身（如类中的正则表达式定义）
                         if self._is_pattern_definition(stripped, risk_name):
                             continue
+                        # AGENT-SEC-25：提取完整调用参数（平衡括号，支持跨行/嵌套），
+                        # 若已显式传入 timeout 关键字参数，则不算"无超时"误报
+                        if risk_id == "AGENT-SEC-25":
+                            args = self._collect_call_args(lines, i - 1, stripped, m.start())
+                            if re.search(r'timeout\s*=', args, re.IGNORECASE):
+                                continue
+                        # AGENT-SEC-23：豁免服务端内部 pickle dumps→loads 闭环（参数为内部可信变量）
+                        if risk_id == "AGENT-SEC-23":
+                            args = self._collect_call_args(lines, i - 1, stripped, m.start())
+                            if args and self._is_internal_pickle_loads(args, lines):
+                                continue
                         # 提示注入/上下文操纵：若注入点已被净化函数包裹，视为已安全处理
                         if is_sanitized and category_key in ("prompt_injection", "context_manipulation"):
                             continue
@@ -551,6 +563,15 @@ class AgentSecurityAuditor:
         
         # 对每种防御模式，检查是否在项目中存在
         for check in self.RESILIENCE_GAP_CHECKS:
+            # AGENT-RESILIENCE-07 连接池探活：若项目根本不用数据库连接池（无 create_engine /
+            # sqlalchemy / psycopg / pymysql / asyncpg / DBUtils 等），跳过该项，
+            # 避免对 SQLite（无连接池概念）等纯文件型项目机械打标
+            if check["id"] == "AGENT-RESILIENCE-07":
+                if not re.search(
+                    r'create_engine|sqlalchemy|psycopg|pymysql|mysql\.connector|asyncpg|DBUtils|pool_pre_ping|pool_recycle',
+                    all_content, re.IGNORECASE
+                ):
+                    continue
             found = False
             for pattern in check["patterns"]:
                 if pattern.search(all_content):
@@ -572,6 +593,65 @@ class AgentSecurityAuditor:
                 ))
         
         return risks
+
+    def _is_internal_pickle_loads(self, args: str, lines: List[str]) -> bool:
+        """判断 pickle.loads 是否属于服务端内部 dumps→loads 闭环（参数为内部可信变量）。
+
+        豁免条件：同一文件内对同一变量存在 pickle.dumps 赋值，且该 loads 调用的参数
+        就是这个变量（非 request/input/user/cookie/header 等不可信外部来源）。
+        仅当"被负载的变量在文件内被 pickle.dumps 的结果赋值"时才豁免，避免把真实
+        攻击面（如 loads 外部请求数据）一并跳过。
+        """
+        arg = args.strip()
+        # 参数必须是简单变量名（如 pickle.loads(blob)），复杂表达式不豁免
+        if not re.fullmatch(r'[A-Za-z_]\w*', arg):
+            return False
+        # 该变量必须被 pickle.dumps(...) 赋值，才构成"内部 dumps→loads 闭环"
+        if not re.search(r'\b' + re.escape(arg) + r'\s*=\s*pickle\.dumps\s*\(', "".join(lines)):
+            return False
+        # 参数本身来自不可信外部来源则不豁免
+        untrusted = re.search(
+            r'\b(request|input|user|cookie|header|query|form|body|payload|received)\b',
+            args, re.IGNORECASE
+        )
+        return not untrusted
+
+    def _collect_call_args(self, lines: List[str], start_idx: int, stripped: str, from_col: int) -> str:
+        """从调用起点提取完整括号内的参数（平衡括号匹配，支持跨行/嵌套调用）。
+
+        从 from_col 位置起扫描，遇到 '(' 深度+1，遇到 ')' 深度-1，深度归零即返回
+        括号内完整内容。若参数跨行（调用写到下一行），自动续读后续行，避免
+        `[^)]*` 在第一个 ')' 提前截断导致的漏判（如 requests.get(url, timeout=compute())）。
+        """
+        depth = 0
+        started = False
+        buf = []
+        col = from_col
+        idx = start_idx
+        while True:
+            if idx >= len(lines):
+                break
+            line = lines[idx] if idx == start_idx else lines[idx].strip()
+            while col < len(line):
+                ch = line[col]
+                if not started:
+                    if ch == '(':
+                        started = True
+                        depth = 1
+                    col += 1
+                    continue
+                if ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                    if depth == 0:
+                        return "".join(buf)
+                elif ch not in ("\n", "\r", "\t"):
+                    buf.append(ch)
+                col += 1
+            idx += 1
+            col = 0
+        return "".join(buf)
 
     def _is_pattern_definition(self, line: str, risk_name: str) -> bool:
         """检查是否匹配了工具自身的检测模式定义"""

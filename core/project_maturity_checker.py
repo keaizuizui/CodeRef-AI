@@ -40,6 +40,7 @@ class MaturityCheck:
     detail: str  # 详细说明
     suggestion: str  # 改进建议（通俗语言）
     evidence: str = ""  # 发现的证据（通过时）
+    kind: str = "defect"  # defect=缺陷/缺失；suggestion=工程化改进建议（非缺陷）
 
 
 @dataclass
@@ -173,6 +174,12 @@ class ProjectMaturityChecker:
         checks.extend(self._check_code_quality(project_path, deps))
         # 8. 文档
         checks.extend(self._check_documentation(project_path, framework))
+
+        # 将 warn 状态（工程化改进建议，如 CI/CD、容器化、格式化等）归类为"建议项"，
+        # 而非缺陷，避免外层将其当作 security/quality 缺陷汇总
+        for c in checks:
+            if c.status == "warn":
+                c.kind = "suggestion"
 
         # 计算评分
         total = len(checks)
@@ -740,6 +747,8 @@ class ProjectMaturityChecker:
             for c in cat_checks:
                 if c.status == "pass":
                     icon = "✅"
+                elif getattr(c, "kind", "") == "suggestion":
+                    icon = "💡 建议"
                 elif c.status == "fail":
                     icon = "❌ 缺失"
                 else:
@@ -753,6 +762,21 @@ class ProjectMaturityChecker:
 
                 lines.append(f"| {icon} | {c.name} | {detail} | {suggestion} |")
 
+            lines.append("")
+
+        # 工程化改进建议（非缺陷）独立汇总，与缺陷项明确区分
+        suggestions = [c for c in report.checks if getattr(c, "kind", "") == "suggestion"]
+        if suggestions:
+            lines.append("### 💡 工程化改进建议（非缺陷）")
+            lines.append("")
+            lines.append("以下为可选的工程化改进建议，并非缺陷。项目已具备核心功能与代码，这些是可锦上添花的优化项：")
+            lines.append("")
+            lines.append("| 检查项 | 详情 | 建议 |")
+            lines.append("|--------|------|------|")
+            for c in suggestions:
+                detail = c.detail[:100]
+                suggestion = c.suggestion[:120] if c.suggestion else "-"
+                lines.append(f"| {c.name} | {detail} | {suggestion} |")
             lines.append("")
 
         lines.append("---")
