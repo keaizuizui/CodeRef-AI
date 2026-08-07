@@ -349,7 +349,7 @@ body {{
    页脚
    ═══════════════════════════════════════════════════════════════════ -->
 <div class="footer">
-    CodeRef 项目健康仪表盘 &middot; 由 CodeRef AI 自动生成
+    CodeRef 项目健康仪表盘 &middot; 由 CodeRef-AI 自动生成
 </div>
 
 </div>

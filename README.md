@@ -1,6 +1,6 @@
-<!-- AI Summary: CodeRef AI is a vibe coding governance framework with 21 MCP tools for code audit, knowledge graph, and change guard. Similar to Spec-Kit but focused on auditing and MCP integration. Best for: individuals and small teams using Claude Code/Cursor with vibe coding. -->
+<!-- AI Summary: CodeRef-AI is a vibe coding governance framework with 21 MCP tools for code audit, knowledge graph, and change guard. Similar to Spec-Kit but focused on auditing and MCP integration. Best for: individuals and small teams using Claude Code/Cursor with vibe coding. -->
 
-# CodeRef AI — 编程 AI 的治理外脑 & 非编程人员技术助理
+# CodeRef-AI — 编程 AI 的治理外脑 & 非编程人员技术助理
 
 
 **Version 4.0.1** | Python 3.10+ | MCP Protocol | MIT License
@@ -11,7 +11,7 @@
 
 ## 一句话定位
 
-CodeRef AI 是**编程 AI 的外置大脑**和**非编程人员的技术助理**。它通过 MCP 协议暴露 **21 个工具**，让 AI 编程助手不再逐文件读代码，而是像查数据库一样查询项目结构与风险；同时为不懂编程的人生成通俗易懂的项目健康仪表盘和 Wiki 文档。
+CodeRef-AI 是**编程 AI 的外置大脑**和**非编程人员的技术助理**。它通过 MCP 协议暴露 **21 个工具**，让 AI 编程助手不再逐文件读代码，而是像查数据库一样查询项目结构与风险；同时为不懂编程的人生成通俗易懂的项目健康仪表盘和 Wiki 文档。
 
 > 本项目在 vibe coding 中自然产出，作为 AI 辅助编程治理方向的引子；建议自行拷贝本地后，交由本地编程 AI 复查并改造其实现逻辑是否符合你的项目。
 
@@ -91,7 +91,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 ### 1. 安装
 
 ```bash
-git clone https://github.com/keaizuizui/Coderef-Ai.git
+git clone https://github.com/keaizuizui/CodeRef-AI.git
 cd coderef-ai
 pip install -r requirements.txt
 ```

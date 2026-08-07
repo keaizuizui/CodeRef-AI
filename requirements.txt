@@ -1,4 +1,4 @@
-# CodeRef AI - 智能代码分析引擎
+# CodeRef-AI - 智能代码分析引擎
 # 依赖清单
 
 # 代码解析（注意：tree-sitter 需保持在 0.20.x，新版本不兼容 tree-sitter-languages）
