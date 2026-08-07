@@ -48,6 +48,11 @@ class PipeResult:
     report: str = ""; errors: List[str] = field(default_factory=list)
     elapsed: float = 0.0; report_path: str = ""
     scope_text: str = ""  # 审计范围说明（披露被排除的目录，保证统计透明）
+    # 审计证据字段：让调用方能区分"本次扫描结果"与"历史缓存/修复状态"，
+    # 避免外层把旧知识图谱或记忆当成本次审计结论。
+    scan_ts: str = ""              # 本次扫描开始时间（ISO 时间戳）
+    file_snapshot: dict = field(default_factory=dict)  # 本次被扫描文件的 mtime+size 快照
+    kg_built_at: str = ""          # 本次审计构建的知识图谱时间（若为历史图谱则为旧时间）
 
 class Pipe:
 
@@ -295,16 +300,35 @@ class Pipe:
                 except Exception: pass
 
         try:
+            # 审计证据：记录本次扫描开始时间，供调用方区分"本次结果"与历史缓存
+            r.scan_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
             # 扫描阶段桥接文件级进度：长阶段能实时看到"已扫描文件/总文件"
             def _scan_file_prog(done, total):
                 _prog("扫描代码", 0, 11, detail=f"已扫描 {done}/{total} 个文件")
             tf, tl, analysis = self._scan(project_path, file_cb=_scan_file_prog)
             r.total_files, r.total_lines = tf, tl
             r.scope_text = self._build_scope_text(project_path, tf)
+            # 本次实际扫描文件的 mtime+size 快照，作为"审计覆盖了哪些文件"的证据
+            try:
+                snapshot = {}
+                for cf in getattr(analysis, "files", []) or []:
+                    fp = getattr(cf, "file_path", "")
+                    if not fp:
+                        continue
+                    try:
+                        st = os.stat(fp)
+                        snapshot[fp] = {"mtime": st.st_mtime, "size": st.st_size}
+                    except Exception:
+                        pass
+                r.file_snapshot = snapshot
+            except Exception:
+                r.file_snapshot = {}
             _prog("扫描代码", 0, 11)
 
             # 构建知识图谱（持久化项目记忆）
             kg_stats = self._build_kg(project_path, analysis)
+            r.kg_built_at = str(kg_stats.get("built_at", "")) if isinstance(kg_stats, dict) else ""
             _prog("构建知识图谱", 1, 11)
 
             # 11 个审计工具
@@ -887,6 +911,11 @@ class Pipe:
             f"项目: `{r.project_path}` | 文件: {r.total_files} | 行: {r.total_lines} | {r.elapsed}s",
             f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             "",
+            "## 统计口径",
+            f"- **本次扫描时间**: {r.scan_ts or datetime.now().strftime('%Y-%m-%d %H:%M:%S')}（本次审计实际扫描代码的时刻）",
+            f"- **知识图谱构建时间**: {r.kg_built_at or '本次未重建图谱'}（图谱可能滞后于代码，若两者不一致请以重建后为准）",
+            f"- **统计范围**: 下表仅覆盖本次扫描的 {r.total_files} 个文件（详见 `file_snapshot`），均为**审计发现**，不代表任何修复状态；修复状态需对照 git 提交单独核实。",
+            "",
             "## 置信度",
             f"| 🔴 HIGH | 🟡 MEDIUM | ⚪ LOW |",
             f"|----------|------------|---------|",
@@ -970,35 +999,44 @@ class Pipe:
         if not kg:
             return {"error": "知识图谱不存在，请先运行 coderef_audit/coderef_docs/coderef_architecture"}
 
+        # 元信息：图谱构建时间，供调用方识别数据新旧，避免把旧图谱当成本次审计结果
+        kg_built_at = kg.get_built_at()
+        meta = {"kg_built_at": kg_built_at,
+                "kg_note": f"知识图谱构建于 {kg_built_at}，仅当本次运行 coderef_audit/coderef_docs/coderef_architecture 后才会重建；若代码有改动，请先重建图谱再查询。" if kg_built_at else "知识图谱缺少构建时间标记"}
+
+        def _wrap(data: dict) -> dict:
+            data.update(meta)
+            return data
+
         try:
             if query_type == "stats":
-                return kg.get_stats()
+                return _wrap(kg.get_stats())
             elif query_type == "entity":
                 r = kg.query_entity(kwargs.get("name", ""), kwargs.get("type"))
-                return {"nodes": [n.to_dict() for n in r.nodes], "total": r.total}
+                return _wrap({"nodes": [n.to_dict() for n in r.nodes], "total": r.total})
             elif query_type == "callers":
                 r = kg.query_callers(kwargs.get("func_name", ""))
-                return {"nodes": [n.to_dict() for n in r.nodes], "total": r.total}
+                return _wrap({"nodes": [n.to_dict() for n in r.nodes], "total": r.total})
             elif query_type == "callees":
                 r = kg.query_callees(kwargs.get("func_name", ""))
-                return {"nodes": [n.to_dict() for n in r.nodes], "total": r.total}
+                return _wrap({"nodes": [n.to_dict() for n in r.nodes], "total": r.total})
             elif query_type == "impact":
                 r = kg.query_impact(kwargs.get("file_path", ""))
-                return {"nodes": [n.to_dict() for n in r.nodes], "total": r.total}
+                return _wrap({"nodes": [n.to_dict() for n in r.nodes], "total": r.total})
             elif query_type == "relations":
                 r = kg.query_relations(kwargs.get("node_id", ""))
-                return {"nodes": [n.to_dict() for n in r.nodes],
-                        "edges": [e.to_dict() for e in r.edges], "total": r.total}
+                return _wrap({"nodes": [n.to_dict() for n in r.nodes],
+                              "edges": [e.to_dict() for e in r.edges], "total": r.total})
             elif query_type == "file_entities":
                 r = kg.query_file_entities(kwargs.get("file_path", ""))
-                return {"nodes": [n.to_dict() for n in r.nodes], "total": r.total}
+                return _wrap({"nodes": [n.to_dict() for n in r.nodes], "total": r.total})
             elif query_type == "search":
                 r = kg.search(kwargs.get("keyword", ""), kwargs.get("limit", 30))
-                return {"nodes": [n.to_dict() for n in r.nodes], "total": r.total}
+                return _wrap({"nodes": [n.to_dict() for n in r.nodes], "total": r.total})
             elif query_type == "call_graph":
                 r = kg.get_call_graph(kwargs.get("func_name", ""), kwargs.get("depth", 2))
-                return {"nodes": [n.to_dict() for n in r.nodes],
-                        "edges": [e.to_dict() for e in r.edges], "total": r.total}
+                return _wrap({"nodes": [n.to_dict() for n in r.nodes],
+                              "edges": [e.to_dict() for e in r.edges], "total": r.total})
             else:
                 return {"error": f"未知查询类型: {query_type}，支持: stats/entity/callers/callees/impact/relations/file_entities/search/call_graph"}
         finally:
