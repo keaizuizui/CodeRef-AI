@@ -2341,7 +2341,7 @@ UI线索:
         lines.append(f'# {project_display} — 业务架构全景报告')
         lines.append('')
         lines.append(f'> **报告日期**：{datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}')
-        lines.append(f'> **分析引擎**：CodeRef AI BusinessAnalyzer V2.1 + GitNexus Code Intelligence')
+        lines.append(f'> **分析引擎**：CodeRef-AI BusinessAnalyzer V2.1 + GitNexus Code Intelligence')
         lines.append(f'> **代码规模**：{result.file_count} 文件 / {result.line_count:,} 行 / {result.total_classes} 类 / {result.total_functions} 函数')
         if result.enrichment and result.enrichment.available:
             lines.append(f'> **GitNexus 索引**：{len(result.enrichment.all_symbols)} 符号 / {len(result.enrichment.call_pairs)} 调用关系 / {len(result.enrichment.entry_points)} 入口点')

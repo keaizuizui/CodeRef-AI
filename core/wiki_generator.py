@@ -1552,7 +1552,7 @@ class WikiGenerator:
         lines.append("")
         lines.append("### 关于本 Wiki")
         lines.append("")
-        lines.append("本 Wiki 由 CodeRef AI 自动生成，使用 LLM 理解代码语义后撰写。")
+        lines.append("本 Wiki 由 CodeRef-AI 自动生成，使用 LLM 理解代码语义后撰写。")
         lines.append("如果你修改了代码，可以重新运行 `coderef_generate_wiki` 更新文档。")
         lines.append("")
         if result.large_repo:

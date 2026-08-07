@@ -1,8 +1,8 @@
-# CodeRef AI — MCP Server 配置指南
+# CodeRef-AI — MCP Server 配置指南
 
 ## 概述
 
-CodeRef AI 通过 MCP (Model Context Protocol) 协议暴露 6 个工具给 AI 编程助手使用。配置一次后，AI 可以分析**任何项目**——每次调用时传入 `project_path` 参数即可，不需要重复配置。
+CodeRef-AI 通过 MCP (Model Context Protocol) 协议暴露 6 个工具给 AI 编程助手使用。配置一次后，AI 可以分析**任何项目**——每次调用时传入 `project_path` 参数即可，不需要重复配置。
 
 **适用客户端：** Trae / Claude Desktop / Cursor / 任何支持 MCP 的 AI 编程助手
 

@@ -1,11 +1,11 @@
 ﻿@echo off
 chcp 65001 >nul
-title CodeRef AI - 配置管理
+title CodeRef-AI - 配置管理
 
 :menu
 cls
 echo ============================================
-echo   CodeRef AI - 配置管理
+echo   CodeRef-AI - 配置管理
 echo ============================================
 echo.
 echo   1. 配置 LLM API 密钥
