@@ -649,6 +649,12 @@ class Server:
                 "report": r.report,
                 "report_path": r.report_path or "",
                 "dashboard_path": d or "",
+                "evidence": {
+                    "scan_ts": getattr(r, "scan_ts", ""),          # 本次扫描时间戳
+                    "kg_built_at": getattr(r, "kg_built_at", ""),   # 知识图谱构建时间
+                    "file_snapshot": getattr(r, "file_snapshot", {}),  # 本次扫描文件快照
+                    "note": "evidence.scan_ts 为本次审计实际扫描时间；kg_built_at 为知识图谱构建时间，两者不一致时说明图谱可能滞后于代码，查询类结果请以重建后为准。统计口径仅覆盖 file_snapshot 所列文件，不代表修复状态。",
+                },
                 "summary": {
                     "total_files": getattr(r, "total_files", 0),
                     "total_lines": getattr(r, "total_lines", 0),

@@ -23,6 +23,9 @@ logs/
 # ─── 报告输出 ───
 coderef-report/
 
+# ─── 回归测试（v4.0.2 不入库）───
+tests/
+
 # ─── IDE ───
 .vscode/
 .idea/
