@@ -3,7 +3,7 @@
 # CodeRef-AI — 编程 AI 的治理外脑 & 非编程人员技术助理
 
 
-**Version 4.0.3** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.0.4** | Python 3.10+ | MCP Protocol | MIT License
 
 > 一键审计 · 架构图谱 · 项目文档 · 知识图谱 · 健康仪表盘 · 代码审查 · 前端交互审查 · 记忆层 · 创新识别 · OWASP 合规 · 变更守护
 
@@ -305,6 +305,14 @@ coderef-ai/
 | 开源友好 | 敏感数据集中 `cache/` 与 `config/config.json`，删除即清理，一行命令安全开源 |
 
 ## 更新日志
+
+### v4.0.4 — 审计误报修复（Agent 安全审计 + 成熟度建议归类）
+
+- **timeout 误报修复**：`coderef_audit` 的网络请求无超时检测不再把 `requests.get(url, timeout=120)` 误判为无超时。改为平衡括号解析完整调用参数，支持跨行调用与嵌套括号（如 `timeout=compute_timeout()`），仅当调用确实未传 `timeout` 时才报告
+- **pickle 误报修复**：反序列化检测从无条件 blocker 降级为 medium，并识别服务端内部 `dumps→loads` 闭环予以豁免；豁免条件收紧为"被负载变量确实由 `pickle.dumps` 赋值"，外部请求数据、复杂表达式不再被误豁免（避免漏报真实攻击面）
+- **连接池探活误报修复**：对不使用数据库连接池的项目（如纯 SQLite）不再机械打标 `AGENT-RESILIENCE-07`，仅当项目存在 SQLAlchemy 等连接池依赖时才建议
+- **成熟度建议归类**：`coderef_audit` 的成熟度检查将"工程化改进建议"（CI/CD、容器化、格式化、配置模板等 warn 项）与"缺陷"分离，报告新增"💡 建议（工程化改进项，非缺陷）"独立小节，建议项不再以缺陷级别进入 HIGH/MEDIUM 缺陷汇总
+- **管线健壮性**：`_matu` 改为直接接住成熟度检查返回值，消除对检测器 `self.report` 副作用的隐式依赖
 
 ### v4.0.3 — Wiki 生成可靠性（部分失败可感知）
 
