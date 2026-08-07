@@ -31,6 +31,10 @@ class Finding:
     # 相邻行合并后记录真实行号区间，避免标题退化为 "(等多行)"
     line_start: int = 0
     line_end: int = 0
+    # 类型标记：defect=缺陷/缺失；advice=工程化改进建议（非缺陷）。
+    # 汇总层据此区分"建议项"与"缺陷项"，避免把工程化 warn 等建议误报为缺陷。
+    # 带默认值，向后兼容所有不含 kind 的现有 Finding 构造调用。
+    kind: str = "defect"
 
     @property
     def line_label(self) -> str:
@@ -660,17 +664,25 @@ class Pipe:
         if "matu" in done: return
         try:
             from core.project_maturity_checker import ProjectMaturityChecker
-            c = ProjectMaturityChecker(); c.check(p)
-            rep = getattr(c, "report", None)
+            c = ProjectMaturityChecker()
+            rep = c.check(p)
             for s in getattr(rep, "checks", []):
                 if getattr(s, "status", "") == "pass":
                     continue  # 只上报未通过的成熟度检查
+                # 成熟度检查含两类：缺陷/缺失(kind=defect) 与 工程化改进建议(kind=suggestion)。
+                # 建议项(a.k.a 工程化 warn)不以安全缺陷同级别的 severity 进入缺陷汇总，
+                # 通过 kind="advice" + severity="info" 标记，供汇总/报告层区分"建议项"与"缺陷项"。
+                # getattr 兜底，即使 detector 未提供 kind 也保持向后兼容。
+                mk = getattr(s, "kind", "defect")
+                is_advice = mk == "suggestion"
+                sev = "info" if is_advice else "medium"
                 r.findings.append(Finding(id=f"matu-{len(r.findings)}", tool="matu",
-                    category=getattr(s,"category",""), severity="medium",
+                    category=getattr(s,"category",""), severity=sev,
                     file_path="", line=0,
                     title=f"[{getattr(s,'check_id','')}] {getattr(s,'name','')} - {getattr(s,'status','')}",
                     detail=getattr(s,"detail",""), suggestion=getattr(s,"suggestion",""),
-                    tier=Tier.MEDIUM))
+                    kind="advice" if is_advice else "defect",
+                    tier=self._tier_for(sev)))
             done.add("matu"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"matu: {e}")
 
@@ -912,9 +924,12 @@ class Pipe:
         # 保证报告头展示真实耗时。
         if r.elapsed == 0.0 and getattr(self, "_t0", None):
             r.elapsed = round(time.time() - self._t0, 1)
-        h = [f for f in r.findings if f.tier == Tier.HIGH]
-        m = [f for f in r.findings if f.tier == Tier.MEDIUM]
-        l = [f for f in r.findings if f.tier == Tier.LOW]
+        # 把"建议项"(kind=advice) 与"缺陷项"(defect) 分开统计/展示，
+        # 建议项不计入 HIGH/MEDIUM/LOW 缺陷表，避免工程化改进建议被误报为缺陷。
+        h = [f for f in r.findings if f.tier == Tier.HIGH and f.kind != "advice"]
+        m = [f for f in r.findings if f.tier == Tier.MEDIUM and f.kind != "advice"]
+        l = [f for f in r.findings if f.tier == Tier.LOW and f.kind != "advice"]
+        adv = [f for f in r.findings if f.kind == "advice"]
         lines = [
             f"# CodeRef {title}",
             f"项目: `{r.project_path}` | 文件: {r.total_files} | 行: {r.total_lines} | {r.elapsed}s",
@@ -926,9 +941,9 @@ class Pipe:
             f"- **统计范围**: 下表仅覆盖本次扫描的 {r.total_files} 个文件（详见 `file_snapshot`），均为**审计发现**，不代表任何修复状态；修复状态需对照 git 提交单独核实。",
             "",
             "## 置信度",
-            f"| 🔴 HIGH | 🟡 MEDIUM | ⚪ LOW |",
-            f"|----------|------------|---------|",
-            f"| {len(h)} | {len(m)} | {len(l)} |",
+            f"| 🔴 HIGH | 🟡 MEDIUM | ⚪ LOW | 💡 建议 |",
+            f"|----------|------------|---------|---------|",
+            f"| {len(h)} | {len(m)} | {len(l)} | {len(adv)} |",
             "",
         ]
         if r.scope_text:
@@ -980,6 +995,13 @@ class Pipe:
             lines.append("|工具|分类|程度|位置|描述|")
             lines.append("|---|---|---|---|---|")
             for f in m[:20]: lines.append(f"|{f.tool}|{f.category}|{f.severity}|{f.line_label}|{f.title[:80]}|")
+            lines.append("")
+        if adv:
+            lines.append("## 💡 建议（工程化改进项，非缺陷）")
+            lines.append("|工具|分类|程度|位置|描述|")
+            lines.append("|---|---|---|---|---|")
+            for f in adv[:20]:
+                lines.append(f"|{f.tool}|{f.category}|{f.severity}|{f.line_label}|{f.title[:80]}|")
             lines.append("")
         lines.append(f"---\n{r.report_path or ''}")
         return "\n".join(lines)
