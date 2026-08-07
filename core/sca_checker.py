@@ -11,6 +11,7 @@ import os
 import re
 import json
 import hashlib
+import logging
 import urllib.request
 import urllib.error
 from typing import Dict, List, Optional, Tuple
@@ -18,6 +19,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.shared_filter import SharedFilter
+
+try:
+    from packaging.version import Version, InvalidVersion
+except ImportError:  # pragma: no cover - packaging 未安装时降级字符串比较
+    Version = None
+    InvalidVersion = ValueError  # 占位，避免 NameError
+
+logger = logging.getLogger("coderef.sca")
 
 
 @dataclass
@@ -67,6 +76,7 @@ class SCAReport:
     medium_count: int = 0
     low_count: int = 0
     offline_mode: bool = False
+    osv_status: str = "ok"  # ok / degraded（在线查询失败，仅本地库）
 
     @property
     def clean_score(self) -> float:
@@ -102,7 +112,6 @@ class SCAChecker:
     LOCAL_KNOWN_VULNS = {
         "pillow": {
             "<10.0.0": [
-                ("CVE-2023-44271", "high", "DoS via crafted image file"),
                 ("CVE-2023-50447", "high", "Arbitrary code execution via PIL.ImageMath.eval"),
             ],
             "<9.0.0": [
@@ -168,11 +177,8 @@ class SCAChecker:
                 ("CVE-2023-47129", "high", "API key leak via debug logging"),
             ],
         },
-        "numpy": {
-            "<1.26.0": [
-                ("CVE-2023-32698", "high", "Buffer overflow via crafted pickle file"),
-            ],
-        },
+        # numpy：旧表 CVE-2023-32698 归属错误（非 numpy），已移除，避免误报。
+        # 本地表不收录 numpy（依赖多为 >= ,由 OSV 在线查询兜底）
         "pandas": {
             "<2.1.0": [
                 ("CVE-2023-32690", "high", "Arbitrary code execution via crafted pickle file"),
@@ -200,13 +206,10 @@ class SCAChecker:
                 ("CVE-2024-0965", "high", "SSRF via /proxy route"),
             ],
         },
-        "fastapi": {
-            "<0.110.0": [
-                ("CVE-2024-24762", "high", "ReDoS via crafted Content-Type header"),
-            ],
-        },
-        "starlette": {
-            "<0.36.0": [
+        # fastapi：旧表 CVE-2024-24762 实为 python-multipart 的 ReDoS（fastapi 仅间接依赖），
+        # 归属错误已移除，避免对 fastapi 本身误报。
+        "python-multipart": {
+            "<0.0.7": [
                 ("CVE-2024-24762", "high", "ReDoS via crafted Content-Type header"),
             ],
         },
@@ -215,11 +218,8 @@ class SCAChecker:
                 ("CVE-2023-45827", "medium", "Information exposure via error messages"),
             ],
         },
-        "sqlalchemy": {
-            "<2.0.23": [
-                ("CVE-2023-48795", "high", "SQL injection via order_by parameter"),
-            ],
-        },
+        # sqlalchemy：旧表 CVE-2023-48795 实为 SSH Terrapin 攻击（paramiko/OpenSSH），
+        # 与 SQLAlchemy 无关，归属错误已移除。
         "pyyaml": {
             "<6.0.1": [
                 ("CVE-2020-14343", "critical", "Arbitrary code execution via yaml.load()"),
@@ -251,7 +251,6 @@ class SCAChecker:
     # 与 LOCAL_KNOWN_VULNS 配套使用：本地命中时也能给出可执行的升级目标，
     # 避免报告出现"升级到 None"这类无意义建议。
     LOCAL_FIXED_VERSIONS = {
-        "CVE-2023-44271": "10.1.0",   # pillow
         "CVE-2023-50447": "10.1.0",   # pillow
         "CVE-2022-22817": "9.0.0",    # pillow
         "CVE-2022-22816": "9.0.0",    # pillow
@@ -271,7 +270,6 @@ class SCAChecker:
         "CVE-2023-46229": "0.0.338",  # langchain
         "CVE-2023-44467": "0.0.331",  # langchain
         "CVE-2023-47129": "1.3.0",    # openai
-        "CVE-2023-32698": "1.25.0",   # numpy
         "CVE-2023-32690": "2.0.3",    # pandas
         "CVE-2023-49070": "2.15.0",   # tensorflow
         "CVE-2023-49071": "2.15.0",   # tensorflow
@@ -279,9 +277,8 @@ class SCAChecker:
         "CVE-2024-22052": "4.37.2",   # transformers
         "CVE-2024-0964": "4.18.0",    # gradio
         "CVE-2024-0965": "4.18.0",    # gradio
-        "CVE-2024-24762": "0.110.0",  # fastapi / starlette
+        "CVE-2024-24762": "0.0.7",    # python-multipart
         "CVE-2023-45827": "2.5.0",    # pydantic
-        "CVE-2023-48795": "2.0.23",   # sqlalchemy
         "CVE-2020-14343": "6.0.1",    # pyyaml
         "CVE-2023-33733": "4.0.0",    # reportlab
         "CVE-2023-29469": "5.0.0",    # lxml
@@ -291,6 +288,7 @@ class SCAChecker:
 
     def __init__(self, offline: bool = False):
         self.offline = offline
+        self._osv_degraded = False  # OSV 在线查询是否失败（降级标记）
 
     def scan(self, project_path: str) -> SCAReport:
         """扫描项目依赖"""
@@ -349,6 +347,7 @@ class SCAChecker:
             medium_count=medium,
             low_count=low,
             offline_mode=self.offline,
+            osv_status="degraded" if self._osv_degraded else "ok",
         )
         # 暴露结构化结果，供管线统一收集
         self.report = report
@@ -452,8 +451,10 @@ class SCAChecker:
                 for v in online_vulns:
                     if v.cve_id not in existing_cves:
                         vulns.append(v)
-            except Exception:
-                pass  # 离线/网络不可用，使用本地结果
+            except Exception as e:
+                # 在线查询失败：标记降级，供报告告警（不再静默丢弃）
+                self._osv_degraded = True
+                logger.warning("OSV 在线查询失败 package=%s err=%s", package, e)
 
         return vulns
 
@@ -516,26 +517,39 @@ class SCAChecker:
         return vulns
 
     def _version_matches(self, version: str, constraint: str) -> bool:
-        """检查版本是否匹配约束"""
+        """检查版本是否匹配约束。
+
+        修复：旧实现 `from packaging.version import Version` 在未安装 packaging 时
+        抛 ImportError，被 `except: return True` 吞掉，导致**所有**版本约束无条件命中，
+        产生大量误报。现在：
+          - packaging 不可用时降级为简单字符串前缀比较（不判断版本号大小）
+          - 版本解析失败返回 False（不命中），避免误报，并记录日志
+        """
         if version == "latest":
-            return True  # 无法确定版本，保守处理
+            return True  # 无法确定版本，保守处理：命中以便提示人工核查
+        if Version is None:
+            # packaging 未安装：仅能按约束前缀做字符串比较，无法判断大小
+            logger.warning("packaging 未安装，SCA 版本比较降级为字符串前缀匹配")
+            norm = constraint.lstrip("<>=!~ ")
+            return version.startswith(norm)
         try:
-            # 简单版本比较
-            from packaging.version import Version
             v = Version(version)
+            c = Version(constraint.lstrip("<>=!~ "))
+            if constraint.startswith("<="):
+                return v <= c
             if constraint.startswith("<"):
-                return v < Version(constraint[1:])
-            elif constraint.startswith("<="):
-                return v <= Version(constraint[2:])
-            elif constraint.startswith(">"):
-                return v > Version(constraint[1:])
-            elif constraint.startswith(">="):
-                return v >= Version(constraint[2:])
-            elif constraint.startswith("=="):
-                return v == Version(constraint[2:])
+                return v < c
+            if constraint.startswith(">="):
+                return v >= c
+            if constraint.startswith(">"):
+                return v > c
+            if constraint.startswith("=="):
+                return v == c
             return False
-        except Exception:
-            return True  # 解析失败，保守处理
+        except (InvalidVersion, TypeError, ValueError) as e:
+            # 版本不可解析：不命中，避免对无法判断的版本给出误报
+            logger.warning("SCA 版本解析失败 version=%r constraint=%r err=%s", version, constraint, e)
+            return False
 
     def to_report(self, report: SCAReport) -> str:
         """生成 SCA 报告"""
@@ -562,6 +576,10 @@ class SCAChecker:
 
         if report.offline_mode:
             lines.append("> ⚠️ 离线模式：仅使用本地漏洞库，未查询 OSV 在线数据库。")
+            lines.append("")
+        elif getattr(report, "osv_status", "ok") == "degraded":
+            lines.append("> ⚠️ **OSV 在线查询失败**：本次仅使用本地漏洞库，"
+                         "可能遗漏未收录的 CVE。请检查网络后重试，或手动核对依赖版本。")
             lines.append("")
 
         if not report.vulnerable_deps:

@@ -47,11 +47,29 @@ class PipeResult:
     findings: List[Finding] = field(default_factory=list)
     report: str = ""; errors: List[str] = field(default_factory=list)
     elapsed: float = 0.0; report_path: str = ""
+    scope_text: str = ""  # 审计范围说明（披露被排除的目录，保证统计透明）
 
 class Pipe:
 
     def __init__(self):
         self._t0 = 0.0
+
+    @staticmethod
+    def _tier_for(severity: str) -> Tier:
+        """按严重程度严格映射置信度等级，修复分级归表混入问题。
+
+        旧实现各检测器硬编码 tier（如 _td/_blind/_resgap 一律 Tier.MEDIUM），
+        导致 severity=low 的条目被塞进 MEDIUM 表。现在 tier 始终跟随 severity：
+          critical/high/blocker → HIGH
+          medium/warning/info   → MEDIUM
+          low/其余              → LOW
+        """
+        s = (severity or "").lower().strip()
+        if s in ("critical", "high", "blocker"):
+            return Tier.HIGH
+        if s in ("medium", "warning", "info"):
+            return Tier.MEDIUM
+        return Tier.LOW
 
     @staticmethod
     def _phash(p: str) -> str:
@@ -182,10 +200,35 @@ class Pipe:
 
     # ─── shared AST ───
 
-    def _scan(self, p: str) -> tuple:
+    def _scan(self, p: str, file_cb=None) -> tuple:
         from core.code_analyzer import CodeAnalyzer
-        a = CodeAnalyzer().analyze_project(p)
+        a = CodeAnalyzer().analyze_project(p, file_progress_cb=file_cb)
         return (getattr(a, "total_files", 0) or 0, getattr(a, "total_lines", 0) or 0, a)
+
+    @staticmethod
+    def _build_scope_text(project_path: str, total_files: int) -> str:
+        """生成审计范围说明：披露被排除目录，避免"为何只统计 N 文件"的疑问。
+
+        复用 ProjectScope 的跳过规则（虚拟环境/vendored库/数据目录/运行时等），
+        将跳过目录数与原因分布写进报告，保证统计透明。
+        """
+        try:
+            from core.project_scope import ProjectScope
+            scope = ProjectScope(project_path)
+            scope.analyze()
+            stats = scope.get_stats()
+            skip_count = stats.get("skip_dir_count", 0)
+            reasons = stats.get("skip_reasons", {})
+            parts = [f"分析 {total_files} 个代码文件"]
+            if skip_count:
+                parts.append(f"按规则排除 {skip_count} 个目录")
+                top = sorted(reasons.items(), key=lambda x: -x[1])[:6]
+                if top:
+                    detail = "；".join(f"{name}×{cnt}" for name, cnt in top)
+                    parts.append(f"（{detail}）")
+            return "；".join(parts)
+        except Exception as e:
+            return f"分析 {total_files} 个代码文件（范围统计失败: {e}）"
 
     # ─── knowledge graph ───
 
@@ -246,14 +289,18 @@ class Pipe:
         out = output_dir or os.path.join(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))), "coderef-report")
 
-        def _prog(stage, done, total):
+        def _prog(stage, done, total, detail=None):
             if progress_cb:
-                try: progress_cb(stage, done, total)
+                try: progress_cb(stage, done, total, detail)
                 except Exception: pass
 
         try:
-            tf, tl, analysis = self._scan(project_path)
+            # 扫描阶段桥接文件级进度：长阶段能实时看到"已扫描文件/总文件"
+            def _scan_file_prog(done, total):
+                _prog("扫描代码", 0, 11, detail=f"已扫描 {done}/{total} 个文件")
+            tf, tl, analysis = self._scan(project_path, file_cb=_scan_file_prog)
             r.total_files, r.total_lines = tf, tl
+            r.scope_text = self._build_scope_text(project_path, tf)
             _prog("扫描代码", 0, 11)
 
             # 构建知识图谱（持久化项目记忆）
@@ -462,7 +509,7 @@ class Pipe:
                         title=f"{getattr(dep,'package','')} {getattr(dep,'version','')} - {getattr(v,'cve_id','')}",
                         detail=getattr(v,"summary",""),
                         suggestion=f"升级到 {(getattr(v,'fixed_version',None) or '最新可用版本')} 修复漏洞",
-                        tier=Tier.HIGH if getattr(v,"severity","") in ("critical","high") else Tier.MEDIUM))
+                        tier=self._tier_for(getattr(v,"severity","medium"))))
             # 无漏洞时也追加一条"扫描完成"汇总 finding，确保 sca 结果不被静默丢弃
             if not any(f.tool == "sca" for f in r.findings):
                 scanned = getattr(rep, "scanned_deps", 0)
@@ -485,7 +532,7 @@ class Pipe:
                     category=getattr(x,"category",""), severity=getattr(x,"severity","medium"),
                     file_path=getattr(x,"file_path",""), line=getattr(x,"line",0),
                     title=getattr(x,"description",""), detail=getattr(x,"detail",getattr(x,"description","")),
-                    suggestion=getattr(x,"suggestion",""), tier=Tier.MEDIUM))
+                    suggestion=getattr(x,"suggestion",""), tier=self._tier_for(getattr(x,"severity","medium"))))
             done.add("td"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"td: {e}")
 
@@ -499,7 +546,7 @@ class Pipe:
                     category=getattr(s,"category",""), severity=getattr(s,"severity","medium"),
                     file_path=getattr(s,"file_path",""), line=getattr(s,"line",0),
                     title=getattr(s,"content",""), detail=getattr(s,"content",""),
-                    suggestion=getattr(s,"suggestion",""), tier=Tier.MEDIUM))
+                    suggestion=getattr(s,"suggestion",""), tier=self._tier_for(getattr(s,"severity","medium"))))
             done.add("integ"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"integ: {e}")
 
@@ -514,7 +561,7 @@ class Pipe:
                     severity=getattr(s,"risk_level","medium"),
                     file_path=getattr(s,"file_path",""),
                     title=getattr(s,"item",""), detail=getattr(s,"detail",""),
-                    suggestion=getattr(s,"user_should_know",""), tier=Tier.MEDIUM))
+                    suggestion=getattr(s,"user_should_know",""), tier=self._tier_for(getattr(s,"risk_level","medium"))))
             done.add("blind"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"blind: {e}")
 
@@ -560,7 +607,7 @@ class Pipe:
                     category=getattr(s,"category",""), severity=getattr(s,"severity","medium"),
                     file_path=getattr(s,"file_path",""), line=0,
                     title=getattr(s,"item",""), detail=getattr(s,"detail",""),
-                    suggestion=getattr(s,"suggestion",""), tier=Tier.MEDIUM))
+                    suggestion=getattr(s,"suggestion",""), tier=self._tier_for(getattr(s,"severity","medium"))))
             done.add("resgap"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"resgap: {e}")
 
@@ -580,7 +627,7 @@ class Pipe:
                     title=(s.get("title","") if isinstance(s, dict) else getattr(s,"title","")),
                     detail=(s.get("current","") if isinstance(s, dict) else getattr(s,"current","")),
                     suggestion=(s.get("suggestion","") if isinstance(s, dict) else getattr(s,"suggestion","")),
-                    tier=Tier.LOW))
+                    tier=self._tier_for((s.get("severity","medium") if isinstance(s, dict) else getattr(s,"severity","medium")))))
             done.add("simp"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"simp: {e}")
 
@@ -827,6 +874,11 @@ class Pipe:
         return result
 
     def _fmt(self, r: PipeResult, title: str) -> str:
+        # 修复：报告头时间取自错误变量，导致 elapsed 显示 0.0s。
+        # 若调用方尚未写入 r.elapsed（在 _fmt 之后才赋值），此处实时兜底计算，
+        # 保证报告头展示真实耗时。
+        if r.elapsed == 0.0 and getattr(self, "_t0", None):
+            r.elapsed = round(time.time() - self._t0, 1)
         h = [f for f in r.findings if f.tier == Tier.HIGH]
         m = [f for f in r.findings if f.tier == Tier.MEDIUM]
         l = [f for f in r.findings if f.tier == Tier.LOW]
@@ -834,12 +886,16 @@ class Pipe:
             f"# CodeRef {title}",
             f"项目: `{r.project_path}` | 文件: {r.total_files} | 行: {r.total_lines} | {r.elapsed}s",
             f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            "", "## 置信度",
+            "",
+            "## 置信度",
             f"| 🔴 HIGH | 🟡 MEDIUM | ⚪ LOW |",
             f"|----------|------------|---------|",
             f"| {len(h)} | {len(m)} | {len(l)} |",
             "",
         ]
+        if r.scope_text:
+            lines.append(f"> 📋 审计范围: {r.scope_text}")
+            lines.append("")
         ns = getattr(r, 'noise_suppressed', 0)
         nd = getattr(r, 'noise_downgraded', 0)
         wl = getattr(r, 'wl_suppressed', 0)
@@ -883,8 +939,9 @@ class Pipe:
             lines.append("")
         if m:
             lines.append("## 🟡 MEDIUM");
-            lines.append("|工具|分类|程度|描述|")
-            for f in m[:20]: lines.append(f"|{f.tool}|{f.category}|{f.severity}|{f.title[:80]}|")
+            lines.append("|工具|分类|程度|位置|描述|")
+            lines.append("|---|---|---|---|---|")
+            for f in m[:20]: lines.append(f"|{f.tool}|{f.category}|{f.severity}|{f.line_label}|{f.title[:80]}|")
             lines.append("")
         lines.append(f"---\n{r.report_path or ''}")
         return "\n".join(lines)
