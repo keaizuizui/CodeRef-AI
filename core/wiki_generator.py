@@ -204,6 +204,10 @@ class WikiGenerator:
             llm_client: LLMIntegration 实例，如果为 None 则延迟创建
         """
         self._llm = llm_client
+        # 记录本次生成失败明细，供 generate() 末尾汇总进 result.errors，
+        # 让外层能感知"部分文档生成失败"，避免失败被静默吞掉却标记任务 completed。
+        self._failed_docs: List[str] = []
+        self._last_llm_error: str = ""
 
     @property
     def llm(self):
@@ -231,6 +235,9 @@ class WikiGenerator:
         Returns:
             WikiResult: 生成结果
         """
+        # 重置本次生成失败统计（实例可能被复用，需保证每次 generate 独立）
+        self._failed_docs = []
+        self._last_llm_error = ""
         project_path = os.path.abspath(project_path)
         project_name = os.path.basename(project_path)
 
@@ -336,6 +343,16 @@ class WikiGenerator:
         # 6. Git hook 配置
         if enable_git_hook:
             self._setup_git_hook(project_path, output_dir)
+
+        # 汇总本次生成失败（主项目 + 子项目），让调用方感知"部分文档生成失败"
+        if self._failed_docs:
+            result.errors.append(
+                f"以下 {len(self._failed_docs)} 个文档生成失败（LLM 返回空内容），未落盘: "
+                f"{', '.join(self._failed_docs[:20])}"
+                + (" ..." if len(self._failed_docs) > 20 else "")
+            )
+        if self._last_llm_error:
+            result.errors.append(f"LLM 调用异常: {self._last_llm_error}")
 
         return result
 
@@ -1053,7 +1070,11 @@ class WikiGenerator:
         return "\n".join(lines)
 
     def _llm_ask(self, system_prompt: str, user_prompt: str) -> str:
-        """调用 LLM 生成内容"""
+        """调用 LLM 生成内容。
+
+        失败时返回空串并记录错误：空内容统一由 _write_doc 跳过落盘并计入失败统计，
+        避免把"(LLM 生成失败: ...)"这类占位符当成正常文档写入，产生"看似成功实为错误"的假象。
+        """
         try:
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -1061,7 +1082,8 @@ class WikiGenerator:
             ]
             return self.llm.chat_completion(messages, max_tokens=4096, temperature=0.3)
         except Exception as e:
-            return f"*(LLM 生成失败: {str(e)})*"
+            self._last_llm_error = str(e)
+            return ""
 
     def _style_guidelines(self, style: str) -> str:
         """根据 Wiki 风格返回写作指引"""
@@ -1572,7 +1594,17 @@ class WikiGenerator:
         return "未找到明确的依赖信息"
 
     def _write_doc(self, output_dir: str, filename: str, content: str) -> str:
-        """写入文档文件"""
+        """写入文档文件。
+
+        内容为空（LLM 生成失败返回空串）时不落盘，避免产生 0 字节空文件；
+        空文件对外表现为"文档已生成"的假象，且无法再触发重试/告警。
+        同时记录失败文档名，供 generate() 末尾汇总进 result.errors，让外层感知部分失败。
+        返回实际写入的文件路径；内容为空时返回空串。
+        """
+        if not content or not content.strip():
+            if filename not in self._failed_docs:
+                self._failed_docs.append(filename)
+            return ""
         filepath = os.path.join(output_dir, filename)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)

@@ -3,7 +3,7 @@
 # CodeRef-AI — 编程 AI 的治理外脑 & 非编程人员技术助理
 
 
-**Version 4.0.2** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.0.3** | Python 3.10+ | MCP Protocol | MIT License
 
 > 一键审计 · 架构图谱 · 项目文档 · 知识图谱 · 健康仪表盘 · 代码审查 · 前端交互审查 · 记忆层 · 创新识别 · OWASP 合规 · 变更守护
 
@@ -281,7 +281,7 @@ coderef-ai/
 │   └── settings.py
 ├── utils/
 │   └── helpers.py
-# tests/ 已移除（v4.0.2 回归测试不入库）
+# tests/ 已移除（清理无必要的回归测试代码，保持仓库精简）
 ├── cache/                             # 运行时缓存（.gitignore 已忽略）
 ├── coderef-report/                    # 输出报告（.gitignore 已忽略）
 ├── demo-app/                          # 前端审查测试实例（含 6 个预置交互问题）
@@ -306,11 +306,19 @@ coderef-ai/
 
 ## 更新日志
 
+### v4.0.3 — Wiki 生成可靠性（部分失败可感知）
+
+- **`coderef_docs` 输出目录参数生效**：调用方指定的 `output_dir` 现在会被正确传递到 Wiki 生成器，不再无视参数落到默认 `txt/`
+- **不再产生 0 字节空文件**：LLM 生成返回空内容时跳过落盘，避免生成"文档已生成"的假象
+- **部分失败可感知**：`coderef_docs` 改为结构化返回 `status`（`completed` / `partial_failed`）+ `errors` + 输出目录 + 文档清单，部分文档生成失败时不再被当作全量成功
+- **LLM 失败不再写占位假文档**：`_llm_ask` 失败返回空串并记录错误，交由上层统一跳过与告警，取代原先"错误占位符当正常文档"的假象
+
 ### v4.0.2 — 审计证据透明化（区分审计发现与历史数据）
 
 - **知识图谱查询返回构建时间**：`coderef_query` 的所有查询类型（stats/entity/callers/callees/impact/relations/file_entities/search/call_graph）统一附带 `kg_built_at` 与 `kg_note`，明确提示"图谱仅当运行 audit/docs/architecture 后才会重建，代码有改动需先重建再查询"，避免把旧图谱当成本次审计结论
 - **审计结果携带证据字段**：`coderef_audit` 返回新增 `evidence` 块，包含本次扫描时间 `scan_ts`、知识图谱构建时间 `kg_built_at`、本次扫描文件快照 `file_snapshot`（mtime+size），并声明统计口径仅覆盖快照所列文件、不代表修复状态
 - **报告显式标注统计口径**：审计报告头部新增"统计口径"章节，写明本次扫描时间、图谱构建时间，并声明 HIGH/MEDIUM/LOW 均为审计发现、不代表任何修复状态，修复需对照 git 提交单独核实
+- 移除 `tests/` 目录（清理无必要的回归测试代码，保持仓库精简）
 
 ### v4.0.1 — 复查修复（SCA 准确性 + 报告透明性）
 

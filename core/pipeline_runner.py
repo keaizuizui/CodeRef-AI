@@ -53,6 +53,7 @@ class PipeResult:
     scan_ts: str = ""              # 本次扫描开始时间（ISO 时间戳）
     file_snapshot: dict = field(default_factory=dict)  # 本次被扫描文件的 mtime+size 快照
     kg_built_at: str = ""          # 本次审计构建的知识图谱时间（若为历史图谱则为旧时间）
+    wiki_result: Optional[object] = None  # coderef_docs 的 WikiResult，供 MCP 层返回结构化文档统计
 
 class Pipe:
 
@@ -466,7 +467,7 @@ class Pipe:
             # 构建知识图谱
             self._build_kg(project_path, analysis)
 
-            self._wiki(project_path, r, d)
+            self._wiki(project_path, r, d, output_dir)
 
             r.report = self._fmt(r, "文档探查报告")
             os.makedirs(output_dir or os.path.join(os.path.dirname(os.path.dirname(
@@ -680,15 +681,23 @@ class Pipe:
             r.report_path = html
         except Exception as e: r.errors.append(f"workflow: {e}")
 
-    def _wiki(self, p: str, r: PipeResult, done: set):
+    def _wiki(self, p: str, r: PipeResult, done: set, output_dir: str = None):
         if "wiki" in done: return
         try:
             from core.wiki_generator import WikiGenerator
-            wo = os.path.join(os.path.dirname(os.path.dirname(
+            # 尊重调用方指定的输出目录；未指定时回退到默认 txt/
+            wo = output_dir or os.path.join(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__))), "txt")
-            WikiGenerator().generate(p, output_dir=wo, wiki_style="comprehensive", include_subprojects=True)
+            wg = WikiGenerator()
+            gres = wg.generate(p, output_dir=wo, wiki_style="comprehensive", include_subprojects=True)
+            # 把 Wiki 生成失败明细带入管线结果，让 _fmt / MCP 层能感知"部分文档生成失败"，
+            # 避免部分阶段失败却仍对外标记为 fully completed。
+            for e in getattr(gres, "errors", []) or []:
+                r.errors.append(f"wiki: {e}")
+            r.wiki_result = gres
             done.add("wiki"); self._save(p, list(done))
-        except Exception as e: r.errors.append(f"wiki: {e}")
+        except Exception as e:
+            r.errors.append(f"wiki: {e}")
 
     # ═══════════════════════════════════
     # 交叉验证 + 格式化

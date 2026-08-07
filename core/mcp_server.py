@@ -35,6 +35,44 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger("coderef")
 
 
+# ─── 工具可靠性清单 ─────────────────────────────────────────────
+# 汇总工具的可信度与使用边界，注入到 MCP 元数据（initialize.serverInfo.reliability +
+# tools/list 各工具 description），让外层 LLM 在选工具时主动避开误报、改用更合适的工具。
+# 依据：对多轮真实审计结果的人工复核（区分工具误报 vs 代码真问题）。
+RELIABILITY_GUIDE = (
+    "CodeRef 工具可靠性清单（供外层 AI 选工具时参考）：\n"
+    "【可靠，可放心日常使用】coderef_audit / coderef_scan / coderef_owasp / "
+    "coderef_architecture / coderef_change_guard / coderef_change_report / coderef_query / "
+    "coderef_review / coderef_memory_* / coderef_task_status。\n"
+    "【有使用边界，需注意场景】\n"
+    "  - coderef_frontend：仅扫 HTML/菜单，不适合 React/Vue SPA 组件逻辑；SPA 改用 mode=runtime 浏览器抽查。\n"
+    "  - coderef_scan/audit 的 sca 维度（CVE 扫描）：不可全信。会把 poetry 配置 priority='primary' 误当依赖、"
+    "把 >= 范围约束当固定版本。CVE 类发现需人工对照真实 CVE 库复核，勿直接采信。\n"
+    "【误报已修复】标准库 import 不再被 memory_quality 判为孤儿边；PII 拼接不再误报 api_address 等技术变量；"
+    "测试目录默认不参与 agent 安全审计。\n"
+    "【协作建议】收到 CVE/安全类发现时先人工复核再决定是否修复；超大文件/结构债属改进建议非缺陷。"
+)
+
+# 逐工具边界提示（追加到 tools/list 对应工具的 description 末尾）
+TOOL_BOUNDARY_NOTES = {
+    "coderef_scan": (
+        "\n\n[可靠性] sca 维度(CVE)有已知误报：会把 poetry 配置 priority='primary' 误当依赖、"
+        "把 >= 范围约束当固定版本。CVE 类结果需人工复核，勿直接采信。"
+    ),
+    "coderef_frontend": (
+        "\n\n[可靠性] 仅静态扫描 HTML 按钮/菜单树，不适合 React/Vue SPA 组件逻辑；"
+        "SPA 请改用 mode=runtime 做浏览器抽查。"
+    ),
+    "coderef_audit": (
+        "\n\n[可靠性] 依赖扫描(CVE)子项有已知误报（见 coderef_scan 提示），"
+        "CVE 类发现请人工复核后再决定是否修复。"
+    ),
+    "coderef_owasp": (
+        "\n\n[可靠性] 其 CVE 检测复用 SCA，存在与 coderef_scan 相同的误报边界，违规项需人工复核。"
+    ),
+}
+
+
 class Server:
 
     def __init__(self):
@@ -395,10 +433,21 @@ class Server:
         if m == "initialize":
             return {"jsonrpc":"2.0","id":rid,"result":{
                 "protocolVersion":"2024-11-05","capabilities":{"tools":{}},
-                "serverInfo":{"name":"coderef-ai","version":PKG_VERSION}}}
+                "serverInfo":{
+                    "name":"coderef-ai","version":PKG_VERSION,
+                    "reliability": RELIABILITY_GUIDE,
+                }}}
         if m == "notifications/initialized": return None
         if m == "tools/list":
-            return {"jsonrpc":"2.0","id":rid,"result":{"tools":self._tools}}
+            # 在返回工具描述时追加可靠性/边界提示，供外层 LLM 选工具时判断
+            tools = []
+            for t in self._tools:
+                note = TOOL_BOUNDARY_NOTES.get(t["name"], "")
+                if note:
+                    t = dict(t)
+                    t["description"] = (t.get("description", "") + note).strip()
+                tools.append(t)
+            return {"jsonrpc":"2.0","id":rid,"result":{"tools":tools}}
         if m == "tools/call":
             return self._call(rid, req.get("params",{}))
         return {"jsonrpc":"2.0","id":rid,"error":{"code":-32601,"message":f"未知: {m}"}}
@@ -668,6 +717,22 @@ class Server:
             }, ensure_ascii=False)
         elif n == "coderef_docs":
             r = Pipe().docs(p, output_dir=o)
+            wr = getattr(r, "wiki_result", None)
+            # 结构化返回：携带输出目录/文档清单/失败明细，让调用方能区分"全量成功"与"部分失败"，
+            # 避免部分文档生成失败时仍被当作 fully completed。
+            return json.dumps({
+                "status": "completed" if not getattr(r, "errors", []) else "partial_failed",
+                "tool": n,
+                "project_path": p,
+                "report": getattr(r, "report", ""),
+                "errors": getattr(r, "errors", []),
+                "wiki": {
+                    "output_dir": getattr(wr, "output_dir", "") if wr else "",
+                    "documents": getattr(wr, "documents", []) if wr else [],
+                    "module_count": getattr(wr, "module_count", 0) if wr else 0,
+                    "subprojects": getattr(wr, "subproject_results", []) if wr else [],
+                },
+            }, ensure_ascii=False)
         elif n == "coderef_review":
             return self._review(a)
         elif n == "coderef_frontend":

@@ -49,6 +49,9 @@ class DependencyInfo:
     source_file: str  # 所在文件
     source_line: int   # 所在行号
     vulnerabilities: List[DependencyVulnerability] = field(default_factory=list)
+    # 版本约束运算符（如 ">=" / "==" / 空表示无约束）。范围约束（>= > < <= ~=）无法
+    # 确定精确安装版本，不应作为固定版本触发 OSV 精确命中的误报。
+    constraint: str = ""
 
     @property
     def has_vuln(self) -> bool:
@@ -100,9 +103,24 @@ class SCAChecker:
         re.IGNORECASE
     )
     TOML_PATTERN = re.compile(
-        r'^\s*["\']?([a-zA-Z0-9_.-]+)["\']?\s*=\s*["\']([><=!~]*\s*[a-zA-Z0-9_.*-]+)["\']',
+        r'^\s*["\']?([a-zA-Z0-9_.-]+)["\']?\s*=\s*["\']([><=!~^]*\s*[a-zA-Z0-9_.*-]+)["\']',
         re.IGNORECASE
     )
+    # 识别 TOML 段落头，如 [tool.poetry.dependencies] / [[tool.poetry.source]]
+    TOML_SECTION_PATTERN = re.compile(
+        r'^\s*\[\[\s*([a-zA-Z0-9_.-]+)\s*\]\]'
+        r'|^\s*\[\s*([a-zA-Z0-9_.-]+)\s*\]',
+    )
+    # 仅这些段内的 key = "value" 才视为依赖声明，避免把 poetry 的
+    # [[tool.poetry.source]]（name/url/priority 软件源配置）等元数据误解析成依赖。
+    TOML_DEP_SECTIONS = {
+        "project",                     # PEP 621: [project] dependencies
+        "tool.poetry.dependencies",    # poetry 运行时依赖
+        "tool.poetry.group.dev.dependencies",
+        "tool.pdm.dev-dependencies",
+        "tool.uv",                     # uv 依赖
+        "dependency-groups",
+    }
 
     # OSV API endpoint
     OSV_API_URL = "https://api.osv.dev/v1/query"
@@ -322,7 +340,7 @@ class SCAChecker:
 
         # 检查漏洞
         for dep in unique_deps:
-            vulns = self._check_vulnerability(dep.package, dep.version)
+            vulns = self._check_vulnerability(dep.package, dep.version, dep.constraint)
             # 过滤 cache 白名单中的 CVE 误报
             vulns = [v for v in vulns if not SharedFilter.is_security_whitelisted(v.cve_id, dep.source_file, dep.source_line)]
             dep.vulnerabilities = vulns
@@ -385,6 +403,8 @@ class SCAChecker:
 
         basename = os.path.basename(filepath)
 
+        cur_section = ""  # 当前 TOML 段（仅 pyproject.toml）
+
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
@@ -394,9 +414,14 @@ class SCAChecker:
             if basename in ("requirements.txt", "Pipfile.lock"):
                 m = self.REQ_PATTERN.match(stripped)
                 if m:
+                    op = m.group(2) or ""
+                    # "==" 是无范围语义的精确固定版本，等同无约束，允许 OSV 精确命中
+                    if op == "==":
+                        op = ""
                     deps.append(DependencyInfo(
                         package=m.group(1), version=m.group(3),
                         source_file=filepath, source_line=i,
+                        constraint=op,
                     ))
                     continue
                 m = self.REQ_SIMPLE_PATTERN.match(stripped)
@@ -408,11 +433,22 @@ class SCAChecker:
 
             # pyproject.toml
             elif basename == "pyproject.toml":
+                # 更新当前段；段头行本身不是依赖
+                sec = self._match_toml_section(stripped)
+                if sec is not None:
+                    cur_section = sec
+                    continue
+                # 仅依赖段内的 key = "value" 视为依赖
+                if cur_section not in self.TOML_DEP_SECTIONS:
+                    continue
                 m = self.TOML_PATTERN.match(stripped)
                 if m:
+                    ver_raw = m.group(2).strip()
+                    op, ver = self._split_version_constraint(ver_raw)
                     deps.append(DependencyInfo(
-                        package=m.group(1), version=m.group(2).strip().lstrip("><=!~ "),
+                        package=m.group(1), version=ver,
                         source_file=filepath, source_line=i,
+                        constraint=op,
                     ))
 
             # setup.py
@@ -426,7 +462,7 @@ class SCAChecker:
 
         return deps
 
-    def _check_vulnerability(self, package: str, version: str) -> List[DependencyVulnerability]:
+    def _check_vulnerability(self, package: str, version: str, constraint: str = "") -> List[DependencyVulnerability]:
         """检查依赖的已知漏洞"""
         vulns = []
 
@@ -444,7 +480,9 @@ class SCAChecker:
                         ))
 
         # 2. 在线 OSV API 查询（如果允许）
-        if not self.offline:
+        #    仅对精确版本（无范围约束）查询，避免把 `>=10.0.0` 当 `10.0.0` 精确命中
+        #    产生误报。范围约束的实际安装版本未知，交由本地库判断即可。
+        if not self.offline and not constraint:
             try:
                 online_vulns = self._query_osv(package, version)
                 existing_cves = {v.cve_id for v in vulns}
@@ -458,8 +496,34 @@ class SCAChecker:
 
         return vulns
 
+    def _match_toml_section(self, line: str) -> Optional[str]:
+        """识别 TOML 段头，返回段名；非段头返回 None"""
+        m = self.TOML_SECTION_PATTERN.match(line)
+        if not m:
+            return None
+        return (m.group(1) or m.group(2) or "").strip()
+
+    def _split_version_constraint(self, ver_raw: str) -> Tuple[str, str]:
+        """拆分版本约束运算符与版本号。
+
+        例：">=10.0.0" -> ("", "10.0.0") 中 const 保留范围判断；
+        固定版本如 "10.0.0" -> ("", "10.0.0")。
+        范围约束（>= > < <= ~= !=）无法确定精确安装版本，标记 constraint 供上层
+        决定是否跳过 OSV 精确命中，避免把 `>=10.0.0` 当成 `10.0.0` 造误报。
+        """
+        m = re.match(r'^\s*([!<>=~^]+)\s*(.*)$', ver_raw)
+        if not m:
+            return "", ver_raw.strip()
+        op = m.group(1)
+        ver = m.group(2).strip()
+        # 无运算符（可能只有 ==）但版本有效
+        if op in ("==",):
+            return "", ver
+        if op in (">", "<", ">=", "<=", "~=", "!=", "^", "~"):
+            return op, ver
+        return "", ver_raw.strip()
+
     def _query_osv(self, package: str, version: str) -> List[DependencyVulnerability]:
-        """查询 OSV 数据库"""
         payload = json.dumps({
             "package": {"name": package, "ecosystem": "PyPI"},
             "version": version,
@@ -514,7 +578,16 @@ class SCAChecker:
                 fixed_version=fixed, source="OSV",
             ))
 
-        return vulns
+        # OSV 可能对同一 package 返回重复 vuln（同一 CVE 出现多次），
+        # 按 cve_id 去重，保留首个（含 severity/fixed 信息），避免报告重复罗列。
+        seen = {}
+        uniq = []
+        for v in vulns:
+            key = v.cve_id
+            if key not in seen:
+                seen[key] = True
+                uniq.append(v)
+        return uniq
 
     def _version_matches(self, version: str, constraint: str) -> bool:
         """检查版本是否匹配约束。
