@@ -3,7 +3,7 @@
 # CodeRef-AI — 编程 AI 的治理外脑 & 非编程人员技术助理
 
 
-**Version 4.0.1** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.0.2** | Python 3.10+ | MCP Protocol | MIT License
 
 > 一键审计 · 架构图谱 · 项目文档 · 知识图谱 · 健康仪表盘 · 代码审查 · 前端交互审查 · 记忆层 · 创新识别 · OWASP 合规 · 变更守护
 
@@ -281,7 +281,7 @@ coderef-ai/
 │   └── settings.py
 ├── utils/
 │   └── helpers.py
-├── tests/                             # 回归测试
+# tests/ 已移除（v4.0.2 回归测试不入库）
 ├── cache/                             # 运行时缓存（.gitignore 已忽略）
 ├── coderef-report/                    # 输出报告（.gitignore 已忽略）
 ├── demo-app/                          # 前端审查测试实例（含 6 个预置交互问题）
@@ -305,6 +305,13 @@ coderef-ai/
 | 开源友好 | 敏感数据集中 `cache/` 与 `config/config.json`，删除即清理，一行命令安全开源 |
 
 ## 更新日志
+
+### v4.0.2 — 审计证据透明化（区分审计发现与历史数据）
+
+- **知识图谱查询返回构建时间**：`coderef_query` 的所有查询类型（stats/entity/callers/callees/impact/relations/file_entities/search/call_graph）统一附带 `kg_built_at` 与 `kg_note`，明确提示"图谱仅当运行 audit/docs/architecture 后才会重建，代码有改动需先重建再查询"，避免把旧图谱当成本次审计结论
+- **审计结果携带证据字段**：`coderef_audit` 返回新增 `evidence` 块，包含本次扫描时间 `scan_ts`、知识图谱构建时间 `kg_built_at`、本次扫描文件快照 `file_snapshot`（mtime+size），并声明统计口径仅覆盖快照所列文件、不代表修复状态
+- **报告显式标注统计口径**：审计报告头部新增"统计口径"章节，写明本次扫描时间、图谱构建时间，并声明 HIGH/MEDIUM/LOW 均为审计发现、不代表任何修复状态，修复需对照 git 提交单独核实
+- 移除 `tests/` 目录（回归测试不入库，避免内部实现细节外透）
 
 ### v4.0.1 — 复查修复（SCA 准确性 + 报告透明性）
 
