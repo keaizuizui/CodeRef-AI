@@ -564,8 +564,13 @@ class CodeAnalyzer:
             logger.error(f"解析文件 {file_path} 失败: {e}")
             return None
     
-    def analyze_project(self, project_path: str, force_reanalyze: bool = False) -> ProjectAnalysis:
-        """完整分析项目（支持缓存）"""
+    def analyze_project(self, project_path: str, force_reanalyze: bool = False,
+                        file_progress_cb=None) -> ProjectAnalysis:
+        """完整分析项目（支持缓存）
+
+        file_progress_cb: 可选回调 file_progress_cb(done:int, total:int),
+        在逐个解析文件时上报进度，供长阶段提供"已扫描文件/总文件"的中间粒度。
+        """
         logger.info(f"开始分析项目: {project_path}")
         
         # 加载项目专属的 cache 硬编码优化（白名单）
@@ -593,7 +598,14 @@ class CodeAnalyzer:
             # 每500个文件打一次进度日志
             if idx > 0 and idx % 500 == 0:
                 logger.info(f"  分析进度: {idx}/{len(code_files)} 个文件")
-            
+
+            # 文件级进度回调：长阶段也能看到中间进度（每50个文件触发一次，避免回调过密）
+            if file_progress_cb and (idx % 50 == 0 or idx + 1 == len(code_files)):
+                try:
+                    file_progress_cb(idx + 1, len(code_files))
+                except Exception:
+                    pass
+
             code_file = self.parse_file(file_path)
             if code_file:
                 # 检查是否跳过

@@ -15,6 +15,20 @@ from contextlib import contextmanager
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 统一取包版本号，避免 serverInfo 与 __init__.py / README 版本漂移
+def _pkg_version() -> str:
+    try:
+        ver_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "__init__.py")
+        with open(ver_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip().startswith("__version__"):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return "4.0.0"
+
+PKG_VERSION = _pkg_version()
+
 logging.basicConfig(level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stderr)])
@@ -381,7 +395,7 @@ class Server:
         if m == "initialize":
             return {"jsonrpc":"2.0","id":rid,"result":{
                 "protocolVersion":"2024-11-05","capabilities":{"tools":{}},
-                "serverInfo":{"name":"coderef-ai","version":"3.1.0"}}}
+                "serverInfo":{"name":"coderef-ai","version":PKG_VERSION}}}
         if m == "notifications/initialized": return None
         if m == "tools/list":
             return {"jsonrpc":"2.0","id":rid,"result":{"tools":self._tools}}
@@ -443,8 +457,8 @@ class Server:
     def _bg(self, rc, n, a):
         try:
             # progress 回调：每个阶段完成后写入共享 rc，_tsk 据此回传进度
-            def prog(stage, done, total):
-                rc["progress"] = {"stage": stage, "done": done, "total": total}
+            def prog(stage, done, total, detail=None):
+                rc["progress"] = {"stage": stage, "done": done, "total": total, "detail": detail}
             rc["result"] = self._run(n, a, progress_cb=prog)
         except Exception as e: rc["error"] = str(e); rc["tb"] = traceback.format_exc()
 
@@ -741,10 +755,14 @@ class Server:
                 rc = t["result"]
                 prog = rc.get("progress")
                 if prog:
+                    detail = prog.get("detail")
+                    base = f"已完成 {prog['done']}/{prog['total']} 阶段，当前: {prog['stage']}"
+                    if detail:
+                        base += f"（{detail}）"
                     return json.dumps({
                         "status": "running", "task_id": tid,
                         "progress": prog,
-                        "progress_text": f"已完成 {prog['done']}/{prog['total']} 阶段，当前: {prog['stage']}",
+                        "progress_text": base,
                     }, ensure_ascii=False)
                 return json.dumps({"status":"running","task_id":tid})
             rc = t["result"]
