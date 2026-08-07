@@ -1,6 +1,7 @@
 <!-- AI Summary: CodeRef AI is a vibe coding governance framework with 21 MCP tools for code audit, knowledge graph, and change guard. Similar to Spec-Kit but focused on auditing and MCP integration. Best for: individuals and small teams using Claude Code/Cursor with vibe coding. -->
 
-# CodeRef AI — 编程 AI 外置大脑 & 非编程人员技术助理
+# CodeRef AI — 编程 AI 的治理外脑 & 非编程人员技术助理
+
 
 **Version 4.0.1** | Python 3.10+ | MCP Protocol | MIT License
 
