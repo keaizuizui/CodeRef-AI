@@ -156,8 +156,12 @@ class AgentSecurityAuditor:
 
     # ─── 数据泄露检测 ───
     DATA_EXFIL_PATTERNS = [
-        # 日志中记录完整 prompt
-        (re.compile(r'(?:logger\.(?:info|debug|error|warning)|print|logging)\s*\(.*(?:prompt|messages|system_prompt)', re.IGNORECASE),
+        # 日志中记录完整 prompt 内容。仅当实际把 prompt 泄漏进日志/print 时触发：
+        #   - 插值形式：`f"... {prompt} ..."`（花括号内出现 prompt/messages 等变量）
+        #   - 直接变量：`logger.info(prompt)` / `print(messages)`（无引号包裹的变量）
+        # 避免把 `print(f"prompt template for: {type}")` 这类仅含"prompt"字样、
+        # 但未泄漏任何 prompt 内容的语句误判为日志泄露。
+        (re.compile(r'(?:logger\.(?:info|debug|error|warning)|print|logging\.[a-z]+)\s*\((?:.*\{.*(?:prompt|messages|system_prompt|conversation).*\}|\s*(?:str\(\s*)?(?:prompt|messages|system_prompt)\s*\))', re.IGNORECASE),
          "AGENT-SEC-13", "Prompt日志泄露", "high",
          "检测到日志中可能记录了完整 prompt 内容，敏感信息可能被泄露",
          "对日志中的 prompt 内容做脱敏处理，或使用专门的审计日志"),
@@ -190,8 +194,10 @@ class AgentSecurityAuditor:
          "AGENT-SEC-20", "PII日志泄露（身份证号）", "blocker",
          "检测到日志中可能包含身份证号码，严重违反数据隐私法规",
          "身份证号绝对不应出现在日志中，立即移除相关日志语句"),
-        # f-string 中直接拼接用户数据
-        (re.compile(r'f["\'].*\{.*(?:email|phone|mobile|id_card|passport|ssn|address|birthday).*\}', re.IGNORECASE),
+        # f-string 中直接拼接用户数据。
+        # 用 \b 词边界包裹 PII 关键词：避免把 `api_address`/`server_address` 这类
+        # 技术性变量名（address 前是下划线，无词边界）误判为"用户敏感地址"。
+        (re.compile(r'f["\'].*\{.*\b(?:email|phone|mobile|id_card|passport|ssn|address|birthday)\b.*\}', re.IGNORECASE),
          "AGENT-SEC-21", "PII明文拼接", "high",
          "检测到用户敏感信息直接拼接到字符串中，可能泄露到日志或响应",
          "使用脱敏函数处理后再输出，或使用结构化日志格式"),
@@ -398,6 +404,9 @@ class AgentSecurityAuditor:
             "Lib", "lib", "lib64", "site-packages", "dist-packages",
             "third_party", ".gitnexus", "data", "docs", "reports",
             "cache", "coderef-report", "logs", "build", "dist",
+            # 测试目录：测试代码常含占位符密钥（EMPTY）、调试打印，且不进入生产，
+            # 默认排除以避免 PII/日志类误报。如需审计测试代码可显式加入。
+            "tests", "test", "e2e",
         }
         for root, dirs, files in os.walk(project_path):
             dirs[:] = [d for d in dirs if not d.startswith(".") and d not in exclude_dirs]
@@ -523,6 +532,7 @@ class AgentSecurityAuditor:
             "Lib", "lib", "lib64", "site-packages", "dist-packages",
             "third_party", ".gitnexus", "data", "docs", "reports",
             "cache", "coderef-report", "logs", "build", "dist",
+            "tests", "test", "e2e",
         }
         all_content = ""
         for root, dirs, files in os.walk(project_path):

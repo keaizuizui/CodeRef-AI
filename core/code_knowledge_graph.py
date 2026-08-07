@@ -237,6 +237,14 @@ class CodeKnowledgeGraph:
 
     def _build_from_analysis(self, analysis, stats: dict):
         """从 CodeAnalyzer.analyze_project() 的 ProjectAnalysis 构建节点"""
+        # 预收集项目内所有模块节点 id（mod:<文件名>），供 IMPORTS 边过滤：
+        # 仅当 import 目标是项目内真实存在的模块才建边，排除标准库/第三方导入，
+        # 避免 memory_quality 把 `import os` 这类指向不存在节点的边反复报为孤儿边。
+        mod_ids = {
+            f"mod:{os.path.splitext(os.path.basename(getattr(cf, 'file_path', '')))[0]}"
+            for cf in getattr(analysis, "files", [])
+            if getattr(cf, "file_path", "")
+        }
         n = 0
         for cf in getattr(analysis, "files", []):
             rel = getattr(cf, "file_path", "")
@@ -300,6 +308,11 @@ class CodeKnowledgeGraph:
             # 导入边
             for imp in getattr(cf, "imports", []):
                 target_mod = f"mod:{imp.split('.')[0]}"
+                # 仅当目标模块是项目内真实存在的模块节点才建 IMPORTS 边。
+                # 标准库/第三方导入（如 os、json、requests）无对应节点，
+                # 建边只会产生"指向不存在节点"的孤儿边，被 memory_quality 误报。
+                if target_mod not in mod_ids:
+                    continue
                 self._upsert_edge(KGEdge(
                     source=module_id, target=target_mod, type="IMPORTS",
                     props={"full": imp}))
