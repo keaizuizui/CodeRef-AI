@@ -341,7 +341,13 @@ class ResourceGapDetector:
                     ))
 
     def _is_conditional_import(self, filepath: str, module_name: str) -> bool:
-        """检查 import 是否被 try-except ImportError 保护（条件导入）"""
+        """检查 import 是否被 try-except 保护（条件导入 / 可选依赖）。
+
+        识别两类场景：
+        1. import 语句本身位于 try/except (ImportError|ModuleNotFoundError|Exception) 块中；
+        2. import 位于函数体内，且调用该函数的代码被 try/except 保护（延迟加载的可选依赖，
+           如 selenium 等"非强制、未安装则降级"的模块）。
+        """
         try:
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
@@ -354,36 +360,87 @@ class ResourceGapDetector:
         except SyntaxError:
             return False
 
-        # 遍历 AST，找到 import 语句，检查其父节点是否为 try-except
+        # 遍历 AST，找到匹配的 import 节点
         for node in _ast.walk(tree):
+            matched = False
             if isinstance(node, _ast.Import):
                 for alias in node.names:
                     if alias.name.split(".")[0] == module_name:
-                        return self._is_in_try_except_import_error(node, tree)
+                        matched = True
+                        break
             elif isinstance(node, _ast.ImportFrom):
                 if node.module and node.module.split(".")[0] == module_name:
-                    return self._is_in_try_except_import_error(node, tree)
+                    matched = True
+            if not matched:
+                continue
+            # 情况1：import 本身在 try/except 保护内
+            if self._is_in_try_except_import_error(node, tree):
+                return True
+            # 情况2：import 在函数体内，且该函数被 try/except 保护调用
+            if self._is_function_import_guarded(node, tree):
+                return True
 
         return False
 
+    def _is_function_import_guarded(self, target_node, tree) -> bool:
+        """判断 import 节点是否位于某函数体内，且该函数被 try/except 保护调用。
+
+        用于识别"函数内延迟导入 + 调用处降级"的可选依赖（如 selenium）。
+        """
+        import ast as _ast
+        # 找到包含 target_node 的函数定义
+        func_def = None
+        for parent in _ast.walk(tree):
+            if isinstance(parent, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                for child in _ast.walk(parent):
+                    if child is target_node:
+                        func_def = parent
+                        break
+            if func_def:
+                break
+        if not func_def:
+            return False
+
+        func_name = func_def.name
+        # 遍历 tree，找所有调用该函数的 Call 节点，检查是否被 try/except 保护
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Call):
+                name = None
+                if isinstance(node.func, _ast.Name):
+                    name = node.func.id
+                elif isinstance(node.func, _ast.Attribute):
+                    name = node.func.attr
+                if name == func_name:
+                    if self._is_in_try_except_import_error(node, tree):
+                        return True
+        return False
+
     def _is_in_try_except_import_error(self, target_node, tree) -> bool:
-        """检查节点是否在 try-except (ImportError | ModuleNotFoundError) 块中"""
+        """检查节点是否在 try-except (ImportError | ModuleNotFoundError | Exception) 块中"""
         import ast as _ast
         for node in _ast.walk(tree):
             if isinstance(node, _ast.Try):
                 # 检查 target_node 是否在 try 块中
                 for child in _ast.walk(node):
                     if child is target_node:
-                        # 检查 except handlers 是否捕获 ImportError/ModuleNotFoundError
-                        for handler in node.handlers:
-                            if handler.type:
-                                if isinstance(handler.type, _ast.Tuple):
-                                    for elt in handler.type.elts:
-                                        if isinstance(elt, _ast.Name) and elt.id in ("ImportError", "ModuleNotFoundError"):
-                                            return True
-                                elif isinstance(handler.type, _ast.Name) and handler.type.id in ("ImportError", "ModuleNotFoundError"):
-                                    return True
-                        return False
+                        return self._try_has_import_guard(node)
+        return False
+
+    def _try_has_import_guard(self, try_node) -> bool:
+        """判断 try 块的 except 是否捕获 ImportError/ModuleNotFoundError/Exception"""
+        import ast as _ast
+        for handler in try_node.handlers:
+            if handler.type is None:
+                # 裸 except 也能兜底 import 失败
+                return True
+            if isinstance(handler.type, _ast.Tuple):
+                for elt in handler.type.elts:
+                    if isinstance(elt, _ast.Name) and elt.id in (
+                            "ImportError", "ModuleNotFoundError", "Exception"):
+                        return True
+            elif isinstance(handler.type, _ast.Name) and handler.type.id in (
+                    "ImportError", "ModuleNotFoundError", "Exception"):
+                return True
         return False
 
     def _is_third_party_installed(self, module_name: str) -> bool:
@@ -755,10 +812,14 @@ class ResourceGapDetector:
                     match = re.match(r'^([A-Za-z0-9][A-Za-z0-9._-]*)', stripped)
                     if match:
                         pkg_name = match.group(1).strip().lower()  # 统一小写
-                        # 提取版本号
+                        # 归一化：连字符/下划线互换，确保 "tree-sitter-languages" 能匹配
+                        # 代码中 import 的 "tree_sitter_languages"（PEP 503 规范两者等价）
+                        pkg_name_norm = pkg_name.replace("-", "_")
                         version_match = re.search(r'[=<>~!]+\s*([\d.]+)', stripped)
                         version = version_match.group(1) if version_match else ""
                         packages[pkg_name] = version
+                        if pkg_name_norm != pkg_name:
+                            packages[pkg_name_norm] = version
 
         except Exception as e:
             logger.warning(f"[ResourceGapDetector] 解析 requirements.txt 失败: {e}")

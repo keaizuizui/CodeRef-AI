@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-CodeRef MCP Server v4.0 — 四大引擎 + 21 个工具
+CodeRef MCP Server v4.1 — 四大引擎 + 24 个工具
   审计引擎     → coderef_audit / coderef_scan / coderef_scan_list / architecture / docs / query / review / frontend / whitelist / task_status
   记忆引擎     → coderef_memory_sync / memory_query / memory_status / memory_quality / prompt_mgmt
   创新识别引擎 → coderef_innovation / asset / registry
@@ -124,6 +124,10 @@ class Server:
                     "project_path": {"type": "string", "description": "目标项目路径"},
                     "output_dir": {"type": "string", "description": "报告输出目录（默认 coderef-report/）"},
                     "background": {"type": "boolean", "description": "后台执行", "default": True},
+                    "strategy": {"type": "string",
+                        "enum": ["auto", "full", "incr", "no_change"],
+                        "default": "auto",
+                        "description": "审计策略：auto=自动判定（首次全量/增量裁剪重型工具）；full=全量 11 工具；incr=增量裁剪；no_change=复用既有结论"},
                 }, "required": ["project_path"]},
             },
             {
@@ -151,6 +155,22 @@ class Server:
                     "wiki_style": {"type": "string", "enum": ["comprehensive","reference","tutorial","plain"], "default": "comprehensive"},
                     "include_subprojects": {"type": "boolean", "default": True},
                     "background": {"type": "boolean", "default": True},
+                }, "required": ["project_path"]},
+            },
+            {
+                "name": "coderef_docs_read",
+                "description": (
+                    "按需读取已生成的 Wiki 文档正文（返回文档内容，而非路径）。\n"
+                    "解决编程 AI 无法主动调取外部文件夹的问题：docs 生成后正文落在磁盘，\n"
+                    "本工具把正文作为返回值直接交给 AI，无需 fs 访问。\n"
+                    "doc 为空 → 列出全部文档；doc 指定 → 返回该文档正文（可截断）。\n"
+                    "输出目录自动探测 docs/wiki/ 或 txt/，也可用 output_dir 显式指定。"
+                ),
+                "inputSchema": {"type": "object", "properties": {
+                    "project_path": {"type": "string", "description": "目标项目路径"},
+                    "doc": {"type": "string", "description": "文档相对路径，如 README.md 或 MODULES/xxx.md；留空则列出全部"},
+                    "output_dir": {"type": "string", "description": "Wiki 输出目录（可选，默认自动探测）"},
+                    "max_chars": {"type": "integer", "description": "返回正文最大字符数", "default": 20000},
                 }, "required": ["project_path"]},
             },
             {
@@ -224,6 +244,34 @@ class Server:
                     "url": {"type": "string", "description": "运行 URL（mode=runtime 时必填）"},
                     "check_levels": {"type": "array", "items": {"type": "integer"}, "description": "要审查的菜单层级，默认 [1,2,3,4,5]"},
                     "background": {"type": "boolean", "description": "后台执行", "default": True},
+                }, "required": ["project_path"]},
+            },
+            {
+                "name": "coderef_report",
+                "description": (
+                    "把审计报告 / 知识图谱 / Wiki 聚合成自包含 HTML 报告目录（解决没有有效前端的问题）。\n"
+                    "渲染到 output_dir（默认 coderef-report/html/）：index.html（概览+导航）/ audit.html / kg.html / wiki.html。\n"
+                    "本质是跑一次全量审计管线并渲染 HTML 报告；若只想重渲染既有产物，可先用 coderef_audit / coderef_docs 再调用本工具。\n"
+                    "返回 index.html 绝对路径与生成文件清单。"
+                ),
+                "inputSchema": {"type": "object", "properties": {
+                    "project_path": {"type": "string", "description": "目标项目路径"},
+                    "output_dir": {"type": "string", "description": "报告输出目录（默认 coderef-report/html/）"},
+                }, "required": ["project_path"]},
+            },
+            {
+                "name": "coderef_audit_advisor",
+                "description": (
+                    "审计策略判定 + 功能审查（审计前先和 AI 沟通审查范围）。\n"
+                    "不直接跑代码审计，而是先判断本次该【增量审查】还是【全量审查】。\n"
+                    "依据：变更信号（记忆层快照 diff）+ 知识图谱影响闭包（多跳 BFS）+ 图谱新旧。\n"
+                    "同时给出应重点审查的功能维度（创新传播/结构复杂度/回归一致性等），\n"
+                    "并可选叠加 LLM 功能审查（with_functional=True 时）。\n"
+                    "建议：调用前先 coderef_memory_sync 建立基线，效果最佳。"
+                ),
+                "inputSchema": {"type": "object", "properties": {
+                    "project_path": {"type": "string", "description": "目标项目路径"},
+                    "with_functional": {"type": "boolean", "description": "是否叠加 LLM 功能审查增强", "default": True},
                 }, "required": ["project_path"]},
             },
         ]
@@ -489,6 +537,8 @@ class Server:
                 return self._ok(rid, self._asset(a))
             if n == "coderef_registry":
                 return self._ok(rid, self._registry(a))
+            if n == "coderef_docs_read":
+                return self._ok(rid, self._docs_read(a))
             bg = a.get("background", n == "coderef_docs")
             if bg:
                 tid = str(uuid.uuid4())[:8]; rc = {}
@@ -683,12 +733,33 @@ class Server:
         r["project_path"] = pp
         return json.dumps(r, ensure_ascii=False)
 
+    def _docs_read(self, a: dict) -> str:
+        """按需读取 Wiki 文档正文（coderef_docs_read）"""
+        from core.pipeline_runner import Pipe
+        pp = a["project_path"]
+        # max_chars 防御性转换：非法值回退默认，避免 MCP 层抛 ValueError
+        try:
+            max_chars = int(a.get("max_chars", 20000))
+        except (TypeError, ValueError):
+            max_chars = 20000
+        r = Pipe().docs_read(
+            pp, doc=a.get("doc") or None,
+            output_dir=a.get("output_dir") or None,
+            max_chars=max_chars,
+        )
+        r["tool"] = "coderef_docs_read"
+        r["project_path"] = pp
+        return json.dumps(r, ensure_ascii=False)
+
     def _run(self, n, a, progress_cb=None) -> str:
         from core.pipeline_runner import Pipe
         p, o = a["project_path"], a.get("output_dir")
         logger.info(f"[{n}] {p}")
         if n == "coderef_audit":
-            r = Pipe().audit(p, output_dir=o, progress_cb=progress_cb)
+            strat = a.get("strategy", "auto")
+            strat = None if strat == "auto" else strat
+            r = Pipe().audit(p, output_dir=o, progress_cb=progress_cb,
+                             strategy=strat)
             d = getattr(r, 'dashboard_path', '')
             # 结构化返回：携带落盘路径与明细统计，避免调用方只看得到摘要
             return json.dumps({
@@ -698,6 +769,7 @@ class Server:
                 "report": r.report,
                 "report_path": r.report_path or "",
                 "dashboard_path": d or "",
+                "strategy": getattr(r, "audit_strategy", "full"),
                 "evidence": {
                     "scan_ts": getattr(r, "scan_ts", ""),          # 本次扫描时间戳
                     "kg_built_at": getattr(r, "kg_built_at", ""),   # 知识图谱构建时间
@@ -737,6 +809,10 @@ class Server:
             return self._review(a)
         elif n == "coderef_frontend":
             return self._frontend(a)
+        elif n == "coderef_report":
+            return self._report(a)
+        elif n == "coderef_audit_advisor":
+            return self._advisor(a)
         else: return "未知"
         logger.info(f"[{n}] 完成: {r.elapsed}s")
         return r.report
@@ -767,6 +843,32 @@ class Server:
             pp, entry=entry, mode=mode, url=url, check_levels=levels,
         )
         return json.dumps(r, ensure_ascii=False)
+
+    def _report(self, a) -> str:
+        """执行 HTML 报告渲染（coderef_report）：跑审计管线并渲染 HTML 报告目录"""
+        from core.pipeline_runner import Pipe
+        pp = a["project_path"]
+        out = a.get("output_dir") or None
+        r = Pipe().audit(pp, output_dir=out)
+        hr = getattr(r, "html_report", None) or {}
+        return json.dumps(hr, ensure_ascii=False)
+
+    def _advisor(self, a) -> str:
+        """审计策略判定 + 功能审查（coderef_audit_advisor）"""
+        from core.review_strategy import review_advisor
+        from core.functional_review import functional_reviewer
+        pp = a["project_path"]
+        with_functional = a.get("with_functional", True)
+        strategy = review_advisor.advise(pp)
+        result = {"strategy": strategy}
+        if with_functional:
+            try:
+                fr = functional_reviewer.review(pp, strategy)
+                result["functional_review"] = fr
+            except Exception as e:
+                result["functional_review"] = {"llm_available": False,
+                                               "degraded": True, "error": str(e)}
+        return json.dumps(result, ensure_ascii=False)
 
     def _arch(self, a) -> str:
         from core.pipeline_runner import Pipe

@@ -466,6 +466,11 @@ class CodeSimplifier:
                 # 检查是否导入了第三方库
                 tp_imported = any(third_party in imp for imp in all_imports)
                 if tp_imported:
+                    # loguru 特判：若项目用到 loguru 特有高级 API（结构化/格式化，
+                    # 如 opt/bind/patch/contextualize/level 自定义），说明有格式化需求，
+                    # 标准库 logging 无法等价替代，不报"可用标准库替代"建议。
+                    if third_party == "loguru" and self._loguru_needs_formatting(analysis):
+                        continue
                     items.append(SimplificationItem(
                         category="stdlib_replace",
                         severity="medium",
@@ -479,6 +484,26 @@ class CodeSimplifier:
                         ponytail_rung=2,
                     ))
         return items
+
+    def _loguru_needs_formatting(self, analysis) -> bool:
+        """判断项目是否用到 loguru 特有高级 API（说明有格式化/结构化需求）。
+
+        命中 logger.opt / logger.bind / logger.patch / logger.contextualize /
+        logger.level / logger.add(fmt=...) 任一即视为需要 loguru 而非标准库 logging。
+        """
+        api_patterns = (
+            r'logger\.opt\s*\(',
+            r'logger\.bind\s*\(',
+            r'logger\.patch\s*\(',
+            r'logger\.contextualize\s*\(',
+            r'logger\.level\s*\(',
+            r'logger\.add\s*\([^)]*fmt\s*=',
+        )
+        for cf in analysis.files:
+            raw = cf.raw_content or ""
+            if raw and any(re.search(p, raw) for p in api_patterns):
+                return True
+        return False
 
     def _detect_over_abstractions(self, analysis) -> List[SimplificationItem]:
         """检测过度抽象（只有一个实现的接口/基类/工厂）"""
