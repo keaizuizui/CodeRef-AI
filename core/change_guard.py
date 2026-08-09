@@ -210,19 +210,43 @@ class ChangeGuard:
             project_path: 当前项目路径（新代码，绝对路径）
             diff: git diff 文本（可选）。若提供，用于定位变更范围、精确对比；
                   否则全量对比当前文件与基线目录。
-            baseline_dir: 基线目录（改动前的代码快照）。为空时尝试用 git 工作区
-                  作为基线（暂不支持），仅做 diff 内的新增/删除分析。
+            baseline_dir: 基线目录（改动前的代码快照）。为空时动态兜底：
+                  尝试从 git 历史自动提取最近一次改动作为基线对比。
 
         返回:
-            {"findings": [...], "summary": "...", "degraded": bool}
+            {
+                "findings": [...],
+                "summary": "...",
+                "degraded": bool,
+                "source": "diff" | "baseline_dir" | "git-auto" | "no-baseline",
+            }
+
+        动态兜底规则（保证始终有意义的反馈，而非误导性"未检测到退化"）：
+        - 提供 diff → 基于变更范围精确检测；
+        - 提供 baseline_dir → 全量对比当前文件与基线目录；
+        - 两者皆缺 → 尝试从 git 历史自动提取最近改动（git-auto）；
+        - git 也无法建立基线 → 返回明确降级反馈（no-baseline），
+          明确说明"未执行对比"，而非假装"未检测到退化"。
         """
         findings: List[DegradationFinding] = []
+        source = "no-baseline"
 
         try:
             if diff:
                 findings = self._guard_diff(project_path, diff)
-            else:
+                source = "diff"
+            elif baseline_dir and os.path.isdir(baseline_dir):
                 findings = self._guard_dir(project_path, baseline_dir)
+                source = "baseline_dir"
+            else:
+                # 动态兜底：从 git 历史自动提取基线
+                auto_diff = self._auto_git_diff(project_path)
+                if auto_diff:
+                    findings = self._guard_diff(project_path, auto_diff)
+                    source = "git-auto"
+                else:
+                    # 无法建立任何基线，保留 no-baseline，summary 会明确说明
+                    logger.warning("未提供 diff/baseline_dir，且无法从 git 提取基线，退化检测未执行")
         except Exception as e:
             logger.exception(f"退化检测执行出现未预期异常: {e}")
             findings.append(DegradationFinding(
@@ -233,15 +257,49 @@ class ChangeGuard:
                 suggestion="请人工核对本次改动，或重试退化检测。",
                 tier=ChangeGuardTier.LOW,
             ))
+            source = "error"
 
         degraded = any(f.tier in (ChangeGuardTier.HIGH, ChangeGuardTier.MEDIUM)
                        for f in findings)
-        summary = self._build_summary(findings, degraded)
+        summary = self._build_summary(findings, degraded, source)
         return {
             "findings": [f.to_dict() for f in findings],
             "summary": summary,
             "degraded": degraded,
+            "source": source,
         }
+
+    # ── 动态兜底：git 自动提取基线 ────────────────────────────────
+    def _auto_git_diff(self, project_path: str) -> str:
+        """从 git 历史自动提取最近一次改动的 diff 作为基线。
+
+        依次尝试：
+          1. 当前工作区未提交改动（git diff HEAD）——最适合"AI 刚改完还没提交"的场景；
+          2. 最近一次提交的改动（git diff HEAD~1 HEAD）——工作区干净时的兜底。
+
+        git 不可用 / 不是 git 仓库 / 无任何改动历史时返回空字符串。
+        绝不抛异常——退化检测必须优雅降级。
+        """
+        import subprocess
+        candidates = [
+            ["git", "-C", project_path, "diff", "HEAD"],
+            ["git", "-C", project_path, "diff", "HEAD~1", "HEAD"],
+        ]
+        for cmd in candidates:
+            try:
+                r = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=30
+                )
+            except Exception as e:
+                logger.debug(f"git 命令执行失败（降级尝试下一个）: {cmd} → {e}")
+                continue
+            if r.returncode != 0:
+                logger.debug(f"git 命令返回非零（{cmd}）: {r.stderr.strip()[:120]}")
+                continue
+            content = (r.stdout or "").strip()
+            if content:
+                return content
+        return ""
 
     # ── 基于 diff 的退化检测（推荐）────────────────────────────────
     def _guard_diff(self, project_path: str, diff: str) -> List[DegradationFinding]:
@@ -422,7 +480,28 @@ class ChangeGuard:
         return result
 
     # ── summary ─────────────────────────────────────────────────────
-    def _build_summary(self, findings: List[DegradationFinding], degraded: bool) -> str:
+    def _build_summary(self, findings: List[DegradationFinding], degraded: bool,
+                       source: str = "diff") -> str:
+        if source == "no-baseline":
+            return (
+                "退化检测未执行：未提供 diff，也未提供 baseline_dir，"
+                "且无法从 git 历史自动提取基线改动。"
+                "请传入 git diff 文本，或传入 baseline_dir（改动前快照），"
+                "或在已提交的 git 仓库中重试，才能进行有意义的退化检测。"
+            )
+        if source == "git-auto":
+            if not findings:
+                return "已自动从 git 历史提取最近改动完成对比，未检测到明显的代码退化。"
+            head = ("⚠️ 检测到代码退化，建议提交前修复" if degraded
+                    else "检测到低风险项，建议人工确认")
+            n_high = sum(1 for f in findings if f.tier == ChangeGuardTier.HIGH)
+            n_med = sum(1 for f in findings if f.tier == ChangeGuardTier.MEDIUM)
+            n_low = sum(1 for f in findings if f.tier == ChangeGuardTier.LOW)
+            return (
+                f"{head}：共 {len(findings)} 条（HIGH {n_high} / MEDIUM {n_med} / "
+                f"LOW {n_low}）。基线来自 git 历史自动提取，覆盖最近一次改动。"
+                f"重点核查校验链、重试、异常处理等能力是否被 AI 改动悄悄删除。"
+            )
         if not findings:
             return "本次变更未检测到明显的代码退化。"
         n_high = sum(1 for f in findings if f.tier == ChangeGuardTier.HIGH)

@@ -146,6 +146,8 @@ class Server:
                 "description": (
                     "项目文档探查 = 结构化 Wiki 生成(README/架构/安装/使用/API)。\n"
                     "三级管线：AST元数据(全量)→LLM归纳→编校验证(无幻觉)。\n"
+                    "wiki_style 可选 comprehensive/reference/tutorial/plain；"
+                    "include_subprojects 控制是否同时为子项目生成独立 Wiki。\n"
                     "自动发现子项目并生成独立 Wiki。\n"
                     "支持 background=True（推荐，生成耗时 3-20 分钟）。"
                 ),
@@ -251,7 +253,7 @@ class Server:
                 "description": (
                     "把审计报告 / 知识图谱 / Wiki 聚合成自包含 HTML 报告目录（解决没有有效前端的问题）。\n"
                     "渲染到 output_dir（默认 coderef-report/html/）：index.html（概览+导航）/ audit.html / kg.html / wiki.html。\n"
-                    "本质是跑一次全量审计管线并渲染 HTML 报告；若只想重渲染既有产物，可先用 coderef_audit / coderef_docs 再调用本工具。\n"
+                    "优先重渲染既有产物（图谱+Wiki，不重跑扫描，速度快）；若项目尚无审计/图谱产物，则回退为跑一次全量审计并渲染。\n"
                     "返回 index.html 绝对路径与生成文件清单。"
                 ),
                 "inputSchema": {"type": "object", "properties": {
@@ -314,7 +316,9 @@ class Server:
                 "对比基线与新代码的能力签名，识别四类退化：校验链被删(high)、"
                 "重试/超时削弱(medium)、输入约束移除(medium)、回归风险。\n"
                 "vibecoder 最需要的功能：AI 改没改坏代码，提交前自动拦截。\n"
-                "传 diff 则基于变更范围精确检测；不传则需 baseline_dir 前后对比。"
+                "动态兜底：传 diff 则精确检测；否则传 baseline_dir 全量对比；"
+                "两者皆缺时自动从 git 历史提取最近改动作为基线对比；"
+                "仍无法建立基线则明确反馈需补充输入，绝不静默返回空结论。"
             ),
             "inputSchema": {"type": "object", "properties": {
                 "project_path": {"type": "string", "description": "目标项目路径（新代码）"},
@@ -788,7 +792,9 @@ class Server:
                 "errors": getattr(r, "errors", []),
             }, ensure_ascii=False)
         elif n == "coderef_docs":
-            r = Pipe().docs(p, output_dir=o)
+            r = Pipe().docs(p, output_dir=o,
+                            wiki_style=a.get("wiki_style") or "comprehensive",
+                            include_subprojects=True if a.get("include_subprojects", True) else False)
             wr = getattr(r, "wiki_result", None)
             # 结构化返回：携带输出目录/文档清单/失败明细，让调用方能区分"全量成功"与"部分失败"，
             # 避免部分文档生成失败时仍被当作 fully completed。
@@ -845,11 +851,14 @@ class Server:
         return json.dumps(r, ensure_ascii=False)
 
     def _report(self, a) -> str:
-        """执行 HTML 报告渲染（coderef_report）：跑审计管线并渲染 HTML 报告目录"""
+        """执行 HTML 报告渲染（coderef_report）：
+        优先重渲染既有产物（图谱+Wiki，不重跑扫描）；无既有产物时回退为跑一次全量审计并渲染。"""
         from core.pipeline_runner import Pipe
         pp = a["project_path"]
         out = a.get("output_dir") or None
-        r = Pipe().audit(pp, output_dir=out)
+        r, has_artifacts = Pipe().render_report(pp, output_dir=out)
+        if not has_artifacts:
+            r = Pipe().audit(pp, output_dir=out)
         hr = getattr(r, "html_report", None) or {}
         return json.dumps(hr, ensure_ascii=False)
 
