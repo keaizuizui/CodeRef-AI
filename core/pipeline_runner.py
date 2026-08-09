@@ -385,6 +385,18 @@ class Pipe:
                 }
             r.audit_strategy = effective_strategy
 
+            # 策略为 no_change 时：复用既有结论，不重扫（行为与描述一致）
+            if effective_strategy == "no_change":
+                reused_ok = self._reuse_no_change(project_path, r, out, _prog)
+                if reused_ok:
+                    r.elapsed = round(time.time() - self._t0, 1)
+                    return r
+                # 无可复用结论 → 降级为全量，记录提示
+                r.errors.append(
+                    "no_change 策略下未找到可复用的既有结论，已降级为 full 重新审计")
+                effective_strategy = "full"
+                r.audit_strategy = "full"
+
             # 按策略选择工具子集（动态兜底核心：裁剪重型全量工具）
             tools = [
                 (n, getattr(self, m)) for n, m in self._select_tools(effective_strategy)
@@ -591,8 +603,14 @@ class Pipe:
         return r
 
     def docs(self, project_path: str, output_dir: str = None,
-             resume: bool = False) -> PipeResult:
-        """文档探查管线：Wiki"""
+             resume: bool = False,
+             wiki_style: str = "comprehensive",
+             include_subprojects: bool = True) -> PipeResult:
+        """文档探查管线：Wiki
+
+        wiki_style: Wiki 风格 (comprehensive / reference / tutorial / plain)
+        include_subprojects: 是否同时为子项目生成独立 Wiki
+        """
         self._t0 = time.time()
         r = PipeResult(project_path=project_path)
         d = self._load(project_path) if resume else set()
@@ -604,7 +622,9 @@ class Pipe:
             # 构建知识图谱
             self._build_kg(project_path, analysis)
 
-            self._wiki(project_path, r, d, output_dir)
+            self._wiki(project_path, r, d, output_dir,
+                       wiki_style=wiki_style,
+                       include_subprojects=include_subprojects)
 
             r.report = self._fmt(r, "文档探查报告")
             os.makedirs(output_dir or os.path.join(os.path.dirname(os.path.dirname(
@@ -689,6 +709,51 @@ class Pipe:
                 "chars": len(content),
                 "truncated": truncated,
                 "content": content[:max_chars]}
+
+    @staticmethod
+    def _detect_wiki_dir(project_path: str) -> Optional[str]:
+        """探测已生成的 Wiki 输出目录（第一个存在的），供重渲染聚合使用。"""
+        candidates = [
+            os.path.join(project_path, "docs", "wiki"),
+            os.path.join(project_path, "docs"),
+            os.path.join(project_path, "txt"),
+        ]
+        for c in candidates:
+            if os.path.isdir(c):
+                return c
+        return None
+
+    def render_report(self, project_path: str,
+                      output_dir: Optional[str] = None) -> tuple:
+        """重渲染既有产物为 HTML 报告目录（coderef_report 的核心调度）。
+
+        只聚合已落盘的产物（知识图谱 + Wiki），不重跑代码扫描，适合"已有产物只要 HTML"。
+        返回 (PipeResult, has_artifacts)；has_artifacts=False 表示无既有图谱产物，
+        调用方应回退为跑一次全量审计。
+        """
+        r = PipeResult(project_path=project_path)
+        try:
+            from core.code_knowledge_graph import load_knowledge_graph
+            kg = load_knowledge_graph(project_path)
+            kg_stats = kg.get_stats() if kg is not None else None
+            if kg is not None:
+                kg.close()
+            if kg_stats is None:
+                return r, False
+            # 若已有 Wiki 产物，挂到 wiki_result 供 HTML 渲染聚合 Wiki 页
+            wiki_dir = self._detect_wiki_dir(project_path)
+            if wiki_dir:
+                class _WikiRef:
+                    output_dir = wiki_dir
+                r.wiki_result = _WikiRef()
+            hr = self._render_html(project_path, r, kg_stats=kg_stats,
+                                   output_dir=output_dir)
+            if not hr.get("ok"):
+                r.errors.append(hr.get("error", "渲染失败"))
+            return r, True
+        except Exception as e:
+            r.errors.append(f"render_report: {e}")
+            return r, False
 
     # ═══════════════════════════════════
     # 检测器
@@ -901,7 +966,9 @@ class Pipe:
             r.report_path = html
         except Exception as e: r.errors.append(f"workflow: {e}")
 
-    def _wiki(self, p: str, r: PipeResult, done: set, output_dir: str = None):
+    def _wiki(self, p: str, r: PipeResult, done: set, output_dir: str = None,
+              wiki_style: str = "comprehensive",
+              include_subprojects: bool = True):
         if "wiki" in done: return
         try:
             from core.wiki_generator import WikiGenerator
@@ -909,7 +976,8 @@ class Pipe:
             wo = output_dir or os.path.join(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__))), "txt")
             wg = WikiGenerator()
-            gres = wg.generate(p, output_dir=wo, wiki_style="comprehensive", include_subprojects=True)
+            gres = wg.generate(p, output_dir=wo, wiki_style=wiki_style,
+                               include_subprojects=include_subprojects)
             # 把 Wiki 生成失败明细带入管线结果，让 _fmt / MCP 层能感知"部分文档生成失败"，
             # 避免部分阶段失败却仍对外标记为 fully completed。
             for e in getattr(gres, "errors", []) or []:
@@ -918,6 +986,56 @@ class Pipe:
             done.add("wiki"); self._save(p, list(done))
         except Exception as e:
             r.errors.append(f"wiki: {e}")
+
+    @staticmethod
+    def _latest_report(out: str) -> Optional[str]:
+        """返回输出目录下最近一份审计报告（coderef_audit_*.md），无则 None。"""
+        try:
+            if not os.path.isdir(out):
+                return None
+            cands = [os.path.join(out, f) for f in os.listdir(out)
+                     if f.startswith("coderef_audit_") and f.endswith(".md")]
+            if not cands:
+                return None
+            return max(cands, key=os.path.getmtime)
+        except Exception:
+            return None
+
+    def _reuse_no_change(self, project_path: str, r: PipeResult,
+                         out: str, _prog) -> bool:
+        """no_change 策略：复用既有图谱与最近审计报告，不重扫代码。
+
+        返回 True 表示复用成功（调用方应直接返回）；False 表示无既有结论可复用。
+        """
+        try:
+            from core.code_knowledge_graph import load_knowledge_graph
+            kg = load_knowledge_graph(project_path)
+            if kg is None:
+                return False
+            stats = kg.get_stats()
+            kg.close()
+            r.kg_built_at = str(stats.get("built_at", ""))
+            r.audit_strategy = "no_change"
+            # 复用最近一份审计报告 markdown（若存在），否则生成"复用结论"说明文案
+            report_path = self._latest_report(out)
+            if report_path:
+                try:
+                    with open(report_path, "r", encoding="utf-8") as f:
+                        r.report = f.read()
+                    r.report_path = report_path
+                except Exception:
+                    r.report = self._fmt(r, "审计报告（复用既有结论）")
+            else:
+                r.report = self._fmt(r, "审计报告（复用既有结论）")
+            # 渲染 HTML（聚合既有图谱 + Wiki）
+            self._render_html(project_path, r, kg_stats=stats,
+                              output_dir=os.path.join(out, "html"))
+            _prog("复用既有结论", 1, 1)
+            logger.info(f"[audit] 策略=no_change，复用既有结论，未重扫")
+            return True
+        except Exception as e:
+            r.errors.append(f"reuse_no_change: {e}")
+            return False
 
     # ═══════════════════════════════════
     # 交叉验证 + 格式化
