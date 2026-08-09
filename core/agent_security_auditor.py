@@ -670,6 +670,10 @@ class AgentSecurityAuditor:
         # 匹配 CWE 映射行
         if re.search(r'CWE-\d+', line):
             return True
+        # 匹配字符串字面量中引用的危险 API 名（检测器用 'pickle.loads' in line 之类
+        # 字符串匹配来检测目标代码，字符串名不是真实调用，不应被自身规则误报）
+        if re.search(r'["\'](?:pickle\.loads|yaml\.load|json\.loads|eval|exec|subprocess)[`"\']', line):
+            return True
         return False
 
     def to_report(self, risks: List[AgentSecurityRisk], project_path: str) -> str:

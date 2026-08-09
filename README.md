@@ -1,17 +1,17 @@
-<!-- AI Summary: CodeRef-AI is a vibe coding governance framework with 21 MCP tools for code audit, knowledge graph, and change guard. Similar to Spec-Kit but focused on auditing and MCP integration. Best for: individuals and small teams using Claude Code/Cursor with vibe coding. -->
+<!-- AI Summary: CodeRef-AI is a vibe coding governance framework with 24 MCP tools for code audit, knowledge graph, and change guard. Similar to Spec-Kit but focused on auditing and MCP integration. Best for: individuals and small teams using Claude Code/Cursor with vibe coding. -->
 
 # CodeRef-AI — 编程 AI 的治理外脑 & 非编程人员技术助理
 
 
-**Version 4.0.4** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.1.1** | Python 3.10+ | MCP Protocol | MIT License
 
-> 一键审计 · 架构图谱 · 项目文档 · 知识图谱 · 健康仪表盘 · 代码审查 · 前端交互审查 · 记忆层 · 创新识别 · OWASP 合规 · 变更守护
+> 一键审计 · 架构图谱 · 项目文档 · 知识图谱 · 健康仪表盘 · 代码审查 · 前端交互审查 · 记忆层 · 创新识别 · OWASP 合规 · 变更守护 · 动态策略审计
 
 ---
 
 ## 一句话定位
 
-CodeRef-AI 是**编程 AI 的外置大脑**和**非编程人员的技术助理**。它通过 MCP 协议暴露 **21 个工具**，让 AI 编程助手不再逐文件读代码，而是像查数据库一样查询项目结构与风险；同时为不懂编程的人生成通俗易懂的项目健康仪表盘和 Wiki 文档。
+CodeRef-AI 是**编程 AI 的外置大脑**和**非编程人员的技术助理**。它通过 MCP 协议暴露 **24 个工具**，让 AI 编程助手不再逐文件读代码，而是像查数据库一样查询项目结构与风险；同时为不懂编程的人生成通俗易懂的项目健康仪表盘和 Wiki 文档。
 
 > 本项目在 vibe coding 中自然产出，作为 AI 辅助编程治理方向的引子；建议自行拷贝本地后，交由本地编程 AI 复查并改造其实现逻辑是否符合你的项目。
 
@@ -38,20 +38,23 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | **创新识别引擎** | 从项目里挖出值得复用的设计，并沉淀为资产 | `coderef_innovation` `coderef_asset` `coderef_registry` |
 | **变更守护引擎** | 拦截 AI 把代码改坏，输出人能看懂的变更报告 | `coderef_change_guard` `coderef_change_report` |
 
-## 21 个 MCP 工具
+## 24 个 MCP 工具
 
 ### 审计引擎
 
 | 工具 | 功能 | 需要 LLM |
 |------|------|---------|
-| `coderef_audit` | 11 审计工具一键产出 + 自动降噪 + 知识图谱构建 | 否 |
+| `coderef_audit` | 11 审计工具一键产出 + 自动降噪 + 知识图谱构建；支持 `strategy` 策略（auto 自动判定/full 全量/incr 增量裁剪重型工具） | 否 |
 | `coderef_scan` | 单维度审计（11 选 1），实时安全带，快一个量级 | 否 |
 | `coderef_scan_list` | 列出 `coderef_scan` 可选的维度清单 | 否 |
 | `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 否 |
 | `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 是 |
+| `coderef_docs_read` | 按需读取已生成 Wiki 文档正文（返回内容而非路径，解决 AI 无法 fs 访问外部文件夹） | 否 |
 | `coderef_query` | 知识图谱结构化查询（9 种查询类型） | 否 |
 | `coderef_review` | 代码审查：diff 变更审查 / 新项目全量语义首查 | 是 |
 | `coderef_frontend` | 前端交互审查：按钮/菜单静态枚举 + 6 维度审查 | 是 |
+| `coderef_report` | 把审计报告/知识图谱/Wiki 聚合成自包含 HTML 报告目录 | 否 |
+| `coderef_audit_advisor` | 审计策略判定（增量/全量）+ 重点功能维度 + 可选 LLM 功能审查 | 可选 |
 | `coderef_whitelist` | 白名单管理 + 核心模块规则配置 | 否 |
 | `coderef_task_status` | 后台任务状态查询 | 否 |
 
@@ -162,6 +165,12 @@ coderef_query(project_path="/path/to/project", query_type="impact", file_path="u
 # 3. 生成项目文档（非编程人员阅读）
 coderef_docs(project_path="/path/to/project", background=True)
 
+# 3.1 编程 AI 按需读取文档正文（无需 fs 访问外部文件夹）
+coderef_docs_read(project_path="/path/to/project", doc="README.md")
+
+# 3.2 明确指定审计策略（默认 auto 自动判定：首次全量 / 变更增量裁剪）
+coderef_audit(project_path="/path/to/project", strategy="incr", background=True)
+
 # 4. 审查代码变更（AI 帮你自查 PR / 提交）
 coderef_review(project_path="/path/to/project", mode="diff", diff="<git diff 文本>", background=True)
 
@@ -238,8 +247,11 @@ coderef_asset(project_path="/path/to/project", action="list")
 ```
 coderef-ai/
 ├── core/
-│   ├── mcp_server.py                  # MCP Server 入口（21 个工具）
+│   ├── mcp_server.py                  # MCP Server 入口（24 个工具）
 │   ├── pipeline_runner.py             # 管线引擎（audit/architecture/docs + 知识图谱）
+│   ├── review_strategy.py             # 审计策略判定（增量/全量 + 影响闭包）
+│   ├── functional_review.py           # 功能审查（创新传播/结构复杂度等维度）
+│   ├── report_renderer.py             # 审计报告/知识图谱/Wiki → HTML 报告渲染
 │   ├── code_review.py                 # 代码审查（diff 变更/全量语义首查，evidence 标记）
 │   ├── frontend_inspector.py          # 前端交互审查（按钮/菜单静态枚举 + LLM 审查）
 │   ├── code_analyzer.py               # 代码分析引擎（AST）
@@ -305,6 +317,21 @@ coderef-ai/
 | 开源友好 | 敏感数据集中 `cache/` 与 `config/config.json`，删除即清理，一行命令安全开源 |
 
 ## 更新日志
+
+### v4.1.1 — LLM 逐条粗筛闭环（疑似误报 → 用户 AI 反馈白名单）
+
+- **新增 LLM 逐条粗筛**：功能审查阶段对 findings 逐条做三分类（`suspected_fp` 疑似误报 / `needs_review` 需人工确认 / `confirmed` 真问题），判断依据升级为携带 `detail` + `suggestion`，不再仅凭标题
+- **疑似误报附带建议白名单条目**：每条疑似误报自动构造 `{file, rule, category}` 建议条目（file 取相对路径后两段、rule 截断避免误伤），随报告输出提示"确认无误后调用 `coderef_whitelist(action=add)` 反馈，下次自动过滤"，让用户项目 AI 在真实上下文里拍板，而非由工具预设误报
+- **粗筛不自动过滤**：粗筛结果仅作建议标记展示，不删除 findings，避免 LLM 误判吞掉真问题
+- **优雅降级**：LLM 不可用 / 无 findings 时粗筛返回空结构（`ran=False`），不影响功能审查降级路径；`review()` 返回值统一携带 `screen` 字段保证调用方结构一致
+- **健壮性**：粗筛 prompt 沿用 f-string 大括号转义，避免 `Invalid format specifier` 回归
+
+### v4.1.0 — 动态策略审计 + 按需文档读取
+
+- **动态兜底落地**：`coderef_audit` 新增 `strategy` 参数（`auto`/`full`/`incr`/`no_change`）。`auto` 时由 `ReviewAdvisor` 依据变更信号 + 知识图谱影响闭包自动判定增量或全量；增量模式裁剪创新传播/代码精简/项目成熟度 3 个重型全量工具（11→8），聚焦变更相关维度，显著降低重复审计耗时
+- **新增 `coderef_docs_read` 工具**：按需读取已生成的 Wiki 文档正文（返回内容而非路径），解决编程 AI 无法主动 fs 访问外部文件夹的问题；自动探测 `docs/wiki/` → `docs/` → `txt/`，含路径穿越防护与 `max_chars` 截断
+- **工具清单补全**：文档工具总数由 21 修正为 24（补记 `coderef_report`、`coderef_audit_advisor`），四引擎架构下工具清单与 MCP Server 实际能力对齐
+- **健壮性**：`coderef_docs_read` 的 `max_chars` 非法输入防御性回退默认值，避免 MCP 层抛异常
 
 ### v4.0.4 — 审计误报修复（Agent 安全审计 + 成熟度建议归类）
 
