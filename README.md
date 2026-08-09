@@ -3,7 +3,7 @@
 # CodeRef-AI — 编程 AI 的治理外脑 & 非编程人员技术助理
 
 
-**Version 4.1.2** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.1.3** | Python 3.10+ | MCP Protocol | MIT License
 
 > 一键审计 · 架构图谱 · 项目文档 · 知识图谱 · 健康仪表盘 · 代码审查 · 前端交互审查 · 记忆层 · 创新识别 · OWASP 合规 · 变更守护 · 动态策略审计
 
@@ -317,6 +317,14 @@ coderef-ai/
 | 开源友好 | 敏感数据集中 `cache/` 与 `config/config.json`，删除即清理，一行命令安全开源 |
 
 ## 更新日志
+
+### v4.1.3 — git 超时参数化（让外层 AI 按项目规模自调超时）
+
+- **超时参数暴露**：`coderef_change_guard` 新增 `git_timeout` 参数，允许外层 AI 根据项目规模调节 git 命令的等待秒数，避免小项目等太久、大项目超时误判
+- **规模建议写入工具描述**：明确建议"小型项目(<1万行) 15s；中型(1~10万行) 30s；大型(>10万行) 60s"，让外层 AI 在 `tools/list` 看到即可自己决策，无需依赖工具侧猜
+- **默认值保留兼容**：`DEFAULT_GIT_TIMEOUT` 常量保持 30s（中型项目），不传即时用默认值，旧调用方式不受影响
+- **全链路透传**：MCP 工具 schema → `_change_guard` 分发 → `guard(git_timeout=...)` → `_auto_git_diff(timeout=...)` 逐层透传，无硬编码
+- **测试**：新增 3 个用例覆盖「默认值生效 / 显式传参生效 / guard 正确透传」
 
 ### v4.1.2 — 退化检测动态兜底（消除误导性空结论）
 

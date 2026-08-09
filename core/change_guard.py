@@ -65,6 +65,10 @@ VALIDATE_CHAIN_THRESHOLD = 2
 # 单文件能力签名提取的最大行数（防止超长文件拖慢）
 MAX_SIGNATURE_LINES = 2000
 
+# git 自动提取基线时的默认超时（秒）。可按项目规模调整：
+#   小型项目（<1 万行）建议 15s；中型（1~10 万行）建议 30s；大型（>10 万行）建议 60s。
+DEFAULT_GIT_TIMEOUT = 30
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 能力签名
@@ -203,7 +207,8 @@ class ChangeGuard:
         pass
 
     def guard(self, project_path: str, diff: Optional[str] = None,
-              baseline_dir: Optional[str] = None) -> Dict[str, Any]:
+              baseline_dir: Optional[str] = None,
+              git_timeout: Optional[int] = None) -> Dict[str, Any]:
         """AI 代码退化检测主入口。
 
         参数:
@@ -212,6 +217,8 @@ class ChangeGuard:
                   否则全量对比当前文件与基线目录。
             baseline_dir: 基线目录（改动前的代码快照）。为空时动态兜底：
                   尝试从 git 历史自动提取最近一次改动作为基线对比。
+            git_timeout: 动态兜底时 git 命令的最长等待秒数（可选）。
+                  默认 30s；大型项目（>10 万行）建议 60s，小型项目可降到 15s。
 
         返回:
             {
@@ -224,7 +231,8 @@ class ChangeGuard:
         动态兜底规则（保证始终有意义的反馈，而非误导性"未检测到退化"）：
         - 提供 diff → 基于变更范围精确检测；
         - 提供 baseline_dir → 全量对比当前文件与基线目录；
-        - 两者皆缺 → 尝试从 git 历史自动提取最近改动（git-auto）；
+        - 两者皆缺 → 尝试从 git 历史自动提取最近改动（git-auto），
+          git-auto 时若工作区干净会回退检测最近一次提交的改动；
         - git 也无法建立基线 → 返回明确降级反馈（no-baseline），
           明确说明"未执行对比"，而非假装"未检测到退化"。
         """
@@ -240,7 +248,7 @@ class ChangeGuard:
                 source = "baseline_dir"
             else:
                 # 动态兜底：从 git 历史自动提取基线
-                auto_diff = self._auto_git_diff(project_path)
+                auto_diff = self._auto_git_diff(project_path, timeout=git_timeout)
                 if auto_diff:
                     findings = self._guard_diff(project_path, auto_diff)
                     source = "git-auto"
@@ -270,7 +278,8 @@ class ChangeGuard:
         }
 
     # ── 动态兜底：git 自动提取基线 ────────────────────────────────
-    def _auto_git_diff(self, project_path: str) -> str:
+    def _auto_git_diff(self, project_path: str,
+                       timeout: Optional[int] = None) -> str:
         """从 git 历史自动提取最近一次改动的 diff 作为基线。
 
         依次尝试：
@@ -281,6 +290,7 @@ class ChangeGuard:
         绝不抛异常——退化检测必须优雅降级。
         """
         import subprocess
+        timeout = timeout if timeout is not None else DEFAULT_GIT_TIMEOUT
         candidates = [
             ["git", "-C", project_path, "diff", "HEAD"],
             ["git", "-C", project_path, "diff", "HEAD~1", "HEAD"],
@@ -288,7 +298,7 @@ class ChangeGuard:
         for cmd in candidates:
             try:
                 r = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=30
+                    cmd, capture_output=True, text=True, timeout=timeout
                 )
             except Exception as e:
                 logger.debug(f"git 命令执行失败（降级尝试下一个）: {cmd} → {e}")
