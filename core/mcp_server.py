@@ -317,13 +317,16 @@ class Server:
                 "重试/超时削弱(medium)、输入约束移除(medium)、回归风险。\n"
                 "vibecoder 最需要的功能：AI 改没改坏代码，提交前自动拦截。\n"
                 "动态兜底：传 diff 则精确检测；否则传 baseline_dir 全量对比；"
-                "两者皆缺时自动从 git 历史提取最近改动作为基线对比；"
-                "仍无法建立基线则明确反馈需补充输入，绝不静默返回空结论。"
+                "两者皆缺时自动从 git 历史提取最近改动作为基线对比"
+                "(git-auto；若工作区干净会回退检测最近一次提交的改动)；"
+                "仍无法建立基线则明确反馈需补充输入，绝不静默返回空结论。\n"
+                "git_timeout 建议：小型项目(<1万行)15s；中型(1~10万行)30s；大型(>10万行)60s。"
             ),
             "inputSchema": {"type": "object", "properties": {
                 "project_path": {"type": "string", "description": "目标项目路径（新代码）"},
                 "diff": {"type": "string", "description": "git diff 文本（推荐，用于精确检测）"},
                 "baseline_dir": {"type": "string", "description": "基线目录（改动前的代码快照，可选）"},
+                "git_timeout": {"type": "integer", "description": "git-auto 兜底时 git 命令超时秒数；默认 30，小型项目 15 / 中型 30 / 大型 60"},
             }, "required": ["project_path"]},
         })
         self._tools.append({
@@ -616,7 +619,9 @@ class Server:
         pp = a["project_path"]
         diff = a.get("diff") or None
         baseline = a.get("baseline_dir") or None
-        r = ChangeGuard().guard(pp, diff=diff, baseline_dir=baseline)
+        timeout = a.get("git_timeout")
+        r = ChangeGuard().guard(pp, diff=diff, baseline_dir=baseline,
+                                git_timeout=timeout)
         r["tool"] = "coderef_change_guard"
         r["project_path"] = pp
         return json.dumps(r, ensure_ascii=False)
