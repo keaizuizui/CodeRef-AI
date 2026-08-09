@@ -3,7 +3,7 @@
 # CodeRef-AI — 编程 AI 的治理外脑 & 非编程人员技术助理
 
 
-**Version 4.1.1** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.1.2** | Python 3.10+ | MCP Protocol | MIT License
 
 > 一键审计 · 架构图谱 · 项目文档 · 知识图谱 · 健康仪表盘 · 代码审查 · 前端交互审查 · 记忆层 · 创新识别 · OWASP 合规 · 变更守护 · 动态策略审计
 
@@ -80,7 +80,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 
 | 工具 | 功能 | 需要 LLM |
 |------|------|---------|
-| `coderef_change_guard` | AI 代码退化检测：拦截「把之前写好的代码改坏了」 | 否 |
+| `coderef_change_guard` | AI 代码退化检测：拦截「把之前写好的代码改坏了」。动态兜底：无 diff/baseline_dir 时自动从 git 历史提取最近改动作为基线对比，无法建立基线则明确反馈需补充输入 | 否 |
 | `coderef_change_report` | 把 diff 归纳为「人话版」变更说明（新增/修改/影响/风险） | 可选 |
 
 ### OWASP 合规
@@ -317,6 +317,15 @@ coderef-ai/
 | 开源友好 | 敏感数据集中 `cache/` 与 `config/config.json`，删除即清理，一行命令安全开源 |
 
 ## 更新日志
+
+### v4.1.2 — 退化检测动态兜底（消除误导性空结论）
+
+- **修复承诺未兑现**：`coderef_change_guard` 此前既不传 `diff` 也不传 `baseline_dir` 时，静默返回空 findings 并显示"未检测到明显退化"——这是误导性静态结果，未做任何基线对比
+- **git 历史动态兜底**：无 `diff`/`baseline_dir` 时自动尝试从 git 历史提取最近改动作为基线（优先工作区未提交改动 `git diff HEAD`，其次最近一次提交 `git diff HEAD~1 HEAD`），走真实退化检测
+- **明确的降级反馈**：git 不可用 / 非 git 仓库 / 无历史改动时，返回 `source=no-baseline` 并明确提示"退化检测未执行，请传入 diff 或 baseline_dir"，绝不假装"未检测到退化"
+- **检测依据透明化**：返回结构新增 `source` 字段（`diff` / `baseline_dir` / `git-auto` / `no-baseline`），summary 同步标注基线来源，让外层 AI 清楚结论依据
+- **优雅降级**：git 命令执行失败（超时 / 非零退出 / 无输出）逐级降级尝试，全程不抛异常
+- **测试**：新增 5 个用例覆盖 diff/baseline/无基线反馈/git 动态兜底/真实 git 仓库提取
 
 ### v4.1.1 — LLM 逐条粗筛闭环（疑似误报 → 用户 AI 反馈白名单）
 
