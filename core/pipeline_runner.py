@@ -58,6 +58,12 @@ class PipeResult:
     file_snapshot: dict = field(default_factory=dict)  # 本次被扫描文件的 mtime+size 快照
     kg_built_at: str = ""          # 本次审计构建的知识图谱时间（若为历史图谱则为旧时间）
     wiki_result: Optional[object] = None  # coderef_docs 的 WikiResult，供 MCP 层返回结构化文档统计
+    html_report: dict = field(default_factory=dict)  # HTML 报告渲染结果（见 report_renderer.render 返回值）
+    # 功能②：审计策略判定 + LLM 功能审查增强结果
+    review_strategy: dict = field(default_factory=dict)     # ReviewAdvisor.advise() 返回值
+    functional_review: dict = field(default_factory=dict)   # FunctionalReviewer.review() 返回值
+    # 动态兜底：本次审计实际采用的策略（full/incr/no_change），由 audit() 在跑工具前判定
+    audit_strategy: str = "full"
 
 class Pipe:
 
@@ -282,16 +288,59 @@ class Pipe:
         except Exception as e:
             return {"error": str(e)}
 
+    # ─── HTML 报告渲染（功能①：把审计/图谱/Wiki 聚合成前端可读的 HTML 报告目录）───
+
+    def _render_html(self, project_path: str, r: PipeResult,
+                     kg_stats: Optional[dict] = None,
+                     output_dir: Optional[str] = None) -> dict:
+        """调用 report_renderer 渲染 HTML 报告目录，结果写入 r.html_report。
+
+        失败不阻塞主流程：渲染异常记录到 r.errors，避免 HTML 前端问题拖垮审计结果。
+        """
+        try:
+            from core.report_renderer import HtmlReportRenderer
+            # 未显式传入图谱统计时，尝试加载已有知识图谱，避免 HTML 图谱页显示"不可用"
+            if kg_stats is None:
+                try:
+                    from core.code_knowledge_graph import load_knowledge_graph
+                    existing = load_knowledge_graph(project_path)
+                    if existing is not None:
+                        kg_stats = existing.get_stats()
+                        existing.close()
+                except Exception:
+                    kg_stats = None
+            wiki_dir = None
+            wr = getattr(r, "wiki_result", None)
+            if wr is not None:
+                wiki_dir = getattr(wr, "output_dir", None) or None
+            renderer = HtmlReportRenderer(project_path)
+            result = renderer.render(r, kg_stats=kg_stats,
+                                     wiki_dir=wiki_dir,
+                                     output_dir=output_dir)
+            r.html_report = result
+            if not result.get("ok"):
+                r.errors.append(f"html_report: {result.get('error', '渲染失败')}")
+            return result
+        except Exception as e:
+            r.errors.append(f"html_report: {e}")
+            r.html_report = {"ok": False, "error": str(e), "files": []}
+            return r.html_report
+
     # ═══════════════════════════════════
     # 三大管线
     # ═══════════════════════════════════
 
     def audit(self, project_path: str, output_dir: str = None,
-              resume: bool = False, progress_cb=None) -> PipeResult:
-        """安全审计管线：11 工具
+              resume: bool = False, progress_cb=None,
+              strategy: Optional[str] = None) -> PipeResult:
+        """安全审计管线：11 工具（按策略裁剪）
 
         progress_cb: 可选回调 progress_cb(stage:str, done:int, total:int)
         用于后台执行时向调用方回传阶段进度。
+
+        strategy: 可选，显式指定审计策略（"full"/"incr"/"no_change"）。
+        为 None 时自动调用 ReviewAdvisor 判定（变更信号 + 影响闭包），
+        并据此裁剪工具集 —— 动态兜底：首次/无基线→全量，增量→裁剪重型工具。
         """
         self._t0 = time.time()
         r = PipeResult(project_path=project_path)
@@ -308,9 +357,44 @@ class Pipe:
             # 审计证据：记录本次扫描开始时间，供调用方区分"本次结果"与历史缓存
             r.scan_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+            # 审计策略判定（增量 vs 全量）—— 动态兜底第一步：在跑任何阶段前算出策略，
+            # 据此裁剪工具集并确定统一进度分母，避免"算完不用 / 进度分母漂移"。
+            effective_strategy = strategy
+            if effective_strategy is None:
+                try:
+                    from core.review_strategy import review_advisor
+                    advise = review_advisor.advise(project_path)
+                    r.review_strategy = advise
+                    effective_strategy = advise.get("strategy", "full")
+                except Exception as e:
+                    r.errors.append(f"review_strategy: {e}")
+                    effective_strategy = "full"
+            else:
+                # 显式指定策略：跳过自动判定（避免重复 advise 开销），记录显式标记。
+                # 保留与 advise() 一致的结构骨架（changes/impact/kg/dimensions_focus），
+                # 避免下游报告/功能审查读到空键时渲染出"变更 0、波及 0、图谱 None"的误导结论。
+                r.review_strategy = {
+                    "strategy": effective_strategy,
+                    "explicit": True,
+                    "reason": "显式指定审计策略，跳过自动判定",
+                    "changes": {"has_prev_snapshot": False, "changed": [],
+                                "added": [], "deleted": [], "total": 0},
+                    "impact": {"count": 0, "depth": 0, "nodes": []},
+                    "kg": {"exists": False, "built_at": "", "stale": True},
+                    "dimensions_focus": [],
+                }
+            r.audit_strategy = effective_strategy
+
+            # 按策略选择工具子集（动态兜底核心：裁剪重型全量工具）
+            tools = [
+                (n, getattr(self, m)) for n, m in self._select_tools(effective_strategy)
+            ]
+            # 统一进度分母：扫描 + 构建知识图谱 + 各工具 + 生成报告
+            total_stages = 3 + len(tools)
+
             # 扫描阶段桥接文件级进度：长阶段能实时看到"已扫描文件/总文件"
             def _scan_file_prog(done, total):
-                _prog("扫描代码", 0, 11, detail=f"已扫描 {done}/{total} 个文件")
+                _prog("扫描代码", 0, total_stages, detail=f"已扫描 {done}/{total} 个文件")
             tf, tl, analysis = self._scan(project_path, file_cb=_scan_file_prog)
             r.total_files, r.total_lines = tf, tl
             r.scope_text = self._build_scope_text(project_path, tf)
@@ -329,30 +413,47 @@ class Pipe:
                 r.file_snapshot = snapshot
             except Exception:
                 r.file_snapshot = {}
-            _prog("扫描代码", 0, 11)
+            _prog("扫描代码", 0, total_stages)
 
             # 构建知识图谱（持久化项目记忆）
             kg_stats = self._build_kg(project_path, analysis)
             r.kg_built_at = str(kg_stats.get("built_at", "")) if isinstance(kg_stats, dict) else ""
-            _prog("构建知识图谱", 1, 11)
+            _prog("构建知识图谱", 1, total_stages)
 
-            # 11 个审计工具
-            tools = [
-                ("治理审计", self._gov), ("Agent安全", self._agent),
-                ("依赖扫描SCA", self._sca), ("技术债务", self._td),
-                ("完整性检查", self._integ), ("盲区检测", self._blind),
-                ("创新传播", self._inn), ("垃圾文件", self._junk),
-                ("资源遗漏", self._resgap), ("代码精简", self._simp),
-                ("项目成熟度", self._matu),
-            ]
+            # 执行工具
             for i, (name, fn) in enumerate(tools, start=2):
                 fn(project_path, r, d)
-                _prog(name, i, 11)
+                _prog(name, i, total_stages)
+            if len(tools) < len(Pipe.ALL_AUDIT_TOOLS):
+                logger.info(
+                    f"[audit] 策略={effective_strategy}，裁剪 "
+                    f"{len(Pipe.ALL_AUDIT_TOOLS) - len(tools)} 个重型全量工具，"
+                    f"实际运行 {len(tools)} 个")
 
             self._xval(r)
             self._denoise(r)
+
+            # 图谱增量 patch：若策略为增量且图谱存在，用 memory_layer 增量同步更新图谱，
+            # 避免每次都全量重建（图谱增量复用，符合功能②B"图谱增量 patch"）。
+            try:
+                from core.memory_layer import memory_layer
+                strata = getattr(r, "audit_strategy", "full") or "full"
+                memory_layer.sync(project_path,
+                                  mode="incr" if strata == "incr" else "full")
+            except Exception as e:
+                r.errors.append(f"memory_sync: {e}")
+
+            # 功能②：LLM 功能审查增强（创新传播/结构复杂度/回归一致性等语义维度）
+            try:
+                from core.functional_review import functional_reviewer
+                r.functional_review = functional_reviewer.review(
+                    project_path, r.review_strategy or {},
+                    pipe_result=r, kg_stats=kg_stats)
+            except Exception as e:
+                r.errors.append(f"functional_review: {e}")
+
             r.report = self._fmt(r, "审计报告")
-            _prog("生成报告", 12, 12)
+            _prog("生成报告", total_stages - 1, total_stages)
 
             os.makedirs(out, exist_ok=True)
             fn = f"coderef_audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
@@ -368,6 +469,10 @@ class Pipe:
                 r.dashboard_path = dashboard_path
             except Exception as e:
                 r.errors.append(f"dashboard: {e}")
+
+            # 渲染 HTML 报告目录（审计 + 图谱；若已有 wiki 产物则一并纳入）
+            self._render_html(project_path, r, kg_stats=kg_stats,
+                              output_dir=os.path.join(out, "html"))
 
             if os.path.exists(self._ckpt(project_path)):
                 os.remove(self._ckpt(project_path))
@@ -399,6 +504,34 @@ class Pipe:
         """列出所有可单独运行的审计工具（短名 + 展示名）"""
         return [{"name": k, "label": v[0]}
                 for k, v in Pipe.SINGLE_TOOLS.items()]
+
+    # 全量模式下运行的全部 11 个工具（展示名, 方法名）
+    ALL_AUDIT_TOOLS = [
+        ("治理审计", "_gov"), ("Agent安全", "_agent"),
+        ("依赖扫描SCA", "_sca"), ("技术债务", "_td"),
+        ("完整性检查", "_integ"), ("盲区检测", "_blind"),
+        ("创新传播", "_inn"), ("垃圾文件", "_junk"),
+        ("资源遗漏", "_resgap"), ("代码精简", "_simp"),
+        ("项目成熟度", "_matu"),
+    ]
+
+    # 增量模式下跳过的重型全量工具（这些维度需全项目盘点，增量变更无意义）
+    INCR_SKIP_TOOLS = {"_inn", "_simp", "_matu"}
+
+    @staticmethod
+    def _select_tools(strategy: Optional[str]) -> list:
+        """按审计策略选择要运行的工具子集 —— 动态兜底的核心裁剪。
+
+        规则：
+          - strategy == "incr"：跳过重型全量工具（创新传播/代码精简/项目成熟度），
+            聚焦与变更直接相关的维度，避免增量变更还跑全量盘点；
+          - 其余（full / no_change / 未知）：全量跑 11 个工具，保证一致性。
+        返回 [(展示名, 方法名), ...]。
+        """
+        if (strategy or "").lower() == "incr":
+            return [(n, m) for n, m in Pipe.ALL_AUDIT_TOOLS
+                    if m not in Pipe.INCR_SKIP_TOOLS]
+        return list(Pipe.ALL_AUDIT_TOOLS)
 
     def run_single(self, project_path: str, tool: str) -> PipeResult:
         """单独运行某一个审计工具 —— AI 写代码时的实时安全带。
@@ -476,11 +609,86 @@ class Pipe:
             r.report = self._fmt(r, "文档探查报告")
             os.makedirs(output_dir or os.path.join(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__))), "coderef-report"), exist_ok=True)
+
+            # 渲染 HTML 报告目录（Wiki 为主；若图谱/审计产物存在则一并纳入）
+            html_out = os.path.join(output_dir or os.path.join(os.path.dirname(
+                os.path.dirname(os.path.abspath(__file__))), "coderef-report"), "html")
+            self._render_html(project_path, r, kg_stats=None,
+                              output_dir=html_out)
         except Exception as e:
             r.errors.append(str(e))
 
         r.elapsed = round(time.time() - self._t0, 1)
         return r
+
+    def docs_read(self, project_path: str, doc: Optional[str] = None,
+                  output_dir: Optional[str] = None,
+                  max_chars: int = 20000) -> dict:
+        """按需读取已生成的 Wiki 文档 —— 解决编程 AI 无法 fs 访问外部文件夹的问题。
+
+        docs 生成后正文落在磁盘，而 MCP 返回的只是路径引用，AI 拿不到内容。
+        本方法把文档正文作为返回值直接交给调用方（AI），无需 fs 访问。
+
+        探测输出目录（取第一个存在的）：
+          1. 显式 output_dir；
+          2. {project_path}/docs/wiki/（wiki_generator 默认）；
+          3. {project_path}/docs/（docs 根目录）；
+          4. {project_path}/txt（MCP 未指定 output_dir 时的回退）。
+
+        doc 为 None 时列出全部文档（相对路径）；否则读取指定文档正文。
+        安全：仅允许读取 .md 且 resolve 后位于输出目录内的文件，防路径穿越。
+        """
+        project_path = os.path.abspath(project_path)
+        candidates = []
+        if output_dir:
+            candidates.append(os.path.abspath(output_dir))
+        candidates += [
+            os.path.join(project_path, "docs", "wiki"),
+            os.path.join(project_path, "docs"),
+            os.path.join(project_path, "txt"),
+        ]
+        base = None
+        for c in candidates:
+            if os.path.isdir(c):
+                base = c
+                break
+        if base is None:
+            return {"status": "not_found", "error": "未找到 Wiki 文档目录",
+                    "searched": candidates}
+
+        # 收集该目录下所有 .md（含 MODULES/ 子目录）
+        md_files = []
+        for root, _, files in os.walk(base):
+            for f in files:
+                if f.endswith(".md"):
+                    rel = os.path.relpath(os.path.join(root, f), base)
+                    md_files.append(rel.replace("\\", "/"))
+        md_files.sort()
+
+        if not doc:
+            return {"status": "ok", "output_dir": base,
+                    "documents": md_files, "count": len(md_files)}
+
+        # 读取指定文档（含路径穿越防护）
+        target = os.path.normpath(os.path.join(base, doc))
+        real_base = os.path.realpath(base)
+        real_target = os.path.realpath(target)
+        if not (doc.endswith(".md") and real_target.startswith(real_base + os.sep)):
+            return {"status": "error", "error": "非法文档引用（仅允许 .md 且位于输出目录内）"}
+        if not os.path.isfile(real_target):
+            return {"status": "not_found", "doc": doc, "error": "文档不存在",
+                    "available": md_files[:50]}
+        try:
+            with open(real_target, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            return {"status": "error", "doc": doc, "error": f"读取失败: {e}"}
+        truncated = len(content) > max_chars
+        return {"status": "ok", "doc": doc, "output_dir": base,
+                "file_path": real_target,
+                "chars": len(content),
+                "truncated": truncated,
+                "content": content[:max_chars]}
 
     # ═══════════════════════════════════
     # 检测器
@@ -1002,6 +1210,52 @@ class Pipe:
             lines.append("|---|---|---|---|---|")
             for f in adv[:20]:
                 lines.append(f"|{f.tool}|{f.category}|{f.severity}|{f.line_label}|{f.title[:80]}|")
+            lines.append("")
+
+        # 功能②：审计策略建议 + LLM 功能审查结论（若有）
+        strat = getattr(r, "review_strategy", None)
+        if strat:
+            lines.append("## 🧭 审计策略建议")
+            if strat.get("explicit"):
+                # 显式指定策略：未做自动判定，仅展示策略与原因，避免渲染空判定字段误导
+                lines.append(f"- **建议策略**: `{strat.get('strategy', 'full')}`（显式指定）")
+                lines.append(f"- **原因**: {strat.get('reason', '')}")
+            else:
+                lines.append(f"- **建议策略**: `{strat.get('strategy', 'full')}`")
+                lines.append(f"- **原因**: {strat.get('reason', '')}")
+                ch = strat.get("changes", {})
+                lines.append(f"- **变更**: 变更 {len(ch.get('changed', []))}、新增 {len(ch.get('added', []))}、删除 {len(ch.get('deleted', []))} 个文件")
+                imp = strat.get("impact", {})
+                lines.append(f"- **影响闭包**: 波及 {imp.get('count', 0)} 个节点（深度 {imp.get('depth', 0)}）")
+                kg = strat.get("kg", {})
+                lines.append(f"- **知识图谱**: 存在={kg.get('exists')}，构建={kg.get('built_at') or '无'}，过期={kg.get('stale')}")
+            lines.append("")
+        fr = getattr(r, "functional_review", None)
+        if fr:
+            lines.append("## 🎯 功能审查（LLM 语义增强）")
+            lines.append(f"- **LLM**: {'可用' if fr.get('llm_available') else '不可用（静态降级）'}")
+            overall = fr.get("overall", {})
+            lines.append(f"- **整体结论**: {overall.get('verdict', '')} - {overall.get('summary', '')}")
+            for dr in fr.get("dimension_reviews", []):
+                lines.append(f"- **{dr.get('label', dr.get('dimension', ''))}** [{dr.get('verdict', '')}]: "
+                             f"{dr.get('summary', '')}（{dr.get('detail', '')}）")
+            if fr.get("recommendation"):
+                lines.append(f"- **建议**: {fr['recommendation']}")
+            # 逐条粗筛结果（v1.1）：疑似误报建议反馈白名单，不自动过滤
+            screen = fr.get("screen") or {}
+            if screen.get("ran"):
+                sm = screen.get("summary", {})
+                lines.append(
+                    f"- **逐条粗筛**: 疑似误报 {sm.get('suspected_fp', 0)} 条、"
+                    f"需确认 {sm.get('needs_review', 0)} 条、真问题 {sm.get('confirmed', 0)} 条"
+                )
+                cands = screen.get("candidates") or []
+                if cands:
+                    lines.append("  - **疑似误报（待用户 AI 核实后可反馈白名单）**:")
+                    for c in cands[:10]:
+                        parts = " / ".join(f"{k}={v}" for k, v in c.items() if v)
+                        lines.append(f"    - `{parts}`")
+                    lines.append("    - 确认无误后调用 `coderef_whitelist(action=add)` 反馈，下次自动过滤。")
             lines.append("")
         lines.append(f"---\n{r.report_path or ''}")
         return "\n".join(lines)

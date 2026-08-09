@@ -1188,10 +1188,14 @@ class GovernanceAuditor:
         if code_content and len(code_content) > 30:
             try:
                 # 检查代码内容中的关键模式（通用检测，不依赖目录名）
-                # 如果导入了 Flask/FastAPI/Django 的 route 装饰器 → entry
-                if any(kw in code_content for kw in ['@app.route', '@router.', 'FastAPI', 'Flask',
-                                                       'Blueprint', 'APIView', 'def get(', 'def post(',
-                                                       'def put(', 'def delete(', 'Response', 'JSONResponse']):
+                # 真正的 web 入口一定带路由装饰器；仅出现框架名（如检测器自身
+                # 内容含 "FastAPI"/"Flask" 字符串）不代表入口，不应据此判 entry，
+                # 否则会把"检测框架名的检测器"误分类为入口层造成层级穿透误报。
+                if any(kw in code_content for kw in ['@app.route', '@app.get', '@app.post',
+                                                       '@app.put', '@app.delete', '@router.',
+                                                       'Blueprint', 'APIView', 'def get(',
+                                                       'def post(', 'def put(', 'def delete(',
+                                                       'JSONResponse']):
                     return "entry"
                 # 如果包含 ORM 模型定义 → data
                 if any(kw in code_content for kw in ['class Meta:', 'db.Model', 'BaseModel', 'Table(',
