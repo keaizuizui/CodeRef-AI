@@ -2,7 +2,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.2.4** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.2.5** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -350,6 +350,12 @@ coderef-ai/
 | 开源友好 | 敏感数据集中 `cache/` 与 `config/config.json`，删除即清理，一行命令安全开源 |
 
 ## 更新日志
+
+### v4.2.5 — coderef_innovation 输出可固化清单（审计工具守边界，固化交给对方 AI）
+
+- **新增 `solidifiable_assets` 可固化清单**：`coderef_innovation` 的 `detect` 结果中新增该字段，仅列出达到固化阈值（≥2 个 workflow 采用 + 附带 evidence）的设计，并附 `adopters` 真实采用记录与 `commit_hint`
+- **审计 / 编程职责分离**：CodeRef 只判定「某设计够不够格固化」，不自动生成代码；template_code / patch_suggestion / migration_guide 由对方编程 AI 依据 description 自行补全后，再调用 `coderef_asset(action="commit")` 完成固化
+- **防污染一致**：清单判定与 `coderef_asset` 的 commit 防污染检查同源，不会出现「清单可固化但 commit 被拒」的矛盾；不满足条件的设计不进入清单，从源头避免误固化污染资产库
 
 ### v4.2.4 — 变更守护引擎接入 git 健康基线（守护闭环真正落地）
 
