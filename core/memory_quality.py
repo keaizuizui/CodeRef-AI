@@ -95,6 +95,17 @@ class MemoryQuality:
     """项目代码记忆层质量体检"""
 
     def __init__(self, llm_client=None):
+        # 未显式注入 LLM 时，懒加载全局 LLM（环境变量/QSettings/config.json 配置源），
+        # 使经 MCP 调用（MemoryQuality() 无参）时偏差检测也能真正用上 LLM，
+        # 而非恒降级 pending-human。无可用 client 时保持 None，走降级路径。
+        if llm_client is None:
+            try:
+                from core.llm_integration import LLMIntegration
+                _c = LLMIntegration()
+                llm_client = _c if getattr(_c, "client", None) else None
+            except Exception as e:
+                logger.warning(f"[MemoryQuality] LLM 懒加载失败，偏差检测将降级 pending-human: {e}")
+                llm_client = None
         self.llm = llm_client
         self.extractor = PromptExtractor(llm_client=llm_client)
 

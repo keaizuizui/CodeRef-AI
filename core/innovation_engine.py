@@ -332,6 +332,32 @@ class InnovationEngine:
                 ),
             })
 
+        # ── solidifiable_assets：达到固化阈值的可固化清单 ──
+        # 仅列出「≥ MIN_ADOPTION_FOR_SOLIDIFY 采用 + 附带 evidence（真实采用记录）」的
+        # 设计。本工具是审计工具，不自动生成代码，因此只给出清单与证据，由对方 AI
+        # 依据 description 自行补全 template_code / patch_suggestion / migration_guide，
+        # 再调用 coderef_asset(action="commit") 完成固化。不满足条件的不出现在清单中。
+        solidifiable_assets: List[Dict[str, Any]] = []
+        for canonical, info in SEED_DESIGNS.items():
+            adopters = [w["wf_id"] for w in workflows if canonical in w["adoption"]]
+            adoption_count = len(adopters)
+            if adoption_count < MIN_ADOPTION_FOR_SOLIDIFY:
+                continue
+            solidifiable_assets.append({
+                "canonical": canonical,
+                "category": info["category"],
+                "description": info["description"],
+                "intent": next((k for k, v in INTENT_DESIGN.items() if v == canonical), ""),
+                "adoption_count": adoption_count,
+                "adopters": adopters,
+                "solidifiable": True,
+                "commit_hint": (
+                    f"已达到固化阈值（≥{MIN_ADOPTION_FOR_SOLIDIFY} 采用 + evidence）。"
+                    f"请调用 coderef_asset(action='commit', canonical='{canonical}')，"
+                    "补全 template_code / patch_suggestion / migration_guide 后完成固化。"
+                ),
+            })
+
         return {
             "ok": True,
             "project_path": project_path,
@@ -343,6 +369,7 @@ class InnovationEngine:
             "designs": designs,
             "intent_analysis": intent_analysis,
             "registry_matches": registry_matches,
+            "solidifiable_assets": solidifiable_assets,
             "registry_path": self.registry.registry_path,
         }
 
