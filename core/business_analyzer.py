@@ -2852,6 +2852,15 @@ def analyze_project_business(project_analysis, llm_client=None, max_iterations=3
         report = analyze_project_business(analysis)
         print(report)
     """
+    if llm_client is None:
+        from core.llm_integration import LLMIntegration
+        llm_client = LLMIntegration()
+    if not getattr(llm_client, "is_available", lambda: False)():
+        return (
+            "【业务报告未生成】业务全景报告需要 LLM 才能产出，但当前未配置有效的 API Key。\n"
+            "请在配置面板填写 API Key 后再生成。\n"
+            "（审计、知识图谱、架构等确定性分析不受影响，可正常使用）"
+        )
     ba = BusinessAnalyzer(llm_client=llm_client)
     result = ba.analyze(project_analysis, max_iterations=max_iterations)
     return ba.to_business_report(result)

@@ -189,6 +189,8 @@ coderef_query(project_path="/path/to/project", query_type="callers", func_name="
 coderef_query(project_path="/path/to/project", query_type="impact", file_path="utils.py")
 
 # 3. 生成项目文档（非编程人员阅读）
+# 注意：Wiki 与业务报告依赖 LLM。未配置 API Key 时会被硬阻断并明确提示，
+#       不产出降级/占位内容；审计、图谱、架构等确定性分析无 LLM 也照常可用。
 coderef_docs(project_path="/path/to/project", background=True)
 
 # 3.1 编程 AI 按需读取文档正文（无需 fs 访问外部文件夹）
