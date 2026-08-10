@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-CodeRef MCP Server v4.1 — 四大引擎 + 24 个工具
+CodeRef MCP Server v4.2.1 — 四大引擎 + 26 个工具
   审计引擎     → coderef_audit / coderef_scan / coderef_scan_list / architecture / docs / query / review / frontend / whitelist / task_status
   记忆引擎     → coderef_memory_sync / memory_query / memory_status / memory_quality / prompt_mgmt
   创新识别引擎 → coderef_innovation / asset / registry
@@ -329,6 +329,21 @@ class Server:
                 "depth": {"type": "integer", "description": "调用链搜索深度，默认 8"},
             }, "required": ["project_path", "entry", "steps"]},
         })
+        # ── 架构腐化诊断：非编程人员验证工程结构是否健康 ──
+        self._tools.append({
+            "name": "coderef_arch_audit",
+            "description": (
+                "架构腐化诊断 —— 补齐 MCP 工具的架构诊断层。\n"
+                "复用知识图谱 CALLS 边做模块级静态诊断，输出四类架构症状：\n"
+                "cycles=循环依赖（模块依赖图强连通分量）；god_modules=上帝模块（扇出过高）；"
+                "layer_violations=分层违例（低层依赖高层）；large_modules=异常模块规模。\n"
+                "聚合为 0-10 架构健康度。纯静态、确定性，不依赖 LLM。\n"
+                "图谱不存在时会明确反馈需先构建（coderef_audit / coderef_memory_sync）。"
+            ),
+            "inputSchema": {"type": "object", "properties": {
+                "project_path": {"type": "string", "description": "目标项目路径"},
+            }, "required": ["project_path"]},
+        })
         # ── 引擎四 · 变更守护：AI 代码退化检测 + 人话版变更报告 ──
         self._tools.append({
             "name": "coderef_change_guard",
@@ -569,6 +584,8 @@ class Server:
                 return self._ok(rid, self._docs_read(a))
             if n == "coderef_flow_verify":
                 return self._ok(rid, self._flow_verify(a))
+            if n == "coderef_arch_audit":
+                return self._ok(rid, self._arch_audit(a))
             bg = a.get("background", n == "coderef_docs")
             if bg:
                 tid = str(uuid.uuid4())[:8]; rc = {}
@@ -793,6 +810,15 @@ class Server:
             steps = [s.strip() for s in steps.split(",") if s.strip()]
         r = verify_flow(pp, a["entry"], list(steps), depth=a.get("depth"))
         r["tool"] = "coderef_flow_verify"
+        r["project_path"] = pp
+        return json.dumps(r, ensure_ascii=False)
+
+    def _arch_audit(self, a: dict) -> str:
+        """架构腐化诊断（coderef_arch_audit）—— 复用知识图谱 CALLS 边做模块级静态诊断"""
+        from core.arch_audit import audit as arch_audit
+        pp = a["project_path"]
+        r = arch_audit(pp)
+        r["tool"] = "coderef_arch_audit"
         r["project_path"] = pp
         return json.dumps(r, ensure_ascii=False)
 

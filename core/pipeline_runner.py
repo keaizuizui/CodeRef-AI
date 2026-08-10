@@ -15,6 +15,7 @@ from loguru import logger
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 from enum import Enum
+from core import tool_registry
 
 class Tier(Enum):
     HIGH = "high"
@@ -495,55 +496,25 @@ class Pipe:
         return r
 
     # ─── 单工具运行（供 MCP: coderef_scan_* 调用）───
+    # 工具注册表与选择策略已抽到 tool_registry，此处仅保留 Pipe.* 别名，
+    # 保持对外接口（mcp_server / 测试）不变。
 
-    # 11 个审计工具：短名 → (展示名, 检测器方法名)
-    SINGLE_TOOLS = {
-        "gov":    ("治理审计", "_gov"),
-        "agent":  ("Agent安全", "_agent"),
-        "sca":    ("依赖扫描SCA", "_sca"),
-        "td":     ("技术债务", "_td"),
-        "integ":  ("完整性检查", "_integ"),
-        "blind":  ("盲区检测", "_blind"),
-        "inn":    ("创新传播", "_inn"),
-        "junk":   ("垃圾文件", "_junk"),
-        "resgap": ("资源遗漏", "_resgap"),
-        "simp":   ("代码精简", "_simp"),
-        "matu":   ("项目成熟度", "_matu"),
-    }
+    SINGLE_TOOLS = tool_registry.SINGLE_TOOLS
+    ALL_AUDIT_TOOLS = tool_registry.ALL_AUDIT_TOOLS
+    INCR_SKIP_TOOLS = tool_registry.INCR_SKIP_TOOLS
 
     @staticmethod
     def list_single_tools() -> list:
         """列出所有可单独运行的审计工具（短名 + 展示名）"""
-        return [{"name": k, "label": v[0]}
-                for k, v in Pipe.SINGLE_TOOLS.items()]
-
-    # 全量模式下运行的全部 11 个工具（展示名, 方法名）
-    ALL_AUDIT_TOOLS = [
-        ("治理审计", "_gov"), ("Agent安全", "_agent"),
-        ("依赖扫描SCA", "_sca"), ("技术债务", "_td"),
-        ("完整性检查", "_integ"), ("盲区检测", "_blind"),
-        ("创新传播", "_inn"), ("垃圾文件", "_junk"),
-        ("资源遗漏", "_resgap"), ("代码精简", "_simp"),
-        ("项目成熟度", "_matu"),
-    ]
-
-    # 增量模式下跳过的重型全量工具（这些维度需全项目盘点，增量变更无意义）
-    INCR_SKIP_TOOLS = {"_inn", "_simp", "_matu"}
+        return tool_registry.list_single_tools()
 
     @staticmethod
     def _select_tools(strategy: Optional[str]) -> list:
-        """按审计策略选择要运行的工具子集 —— 动态兜底的核心裁剪。
+        """按审计策略选择要运行的工具子集 —— 委托 tool_registry.select_tools
 
-        规则：
-          - strategy == "incr"：跳过重型全量工具（创新传播/代码精简/项目成熟度），
-            聚焦与变更直接相关的维度，避免增量变更还跑全量盘点；
-          - 其余（full / no_change / 未知）：全量跑 11 个工具，保证一致性。
-        返回 [(展示名, 方法名), ...]。
+        规则定义见 tool_registry.select_tools 的 docstring。
         """
-        if (strategy or "").lower() == "incr":
-            return [(n, m) for n, m in Pipe.ALL_AUDIT_TOOLS
-                    if m not in Pipe.INCR_SKIP_TOOLS]
-        return list(Pipe.ALL_AUDIT_TOOLS)
+        return tool_registry.select_tools(strategy)
 
     def run_single(self, project_path: str, tool: str) -> PipeResult:
         """单独运行某一个审计工具 —— AI 写代码时的实时安全带。

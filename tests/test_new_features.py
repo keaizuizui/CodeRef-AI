@@ -783,5 +783,71 @@ class FlowVerifyTest(unittest.TestCase):
             self.assertIn(label, html)
 
 
+class ArchAuditTest(unittest.TestCase):
+    """core.arch_audit —— 架构腐化诊断（模块级静态，复用知识图谱 CALLS 边）"""
+
+    def _db(self, td, funcs, calls):
+        db = os.path.join(td, "kg.db")
+        _build_kg(db, funcs, calls)
+        return db
+
+    def test_cycle_detection(self):
+        # a↔b 互相调用 → 模块级 CALLS 图形成环 → 检测到循环依赖
+        from core.arch_audit import audit
+        with tempfile.TemporaryDirectory() as td:
+            db = self._db(td,
+                [("func:a", "a", "core/a.py"), ("func:b", "b", "core/b.py")],
+                [("func:a", "func:b"), ("func:b", "func:a")])
+            r = audit(td, db_path=db)
+        self.assertTrue(r["ok"])
+        self.assertGreaterEqual(r["summary"]["cycles"], 1)
+        self.assertTrue(any({"a", "b"} <= set(c) for c in r["cycles"]))
+
+    def test_clean_graph_no_cycle(self):
+        # 单向 a→b 无环 → cycles=0，健康度优秀
+        from core.arch_audit import audit
+        with tempfile.TemporaryDirectory() as td:
+            db = self._db(td,
+                [("func:a", "a", "core/a.py"), ("func:b", "b", "core/b.py")],
+                [("func:a", "func:b")])
+            r = audit(td, db_path=db)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["summary"]["cycles"], 0)
+        self.assertGreaterEqual(r["summary"]["health"], 8.5)
+
+    def test_god_module_high_fanout(self):
+        # hub 扇出 20 > 阈值 15 → 上帝模块
+        from core.arch_audit import audit
+        with tempfile.TemporaryDirectory() as td:
+            leaves = [("func:d%d" % i, "d%d" % i, "core/leaf%d.py" % i)
+                      for i in range(20)]
+            db = self._db(td,
+                [("func:hub", "hub", "core/hub.py")] + leaves,
+                [("func:hub", "func:d%d" % i) for i in range(20)])
+            r = audit(td, db_path=db, fan_out_threshold=15)
+        self.assertTrue(r["ok"])
+        self.assertIn("hub", [g["module"] for g in r["god_modules"]])
+
+    def test_layer_violation(self):
+        # config(基础层) 依赖 core(引擎层) → 下层依赖上层 → 分层违例
+        from core.arch_audit import audit
+        with tempfile.TemporaryDirectory() as td:
+            db = self._db(td,
+                [("func:cfg", "cfg", "config/cfg.py"),
+                 ("func:core_mod", "core_mod", "core/x.py")],
+                [("func:cfg", "func:core_mod")])
+            r = audit(td, db_path=db)
+        self.assertTrue(r["ok"])
+        self.assertGreaterEqual(r["summary"]["layer_violations"], 1)
+
+    def test_no_kg_reports_clearly(self):
+        # 图谱未构建 → 明确反馈需先构建，不静默
+        from core.arch_audit import audit
+        with tempfile.TemporaryDirectory() as td:
+            r = audit(td, db_path=os.path.join(td, "nope.db"))
+        self.assertFalse(r["ok"])
+        self.assertIn("知识图谱不存在", r["summary"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

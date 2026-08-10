@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from loguru import logger
+from core.code_models import CodeFile, CodeFunction, CodeClass
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -557,7 +558,6 @@ def _get_stdlib_modules() -> Set[str]:
 
 def ast_to_codefile(ast_result: AstFileResult) -> 'CodeFile':
     """将 AST 解析结果转换为 CodeFile（向后兼容）"""
-    from core.code_analyzer import CodeFile, CodeFunction, CodeClass
 
     # 导入
     imports = []
