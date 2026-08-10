@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-CodeRef MCP Server v4.2.1 — 四大引擎 + 26 个工具
+CodeRef MCP Server v4.2.2 — 四大引擎 + 26 个工具
   审计引擎     → coderef_audit / coderef_scan / coderef_scan_list / architecture / docs / query / review / frontend / whitelist / task_status
   记忆引擎     → coderef_memory_sync / memory_query / memory_status / memory_quality / prompt_mgmt
   创新识别引擎 → coderef_innovation / asset / registry

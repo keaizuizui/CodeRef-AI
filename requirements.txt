@@ -1,10 +1,6 @@
 # CodeRef-AI - 智能代码分析引擎
 # 依赖清单
 
-# 代码解析（注意：tree-sitter 需保持在 0.20.x，新版本不兼容 tree-sitter-languages）
-tree-sitter==0.20.4
-tree-sitter-languages>=1.10.0
-
 # LLM集成
 openai>=1.10.0
 ollama>=0.1.7
@@ -20,3 +16,12 @@ tqdm>=4.66.0
 loguru>=0.7.2
 pathspec>=0.12.1
 packaging>=23.0
+
+# ─── 可选依赖（非必需）────────────────────────────
+# tree-sitter 中文解析为可选能力：核心解析走 Python 标准库 ast.parse，无需第三方。
+# 未安装时自动降级，不影响任何分析功能（code_analyzer 内 try/except 容错）。
+# 如需启用多语言 tree-sitter 解析，自行安装：
+#   pip install tree-sitter==0.20.4 tree-sitter-languages>=1.10.0
+# 注意：0.20.x 仅覆盖 Python 3.10-3.12；Python 3.13+ 无预编译 wheel，需编译工具链。
+# tree-sitter==0.20.4
+# tree-sitter-languages>=1.10.0

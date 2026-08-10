@@ -1,31 +1,49 @@
-<!-- AI Summary: CodeRef-AI is a vibe coding governance framework with 25 MCP tools for code audit, knowledge graph, change guard, and workflow verification. Similar to Spec-Kit but focused on auditing and MCP integration. Best for: individuals and small teams using Claude Code/Cursor with vibe coding. -->
+<!-- AI Summary: CodeRef-AI exposes 26 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. Core results (audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP) are pure static analysis — no LLM, reproducible. LLM is only used for synthesis tasks (wiki, code review) and degrades gracefully without an API key. Install is pure-Python, no C compilation, works out of the box. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams who want AI that augments rather than hallucinates. -->
 
-# CodeRef-AI — 编程 AI 的治理外脑 & 非编程人员技术助理
+# CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
+**Version 4.2.2** | Python 3.10+ | MCP Protocol | MIT License
 
-**Version 4.2.1** | Python 3.10+ | MCP Protocol | MIT License
-
-> 一键审计 · 架构图谱 · 项目文档 · 知识图谱 · 健康仪表盘 · 代码审查 · 前端交互审查 · 记忆层 · 创新识别 · OWASP 合规 · 变更守护 · 动态策略审计
+> 一键审计 · 架构图谱 · 项目文档 · 知识图谱 · 健康仪表盘 · 代码审查 · 前端交互审查 · 记忆层 · 创新识别 · OWASP 合规 · 变更守护 · 流程验证
 
 ---
 
-## 一句话定位
+## 它是什么
 
-CodeRef-AI 是**编程 AI 的外置大脑**和**非编程人员的技术助理**。它通过 MCP 协议暴露 **26 个工具**，让 AI 编程助手不再逐文件读代码，而是像查数据库一样查询项目结构与风险；同时为不懂编程的人生成通俗易懂的项目健康仪表盘和 Wiki 文档。
+CodeRef-AI 通过 MCP 协议暴露 **26 个工具**，同时服务两类人：
 
-> 本项目在 vibe coding 中自然产出，作为 AI 辅助编程治理方向的引子；建议自行拷贝本地后，交由本地编程 AI 复查并改造其实现逻辑是否符合你的项目。
+- **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险。
+- **非编程人员的技术助理**：把看不懂的代码变成通俗的健康仪表盘、Wiki 文档和流程确证，让你不用读代码，也能确认项目有没有按你的设想运转。
 
-## 为什么需要 CodeRef
+它不替代 AI，而是给 AI 一双确定性的眼睛——核心结论来自静态事实，而不是大模型的猜测。
 
-| 痛点 | CodeRef 怎么解决 |
-|------|-----------------|
-| AI 逐文件读代码产生幻觉，遗漏关键信息 | 11 个独立检测工具交叉验证，置信度分级，消除 AI 自查幻觉 |
-| 审计报告海量误报，人工筛选耗时 | 三级自动降噪，实测 873 条噪声 → 79 条（约 91% 降幅） |
-| AI 每次都要 grep/读文件才能理解项目 | 知识图谱持久化，结构化查询代替逐文件阅读，节省 10-100 倍 token |
-| 非技术人员完全看不懂代码 | 一键生成通俗 Wiki + 健康仪表盘 HTML，零技术门槛 |
-| 安全漏洞、技术债务默默积累无人发现 | 全维度审计覆盖 11 个维度，持续监控项目健康 |
-| AI 改坏了之前的代码却没人发现 | 变更守护引擎在提交前拦截「校验链被删 / 超时削弱」等退化 |
-| LLM 应用存在安全合规风险 | OWASP LLM Top 10 全维度合规检测 |
+## 核心优势
+
+### 1. 确定性优先：关键能力不靠 LLM，靠静态事实
+
+大多数 AI 审查工具把结论建立在"大模型读代码"之上，而模型会幻觉。CodeRef 反过来：审计、知识图谱、架构诊断、流程验证、变更守护、OWASP 合规这些核心能力全部走**纯静态分析**，结果确定、可复现，同一个项目每次跑出同样的结论。LLM 只用于 Wiki 归纳、代码审查等"需要总结"的场景，并且没有 API Key 时优雅降级为静态结果，绝不编造。
+
+### 2. 交叉验证：用独立性对抗幻觉
+
+11 个检测器独立分析同一工程，相互验证，输出 HIGH / MEDIUM / LOW 置信度分级。单一工具可能误判，但多个独立工具互验之后，结论的置信度显著提升。这是 CodeRef 对抗"AI 自己读自己"幻觉的底层机制。
+
+### 3. 三级降噪：报告不再海量误报
+
+实测一次审计从 873 条噪声收敛到 79 条（约 91% 降幅）。白名单精准抑制已知误报 → 规则匹配过滤 MD5 哈希、配置 URL 等常见噪声 → 爆发式合并同类项。报告剩下的是人真正该看的东西。
+
+### 4. 知识图谱：一次构建，跨会话复用
+
+运行一次审计即构建 SQLite 知识图谱，之后编程 AI 用结构化查询代替 grep 和逐文件阅读，省下 10-100 倍 token。修改某个文件会影响哪些模块、谁调用了某个函数、从入口展开调用链——不再是 AI 现场猜，而是查表。
+
+### 5. 非技术人员也能验证项目是否按预期运转
+
+这是别的工具做不了的事：你不需要看懂代码，只需定义期望流程（入口 A 应该依次经过步骤 B→C→D），`coderef_flow_verify` 会在调用链里给出确证证据——确证、在管线、存疑、缺失，四种状态如实标记，绝不把"静态查不到"误判成"流程错误"。配合健康仪表盘和 Wiki，你第一次能"看懂"自己的项目。
+
+### 6. 即装即用：纯 Python 免编译，无 API Key 也能跑
+
+安装只依赖纯 Python 包，Python 3.10-3.14 全部免编译直接装好，不在安装阶段要求 C 工具链。核心功能（审计、图谱、架构、变更守护、OWASP）不需要任何 API Key，本地跑通之后，再补一个 Key 让编程 AI 把 Wiki、代码审查这些 LLM 能力也打开。你只需要给编程 AI 一个 Key，它自己就能装好、配好、审好、读好、产出报告。
+
+> 本项目在 vibe coding 中自然产出，作为 AI 治理方向的引子；建议自行拷贝到本地后，交由你的编程 AI 复查并改造实现逻辑，使其符合你的项目。
 
 ## 四引擎架构
 
@@ -93,7 +111,13 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 
 ## 快速开始
 
+如果你是**非编程人员**：把下面这份说明交给你的编程 AI，它会帮你完成安装、配置和第一轮分析，你只需要准备一个 API Key。你真正要做的，是最后打开它生成的健康仪表盘和 Wiki，看懂自己的项目。
+
+如果你**自己动手**：照下面三步走。
+
 ### 1. 安装
+
+安装只依赖纯 Python 包，不触发任何 C 源码编译，Python 3.10-3.14 免编译直接装好。
 
 ```bash
 git clone https://github.com/keaizuizui/CodeRef-AI.git
@@ -103,7 +127,7 @@ pip install -r requirements.txt
 
 ### 2. 配置 LLM（可选）
 
-> 审计、知识图谱、变更守护**不需要 LLM**，纯静态分析即可运行。仅 Wiki 文档、代码审查、Prompt 资产、创新识别需要 LLM。
+> 审计、知识图谱、架构诊断、流程验证、变更守护、OWASP **不需要 LLM**，纯静态分析即可运行。仅 Wiki 文档、代码审查、Prompt 资产、创新识别需要 LLM。没有 API Key 时，这些功能优雅降级为纯静态结果，服务照常可用。
 
 **Windows 用户：**
 
@@ -319,6 +343,14 @@ coderef-ai/
 | 开源友好 | 敏感数据集中 `cache/` 与 `config/config.json`，删除即清理，一行命令安全开源 |
 
 ## 更新日志
+
+### v4.2.2 — 依赖瘦身：tree-sitter 降为可选（可用性承诺的关键修复）
+
+- **核心诉求**：兑现「非技术人员 + 编程 AI 即装即用」承诺。审计发现 `tree-sitter==0.20.4` 是唯一需要 C 编译的依赖，且仅覆盖 Python 3.10-3.12；在 Python 3.13+ 上无预编译 wheel，会强制源码编译导致安装崩溃——这是「装不起来」的第一印象头号来源
+- **关键发现**：tree-sitter 实为**死依赖**——核心解析走 Python 标准库 `ast.parse`（`core/ast_parser.py`），而 `_init_parsers` 填充的 `self.parsers` 字典全项目无任何读取方。移除后功能完全不受影响
+- **改动**：从 `requirements.txt` 移除必需 `tree-sitter` / `tree-sitter-languages`，改为注释标注的**可选依赖**（保留 `_init_parsers` 容错代码，未来如需多语言解析可自行启用）
+- **更轻更稳**：`pip install -r requirements.txt` 不再触发任何 C 源码编译，Python 3.10-3.14 全部免编译直接装好，安装更快更省心
+- **验证**：全量 70 passed, 1 skipped；无 tree-sitter、无 API key 环境下端到端审计正常（13 findings, 0 errors），LLM 优雅降级为静态审查
 
 ### v4.2.1 — 架构腐化诊断层（MCP 工具补盲区）
 
