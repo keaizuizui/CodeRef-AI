@@ -23,8 +23,9 @@ logs/
 # ─── 报告输出 ───
 coderef-report/
 
-# ─── 回归测试（v4.0.2 不入库）───
-tests/
+# ─── 回归测试（v4.0.2 不入库；v4.2.0 起保留核心流程验证用例）───
+tests/*
+!tests/test_new_features.py
 
 # ─── IDE ───
 .vscode/
