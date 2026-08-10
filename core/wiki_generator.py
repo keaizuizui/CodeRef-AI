@@ -39,6 +39,32 @@ from dataclasses import dataclass, field
 from collections import defaultdict
 
 
+# 交叉验证徽章渲染（可选导入：wiki_cross_verify 缺失时降级为空渲染，不阻断生成）
+def module_badge_md(status: str) -> str:
+    """模块文档顶部徽章区块（与 wiki_cross_verify 同构，防导入失败降级）。"""
+    label = {
+        "confirmed": "✅ **确证** — 该模块全部符号都在入口管线闭包内，功能确被调用",
+        "partial": "🔵 **部分确证** — 部分符号在入口管线内，其余独立/未走主流程",
+        "unverified": "🟡 **存疑** — 该模块不在入口管线内（可能动态调用或未走主流程），描述需编程 AI 复核",
+        "missing": "🔴 **缺失** — 图谱中找不到该模块，描述无静态铁证背书",
+    }.get(status, "")
+    if not label:
+        return ""
+    return (
+        "> **静态交叉验证**：" + label + "\n>\n"
+        "> 本徽章来自知识图谱调用闭包（确定性铁证），用于核验下方描述的 "
+        "「是否真的在流程里被调用」。" + (" 未确证不代表流程错误，只代表需进一步核验。" if status in ("unverified", "missing") else "") + "\n"
+    )
+
+
+BADGE_MD = {
+    "confirmed": "✅ 确证",
+    "partial": "🔵 部分确证",
+    "unverified": "🟡 存疑",
+    "missing": "🔴 缺失",
+}
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 数据结构
 # ═══════════════════════════════════════════════════════════════════
@@ -222,7 +248,9 @@ class WikiGenerator:
     def generate(self, project_path: str, output_dir: str = "",
                  enable_git_hook: bool = False,
                  wiki_style: str = "comprehensive",
-                 include_subprojects: bool = False) -> WikiResult:
+                 include_subprojects: bool = False,
+                 cross_verify: bool = True,
+                 cross_entry_spec: str = "class:pipeline_runner:Pipe") -> WikiResult:
         """生成项目 Wiki
         
         Args:
@@ -231,6 +259,8 @@ class WikiGenerator:
             enable_git_hook: 是否安装 git post-commit hook
             wiki_style: Wiki 风格 (comprehensive / reference / tutorial / plain)
             include_subprojects: 是否同时为子项目生成独立 Wiki
+            cross_verify: 是否对模块描述做静态交叉验证（给每篇模块文档打确证徽章）
+            cross_entry_spec: 交叉验证的入口（入口调用闭包为确证依据）
         
         Returns:
             WikiResult: 生成结果
@@ -288,10 +318,18 @@ class WikiGenerator:
         # Stage 2: LLM 逐模块归纳描述（从全量元数据写，不丢失信息）
         module_descriptions = self._generate_module_descriptions(code_metadata, wiki_style)
 
+        # Stage 2.5: 静态交叉验证（可选，熔断降级）
+        # 给每篇模块文档打"确证徽章"，让非技术人员能区分"确被调用"与"LLM 推测"。
+        # 纯静态、确定性，不依赖 LLM；图谱缺失/入口未命中时静默跳过，不阻断生成。
+        cross_badges = {}
+        if cross_verify:
+            cross_badges = self._cross_verify_modules(
+                project_path, modules, cross_entry_spec)
+
         # Stage 3: LLM 生成各文档（用 Stage 2 的输出，而非原始代码摘要）
         docs = self._generate_all_documents(
             project_name, modules, code_metadata, module_descriptions,
-            output_dir, result,
+            output_dir, result, cross_badges,
         )
         result.documents = docs
 
@@ -949,7 +987,8 @@ class WikiGenerator:
                                  meta: ProjectCodeMetadata,
                                  descriptions: Dict[str, str],
                                  output_dir: str,
-                                 result: WikiResult) -> List[str]:
+                                 result: WikiResult,
+                                 cross_badges: Dict[str, dict] = None) -> List[str]:
         """生成所有 Wiki 文档
 
         顺序优化：先逐模块 → 再合并产出跨模块文档
@@ -958,13 +997,14 @@ class WikiGenerator:
         docs = []
         style = result.wiki_style
         cite_warnings: List[str] = []
+        cross_badges = cross_badges or {}
 
         project_summary = self._build_project_summary(project_name, modules, descriptions)
 
         # =============================================================
         # 第一轮：逐模块文档（MODULES/*.md）
         # =============================================================
-        module_docs = self._generate_module_docs(modules, descriptions, output_dir, style, meta)
+        module_docs = self._generate_module_docs(modules, descriptions, output_dir, style, meta, cross_badges)
         docs.extend(module_docs)
         result.module_count = len(module_docs)
 
@@ -1040,6 +1080,30 @@ class WikiGenerator:
             result.errors.extend(cite_warnings)
 
         return docs
+
+    def _cross_verify_modules(self, project_path: str,
+                              modules: List[WikiModule],
+                              entry_spec: str) -> Dict[str, dict]:
+        """对 wiki 模块做静态交叉验证（熔断降级，不阻断生成）。
+
+        结果：{模块名: {status, reason, total, in_pipe, confirmed, ...}}。
+        图谱不存在 / 入口未命中 / 任何异常 → 返回空 dict（静默跳过徽章）。
+        """
+        try:
+            from core.wiki_cross_verify import locate_kg_db, ModuleCrossVerify
+            db = locate_kg_db(project_path)
+            if not db:
+                return {}
+            v = ModuleCrossVerify(db)
+            mod_names = [m.name for m in modules]
+            result = v.verify_modules(mod_names, entry_spec)
+            if not result.get("ok"):
+                return {}
+            # 转为 {模块名: 徽章信息}
+            return {m["module"]: m for m in result.get("modules", [])}
+        except Exception:
+            # 交叉验证是增强项，任何失败都不应阻断 Wiki 主体生成
+            return {}
 
     def _build_project_summary(self, project_name: str, modules: List[WikiModule],
                                 summaries: Dict[str, str]) -> str:
@@ -1239,14 +1303,16 @@ class WikiGenerator:
     def _generate_module_docs(self, modules: List[WikiModule],
                                descriptions: Dict[str, str],
                                output_dir: str, style: str = "comprehensive",
-                               meta: ProjectCodeMetadata = None) -> List[str]:
+                               meta: ProjectCodeMetadata = None,
+                               cross_badges: Dict[str, dict] = None) -> List[str]:
         """生成 MODULES/ 目录下的模块文档"""
         docs = []
         modules_dir = os.path.join(output_dir, "MODULES")
         guidelines = self._style_guidelines(style)
         constraint = self._make_fact_constraint()
+        cross_badges = cross_badges or {}
 
-        index = self._build_module_index(modules)
+        index = self._build_module_index(modules, cross_badges)
         docs.append(self._write_doc(modules_dir, "_index.md", index))
 
         # 为每个核心模块生成详细文档
@@ -1256,6 +1322,15 @@ class WikiGenerator:
             desc = descriptions.get(mod.name, "")
             if not desc:
                 continue
+
+            # 交叉验证徽章：有铁证时注入文档顶部，供非技术人员核验描述可信度
+            badge_md = ""
+            mod_badge = cross_badges.get(mod.name)
+            if mod_badge:
+                try:
+                    badge_md = module_badge_md(mod_badge.get("status", ""))
+                except Exception:
+                    badge_md = ""
 
             # 从 meta 提取该模块的事实数据
             mod_meta_text = ""
@@ -1284,22 +1359,41 @@ class WikiGenerator:
                 f"=== 模块描述（风格参考）===\n{desc[:10000]}"
             )
             content = self._llm_ask(system_prompt, user_prompt)
+            # 在 LLM 生成内容前注入徽章（徽章是铁证，不经过 LLM 幻觉）
+            if badge_md and content:
+                content = badge_md + "\n" + content
             docs.append(self._write_doc(modules_dir, f"{mod.name}.md", content))
 
         return docs
 
-    def _build_module_index(self, modules: List[WikiModule]) -> str:
+    def _build_module_index(self, modules: List[WikiModule],
+                            cross_badges: Dict[str, dict] = None) -> str:
         """生成模块索引"""
+        cross_badges = cross_badges or {}
+        has_badges = any(b.get("status") for b in cross_badges.values())
         lines = [
             f"# 模块索引",
             f"",
-            f"| 模块 | 文件数 | 类型 | 文档 |",
-            f"|------|--------|------|------|",
         ]
+        if has_badges:
+            lines.append("> 每行带「静态交叉验证」徽章：确证 ✅ / 部分确证 🔵 / 存疑 🟡 / 缺失 🔴。"
+                         "徽章来自知识图谱调用闭包，用于核验该模块描述是否真的被调用。")
+            lines.append("")
+            lines.append(f"| 模块 | 文件数 | 类型 | 文档 | 交叉验证 |")
+            lines.append(f"|------|--------|------|------|----------|")
+        else:
+            lines.append(f"| 模块 | 文件数 | 类型 | 文档 |")
+            lines.append(f"|------|--------|------|------|")
         for mod in modules:
             core_tag = "核心" if mod.is_core else "辅助"
             doc_link = f"[查看]({mod.name}.md)" if mod.is_core else "-"
-            lines.append(f"| {mod.name} | {mod.file_count} | {core_tag} | {doc_link} |")
+            mod_badge = cross_badges.get(mod.name)
+            if has_badges:
+                badge_label = (BADGE_MD.get(mod_badge.get("status"), "—")
+                               if mod_badge else "—")
+                lines.append(f"| {mod.name} | {mod.file_count} | {core_tag} | {doc_link} | {badge_label} |")
+            else:
+                lines.append(f"| {mod.name} | {mod.file_count} | {core_tag} | {doc_link} |")
         return "\n".join(lines)
 
     def _summarize_descriptions(self, descriptions: Dict[str, str]) -> str:
