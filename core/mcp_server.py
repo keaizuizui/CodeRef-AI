@@ -139,6 +139,7 @@ class Server:
                 ),
                 "inputSchema": {"type": "object", "properties": {
                     "project_path": {"type": "string", "description": "目标项目路径"},
+                    "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
                 }, "required": ["project_path"]},
             },
             {
@@ -259,6 +260,7 @@ class Server:
                 "inputSchema": {"type": "object", "properties": {
                     "project_path": {"type": "string", "description": "目标项目路径"},
                     "output_dir": {"type": "string", "description": "报告输出目录（默认 coderef-report/html/）"},
+                    "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
                 }, "required": ["project_path"]},
             },
             {
@@ -274,6 +276,7 @@ class Server:
                 "inputSchema": {"type": "object", "properties": {
                     "project_path": {"type": "string", "description": "目标项目路径"},
                     "with_functional": {"type": "boolean", "description": "是否叠加 LLM 功能审查增强", "default": True},
+                    "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
                 }, "required": ["project_path"]},
             },
         ]
@@ -377,6 +380,7 @@ class Server:
                 "allow_autocommit": {"type": "boolean", "description": "anchor 时若工作区有改动是否先自动提交再打 tag（默认 true，使基线指向完整健康状态）"},
                 "git_bin": {"type": "string", "description": "git 可执行文件路径或安装目录（由外层 AI 探测后传入，可选；缺省回退 PATH 的 git）"},
                 "git_timeout": {"type": "integer", "description": "git 命令超时秒数；默认 30，小型项目 15 / 中型 30 / 大型 60"},
+                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
             }, "required": ["project_path"]},
         })
         self._tools.append({
@@ -390,6 +394,7 @@ class Server:
             "inputSchema": {"type": "object", "properties": {
                 "project_path": {"type": "string", "description": "目标项目路径"},
                 "diff": {"type": "string", "description": "git diff 文本"},
+                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
             }, "required": ["project_path", "diff"]},
         })
         # ── 引擎一 · 记忆层（M1/M2/M3）──────────────────────────────
@@ -403,6 +408,7 @@ class Server:
             "inputSchema": {"type": "object", "properties": {
                 "project_path": {"type": "string", "description": "目标项目路径"},
                 "mode": {"type": "string", "enum": ["full", "incr"], "default": "full"},
+                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
             }, "required": ["project_path"]},
         })
         self._tools.append({
@@ -442,6 +448,7 @@ class Server:
             "inputSchema": {"type": "object", "properties": {
                 "project_path": {"type": "string", "description": "目标项目路径"},
                 "auto_fix": {"type": "boolean", "default": False},
+                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
             }, "required": ["project_path"]},
         })
         self._tools.append({
@@ -471,6 +478,7 @@ class Server:
             "inputSchema": {"type": "object", "properties": {
                 "project_path": {"type": "string", "description": "目标项目路径"},
                 "out_format": {"type": "string", "enum": ["json", "report"], "default": "json"},
+                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
             }, "required": ["project_path"]},
         })
         # ── 引擎二 · 创新识别 + 资产沉淀（M6/M7）────────────────────
@@ -484,6 +492,7 @@ class Server:
                 "project_path": {"type": "string", "description": "目标项目路径"},
                 "intent": {"type": "string", "description": "只查指定意图（空=全部）"},
                 "min_adoption": {"type": "number", "description": "最小采用率过滤", "default": 0},
+                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
             }, "required": ["project_path"]},
         })
         self._tools.append({
@@ -501,6 +510,7 @@ class Server:
                 "template_code": {"type": "string", "description": "可复制骨架代码（commit 用）"},
                 "patch_suggestion": {"type": "string", "description": "迁移补丁建议（commit 用）"},
                 "migration_guide": {"type": "string", "description": "迁移指南（commit 用）"},
+                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
             }, "required": ["project_path"]},
         })
         self._tools.append({
@@ -521,6 +531,63 @@ class Server:
         self._tasks: Dict[str, Any] = {}
         # 并发保护：多 Agent 后台任务可能同时读写 _tasks，用可重入锁保证一致性
         self._lock = threading.RLock()
+
+        # ─── 统一工具分发映射 ─────────────────────────────────────────
+        # 工具名 -> handler。收敛 _call 里散落的 if/elif，让所有工具都能复用统一的
+        # background 后台化逻辑。audit/docs 的 handler 额外接收 progress_cb 上报阶段进度。
+        self._handlers = {
+            "coderef_whitelist": self._wl,
+            "coderef_architecture": self._arch,
+            "coderef_docs_read": self._docs_read,
+            "coderef_query": self._query,
+            "coderef_review": self._review,
+            "coderef_frontend": self._frontend,
+            "coderef_report": self._report,
+            "coderef_audit_advisor": self._advisor,
+            "coderef_scan": self._scan_tool,
+            "coderef_scan_list": lambda a: self._scan_list(),
+            "coderef_flow_verify": self._flow_verify,
+            "coderef_arch_audit": self._arch_audit,
+            "coderef_change_guard": self._change_guard,
+            "coderef_change_report": self._change_report,
+            "coderef_memory_sync": self._memory_sync,
+            "coderef_memory_query": self._memory_query,
+            "coderef_memory_status": self._memory_status,
+            "coderef_memory_quality": self._memory_quality,
+            "coderef_prompt_mgmt": self._prompt_mgmt,
+            "coderef_owasp": self._owasp,
+            "coderef_innovation": self._innovation,
+            "coderef_asset": self._asset,
+            "coderef_registry": self._registry,
+        }
+
+        # ─── 重型工具：默认后台执行 ───────────────────────────────────
+        # 解决 MCP 宿主层（Trae / Claude Desktop / Cursor 等任意客户端）对单次
+        # tools/call 的超时限制：大项目同步全量必然超时（如 memory_sync 全量扫描
+        # Python+Vue+Go，曾触发 Trae 的 REQUEST_TIMEOUT）。后台化后调用立即返回
+        # running + task_id，由外层 AI 轮询 coderef_task_status 取结果，不再撞超时。
+        # 轻量工具（query / scan_list / whitelist / docs_read 等）不在此列，保持同步
+        # 快速返回。调用方可用 background=false 强制同步（小项目想立即拿结果时）。
+        self.HEAVY_TOOLS = {
+            "coderef_audit", "coderef_docs", "coderef_review", "coderef_frontend",
+            "coderef_report", "coderef_audit_advisor", "coderef_architecture",
+            "coderef_memory_sync", "coderef_memory_quality", "coderef_owasp",
+            "coderef_innovation", "coderef_asset", "coderef_change_guard",
+            "coderef_change_report",
+        }
+
+    def _should_background(self, n: str, a: Dict) -> bool:
+        """决定工具是否后台执行：
+        - background=true 显式要求 → 后台
+        - background=false 显式要求 → 同步
+        - 未指定 → 重型工具默认后台，轻量工具同步
+        """
+        explicit = a.get("background")
+        if explicit is True:
+            return True
+        if explicit is False:
+            return False
+        return n in self.HEAVY_TOOLS
 
     @contextmanager
     def _locked_tasks(self):
@@ -561,48 +628,14 @@ class Server:
     def _call(self, rid, params):
         n, a = params.get("name",""), params.get("arguments",{})
         try:
+            # 状态查询永远同步返回，不后台化
             if n == "coderef_task_status":
                 return self._ok(rid, self._tsk(a))
-            if n == "coderef_query":
-                return self._ok(rid, self._query(a))
-            if n == "coderef_architecture":
-                return self._ok(rid, self._arch(a))
-            if n == "coderef_whitelist":
-                return self._ok(rid, self._wl(a))
-            if n == "coderef_scan":
-                return self._ok(rid, self._scan_tool(a))
-            if n == "coderef_scan_list":
-                return self._ok(rid, self._scan_list())
-            if n == "coderef_change_guard":
-                return self._ok(rid, self._change_guard(a))
-            if n == "coderef_change_report":
-                return self._ok(rid, self._change_report(a))
-            if n == "coderef_memory_sync":
-                return self._ok(rid, self._memory_sync(a))
-            if n == "coderef_memory_query":
-                return self._ok(rid, self._memory_query(a))
-            if n == "coderef_memory_status":
-                return self._ok(rid, self._memory_status(a))
-            if n == "coderef_memory_quality":
-                return self._ok(rid, self._memory_quality(a))
-            if n == "coderef_prompt_mgmt":
-                return self._ok(rid, self._prompt_mgmt(a))
-            if n == "coderef_owasp":
-                return self._ok(rid, self._owasp(a))
-            if n == "coderef_innovation":
-                return self._ok(rid, self._innovation(a))
-            if n == "coderef_asset":
-                return self._ok(rid, self._asset(a))
-            if n == "coderef_registry":
-                return self._ok(rid, self._registry(a))
-            if n == "coderef_docs_read":
-                return self._ok(rid, self._docs_read(a))
-            if n == "coderef_flow_verify":
-                return self._ok(rid, self._flow_verify(a))
-            if n == "coderef_arch_audit":
-                return self._ok(rid, self._arch_audit(a))
-            bg = a.get("background", n == "coderef_docs")
-            if bg:
+            # 未知工具提前拦截，避免落入 _run 才报"未知"
+            if n not in self._handlers and n not in ("coderef_audit", "coderef_docs"):
+                return {"jsonrpc":"2.0","id":rid,"error":{"code":-32602,"message":f"未知工具: {n}"}}
+            # 统一后台化决策：重型工具默认后台，轻量工具同步；background 显式参数可覆盖
+            if self._should_background(n, a):
                 tid = str(uuid.uuid4())[:8]; rc = {}
                 t = threading.Thread(target=lambda: self._bg(rc, n, a), daemon=True)
                 t.start()
@@ -853,7 +886,8 @@ class Server:
 
     def _run(self, n, a, progress_cb=None) -> str:
         from core.pipeline_runner import Pipe
-        p, o = a["project_path"], a.get("output_dir")
+        # 部分工具（如 coderef_scan_list）不依赖 project_path，用容错读取避免误抛 KeyError
+        p, o = a.get("project_path", ""), a.get("output_dir")
         logger.info(f"[{n}] {p}")
         if n == "coderef_audit":
             strat = a.get("strategy", "auto")
@@ -915,7 +949,13 @@ class Server:
             return self._report(a)
         elif n == "coderef_audit_advisor":
             return self._advisor(a)
-        else: return "未知"
+        # 其余工具统一走 _handlers 分发（query / memory_* / owasp / innovation /
+        # asset / change_* / scan / whitelist / registry / docs_read 等），
+        # 使后台线程与同步路径都能执行任意工具，避免各自散落 if/elif。
+        handler = self._handlers.get(n)
+        if handler is not None:
+            return handler(a)
+        return "未知工具: " + n
         logger.info(f"[{n}] 完成: {r.elapsed}s")
         return r.report
 
