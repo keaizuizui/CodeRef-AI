@@ -2,7 +2,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.2.7** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.2.8** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -360,6 +360,13 @@ CodeRef-AI 是合法开源的安全审计工具，本仓库不含任何恶意代
 3. **如实告知审计 AI**：若 SCA 结果缺失或被清理，先把杀毒排除项配好再跑审计，避免误删导致结论失真
 
 ## 更新日志
+
+### v4.2.8 — 重型工具默认后台执行（适配所有 MCP 客户端的超时限制）
+
+- **修复 MCP 工具超时（REQUEST_TIMEOUT）**：此前 `coderef_memory_sync` 等重型工具同步执行，大项目全量扫描会在 Trae 等客户端对单次 `tools/call` 的超时窗口内未完成，导致超时失败、其余工具异常。v4.2.8 起**重型工具默认后台执行**：调用立即返回 `{"status":"running","task_id":"xxxx"}`，由外层 AI 轮询 `coderef_task_status(task_id)` 取最终结果，不再撞超时
+- **默认后台的工具**：`coderef_audit` / `coderef_docs` / `coderef_review` / `coderef_frontend` / `coderef_report` / `coderef_audit_advisor` / `coderef_architecture` / `coderef_memory_sync` / `coderef_memory_quality` / `coderef_owasp` / `coderef_innovation` / `coderef_asset` / `coderef_change_guard` / `coderef_change_report`；轻量工具（`coderef_scan` / `coderef_query` / `coderef_whitelist` / `coderef_docs_read` 等）保持同步快速返回
+- **显式控制**：所有工具支持 `background` 参数，`background=False` 强制同步（小项目想立即拿结果）、`background=True` 强制后台；统一后台分发避免散落的 if/elif，handler 与 `coderef_task_status` 全工具可用
+- **收敛统一分发**：`_call` 收敛为「统一 handler 映射 + 统一的 `background` 决策」，消除散落分支导致的重型工具被同步执行的遗漏；`_run` 统一走 `_handlers` 分发，后台线程与同步路径执行任意工具
 
 ### v4.2.7 — SCA 本地 CVE 库去敏感化（降低杀毒软件误报）
 
