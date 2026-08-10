@@ -1,13 +1,15 @@
 # utils 目录
 
-`utils/` 存放 CodeRef-AI 跨模块复用的通用辅助工具。
+`utils/` 目录已在本项目 v4.2.1 架构清理中移除。
 
-## 文件说明
+## 说明
 
-| 文件 | 说明 |
-|------|------|
-| `helpers.py` | 通用辅助函数，如路径处理、文本格式化等，供 core/ 各模块复用，避免重复实现 |
+原 `utils/helpers.py` 为早期遗留的通用辅助模块，功能与 `core/` 内相关逻辑重复，且全项目无实际引用。经架构审查（R4 死代码）确认后已删除，`utils/` 空壳目录一并清理。
 
-## 用法
+## 现在的共享辅助
 
-各检测器与引擎通过 `from utils.helpers import ...` 引入通用工具，保持代码复用与口径一致。
+跨模块复用的通用逻辑已收敛到 `core/` 内，例如：
+
+- `core/graph_closure.py`：知识图谱读取 + 下游闭包遍历（`flow_verify` / `wiki_cross_verify` / `arch_audit` 共用）
+- `core/code_models.py`：共享数据模型（切断 `CodeAnalyzer` 与 `AstParser` 的循环依赖）
+- `core/tool_registry.py`：工具目录 + 策略裁剪（收敛 `pipeline_runner` 上帝模块）

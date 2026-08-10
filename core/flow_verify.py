@@ -20,11 +20,10 @@ flow_verify — 流程合规验证（正式集成 v1.0）
 图谱自动定位：使用 CodeKnowledgeGraph(project_path).db_path，图谱不存在时明确反馈需先构建。
 """
 
-import json
 import os
-import sqlite3
 from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple
+from core.graph_closure import load_graph, file_base, downstream
 
 try:
     from loguru import logger
@@ -41,33 +40,6 @@ def _kg_db_path(project_path: str) -> str:
     """定位项目知识图谱数据库路径（与 coderef 其它工具一致）。"""
     from core.code_knowledge_graph import CodeKnowledgeGraph
     return CodeKnowledgeGraph(project_path).db_path
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 数据加载
-# ═══════════════════════════════════════════════════════════════════
-
-def load_graph(db_path: str) -> Tuple[Dict[str, dict], Dict[str, List[str]]]:
-    """返回 (nodes, adj)，adj 仅含 CALLS 边（source -> [targets]）。"""
-    nodes: Dict[str, dict] = {}
-    adj: Dict[str, List[str]] = defaultdict(list)
-    con = sqlite3.connect(db_path)
-    con.row_factory = sqlite3.Row
-    for r in con.execute("SELECT id,type,name,file_path,start_line,props FROM nodes"):
-        d = dict(r)
-        try:
-            d["props"] = json.loads(d["props"] or "{}")
-        except Exception:
-            d["props"] = {}
-        nodes[r["id"]] = d
-    for r in con.execute("SELECT source,target FROM edges WHERE type='CALLS'"):
-        adj[r["source"]].append(r["target"])
-    con.close()
-    return nodes, adj
-
-
-def file_base(n: dict) -> str:
-    return os.path.basename(n.get("file_path") or "") or ""
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -149,19 +121,7 @@ class FlowVerifier:
         return [nid for _, nid in scored]
 
     def _downstream(self, start_id: str, max_depth: int = 8) -> Set[str]:
-        seen = {start_id}
-        frontier = {start_id}
-        for _ in range(max_depth):
-            nxt = set()
-            for nid in frontier:
-                for t in self.adj.get(nid, []):
-                    if t not in seen:
-                        seen.add(t)
-                        nxt.add(t)
-            frontier = nxt
-            if not frontier:
-                break
-        return seen
+        return downstream(self.adj, start_id, max_depth=max_depth)
 
     # ─── 主验证 ───
 

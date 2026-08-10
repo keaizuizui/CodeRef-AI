@@ -23,9 +23,8 @@ WikiCrossVerify — 静态确证 ↔ 人话 wiki 的模块级交叉验证
 """
 
 import os
-import sqlite3
-from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
+from core.graph_closure import load_graph, file_base, downstream
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -37,29 +36,6 @@ def locate_kg_db(project_path: str) -> Optional[str]:
     from core.code_knowledge_graph import CodeKnowledgeGraph
     db = CodeKnowledgeGraph(project_path).db_path
     return db if os.path.exists(db) else None
-
-
-def load_graph(db_path: str) -> Tuple[Dict[str, dict], Dict[str, List[str]]]:
-    """返回 (nodes, adj)，adj 仅含 CALLS 边（source -> [targets]）。"""
-    nodes: Dict[str, dict] = {}
-    adj: Dict[str, List[str]] = defaultdict(list)
-    con = sqlite3.connect(db_path)
-    con.row_factory = sqlite3.Row
-    for r in con.execute("SELECT id,type,name,file_path,start_line,props FROM nodes"):
-        d = dict(r)
-        try:
-            d["props"] = __import__("json").loads(d["props"] or "{}")
-        except Exception:
-            d["props"] = {}
-        nodes[r["id"]] = d
-    for r in con.execute("SELECT source,target FROM edges WHERE type='CALLS'"):
-        adj[r["source"]].append(r["target"])
-    con.close()
-    return nodes, adj
-
-
-def file_base(n: dict) -> str:
-    return os.path.basename(n.get("file_path") or "") or ""
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -75,17 +51,7 @@ class ModuleCrossVerify:
     # ─── 下游闭包 ───
 
     def _downstream(self, start_id: str, max_depth: int = 8):
-        seen = {start_id}; frontier = {start_id}
-        for _ in range(max_depth):
-            nxt = set()
-            for nid in frontier:
-                for t in self.adj.get(nid, []):
-                    if t not in seen:
-                        seen.add(t); nxt.add(t)
-            frontier = nxt
-            if not frontier:
-                break
-        return seen
+        return downstream(self.adj, start_id, max_depth=max_depth)
 
     # ─── 目录 → 文件级符号 对齐 ───
 

@@ -25,6 +25,7 @@
 
 import re
 from typing import List, Set
+from core.cache_manager import cache_manager
 
 
 class SharedFilter:
@@ -265,83 +266,69 @@ class SharedFilter:
         在每次扫描前调用，确保使用最新的缓存白名单。
         调用后，is_magic_whitelisted / is_security_whitelisted 等方法生效。
         """
-        from core.cache_manager import cache_manager
         cache_manager.load_hardcoded(project_path)
 
     @staticmethod
     def is_magic_whitelisted(value, file_path: str = "") -> bool:
         """检查魔法数字是否在 cache 白名单中"""
-        from core.cache_manager import cache_manager
         return cache_manager.is_magic_whitelisted(value, file_path)
 
     @staticmethod
     def is_security_whitelisted(rule_id: str, file_path: str = "", line: int = 0) -> bool:
         """检查安全规则是否在 cache 白名单中"""
-        from core.cache_manager import cache_manager
         return cache_manager.is_security_whitelisted(rule_id, file_path, line)
 
     @staticmethod
     def is_complexity_exempted(function_name: str, file_path: str = "") -> bool:
         """检查函数是否在 cache 复杂度豁免列表中"""
-        from core.cache_manager import cache_manager
         return cache_manager.is_complexity_exempted(function_name, file_path)
 
     @staticmethod
     def is_naming_exempted(name: str) -> bool:
         """检查命名是否在 cache 豁免列表中"""
-        from core.cache_manager import cache_manager
         return cache_manager.is_naming_exempted(name)
 
     @staticmethod
     def is_integrity_whitelisted(category: str, file_path: str = "", line: int = 0) -> bool:
         """检查完整性检查条目是否在 cache 白名单中"""
-        from core.cache_manager import cache_manager
         return cache_manager.is_integrity_whitelisted(category, file_path, line)
 
     @staticmethod
     def is_resource_gap_whitelisted(category: str, item: str, file_path: str = "") -> bool:
         """检查资源缺口条目是否在 cache 白名单中"""
-        from core.cache_manager import cache_manager
         return cache_manager.is_resource_gap_whitelisted(category, item, file_path)
 
     @staticmethod
     def is_blind_spot_whitelisted(category: str, item: str, file_path: str = "") -> bool:
         """检查盲区检测条目是否在 cache 白名单中"""
-        from core.cache_manager import cache_manager
         return cache_manager.is_blind_spot_whitelisted(category, item, file_path)
 
     @staticmethod
     def is_analysis_whitelisted(category: str, file_path: str = "") -> bool:
         """检查项目分析条目是否在 cache 白名单中"""
-        from core.cache_manager import cache_manager
         return cache_manager.is_analysis_whitelisted(category, file_path)
 
     @staticmethod
     def is_simplify_whitelisted(category: str, function_name: str, file_path: str = "") -> bool:
         """检查简化建议条目是否在 cache 白名单中"""
-        from core.cache_manager import cache_manager
         return cache_manager.is_simplify_whitelisted(category, function_name, file_path)
 
     @staticmethod
     def is_junk_whitelisted(category: str, file_path: str = "") -> bool:
         """检查垃圾文件条目是否在 cache 白名单中"""
-        from core.cache_manager import cache_manager
         return cache_manager.is_junk_whitelisted(category, file_path)
 
     @staticmethod
     def is_sca_whitelisted(package: str, cve_id: str = "") -> bool:
         """检查SCA扫描条目是否在 cache 白名单中"""
-        from core.cache_manager import cache_manager
         return cache_manager.is_sca_whitelisted(package, cve_id)
 
     @staticmethod
     def is_business_analysis_whitelisted(entity_type: str, name: str = "") -> bool:
         """检查业务分析条目是否在 cache 白名单中"""
-        from core.cache_manager import cache_manager
         return cache_manager.is_business_analysis_whitelisted(entity_type, name)
 
     @staticmethod
     def is_innovation_gap_whitelisted(module: str, pattern: str = "") -> bool:
         """检查创新缺口条目是否在 cache 白名单中"""
-        from core.cache_manager import cache_manager
         return cache_manager.is_innovation_gap_whitelisted(module, pattern)
