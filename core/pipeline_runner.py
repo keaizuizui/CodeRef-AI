@@ -315,9 +315,10 @@ class Pipe:
             if wr is not None:
                 wiki_dir = getattr(wr, "output_dir", None) or None
             renderer = HtmlReportRenderer(project_path)
-            result = renderer.render(r, kg_stats=kg_stats,
-                                     wiki_dir=wiki_dir,
-                                     output_dir=output_dir)
+            result = renderer.render(
+                r, kg_stats=kg_stats, wiki_dir=wiki_dir,
+                output_dir=output_dir,
+                dimension_states=getattr(r, "dimension_states", None))
             r.html_report = result
             if not result.get("ok"):
                 r.errors.append(f"html_report: {result.get('error', '渲染失败')}")
@@ -696,6 +697,92 @@ class Pipe:
                 return c
         return None
 
+    @staticmethod
+    def _count_md(wiki_dir: str) -> int:
+        """统计目录（含子目录）下 .md 文档数。"""
+        n = 0
+        for root, _, files in os.walk(wiki_dir):
+            n += sum(1 for f in files if f.endswith(".md"))
+        return n
+
+    def _collect_dimension_states(self, project_path: str,
+                                  kg_stats: Optional[dict],
+                                  output_dir: Optional[str] = None) -> dict:
+        """检测各产出维度（审计/图谱/Wiki）的实际执行状态，供 HTML 报告透明化展示。
+
+        目的：报告聚合不再"缺省放行"（有就展示、没有就静默为空/全 0），而是显式标注
+        每个维度是否真正执行过。未执行的维度给出明确指引，避免把"未审计"伪装成"没问题"。
+
+        注意：审计 findings 的探测路径必须与 has_artifacts 判定一致（跟随 output_dir），
+        否则自定义输出目录时，判定"存在"却检测"未执行"，出现矛盾展示。
+        """
+        states: Dict[str, dict] = {}
+
+        # ── 审计维度 ──
+        audit_fp = self._findings_json_path(project_path, output_dir)
+        if os.path.isfile(audit_fp):
+            try:
+                with open(audit_fp, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                findings = data.get("findings", []) or []
+                states["audit"] = {
+                    "status": "done",
+                    "ts": data.get("scan_ts", "") or "",
+                    "count": len(findings),
+                    "hint": f"已执行审计，共 {len(findings)} 条发现",
+                }
+            except Exception:
+                states["audit"] = {
+                    "status": "missing", "ts": "", "count": 0,
+                    "hint": "审计结果文件损坏，请重新运行 coderef_audit",
+                }
+        else:
+            states["audit"] = {
+                "status": "missing", "ts": "", "count": 0,
+                "hint": "尚未执行审计，请先运行 coderef_audit",
+            }
+
+        # ── 知识图谱维度 ──
+        if kg_stats:
+            states["kg"] = {
+                "status": "done",
+                "ts": kg_stats.get("built_at", "") or "",
+                "nodes": kg_stats.get("node_count", 0),
+                "hint": f"知识图谱已构建，{kg_stats.get('node_count', 0)} 节点",
+            }
+        else:
+            states["kg"] = {
+                "status": "missing", "ts": "", "nodes": 0,
+                "hint": "尚未构建知识图谱，请先运行 coderef_audit 或构建图谱",
+            }
+
+        # ── Wiki 维度 ──
+        wiki_dir = self._detect_wiki_dir(project_path)
+        if wiki_dir:
+            md_count = self._count_md(wiki_dir)
+            try:
+                ts = datetime.fromtimestamp(
+                    os.path.getmtime(wiki_dir)).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                ts = ""
+            states["wiki"] = {
+                "status": "done", "ts": ts, "docs": md_count,
+                "hint": f"Wiki 已生成，{md_count} 篇文档",
+            }
+        else:
+            states["wiki"] = {
+                "status": "missing", "ts": "", "docs": 0,
+                "hint": "尚未生成 Wiki，请先运行 coderef_docs",
+            }
+
+        # 图谱滞后提示：审计扫描晚于图谱构建时，图谱可能滞后于代码
+        ats = states.get("audit", {}).get("ts", "")
+        kts = states.get("kg", {}).get("ts", "")
+        if states.get("kg", {}).get("status") == "done" and ats and kts and ats > kts:
+            states["kg"]["hint"] = states["kg"].get("hint", "") + "（图谱构建早于审计，可能滞后于代码）"
+
+        return states
+
     def render_report(self, project_path: str,
                       output_dir: Optional[str] = None) -> tuple:
         """重渲染既有产物为 HTML 报告目录（coderef_report 的核心调度）。
@@ -712,7 +799,18 @@ class Pipe:
             if kg is not None:
                 kg.close()
             if kg_stats is None:
+                r.errors.append("未检测到既有知识图谱产物，已回退为一次全量审计")
                 return r, False
+            # 补全 has_artifacts 判定：kg 与 审计 findings 均存在才走重渲染。
+            # 若只有图谱没有审计 findings，产物残缺，audit.html 与 index 审计卡片
+            # 会缺失真实数据，回退到一次全量审计更完整（社区反馈的"全 0/暂无"bug 根源）。
+            audit_fp = self._findings_json_path(project_path, output_dir)
+            if not os.path.isfile(audit_fp):
+                r.errors.append("未检测到审计 findings 产物（audit_findings.json），"
+                                "已回退为一次全量审计以产出完整报告")
+                return r, False
+            # 检测各维度执行状态，供 HTML 透明化展示（避免"审计未执行"被当成"暂无发现"）
+            r.dimension_states = self._collect_dimension_states(project_path, kg_stats, output_dir)
             # 恢复上次审计的 findings 与统计，避免"重渲染既有产物"时 index 审计卡片
             # 与 audit.html 明细全部为 0 / 空（社区反馈的聚合 HTML 全 0 bug）。
             self._load_findings_json(project_path, r)

@@ -30,3 +30,9 @@ ARCH_LARGE_MODULE_SYMBOL_THRESHOLD = 20    # 单模块符号数超过此值视�
 ARCH_HEALTH_WEIGHT_CYCLE = 3.0             # 每个循环依赖扣分权重（封顶 6.0）
 ARCH_HEALTH_WEIGHT_GOD = 1.0               # 每个上帝模块扣分权重（封顶 2.0）
 ARCH_HEALTH_WEIGHT_LAYER = 1.0             # 每个分层违例扣分权重（封顶 2.0）
+
+# 架构探测器（arch_detector.py）
+ARCH_DETECT_MAX_ENTRY_SIGNALS = 80         # 入口信号总数上限，防止过大拖慢后续
+ARCH_DETECT_MAX_TARGET_LEN = 60            # 入口目标描述截断长度
+ARCH_DETECT_CONFIDENCE_FLOOR = 0.05        # 至少命中 1 个文件时的置信度兜底加成
+ARCH_DETECT_CONFIDENCE_CAP = 1.0           # 置信度上限
