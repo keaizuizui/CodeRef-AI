@@ -24,7 +24,6 @@ WikiCrossVerify — 静态确证 ↔ 人话 wiki 的模块级交叉验证
 
 import os
 import sqlite3
-import hashlib
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
@@ -34,11 +33,9 @@ from typing import Dict, List, Optional, Tuple
 # ═══════════════════════════════════════════════════════════════════
 
 def locate_kg_db(project_path: str) -> Optional[str]:
-    """根据项目路径定位知识图谱 db（与 code_knowledge_graph 相同的路径算法）。"""
-    phash = hashlib.md5(os.path.abspath(project_path).encode()).hexdigest()[:12]
-    kg_dir = os.path.join(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))), "cache", "kg")
-    db = os.path.join(kg_dir, f"{phash}.db")
+    """根据项目路径定位知识图谱 db（复用 code_knowledge_graph 的路径算法）。"""
+    from core.code_knowledge_graph import CodeKnowledgeGraph
+    db = CodeKnowledgeGraph(project_path).db_path
     return db if os.path.exists(db) else None
 
 
@@ -204,36 +201,3 @@ class ModuleCrossVerify:
         }
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 徽章渲染（Markdown，注入 wiki 模块文档）
-# ═══════════════════════════════════════════════════════════════════
-
-BADGE_MD = {
-    "confirmed": "✅ 确证",
-    "partial": "🔵 部分确证",
-    "unverified": "🟡 存疑",
-    "missing": "🔴 缺失",
-}
-
-
-def module_badge_md(status: str) -> str:
-    """返回可在 wiki 模块文档顶部注入的徽章 Markdown 区块。"""
-    label = {
-        "confirmed": "✅ **确证** — 该模块全部符号都在入口管线闭包内，功能确被调用",
-        "partial": "🔵 **部分确证** — 部分符号在入口管线内，其余独立/未走主流程",
-        "unverified": "🟡 **存疑** — 该模块不在入口管线内（可能动态调用或未走主流程），描述需编程 AI 复核",
-        "missing": "🔴 **缺失** — 图谱中找不到该模块，描述无静态铁证背书",
-    }.get(status, "")
-    if not label:
-        return ""
-    return (
-        "> **静态交叉验证**：" + label + "\n>\n"
-        "> 本徽章来自知识图谱调用闭包（确定性铁证），用于核验下方描述的 "
-        "「是否真的在流程里被调用」。" + (" 未确证不代表流程错误，只代表需进一步核验。" if status in ("unverified", "missing") else "") + "\n"
-    )
-
-
-def module_index_row_md(module_name: str, status: str, file_count: int) -> str:
-    """生成模块索引表中带徽章的一行。"""
-    label = BADGE_MD.get(status, "—")
-    return f"| {module_name} | {file_count} | {label} |"
