@@ -1,0 +1,420 @@
+# -*- coding: utf-8 -*-
+"""
+flow_verify — 流程合规验证（正式集成 v1.0）
+
+目标读者：非编程人员。
+核心问题：我设定的期望流程（A→B→C→D→结果），代码里到底有没有真的按这条管线走通？
+
+定位：静态优先、确定性优先。数据只来自知识图谱 CALLS 边，不依赖 LLM。
+它既是"非编程人员验证流程是否按预期执行"的入口，也是编程 AI 的客观参考。
+
+设计原则（吸取 workflow_graph 依赖 GitNexus 不可靠的教训）：
+- 纯静态、确定性：数据只来自知识图谱 CALLS 边，不依赖 LLM。
+- 绝不误导：能确证标 ordered；在管线但顺序未确证标 in_pipeline；
+  入口管线外 / 可能动态调用标 outside；项目里根本无对应符号才标 missing。
+- 期望流程的中文步骤 → 代码符号的映射，由调用方（用户的编程 AI）预完成，
+  本工具接收"已映射的符号关键词"，避免把语义鸿沟硬塞给静态引擎。
+
+集成方式：作为 MCP 工具 coderef_flow_verify 暴露。
+入口：project_path + entry（入口符号，支持 模块.函数）+ steps（期望步骤符号关键词列表）。
+图谱自动定位：使用 CodeKnowledgeGraph(project_path).db_path，图谱不存在时明确反馈需先构建。
+"""
+
+import json
+import os
+import sqlite3
+from collections import defaultdict
+from typing import Dict, List, Optional, Set, Tuple
+
+try:
+    from loguru import logger
+except Exception:  # 单元测试/无 loguru 环境仍可运行
+    logger = None
+
+
+def _log(msg: str):
+    if logger:
+        logger.info(f"[flow_verify] {msg}")
+
+
+def _kg_db_path(project_path: str) -> str:
+    """定位项目知识图谱数据库路径（与 coderef 其它工具一致）。"""
+    from core.code_knowledge_graph import CodeKnowledgeGraph
+    return CodeKnowledgeGraph(project_path).db_path
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 数据加载
+# ═══════════════════════════════════════════════════════════════════
+
+def load_graph(db_path: str) -> Tuple[Dict[str, dict], Dict[str, List[str]]]:
+    """返回 (nodes, adj)，adj 仅含 CALLS 边（source -> [targets]）。"""
+    nodes: Dict[str, dict] = {}
+    adj: Dict[str, List[str]] = defaultdict(list)
+    con = sqlite3.connect(db_path)
+    con.row_factory = sqlite3.Row
+    for r in con.execute("SELECT id,type,name,file_path,start_line,props FROM nodes"):
+        d = dict(r)
+        try:
+            d["props"] = json.loads(d["props"] or "{}")
+        except Exception:
+            d["props"] = {}
+        nodes[r["id"]] = d
+    for r in con.execute("SELECT source,target FROM edges WHERE type='CALLS'"):
+        adj[r["source"]].append(r["target"])
+    con.close()
+    return nodes, adj
+
+
+def file_base(n: dict) -> str:
+    return os.path.basename(n.get("file_path") or "") or ""
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 验证器
+# ═══════════════════════════════════════════════════════════════════
+
+class FlowVerifier:
+    def __init__(self, db_path: str):
+        self.nodes, self.adj = load_graph(db_path)
+        # 名称索引：小写名 -> [id]；也索引方法后缀名
+        self.name_index = defaultdict(list)
+        for nid, n in self.nodes.items():
+            self.name_index[n["name"].lower()].append(nid)
+            if "." in n["name"]:
+                self.name_index[n["name"].split(".")[-1].lower()].append(nid)
+
+    # ─── 入口定位 ───
+
+    def find_entry(self, spec: str) -> Optional[str]:
+        """定位入口。支持：
+        - 'func'                      → 唯一/首个名为 func 的节点
+        - 'module.func'               → 限定模块
+        - 'module'                    → 该模块节点自身
+        - 完整节点 id                  → 直接命中（如 class:pipeline_runner:Pipe）
+        """
+        spec = spec.strip()
+        if spec in self.nodes:
+            return spec
+        if "." in spec:
+            mod, name = spec.rsplit(".", 1)
+            best = None
+            for nid, n in self.nodes.items():
+                if n["name"] == name and (mod in (n.get("file_path") or "").lower()
+                                          or mod in n["name"].lower()):
+                    if best is None or n["type"] in ("function", "method"):
+                        best = nid
+            if best:
+                return best
+        key = spec.lower()
+        if key in self.name_index:
+            return self.name_index[key][0]
+        for nid, n in self.nodes.items():
+            if key in n["name"].lower():
+                return nid
+        return None
+
+    # ─── 步骤匹配（三层） ───
+
+    def match_step_nodes(self, keyword: str) -> List[str]:
+        """三层匹配：符号名 / docstring / 模块名。返回节点 id 列表（按匹配强度排序）。"""
+        kw = keyword.lower()
+        scored: List[Tuple[int, str]] = []
+        seen = set()
+
+        def _add(nid, prio):
+            if nid not in seen:
+                seen.add(nid)
+                scored.append((prio, nid))
+
+        # 层0：符号名精确相等（含方法后缀）——最强
+        for nid in self.name_index.get(kw, []):
+            _add(nid, 0)
+        # 层1：符号名包含关键词
+        for nid, n in self.nodes.items():
+            if kw and kw in n["name"].lower():
+                _add(nid, 1)
+        # 层2：docstring
+        for nid, n in self.nodes.items():
+            doc = (n.get("props") or {}).get("doc") or ""
+            if kw and kw in doc.lower():
+                _add(nid, 2)
+
+        # 注：不按完整文件路径匹配——路径含关键词会误伤该模块内所有函数
+        #（如 governance_audit.py 里所有函数都会被 "audit" 命中）。模块名
+        # 由层1"名称包含"覆盖（mod:governance_audit 的 name 本身含 audit）。
+
+        scored.sort(key=lambda x: (x[0], 0 if self.nodes[x[1]]["type"] in
+                                   ("function", "method") else 1))
+        return [nid for _, nid in scored]
+
+    def _downstream(self, start_id: str, max_depth: int = 8) -> Set[str]:
+        seen = {start_id}
+        frontier = {start_id}
+        for _ in range(max_depth):
+            nxt = set()
+            for nid in frontier:
+                for t in self.adj.get(nid, []):
+                    if t not in seen:
+                        seen.add(t)
+                        nxt.add(t)
+            frontier = nxt
+            if not frontier:
+                break
+        return seen
+
+    # ─── 主验证 ───
+
+    def verify(self, entry_spec: str, steps: List[str],
+               max_depth: int = 8) -> dict:
+        """验证入口管线是否覆盖期望步骤。
+
+        区分两个层面（旁路原型 v2 的核心修正）：
+        - 存在性：步骤符号是否在"入口为根"的调用闭包内（root_reach）。
+          真实项目入口往往直接调用多个并行工具，它们是兄弟节点，而非串行链路，
+          因此必须用入口的完整下游做存在性判断，而不是每步收窄 frontier。
+        - 顺序性：能否从"已确证的上一步"继续推下一步（linear_reach）。
+          兄弟/并行工具之间没有 CALLS 边，顺序推不出来时就诚实标记 in_pipeline，
+          而不是错误地判为 outside 或 missing。
+        """
+        entry = self.find_entry(entry_spec)
+        if not entry:
+            return {"entry": {"spec": entry_spec, "found": False},
+                    "steps": [], "ok": False,
+                    "summary": f"入口未找到: {entry_spec}"}
+
+        en = self.nodes[entry]
+        root_reach = self._downstream(entry, max_depth=max_depth)
+        result = {
+            "entry": {"spec": entry_spec, "found": True,
+                      "id": entry,
+                      "node": f"{en['name']} ({file_base(en)}:{en['start_line']})"},
+            "steps": [],
+            "ok": True,
+            "graph_stats": {"nodes": len(self.nodes),
+                            "calls_edges": sum(len(v) for v in self.adj.values())},
+        }
+
+        current = entry
+        for step in steps:
+            hits = self.match_step_nodes(step)
+            if not hits:
+                result["steps"].append({
+                    "keyword": step, "status": "missing",
+                    "reason": "项目图谱中找不到含该关键词的符号/docstring/模块名",
+                    "evidence": [], "candidates": [],
+                })
+                result["ok"] = False
+                continue
+
+            # 1) 存在性：是否在入口调用闭包内
+            in_pipe = [sid for sid in hits if sid in root_reach]
+            if not in_pipe:
+                result["steps"].append({
+                    "keyword": step, "status": "outside",
+                    "reason": "找到对应符号，但不在入口的静态调用链上——"
+                              "可能该步骤并行/独立于入口，或经动态注册/反射/运行时拼装调用"
+                              "（静态图谱会丢这类链路）",
+                    "candidates": [f"{self.nodes[s]['name']} ({file_base(self.nodes[s])}:{self.nodes[s]['start_line']})"
+                                   for s in hits[:5]],
+                })
+                result["ok"] = False
+                continue
+
+            # 2) 顺序性：能否从 current 继续推下一步
+            ordered = [sid for sid in in_pipe
+                       if sid in self._downstream(current, max_depth=max_depth)]
+            if ordered:
+                best = ordered[0]
+                b = self.nodes[best]
+                result["steps"].append({
+                    "keyword": step, "status": "ordered",
+                    "reason": "该符号在入口调用链上，且能从已确证的上一步调用关系推出",
+                    "node": f"{b['name']} ({file_base(b)}:{b['start_line']})",
+                    "evidence": best,
+                    "candidates": [f"{self.nodes[s]['name']} ({file_base(self.nodes[s])}:{self.nodes[s]['start_line']})"
+                                   for s in ordered[:5]],
+                })
+                current = best
+            else:
+                best = in_pipe[0]
+                b = self.nodes[best]
+                result["steps"].append({
+                    "keyword": step, "status": "in_pipeline",
+                    "reason": "该符号确认在入口调用链上（存在性确证），"
+                              "但从前一步调用关系推不出先后顺序——很可能是与上一步并行/并列的兄弟调用，"
+                              "顺序需结合入口调度代码或运行时复核",
+                    "node": f"{b['name']} ({file_base(b)}:{b['start_line']})",
+                    "evidence": best,
+                    "candidates": [f"{self.nodes[s]['name']} ({file_base(self.nodes[s])}:{self.nodes[s]['start_line']})"
+                                   for s in in_pipe[:5]],
+                })
+                # 顺序未确证：不推进 current，避免错误地基于丢弃的兄弟节点做顺序断言
+
+        return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 顶层接口（MCP handler 调用）
+# ═══════════════════════════════════════════════════════════════════
+
+def verify_flow(project_path: str, entry: str, steps: List[str],
+                depth: Optional[int] = None, db_path: Optional[str] = None) -> dict:
+    """验证入口管线是否覆盖期望步骤。
+
+    Args:
+        project_path: 目标项目路径（用于自动定位知识图谱）。
+        entry: 入口符号，支持 模块.函数 消除歧义。
+        steps: 期望步骤的符号关键词列表（中英文均可，由调用方预映射）。
+        depth: 调用链搜索深度，默认 8。
+        db_path: 显式指定知识图谱数据库（测试/旁路用）；缺省自动定位。
+
+    Returns:
+        结构化验证结果 dict（含 steps 状态与 evidence）。
+    """
+    if depth is None:
+        depth = 8
+    if db_path is None:
+        db_path = _kg_db_path(project_path)
+    if not os.path.exists(db_path):
+        return {
+            "ok": False,
+            "entry": {"spec": entry, "found": False},
+            "steps": [],
+            "graph_stats": {"has_kg": False, "db": db_path},
+            "summary": f"知识图谱不存在({db_path})，"
+                       f"请先运行 coderef_audit 或 coderef_memory_sync 构建知识图谱",
+        }
+    _log(f"verify_flow entry={entry} steps={steps} db={db_path}")
+    return FlowVerifier(db_path).verify(entry, list(steps), max_depth=depth)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 渲染
+# ═══════════════════════════════════════════════════════════════════
+
+def render_report(result: dict) -> str:
+    """纯文本报告（终端/日志可读）。"""
+    lines = []
+    lines.append("流程合规验证报告" + "=" * 3)
+    en = result.get("entry", {})
+    if not en.get("found"):
+        lines.append(f"入口: {en.get('spec')} → 未找到（请确认函数名，或使用 模块.函数 消除歧义）")
+        return "\n".join(lines)
+
+    lines.append(f"入口: {en['spec']} → {en['node']}")
+    gs = result.get("graph_stats", {})
+    lines.append(f"图谱: {gs.get('nodes', 0)} 个节点, {gs.get('calls_edges', 0)} 条调用边")
+    lines.append(f"期望步骤数: {len(result['steps'])}")
+    lines.append("")
+
+    for i, s in enumerate(result["steps"], 1):
+        status = {"ordered": "确证", "in_pipeline": "在管线",
+                  "outside": "存疑", "missing": "缺失"}[s["status"]]
+        mark = {"ordered": "[OK]", "in_pipeline": "[~]", "outside": "[?]",
+                "missing": "[X]"}[s["status"]]
+        lines.append(f"{mark} 步骤{i}「{s['keyword']}」  {status}")
+        lines.append(f"    原因: {s['reason']}")
+        if s["status"] in ("ordered", "in_pipeline"):
+            lines.append(f"    证据: {s['node']}")
+        elif s["status"] == "outside" and s.get("candidates"):
+            lines.append(f"    候选中: {'; '.join(s['candidates'])}")
+            lines.append("    指引: 请编程AI沿上述候选符号的调用点复核,"
+                         "或在运行时打点确认是否真的被调用")
+
+    lines.append("")
+    verdict = "全部步骤在入口管线中确证。" if result.get("ok") \
+        else "存在缺失/存疑步骤，需结合动态运行复核，或确认期望流程是否与实现一致。"
+    lines.append(f"结论: {verdict}")
+    lines.append("")
+    lines.append("图例: [OK]=入口调用链确证(含顺序); [~]=在入口管线但顺序未确证(可能并行);"
+                 + " [?]=入口管线外/动态调用; [X]=项目内找不到对应符号")
+    lines.append("注意: 静态图谱对动态注册/反射/运行时拼装的调用天然不完整，"
+                 + "本报告未被确证的步骤不代表流程错误，只代表'需要进一步核验'。")
+    return "\n".join(lines)
+
+
+def render_html(result: dict) -> str:
+    """渲染非编程人员可读的 HTML 报告（自包含单文件）。"""
+    en = result.get("entry", {})
+    gs = result.get("graph_stats", {})
+    steps = result.get("steps", [])
+    ok = result.get("ok", False)
+
+    def badge(status):
+        return {
+            "ordered": ("#1DC981", "确证"),
+            "in_pipeline": ("#2E86DE", "在管线"),
+            "outside": ("#EFAA17", "存疑"),
+            "missing": ("#E8463A", "缺失"),
+        }[status]
+
+    rows = []
+    for i, s in enumerate(steps, 1):
+        bg, label = badge(s["status"])
+        cand = "; ".join(s.get("candidates", [])[:3]) or "—"
+        ev = s.get("node", "")
+        rows.append(
+            f"<tr>"
+            f"<td style='padding:10px 12px;border-bottom:1px solid #eee;white-space:nowrap;color:#888;'>#{i}</td>"
+            f"<td style='padding:10px 12px;border-bottom:1px solid #eee;font-weight:600;'>{s['keyword']}</td>"
+            f"<td style='padding:10px 12px;border-bottom:1px solid #eee;'><span style='background:{bg};color:#fff;border-radius:999px;padding:2px 10px;font-size:12px;'>{label}</span></td>"
+            f"<td style='padding:10px 12px;border-bottom:1px solid #eee;color:#555;font-size:13px;'>{ev or cand}</td>"
+            f"</tr>")
+
+    status_banner = ("#1DC981", "全部步骤已在入口管线中确证") if ok else \
+        ("#EFAA17", "存在存疑/缺失步骤，需结合动态运行复核")
+
+    return f"""<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>流程合规验证报告</title></head>
+<body style="margin:0;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;background:#f6f7f9;color:#222;">
+<div style="max-width:900px;margin:0 auto;padding:32px 20px;">
+  <div style="background:#fff;border-radius:14px;padding:28px;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+    <h1 style="margin:0 0 4px;font-size:22px;">流程合规验证报告</h1>
+    <div style="color:#888;font-size:13px;margin-bottom:20px;">
+      入口节点：<code style="background:#f0f0f3;padding:2px 6px;border-radius:6px;">{en.get('spec','')}</code>
+      &nbsp;→&nbsp;{en.get('node','')}
+      &nbsp;·&nbsp;图谱 {gs.get('nodes',0)} 节点 / {gs.get('calls_edges',0)} 调用边
+    </div>
+    <div style="background:{status_banner[0]}14;border-left:4px solid {status_banner[0]};padding:12px 16px;border-radius:8px;margin-bottom:20px;">
+      <strong style="color:{status_banner[0]};">{status_banner[1]}</strong>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:14px;">
+      <thead><tr style="text-align:left;color:#888;font-size:12px;border-bottom:2px solid #eee;">
+        <th style="padding:8px 12px;">步骤</th><th style="padding:8px 12px;">期望节点</th>
+        <th style="padding:8px 12px;">状态</th><th style="padding:8px 12px;">证据 / 候选</th>
+      </tr></thead>
+      <tbody>{''.join(rows)}</tbody>
+    </table>
+    <div style="margin-top:20px;font-size:12px;color:#999;line-height:1.8;">
+      图例：<span style="color:#1DC981;">确证</span>=入口调用链确证(含顺序)；
+      <span style="color:#2E86DE;">在管线</span>=确认在入口管线，但顺序未确证(可能并行)；
+      <span style="color:#EFAA17;">存疑</span>=入口管线外或动态调用，需编程AI复核；
+      <span style="color:#E8463A;">缺失</span>=项目内找不到对应符号。<br>
+      注意：静态图谱对动态注册/反射/运行时拼装的调用天然不完整，未确证不代表流程错误，只代表需进一步核验。
+    </div>
+  </div>
+</div></body></html>"""
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--project", required=True, help="项目路径（自动定位图谱）")
+    ap.add_argument("--entry", required=True, help="入口，支持 模块.函数")
+    ap.add_argument("--steps", required=True, help="期望步骤，逗号分隔")
+    ap.add_argument("--depth", type=int, default=8)
+    ap.add_argument("--html", help="可选：输出 HTML 报告路径")
+    args = ap.parse_args()
+    steps = [s.strip() for s in args.steps.split(",") if s.strip()]
+    result = verify_flow(args.project, args.entry, steps, depth=args.depth)
+    print(render_report(result))
+    if args.html:
+        with open(args.html, "w", encoding="utf-8") as f:
+            f.write(render_html(result))
+        _log(f"HTML 报告已写入: {args.html}")
+
+
+if __name__ == "__main__":
+    main()
