@@ -291,6 +291,17 @@ class WikiGenerator:
             wiki_style=wiki_style,
         )
 
+        # 硬阻断：Wiki 人话文档依赖 LLM 才能产出，LLM 不可用时直接明确告知，
+        # 不跑完整流程、不产出任何降级/占位内容，避免把"未生成"伪装成"已成功"。
+        # 审计/知识图谱等确定性分析不受影响（由外层管线独立调度）。
+        if not self.llm.is_available():
+            result.errors.append(
+                "Wiki 文档生成需要 LLM，但当前未配置有效的 API Key。"
+                "请在配置面板填写 API Key 后再运行 coderef_docs。"
+                "（审计、知识图谱等确定性分析不受影响，可正常使用）"
+            )
+            return result
+
         # 0. 发现子项目
         if include_subprojects:
             subprojects = self._discover_subprojects(project_path)

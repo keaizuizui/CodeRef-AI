@@ -433,6 +433,17 @@ class LLMIntegration:
                 return False
         return True
 
+    def is_available(self) -> bool:
+        """判断 LLM 是否真正可用（客户端已初始化且存在有效 API Key）。
+
+        供各"依赖 LLM 才能产出人话内容"的入口做硬阻断判断：LLM 不可用时，
+        应明确告知调用方"需要 LLM 请先配置 API Key"，而不是降级产出占位/机械内容。
+        """
+        if self.client is None:
+            return False
+        api_key = getattr(self.config, "api_key", "") if self.config is not None else ""
+        return bool(api_key)
+
     def chat_completion(self, messages: List[Dict[str, str]], **kwargs) -> str:
         """执行聊天补全（含有限重试与降级回退）"""
         if not self.client:
@@ -644,6 +655,14 @@ class LLMIntegration:
         2. 自学习 —— 发现不足后自动优化分析方案再跑一遍
         3. 多层级 —— 技术架构 → 业务能力 → 用户角色 → 业务流程 → 跨端差异
         """
+        # 硬阻断：业务报告是依赖 LLM 才能产出的人话报告，无 LLM 时直接明确告知，
+        # 不降级产出机械/占位内容，避免编程 AI 拿到一份"看似成功实为降级"的报告。
+        if not self.is_available():
+            return (
+                "【业务报告未生成】业务全景报告需要 LLM 才能产出，但当前未配置有效的 API Key。\n"
+                "请在配置面板填写 API Key 后再生成。\n"
+                "（审计、知识图谱、架构等确定性分析不受影响，可正常使用）"
+            )
         try:
             from core.business_analyzer import BusinessAnalyzer
             
