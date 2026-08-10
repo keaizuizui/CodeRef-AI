@@ -180,7 +180,7 @@ export CODEREF_API_KEY="ollama"
 | `coderef_arch_audit` | 架构腐化诊断（循环依赖/上帝模块/分层违例） | 同步 | 否 |
 | `coderef_whitelist` | 白名单管理 + 核心模块规则配置 | 同步 | 否 |
 | `coderef_task_status` | 后台任务状态查询 | 同步 | 否 |
-| `coderef_change_guard` | AI 代码退化检测 | 同步 | 否 |
+| `coderef_change_guard` | 变更守护：git 基层(ensure_git) + 退化检测(guard) + 健康基线(anchor/list_baselines)，git_bin 可由外层 AI 传入 | 同步 | 否 |
 | `coderef_change_report` | 变更人话版说明 | 同步 | 可选 |
 | `coderef_memory_sync` | 记忆层增量同步 | 同步 | 否 |
 | `coderef_memory_query` | 记忆语义检索 + 结构查询 | 同步 | 否 |

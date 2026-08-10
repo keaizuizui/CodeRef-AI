@@ -69,6 +69,17 @@ MAX_SIGNATURE_LINES = 2000
 #   小型项目（<1 万行）建议 15s；中型（1~10 万行）建议 30s；大型（>10 万行）建议 60s。
 DEFAULT_GIT_TIMEOUT = 30
 
+# ═══ 健康基线（守护引擎的 git 基层） ═══
+# 守护引擎建立在 git 之上：没有 git 就无法 diff、无法对比基线、无法确认健康版本。
+# 因此建 git + 锚定健康基线是守护引擎运转的前提，而非可选附带。
+# 统一用 coderef-health-* 前缀命名健康基线 tag，便于识别与回滚。
+HEALTH_TAG_PREFIX = "coderef-health-"
+# 健康基线提交的固定 message
+HEALTH_COMMIT_MSG = "coderef: 锚定健康基线"
+# 健康基线提交的最小本地身份（仅写入该项目 git 配置，不污染全局）
+HEALTH_GIT_NAME = "CodeRef-AI"
+HEALTH_GIT_EMAIL = "coderef@local"
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 能力签名
@@ -208,7 +219,8 @@ class ChangeGuard:
 
     def guard(self, project_path: str, diff: Optional[str] = None,
               baseline_dir: Optional[str] = None,
-              git_timeout: Optional[int] = None) -> Dict[str, Any]:
+              git_timeout: Optional[int] = None,
+              git_bin: Optional[str] = None) -> Dict[str, Any]:
         """AI 代码退化检测主入口。
 
         参数:
@@ -219,6 +231,8 @@ class ChangeGuard:
                   尝试从 git 历史自动提取最近一次改动作为基线对比。
             git_timeout: 动态兜底时 git 命令的最长等待秒数（可选）。
                   默认 30s；大型项目（>10 万行）建议 60s，小型项目可降到 15s。
+            git_bin: git 可执行文件路径或安装目录（由外层 AI 探测提供，可选）。
+                  缺省时回退到系统 PATH 的 "git"。
 
         返回:
             {
@@ -248,7 +262,8 @@ class ChangeGuard:
                 source = "baseline_dir"
             else:
                 # 动态兜底：从 git 历史自动提取基线
-                auto_diff = self._auto_git_diff(project_path, timeout=git_timeout)
+                auto_diff = self._auto_git_diff(project_path, timeout=git_timeout,
+                                                git_bin=git_bin)
                 if auto_diff:
                     findings = self._guard_diff(project_path, auto_diff)
                     source = "git-auto"
@@ -270,16 +285,206 @@ class ChangeGuard:
         degraded = any(f.tier in (ChangeGuardTier.HIGH, ChangeGuardTier.MEDIUM)
                        for f in findings)
         summary = self._build_summary(findings, degraded, source)
+        # 附带健康基线参照（供外层 AI 回滚）。仅查询不 init，避免副作用。
+        health_baseline = self._latest_health_baseline(project_path, timeout=git_timeout,
+                                                       git_bin=git_bin)
         return {
             "findings": [f.to_dict() for f in findings],
             "summary": summary,
             "degraded": degraded,
             "source": source,
+            "git_ready": bool(health_baseline or self.is_git_repo(
+                project_path, timeout=git_timeout, git_bin=git_bin)),
+            "health_baseline": health_baseline,
         }
+
+    # ── 守护引擎的 git 基层（联动）────────────────────────────────
+    @staticmethod
+    def _resolve_git_bin(git_bin: Optional[str]) -> str:
+        """把编程 AI 提供的 git 路径解析为可执行命令。
+
+        让外层 AI 探测 git 所在位置后传入，避免依赖系统 PATH（git 常不在 PATH）。
+        支持三种形态：
+          1. 完整可执行文件路径（如 C:\\...\\git.exe）→ 直接用；
+          2. git 安装目录 → 在该目录里查找 git.exe / git；
+          3. 空 / None → 回退到系统 PATH 的 "git"。
+        """
+        if not git_bin:
+            return "git"
+        p = os.path.normpath(git_bin)
+        if os.path.isdir(p):
+            for cand in ("git.exe", "git"):
+                full = os.path.join(p, cand)
+                if os.path.isfile(full):
+                    return full
+            return p
+        return p
+
+    @staticmethod
+    def _git(project_path: str, args: List[str],
+             timeout: Optional[int] = None,
+             git_bin: Optional[str] = None) -> Tuple[int, str, str]:
+        """执行 git 命令，返回 (returncode, stdout, stderr)。绝不抛异常。
+
+        守护引擎的 git 基层：所有 git 交互都经此统一执行，便于超时与降级。
+        git_bin 由外层 AI 探测提供（可执行文件路径或 git 安装目录），
+        避免依赖系统 PATH；输出统一按 UTF-8/replace 解码，杜绝中文乱码或解码异常。
+        """
+        import subprocess
+        timeout = timeout if timeout is not None else DEFAULT_GIT_TIMEOUT
+        cmd = [ChangeGuard._resolve_git_bin(git_bin), "-C", project_path] + args
+        try:
+            r = subprocess.run(
+                cmd, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=timeout,
+            )
+            return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
+        except Exception as e:
+            logger.debug(f"git 命令执行失败: {cmd} → {e}")
+            return -1, "", str(e)
+
+    def is_git_repo(self, project_path: str,
+                    timeout: Optional[int] = None,
+                    git_bin: Optional[str] = None) -> bool:
+        """项目是否为 git 仓库。"""
+        rc, _, _ = self._git(project_path, ["rev-parse", "--is-inside-work-tree"],
+                             timeout=timeout, git_bin=git_bin)
+        return rc == 0
+
+    def ensure_git_repo(self, project_path: str,
+                        git_timeout: Optional[int] = None,
+                        git_bin: Optional[str] = None) -> Dict[str, Any]:
+        """守护引擎的 git 前置保障：项目无 git 时自动 init 并补齐最小配置。
+
+        守护引擎建立在 git 之上：没有 git 就无法 diff、无法对比基线、无法锚定健康版本。
+        因此建 git 是守护引擎运转的前提。首次调用守护前先确保 git 就绪，可让
+        守护引擎从"形同虚设"变为"真正可用"。
+
+        返回:
+            {
+              "ok": bool,            # 是否就绪
+              "git_ready": bool,     # 当前是否为 git 仓库
+              "newly_initialized": bool,  # 本次是否刚初始化
+              "message": str,
+              "health_baselines": [tag, ...],  # 已有的健康基线
+            }
+        """
+        if not os.path.isdir(project_path):
+            return {"ok": False, "git_ready": False, "newly_initialized": False,
+                    "message": f"项目目录不存在: {project_path}",
+                    "health_baselines": []}
+        newly = False
+        if not self.is_git_repo(project_path, timeout=git_timeout, git_bin=git_bin):
+            rc, _, err = self._git(project_path, ["init"], timeout=git_timeout,
+                                   git_bin=git_bin)
+            if rc != 0:
+                return {"ok": False, "git_ready": False, "newly_initialized": False,
+                        "message": f"git init 失败: {err}",
+                        "health_baselines": []}
+            newly = True
+            # 补齐最小本地身份（仅该项目配置），否则后续 commit/tag 会失败
+            self._git(project_path, ["config", "user.name", HEALTH_GIT_NAME],
+                      timeout=git_timeout, git_bin=git_bin)
+            self._git(project_path, ["config", "user.email", HEALTH_GIT_EMAIL],
+                      timeout=git_timeout, git_bin=git_bin)
+        baselines = self.list_health_baselines(project_path, git_timeout=git_timeout,
+                                               git_bin=git_bin)
+        return {
+            "ok": True,
+            "git_ready": True,
+            "newly_initialized": newly,
+            "message": ("已初始化 git 仓库，守护引擎基层就绪" if newly
+                        else "项目已是 git 仓库，守护引擎基层就绪"),
+            "health_baselines": baselines,
+        }
+
+    def anchor_health_baseline(self, project_path: str, label: Optional[str] = None,
+                               git_timeout: Optional[int] = None,
+                               allow_autocommit: bool = True,
+                               git_bin: Optional[str] = None) -> Dict[str, Any]:
+        """锚定健康基线：把当前确认健康的代码 commit 并打 coderef-health-* tag。
+
+        由上层（审计通过 / 人工确认健康）决定何时调用，CodeRef 只负责记录。
+        若工作区有未提交改动且 allow_autocommit=True，先自动提交再打 tag，使 tag
+        指向"此刻完整健康状态"；工作区干净时直接打 tag 到 HEAD。
+
+        返回:
+            {
+              "ok": bool,
+              "tag": str,           # 生成的健康基线 tag
+              "committed": int,     # 锚定时自动提交的文件数（0=未自动提交）
+              "message": str,
+              "baselines": [tag, ...],  # 锚定后的全部健康基线
+            }
+        """
+        prep = self.ensure_git_repo(project_path, git_timeout=git_timeout, git_bin=git_bin)
+        if not prep["ok"]:
+            return {"ok": False, "tag": "", "committed": 0,
+                    "message": prep["message"], "baselines": []}
+        # tag 名：首个基线带标签，后续自动追加序号避免覆盖
+        existing = self.list_health_baselines(project_path, git_timeout=git_timeout,
+                                              git_bin=git_bin)
+        tag = self._next_health_tag(label, existing)
+        # 若工作区有改动，先提交为健康快照
+        rc, status_out, _ = self._git(project_path, ["status", "--porcelain"],
+                                      timeout=git_timeout, git_bin=git_bin)
+        dirty = bool(rc == 0 and status_out)
+        committed = 0
+        if dirty and allow_autocommit:
+            self._git(project_path, ["add", "-A"], timeout=git_timeout, git_bin=git_bin)
+            rc, _, _ = self._git(project_path, ["commit", "-m", HEALTH_COMMIT_MSG],
+                                 timeout=git_timeout, git_bin=git_bin)
+            if rc == 0:
+                committed = len([l for l in status_out.splitlines() if l.strip()])
+        rc, _, err = self._git(project_path, ["tag", "-a", tag, "-m", HEALTH_COMMIT_MSG],
+                               timeout=git_timeout, git_bin=git_bin)
+        if rc != 0:
+            return {"ok": False, "tag": "", "committed": committed,
+                    "message": f"打健康基线 tag 失败: {err}", "baselines": existing}
+        baselines = self.list_health_baselines(project_path, git_timeout=git_timeout,
+                                               git_bin=git_bin)
+        msg = f"已锚定健康基线 {tag}"
+        if committed:
+            msg += (f"；工作区有改动，已自动提交 {committed} 个文件以固化健康状态"
+                    "（如需自行控制提交，请用 allow_autocommit=False）")
+        return {"ok": True, "tag": tag, "committed": committed,
+                "message": msg, "baselines": baselines}
+
+    def list_health_baselines(self, project_path: str,
+                              git_timeout: Optional[int] = None,
+                              git_bin: Optional[str] = None) -> List[str]:
+        """列出所有健康基线 tag（按创建时间倒序）。"""
+        if not self.is_git_repo(project_path, timeout=git_timeout, git_bin=git_bin):
+            return []
+        rc, out, _ = self._git(project_path,
+                               ["tag", "-l", HEALTH_TAG_PREFIX + "*",
+                                "--sort=-creatordate"],
+                               timeout=git_timeout, git_bin=git_bin)
+        if rc != 0 or not out:
+            return []
+        return [t for t in out.splitlines() if t.strip()]
+
+    def _latest_health_baseline(self, project_path: str,
+                                timeout: Optional[int] = None,
+                                git_bin: Optional[str] = None) -> Optional[str]:
+        """返回最近一个健康基线 tag；无 git 或无基线时返回 None。（仅查询，无副作用）"""
+        bs = self.list_health_baselines(project_path, git_timeout=timeout, git_bin=git_bin)
+        return bs[0] if bs else None
+
+    @staticmethod
+    def _next_health_tag(label: Optional[str], existing: List[str]) -> str:
+        """生成下一个健康基线 tag 名。优先用 label；无 label 时按日期+序号。"""
+        if label:
+            return HEALTH_TAG_PREFIX + label
+        from datetime import date
+        base = HEALTH_TAG_PREFIX + date.today().isoformat()
+        n = sum(1 for t in existing if t.startswith(base))
+        return base if n == 0 else f"{base}-{n + 1}"
 
     # ── 动态兜底：git 自动提取基线 ────────────────────────────────
     def _auto_git_diff(self, project_path: str,
-                       timeout: Optional[int] = None) -> str:
+                       timeout: Optional[int] = None,
+                       git_bin: Optional[str] = None) -> str:
         """从 git 历史自动提取最近一次改动的 diff 作为基线。
 
         依次尝试：
@@ -287,28 +492,17 @@ class ChangeGuard:
           2. 最近一次提交的改动（git diff HEAD~1 HEAD）——工作区干净时的兜底。
 
         git 不可用 / 不是 git 仓库 / 无任何改动历史时返回空字符串。
-        绝不抛异常——退化检测必须优雅降级。
+        统一经 _git 执行，透传 git_bin 与 UTF-8 解码，绝不抛异常——退化检测必须优雅降级。
         """
-        import subprocess
         timeout = timeout if timeout is not None else DEFAULT_GIT_TIMEOUT
         candidates = [
-            ["git", "-C", project_path, "diff", "HEAD"],
-            ["git", "-C", project_path, "diff", "HEAD~1", "HEAD"],
+            ["diff", "HEAD"],
+            ["diff", "HEAD~1", "HEAD"],
         ]
-        for cmd in candidates:
-            try:
-                r = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=timeout
-                )
-            except Exception as e:
-                logger.debug(f"git 命令执行失败（降级尝试下一个）: {cmd} → {e}")
-                continue
-            if r.returncode != 0:
-                logger.debug(f"git 命令返回非零（{cmd}）: {r.stderr.strip()[:120]}")
-                continue
-            content = (r.stdout or "").strip()
-            if content:
-                return content
+        for args in candidates:
+            rc, out, _ = self._git(project_path, args, timeout=timeout, git_bin=git_bin)
+            if rc == 0 and out:
+                return out
         return ""
 
     # ── 基于 diff 的退化检测（推荐）────────────────────────────────
