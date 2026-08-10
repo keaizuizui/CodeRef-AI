@@ -1053,14 +1053,23 @@ class WikiGenerator:
         # 实证绑定抗幻想（只翻译图谱调用链/数据流边，不编造）。图谱缺失时降级。
         project_path = getattr(meta, "project_path", "") or ""
         if project_path:
-            entries = self._discover_entry_points(project_path, meta)
+            # 只定位一次图谱、构造单个 FlowVerifier 复用，避免每个入口重复加载全图
+            fv = None
+            db = self._locate_kg_db(project_path)
+            if db:
+                try:
+                    from core.flow_verify import FlowVerifier
+                    fv = FlowVerifier(db)
+                except Exception:
+                    fv = None
+            entries = self._discover_entry_points(meta, fv)
             if len(entries) > self.MAX_ENTRY_DOCS:
                 result.errors.append(
                     f"检测到 {len(entries)} 个入口，仅生成前 {self.MAX_ENTRY_DOCS} 篇入口文档"
                     f"（可分批生成或调整内部上限）")
                 entries = entries[:self.MAX_ENTRY_DOCS]
             for entry in entries:
-                chain = self._extract_entry_chain(project_path, entry)
+                chain = self._extract_entry_chain(entry, fv)
                 edoc = self._generate_entry_doc(project_name, entry, chain, style, meta)
                 uv = self._cite_verify(edoc, meta, f"ENTRIES/{entry['key']}.md")
                 if uv:
@@ -1071,7 +1080,7 @@ class WikiGenerator:
                 if fp:
                     docs.append(fp)
 
-            flows = self._extract_cross_module_flows(project_path)
+            flows = self._extract_cross_module_flows(fv)
             if len(flows) > self.MAX_FLOW_DOCS:
                 result.errors.append(
                     f"检测到 {len(flows)} 条数据流，仅生成前 {self.MAX_FLOW_DOCS} 条"
@@ -1588,12 +1597,13 @@ class WikiGenerator:
         name = re.sub(r"[^\w\u4e00-\u9fff]+", "_", name or "").strip("_")
         return name or "untitled"
 
-    def _discover_entry_points(self, project_path: str,
-                               meta: ProjectCodeMetadata) -> List[dict]:
+    def _discover_entry_points(self, meta: ProjectCodeMetadata,
+                               fv=None) -> List[dict]:
         """规模化：自动发现公共业务入口。
 
         实证优先：图谱中无 caller 的顶级函数（真·公共入口）+ is_entry_point 文件。
         回退：仅 is_entry_point 文件对应的模块（无图谱也能给出一份，标记弱实证）。
+        fv: FlowVerifier 实例（generate 阶段复用，避免重复加载图谱）；None 时降级。
         返回 [{key, module, func, files, has_kg}]。
         """
         entry_modules = {}   # module_name -> {files, funcs}
@@ -1610,19 +1620,8 @@ class WikiGenerator:
         if not entry_modules:
             return []
 
-        # 图谱存在 → 收集"无 caller 的函数"（这些才是公共入口的候选）
-        root_funcs = set()
-        db = self._locate_kg_db(project_path)
-        if db:
-            try:
-                from core.flow_verify import FlowVerifier
-                fv = FlowVerifier(db)
-                called = {t for targets in fv.adj.values() for t in targets}
-                for nid, n in fv.nodes.items():
-                    if n["type"] in ("function", "method") and nid not in called:
-                        root_funcs.add(n["name"].split(".")[-1])
-            except Exception:
-                root_funcs = set()
+        # 图谱实例存在 → 收集"无 caller 的函数"（这些才是公共入口的候选）
+        root_funcs = set(fv.root_functions()) if fv else set()
 
         entries = []
         for mod_name, info in entry_modules.items():
@@ -1635,40 +1634,22 @@ class WikiGenerator:
                 "module": mod_name,
                 "func": chosen,
                 "files": info["files"],
-                "has_kg": bool(db),
+                "has_kg": bool(fv),
             })
         return entries
 
-    def _extract_entry_chain(self, project_path: str, entry: dict) -> List[dict]:
+    def _extract_entry_chain(self, entry: dict, fv=None) -> List[dict]:
         """用 FlowVerifier 提取入口的实证调用链（调用闭包内函数节点）。
 
-        返回 [{id, name, file, line, doc}]；图谱缺失或入口未命中返回 []。
+        fv: FlowVerifier 实例（generate 阶段复用，不再重复加载图谱）。
+        返回 [{name, file, line, doc}]；图谱缺失或入口未命中返回 []。
         """
-        db = self._locate_kg_db(project_path)
-        if not db:
+        if not fv:
             return []
         try:
-            from core.flow_verify import FlowVerifier
-            fv = FlowVerifier(db)
             spec = f"{entry['module']}.{entry['func']}" if entry.get("func") \
                 else entry["module"]
-            node = fv.find_entry(spec)
-            if not node:
-                return []
-            reach = fv._downstream(node, max_depth=8)
-            steps = []
-            seen = set()
-            for nid in reach:
-                n = fv.nodes[nid]
-                if n["type"] in ("function", "method") and nid not in seen:
-                    seen.add(nid)
-                    steps.append({
-                        "name": n["name"],
-                        "file": (n.get("file_path") or "").replace("\\", "/"),
-                        "line": n.get("start_line", 0),
-                        "doc": (n.get("props") or {}).get("doc", "") or "",
-                    })
-            return steps
+            return fv.entry_chain(spec, max_depth=8)
         except Exception:
             return []
 
@@ -1714,52 +1695,16 @@ class WikiGenerator:
         )
         return self._llm_ask(system_prompt, user_prompt)
 
-    def _extract_cross_module_flows(self, project_path: str) -> List[dict]:
-        """SQL 查跨模块 CALLS 边，聚合出业务数据流（模块→模块）。
+    def _extract_cross_module_flows(self, fv=None) -> List[dict]:
+        """聚合跨模块 CALLS 边为业务数据流（模块→模块）。
 
-        返回 [{source, target, funcs, count}]；图谱缺失返回 []（无实证则不生数据流）。
+        fv: FlowVerifier 实例（generate 阶段复用）；None 表示图谱缺失，返回 []。
+        返回 [{source, target, funcs, count}]（无实证则不生数据流）。
         """
-        db = self._locate_kg_db(project_path)
-        if not db:
+        if not fv:
             return []
         try:
-            import sqlite3
-            conn = sqlite3.connect(db)
-            conn.row_factory = sqlite3.Row
-            cur = conn.execute("""
-                SELECT DISTINCT a.file_path AS from_file, b.file_path AS to_file,
-                       b.name AS callee, COUNT(*) AS cnt
-                FROM edges e
-                JOIN nodes a ON a.id = e.source
-                JOIN nodes b ON b.id = e.target
-                WHERE e.type='CALLS' AND a.file_path != b.file_path
-                GROUP BY a.file_path, b.file_path, b.name
-                ORDER BY cnt DESC
-            """)
-            rows = cur.fetchall()
-            conn.close()
-
-            def _mod(fp):
-                parts = (fp or "").replace("\\", "/").split("/")
-                return parts[0] if parts else ""
-
-            flows: Dict[tuple, dict] = {}
-            for r in rows:
-                src, tgt = _mod(r["from_file"]), _mod(r["to_file"])
-                if not src or not tgt or src == tgt:
-                    continue
-                key = (src, tgt)
-                flows.setdefault(key, {"source": src, "target": tgt,
-                                       "funcs": set(), "count": 0})
-                flows[key]["funcs"].add(r["callee"])
-                flows[key]["count"] += 1
-
-            out = []
-            for v in flows.values():
-                v["funcs"] = sorted(v["funcs"])[:20]
-                out.append(v)
-            out.sort(key=lambda x: -x["count"])
-            return out
+            return fv.cross_module_flows()
         except Exception:
             return []
 
