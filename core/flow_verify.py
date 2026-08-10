@@ -123,6 +123,74 @@ class FlowVerifier:
     def _downstream(self, start_id: str, max_depth: int = 8) -> Set[str]:
         return downstream(self.adj, start_id, max_depth=max_depth)
 
+    # ─── 公开查询（供 Wiki 等下游复用，避免外部直查 schema / 私有成员）───
+
+    def root_functions(self) -> Set[str]:
+        """返回无被调用方（无 inbound CALLS 边）的函数/方法名集合——公共入口候选。"""
+        called = {t for targets in self.adj.values() for t in targets}
+        return {n["name"].split(".")[-1] for nid, n in self.nodes.items()
+                if n["type"] in ("function", "method") and nid not in called}
+
+    def entry_chain(self, spec: str, max_depth: int = 8) -> List[dict]:
+        """返回入口的实证下游调用链（函数/方法节点），步骤含 name/file/line/doc。
+
+        入口未命中返回 []；图谱由本实例承载，不重复加载全图。
+        """
+        node = self.find_entry(spec)
+        if not node:
+            return []
+        reach = self._downstream(node, max_depth=max_depth)
+        steps: List[dict] = []
+        seen: Set[str] = set()
+        for nid in reach:
+            n = self.nodes[nid]
+            if n["type"] in ("function", "method") and nid not in seen:
+                seen.add(nid)
+                steps.append({
+                    "name": n["name"],
+                    "file": (n.get("file_path") or "").replace("\\", "/"),
+                    "line": n.get("start_line", 0),
+                    "doc": (n.get("props") or {}).get("doc", "") or "",
+                })
+        return steps
+
+    def cross_module_flows(self) -> List[dict]:
+        """把 CALLS 边聚合为跨模块业务数据流（模块→模块）。
+
+        返回 [{source, target, funcs, count}]。count=不同(源文件,目标文件,被调函数)
+        组合数。模块名取"文件所在目录名"，兼容相对(brand/app.py→brand)与绝对
+        (c:\\...\\core\\a.py→core)路径；复用本实例已加载的全图，不直查 schema。
+        """
+        def _mod(fp: str) -> str:
+            d = os.path.dirname(os.path.normpath(fp or ""))
+            return os.path.basename(d) or ""
+
+        flows: Dict[Tuple[str, str], dict] = {}
+        seen_keys: Set[Tuple[str, str, str]] = set()
+        for src, targets in self.adj.items():
+            smod = _mod(self.nodes[src].get("file_path", ""))
+            if not smod:
+                continue
+            for tgt in targets:
+                tmod = _mod(self.nodes[tgt].get("file_path", ""))
+                if not tmod or tmod == smod:
+                    continue
+                callee = self.nodes[tgt].get("name", "")
+                key = (smod, tmod, callee)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                fid = flows.setdefault((smod, tmod), {
+                    "source": smod, "target": tmod, "funcs": set(), "count": 0})
+                fid["funcs"].add(callee)
+                fid["count"] += 1
+        out: List[dict] = []
+        for v in flows.values():
+            v["funcs"] = sorted(v["funcs"])[:20]
+            out.append(v)
+        out.sort(key=lambda x: -x["count"])
+        return out
+
     # ─── 主验证 ───
 
     def verify(self, entry_spec: str, steps: List[str],
