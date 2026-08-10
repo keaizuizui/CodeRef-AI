@@ -2,7 +2,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.2.2** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.2.3** | Python 3.10+ | MCP Protocol | MIT License
 
 > 一键审计 · 架构图谱 · 项目文档 · 知识图谱 · 健康仪表盘 · 代码审查 · 前端交互审查 · 记忆层 · 创新识别 · OWASP 合规 · 变更守护 · 流程验证
 
@@ -343,6 +343,15 @@ coderef-ai/
 | 开源友好 | 敏感数据集中 `cache/` 与 `config/config.json`，删除即清理，一行命令安全开源 |
 
 ## 更新日志
+
+### v4.2.3 — 误报治理与聚合 HTML 全 0 修复（社区反馈专项）
+
+- **修复聚合 HTML 报告全 0**：`coderef_report` 重渲染既有产物时，若用空 `PipeResult` 聚合，`index.html` 审计卡片与 `audit.html` 明细会全部为 0 / "暂无发现"。现 `audit()` 在落盘 markdown 的同时把 findings 与统计序列化为 `audit_findings.json`，`render_report` 优先读取该 JSON 恢复后再渲染，保证重渲染审计内容完整
+- **修复 SCA CVE-2023-32690 归属错误**：`pandas` 旧表误挂该 CVE（实为 DMTF libspdm 漏洞，与 pandas 无关），已移除本地条目，由 OSV 在线查询兜底
+- **新增组件级利用面过滤**：`langchain-community` 的 CVE-2024-2965（SitemapLoader 无限递归 DoS）等只影响特定子组件的 CVE，若项目源码未实际 import/使用受影响的组件，自动降级为 `low` 并附「潜在风险」说明，避免对未使用组件机械报高危
+- **修复 arch_audit 同名模块误判**：模块识别改用项目相对路径而非 basename，`db/base.py` 与 `utils/base.py` 不再被合并计数，「base fan_in 132」等上帝模块虚高消失；跨目录单向调用不再被误判为循环依赖
+- **修复连接池探活机械打标**：`AGENT-RESILIENCE-07` 仅对实际使用数据库连接池的项目打标（精确匹配 `create_engine(`/`import sqlalchemy`/`pool_pre_ping` 等），纯 SQLite 等项目不再误报
+- **验证**：新增 5 项回归测试，全量 75 passed, 1 skipped
 
 ### v4.2.2 — 依赖瘦身：tree-sitter 降为可选（可用性承诺的关键修复）
 

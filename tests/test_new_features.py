@@ -849,5 +849,86 @@ class ArchAuditTest(unittest.TestCase):
         self.assertIn("知识图谱不存在", r["summary"])
 
 
+class ExploitabilityGateTest(unittest.TestCase):
+    """core.sca_checker —— 组件级利用面过滤（社区反馈:CVE-2024-2965 误报）"""
+
+    def _vuln(self, cve="CVE-2024-2965"):
+        from core.sca_checker import DependencyVulnerability
+        return DependencyVulnerability(
+            package="langchain-community", version="0.2.0",
+            cve_id=cve, severity="medium",
+            summary="SitemapLoader infinite recursion DoS", source="OSV")
+
+    def _project(self, td, content):
+        p = os.path.join(td, "app.py")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(content)
+        return td
+
+    def test_unused_component_downgraded(self):
+        # 项目未 import SitemapLoader → CVE 降级为 low 并附"潜在风险"说明
+        from core.sca_checker import SCAChecker
+        with tempfile.TemporaryDirectory() as td:
+            self._project(td, "from langchain_community.llms import OpenAI\nprint('ok')")
+            out = SCAChecker()._apply_exploitability_gates(td, [self._vuln()])
+        self.assertEqual(out[0].severity, "low")
+        self.assertIn("潜在风险", out[0].summary)
+
+    def test_used_component_kept(self):
+        # 项目实际使用 SitemapLoader → 保留原判级
+        from core.sca_checker import SCAChecker
+        with tempfile.TemporaryDirectory() as td:
+            self._project(td,
+                "from langchain_community.document_loaders.sitemap import SitemapLoader\n"
+                "loader = SitemapLoader('https://x/sitemap.xml')")
+            out = SCAChecker()._apply_exploitability_gates(td, [self._vuln()])
+        self.assertEqual(out[0].severity, "medium")
+        self.assertNotIn("潜在风险", out[0].summary)
+
+    def test_non_gate_cve_untouched(self):
+        # 未命中利用面规则的 CVE 不受影响
+        from core.sca_checker import SCAChecker
+        v = self._vuln(cve="CVE-2023-45999")
+        with tempfile.TemporaryDirectory() as td:
+            self._project(td, "print('ok')")
+            out = SCAChecker()._apply_exploitability_gates(td, [v])
+        self.assertEqual(out[0].severity, "medium")
+        self.assertNotIn("潜在风险", out[0].summary)
+
+
+class ArchAuditFalsePositiveTest(unittest.TestCase):
+    """core.arch_audit —— 同名符号去重 / 单向边不误判为环（社区反馈误报）"""
+
+    def _db(self, td, funcs, calls):
+        db = os.path.join(td, "kg.db")
+        _build_kg(db, funcs, calls)
+        return db
+
+    def test_same_name_diff_dir_not_merged(self):
+        # db/base.py 与 utils/base.py 同名不同目录 → 模块名应区分，不合并计数
+        from core.arch_audit import audit
+        with tempfile.TemporaryDirectory() as td:
+            db = self._db(td,
+                [("f1", "base", "src/db/base.py"),
+                 ("f2", "base", "src/utils/base.py")],
+                [("f1", "f2")])
+            r = audit(td, db_path=db)
+        self.assertTrue(r["ok"])
+        # 两个同名模块不应被合并为单个 "base"：cycle 应为 0（单向边）
+        self.assertEqual(r["summary"]["cycles"], 0)
+
+    def test_one_way_edge_not_cycle_across_dir(self):
+        # dialogue→kb_chat 单向调用（跨目录）→ 不应误判为循环依赖
+        from core.arch_audit import audit
+        with tempfile.TemporaryDirectory() as td:
+            db = self._db(td,
+                [("fa", "dialogue", "src/dialogue/x.py"),
+                 ("fb", "kb_chat", "src/kb_chat/y.py")],
+                [("fa", "fb")])
+            r = audit(td, db_path=db)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["summary"]["cycles"], 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
