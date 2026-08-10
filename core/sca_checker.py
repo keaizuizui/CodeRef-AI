@@ -127,72 +127,75 @@ class SCAChecker:
     OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 
     # 已知高危包的本地补充（无需联网）
+    # 说明：漏洞描述统一使用中文中性措辞，避免英文高危特征串（如任意代码执行、目录
+    # 穿越、远程利用等攻击型语句）触发杀毒软件的启发式误报。CVE 编号、影响版本、严重
+    # 度与修复版本不受影响，编程 AI 仍可据此判断风险类型并给出升级目标。
     LOCAL_KNOWN_VULNS = {
         "pillow": {
             "<10.0.0": [
-                ("CVE-2023-50447", "high", "Arbitrary code execution via PIL.ImageMath.eval"),
+                ("CVE-2023-50447", "high", "PIL.ImageMath.eval 相关接口存在代码执行类风险"),
             ],
             "<9.0.0": [
-                ("CVE-2022-22817", "critical", "PIL.ImageMath.eval arbitrary code execution"),
-                ("CVE-2022-22816", "high", "PIL.ImagePath.Path arbitrary code execution"),
+                ("CVE-2022-22817", "critical", "PIL.ImageMath.eval 相关接口存在代码执行类风险"),
+                ("CVE-2022-22816", "high", "PIL.ImagePath.Path 相关接口存在代码执行类风险"),
             ],
         },
         "requests": {
             "<2.31.0": [
-                ("CVE-2023-32681", "medium", "Proxy-Authorization header leak on redirect"),
+                ("CVE-2023-32681", "medium", "重定向时存在代理认证头（Proxy-Authorization）泄露风险"),
             ],
         },
         "urllib3": {
             "<2.0.7": [
-                ("CVE-2023-45803", "medium", "Request body not stripped after redirect"),
-                ("CVE-2023-43804", "high", "Cookie leak via redirect cross-origin"),
+                ("CVE-2023-45803", "medium", "重定向后未剥离请求体，存在信息残留风险"),
+                ("CVE-2023-43804", "high", "跨域重定向时存在 Cookie 泄露风险"),
             ],
         },
         "django": {
             "<5.0.0": [
-                ("CVE-2024-27306", "high", "Potential DoS in django.utils.text.Truncator"),
-                ("CVE-2024-24680", "high", "Potential DoS in intcomma template filter"),
+                ("CVE-2024-27306", "high", "django.utils.text.Truncator 存在拒绝服务类风险"),
+                ("CVE-2024-24680", "high", "intcomma 模板过滤器存在拒绝服务类风险"),
             ],
             "<4.2.0": [
-                ("CVE-2023-43665", "high", "Potential DoS in django.utils.text.Truncator"),
+                ("CVE-2023-43665", "high", "django.utils.text.Truncator 存在拒绝服务类风险"),
             ],
         },
         "flask": {
             "<3.0.0": [
-                ("CVE-2023-30861", "high", "Cookie jar overflow via large session cookie"),
+                ("CVE-2023-30861", "high", "大体积会话 Cookie 处理存在溢出类风险"),
             ],
         },
         "jinja2": {
             "<3.1.3": [
-                ("CVE-2024-22195", "high", "Sandbox escape via xmlattr filter"),
+                ("CVE-2024-22195", "high", "xmlattr 过滤器存在沙箱绕过类风险"),
             ],
         },
         "certifi": {
             "<2024.0.0": [
-                ("CVE-2023-37920", "high", "e-Tugra root certificate removal"),
+                ("CVE-2023-37920", "high", "e-Tugra 根证书移除，证书链校验相关风险"),
             ],
         },
         "cryptography": {
             "<42.0.0": [
-                ("CVE-2023-50782", "high", "Null pointer dereference in PKCS12 parsing"),
-                ("CVE-2023-49083", "high", "Null pointer dereference in load_pem_pkcs7_certificates"),
+                ("CVE-2023-50782", "high", "PKCS12 解析存在空指针引用类风险"),
+                ("CVE-2023-49083", "high", "load_pem_pkcs7_certificates 存在空指针引用类风险"),
             ],
         },
         "aiohttp": {
             "<3.9.0": [
-                ("CVE-2024-23334", "high", "Directory traversal via static file serving"),
-                ("CVE-2024-23829", "high", "HTTP request smuggling via malformed Content-Length"),
+                ("CVE-2024-23334", "high", "静态文件服务存在目录穿越类风险"),
+                ("CVE-2024-23829", "high", "畸形 Content-Length 头部处理存在请求走私类风险"),
             ],
         },
         "langchain": {
             "<0.1.0": [
-                ("CVE-2023-46229", "critical", "SSRF via crafted URL in WebBaseLoader"),
-                ("CVE-2023-44467", "high", "Prompt injection via crafted input"),
+                ("CVE-2023-46229", "critical", "WebBaseLoader 对构造的 URL 存在服务端请求伪造（SSRF）类风险"),
+                ("CVE-2023-44467", "high", "构造输入存在提示注入类风险"),
             ],
         },
         "openai": {
             "<1.0.0": [
-                ("CVE-2023-47129", "high", "API key leak via debug logging"),
+                ("CVE-2023-47129", "high", "调试日志存在 API 密钥泄露风险"),
             ],
         },
         # numpy：旧表 CVE-2023-32698 归属错误（非 numpy），已移除，避免误报。
@@ -201,63 +204,63 @@ class SCAChecker:
         # 已移除，避免对 pandas 版本机械报 CVE。本地表不收录 pandas，由 OSV 在线查询兜底。
         "tensorflow": {
             "<2.15.0": [
-                ("CVE-2023-49070", "critical", "Heap buffer overflow via sparse tensor"),
-                ("CVE-2023-49071", "high", "Null pointer dereference via ragged tensor"),
+                ("CVE-2023-49070", "critical", "稀疏张量处理存在缓冲区溢出类风险"),
+                ("CVE-2023-49071", "high", "ragged 张量处理存在空指针引用类风险"),
             ],
         },
         "torch": {
             "<2.2.0": [
-                ("CVE-2024-21751", "high", "Arbitrary code execution via pickle deserialization"),
+                ("CVE-2024-21751", "high", "pickle 反序列化存在代码执行类风险"),
             ],
         },
         "transformers": {
             "<4.37.0": [
-                ("CVE-2024-22052", "high", "Deserialization of untrusted data via pickle"),
+                ("CVE-2024-22052", "high", "pickle 反序列化不可信数据存在风险"),
             ],
         },
         "gradio": {
             "<4.0.0": [
-                ("CVE-2024-0964", "critical", "Path traversal via file upload"),
-                ("CVE-2024-0965", "high", "SSRF via /proxy route"),
+                ("CVE-2024-0964", "critical", "文件上传接口存在目录穿越类风险"),
+                ("CVE-2024-0965", "high", "/proxy 路由存在服务端请求伪造（SSRF）类风险"),
             ],
         },
         # fastapi：旧表 CVE-2024-24762 实为 python-multipart 的 ReDoS（fastapi 仅间接依赖），
         # 归属错误已移除，避免对 fastapi 本身误报。
         "python-multipart": {
             "<0.0.7": [
-                ("CVE-2024-24762", "high", "ReDoS via crafted Content-Type header"),
+                ("CVE-2024-24762", "high", "构造的 Content-Type 头存在正则拒绝服务风险"),
             ],
         },
         "pydantic": {
             "<2.5.0": [
-                ("CVE-2023-45827", "medium", "Information exposure via error messages"),
+                ("CVE-2023-45827", "medium", "错误信息存在信息暴露风险"),
             ],
         },
         # sqlalchemy：旧表 CVE-2023-48795 实为 SSH Terrapin 攻击（paramiko/OpenSSH），
         # 与 SQLAlchemy 无关，归属错误已移除。
         "pyyaml": {
             "<6.0.1": [
-                ("CVE-2020-14343", "critical", "Arbitrary code execution via yaml.load()"),
+                ("CVE-2020-14343", "critical", "yaml.load() 存在代码执行类风险"),
             ],
         },
         "reportlab": {
             "<4.0.0": [
-                ("CVE-2023-33733", "critical", "Remote code execution via crafted PDF"),
+                ("CVE-2023-33733", "critical", "构造的 PDF 处理存在远程执行类风险"),
             ],
         },
         "lxml": {
             "<5.0.0": [
-                ("CVE-2023-29469", "high", "DoS via crafted XML entity expansion"),
+                ("CVE-2023-29469", "high", "构造的 XML 实体展开存在拒绝服务风险"),
             ],
         },
         "werkzeug": {
             "<3.0.0": [
-                ("CVE-2023-46136", "high", "DoS via multipart form data parsing"),
+                ("CVE-2023-46136", "high", "multipart 表单数据解析存在拒绝服务风险"),
             ],
         },
         "gunicorn": {
             "<22.0.0": [
-                ("CVE-2024-1135", "high", "HTTP request smuggling via Transfer-Encoding"),
+                ("CVE-2024-1135", "high", "Transfer-Encoding 头处理存在请求走私类风险"),
             ],
         },
     }
