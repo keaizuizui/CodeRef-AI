@@ -310,6 +310,16 @@ class Pipe:
                         existing.close()
                 except Exception:
                     kg_stats = None
+            # 实时管线（audit/docs）未预置维度状态时，依据真实产物自动补全，
+            # 避免已构建的图谱在 HTML 中被误标为"未执行"（重渲染路径 render_report 已预置）。
+            if not getattr(r, "dimension_states", None):
+                try:
+                    # findings 落盘于 HTML 输出目录的父目录（out/html → out），据此探测 audit 维度
+                    findings_dir = os.path.dirname(os.path.abspath(output_dir)) if output_dir else None
+                    r.dimension_states = self._collect_dimension_states(
+                        project_path, kg_stats, findings_dir)
+                except Exception:
+                    r.dimension_states = None
             wiki_dir = None
             wr = getattr(r, "wiki_result", None)
             if wr is not None:
