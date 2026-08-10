@@ -2,7 +2,7 @@
 
 ## 概述
 
-CodeRef-AI 通过 MCP (Model Context Protocol) 协议暴露 6 个工具给 AI 编程助手使用。配置一次后，AI 可以分析**任何项目**——每次调用时传入 `project_path` 参数即可，不需要重复配置。
+CodeRef-AI 通过 MCP (Model Context Protocol) 协议暴露 26 个工具给 AI 编程助手使用。配置一次后，AI 可以分析**任何项目**——每次调用时传入 `project_path` 参数即可，不需要重复配置。
 
 **适用客户端：** Trae / Claude Desktop / Cursor / 任何支持 MCP 的 AI 编程助手
 
@@ -161,16 +161,36 @@ export CODEREF_API_KEY="ollama"
 
 ---
 
-## 6 个 MCP 工具
+## 26 个 MCP 工具
 
 | 工具 | 功能 | 模式 | 需要 LLM |
 |------|------|------|---------|
 | `coderef_audit` | 11 审计工具一键产出 + 自动降噪 + 知识图谱构建 | 后台 | 否 |
+| `coderef_scan` | 单维度审计（11 选 1），实时安全带 | 同步 | 否 |
+| `coderef_scan_list` | 列出 `coderef_scan` 可选的维度清单 | 同步 | 否 |
 | `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 同步 | 否 |
 | `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 后台 | 是 |
+| `coderef_docs_read` | 按需读取已生成 Wiki 文档正文 | 同步 | 否 |
 | `coderef_query` | 知识图谱结构化查询（9 种查询类型） | 同步 | 否 |
+| `coderef_review` | 代码审查：diff 变更 / 全量语义首查 | 同步 | 是 |
+| `coderef_frontend` | 前端交互审查：按钮/菜单静态枚举 | 同步 | 是 |
+| `coderef_report` | 审计报告/图谱/Wiki 聚合 HTML 报告 | 同步 | 否 |
+| `coderef_audit_advisor` | 审计策略判定（增量/全量）+ 功能维度 | 同步 | 可选 |
+| `coderef_flow_verify` | 流程合规验证（期望流程确证） | 同步 | 否 |
+| `coderef_arch_audit` | 架构腐化诊断（循环依赖/上帝模块/分层违例） | 同步 | 否 |
 | `coderef_whitelist` | 白名单管理 + 核心模块规则配置 | 同步 | 否 |
 | `coderef_task_status` | 后台任务状态查询 | 同步 | 否 |
+| `coderef_change_guard` | AI 代码退化检测 | 同步 | 否 |
+| `coderef_change_report` | 变更人话版说明 | 同步 | 可选 |
+| `coderef_memory_sync` | 记忆层增量同步 | 同步 | 否 |
+| `coderef_memory_query` | 记忆语义检索 + 结构查询 | 同步 | 否 |
+| `coderef_memory_status` | 认知覆盖度 + 置信度 + 盲区地图 | 同步 | 否 |
+| `coderef_memory_quality` | 记忆质量评估 + 自动补全 | 同步 | 可选 |
+| `coderef_prompt_mgmt` | Prompt 资产管理 | 同步 | 是 |
+| `coderef_innovation` | 识别项目创新设计 + 传播缺口 | 同步 | 是 |
+| `coderef_asset` | 设计固化 WorkflowAsset 资产 | 同步 | 是 |
+| `coderef_registry` | 已知设计库管理，别名归一 | 同步 | 否 |
+| `coderef_owasp` | OWASP LLM Top 10 合规检测 | 同步 | 否 |
 
 ---
 
@@ -192,6 +212,12 @@ export CODEREF_API_KEY="ollama"
 
 **"看看这个项目的架构"**  
 → AI 调用 `coderef_architecture(project_path="/path/to/project")`
+
+**"验证项目是不是按我期望的流程执行"**  
+→ AI 调用 `coderef_flow_verify(project_path="/path/to/project", entry="pipeline_runner.audit", steps=["B","C","D"])`
+
+**"这个项目的架构健康吗？有没有循环依赖/上帝模块？"**  
+→ AI 调用 `coderef_arch_audit(project_path="/path/to/project")`
 
 ---
 
@@ -322,7 +348,7 @@ print(client.models.list())
 ```
 AI 编程助手 (Trae / Claude Desktop / Cursor)
    │
-   └── coderef-ai MCP Server (v3.1, 6 个工具)
+   └── coderef-ai MCP Server (v4.2.1, 26 个工具)
           │
           ├── coderef_audit ─── 11 检测器管线
           │      ├── 治理审计 (governance_audit)
@@ -352,12 +378,22 @@ AI 编程助手 (Trae / Claude Desktop / Cursor)
           │      └── SQLite 持久化，9 种查询类型
           │
           ├── coderef_whitelist ─── 白名单 + 核心规则
-          └── coderef_task_status ─── 后台任务查询
+          ├── coderef_task_status ─── 后台任务查询
+          ├── coderef_flow_verify ─── 流程合规验证（非编程人员验证期望流程）
+          ├── coderef_arch_audit ─── 架构腐化诊断（循环依赖/上帝模块/分层违例/模块规模）
+          ├── coderef_review ─── 代码审查（diff 变更 / 全量语义首查）
+          ├── coderef_frontend ─── 前端交互审查（按钮/菜单静态枚举）
+          ├── coderef_report ─── 审计报告/图谱/Wiki 聚合 HTML 报告
+          ├── coderef_audit_advisor ─── 审计策略判定（增量/全量）
+          ├── coderef_memory_* ─── 记忆引擎（sync/query/status/quality/prompt_mgmt）
+          ├── coderef_innovation / coderef_asset / coderef_registry ─── 创新识别引擎
+          ├── coderef_change_guard / coderef_change_report ─── 变更守护引擎
+          └── coderef_owasp ─── OWASP LLM Top 10 合规检测
 ```
 
 ### 关键设计决策
 
-1. **单 Server 集中管控**：6 个工具统一暴露，无需为每个检测器单独配置 MCP Server
+1. **单 Server 集中管控**：26 个工具统一暴露，无需为每个检测器单独配置 MCP Server
 2. **审计无需 LLM**：11 个检测器均基于静态分析，离线可用，零 API 成本
 3. **知识图谱持久化**：一次构建，跨会话复用，节省重复分析时间
 4. **交叉验证反幻觉**：多工具独立分析同一项目，相互验证，解决 AI 自查幻觉

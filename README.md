@@ -3,7 +3,7 @@
 # CodeRef-AI — 编程 AI 的治理外脑 & 非编程人员技术助理
 
 
-**Version 4.2.0** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.2.1** | Python 3.10+ | MCP Protocol | MIT License
 
 > 一键审计 · 架构图谱 · 项目文档 · 知识图谱 · 健康仪表盘 · 代码审查 · 前端交互审查 · 记忆层 · 创新识别 · OWASP 合规 · 变更守护 · 动态策略审计
 
@@ -11,7 +11,7 @@
 
 ## 一句话定位
 
-CodeRef-AI 是**编程 AI 的外置大脑**和**非编程人员的技术助理**。它通过 MCP 协议暴露 **25 个工具**，让 AI 编程助手不再逐文件读代码，而是像查数据库一样查询项目结构与风险；同时为不懂编程的人生成通俗易懂的项目健康仪表盘和 Wiki 文档。
+CodeRef-AI 是**编程 AI 的外置大脑**和**非编程人员的技术助理**。它通过 MCP 协议暴露 **26 个工具**，让 AI 编程助手不再逐文件读代码，而是像查数据库一样查询项目结构与风险；同时为不懂编程的人生成通俗易懂的项目健康仪表盘和 Wiki 文档。
 
 > 本项目在 vibe coding 中自然产出，作为 AI 辅助编程治理方向的引子；建议自行拷贝本地后，交由本地编程 AI 复查并改造其实现逻辑是否符合你的项目。
 
@@ -38,7 +38,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | **创新识别引擎** | 从项目里挖出值得复用的设计，并沉淀为资产 | `coderef_innovation` `coderef_asset` `coderef_registry` |
 | **变更守护引擎** | 拦截 AI 把代码改坏，输出人能看懂的变更报告 | `coderef_change_guard` `coderef_change_report` |
 
-## 25 个 MCP 工具
+## 26 个 MCP 工具
 
 ### 审计引擎
 
@@ -48,6 +48,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_scan` | 单维度审计（11 选 1），实时安全带，快一个量级 | 否 |
 | `coderef_scan_list` | 列出 `coderef_scan` 可选的维度清单 | 否 |
 | `coderef_flow_verify` | 流程合规验证：非编程人员验证「项目是否按我期望的流程执行」（入口 A 的调用管线是否覆盖步骤 B→C→D）。纯静态、确定性，只读知识图谱 CALLS 边，不依赖 LLM；状态分确证/在管线/存疑/缺失 | 否 |
+| `coderef_arch_audit` | 架构腐化诊断：复用知识图谱 CALLS 边做模块级静态诊断（循环依赖/上帝模块/分层违例/异常模块规模），聚合 0–10 架构健康度。纯静态、不依赖 LLM | 否 |
 | `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 否 |
 | `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 是 |
 | `coderef_docs_read` | 按需读取已生成 Wiki 文档正文（返回内容而非路径，解决 AI 无法 fs 访问外部文件夹） | 否 |
@@ -248,7 +249,7 @@ coderef_asset(project_path="/path/to/project", action="list")
 ```
 coderef-ai/
 ├── core/
-│   ├── mcp_server.py                  # MCP Server 入口（24 个工具）
+│   ├── mcp_server.py                  # MCP Server 入口（26 个工具）
 │   ├── pipeline_runner.py             # 管线引擎（audit/architecture/docs + 知识图谱）
 │   ├── review_strategy.py             # 审计策略判定（增量/全量 + 影响闭包）
 │   ├── functional_review.py           # 功能审查（创新传播/结构复杂度等维度）
@@ -318,6 +319,13 @@ coderef-ai/
 | 开源友好 | 敏感数据集中 `cache/` 与 `config/config.json`，删除即清理，一行命令安全开源 |
 
 ## 更新日志
+
+### v4.2.1 — 架构腐化诊断层（MCP 工具补盲区）
+
+- **新增 `coderef_arch_audit`**：补齐 MCP 工具「看不到架构级问题」的盲区。复用知识图谱 `CALLS` 边做模块级静态诊断，输出四类架构症状：`cycles`（模块依赖图强连通分量→循环依赖）、`god_modules`（扇出过高→上帝模块）、`layer_violations`（低层依赖高层）、`large_modules`（异常模块规模），聚合为 0–10 架构健康度
+- **纯静态、确定性**：只读知识图谱，不依赖 LLM，结果稳定可复现——延续「非编程人员也能验证工程健康」的目标
+- **本轮架构债修复**：抽取 `core/code_models.py` 切断 `CodeAnalyzer↔AstParser` 循环依赖（R1）、收敛全项目函数内惰性导入（R2）、抽取 `core/tool_registry.py` 收敛 `pipeline_runner` 上帝模块（R3）、删除 `utils/helpers.py` 死代码（R4）、抽取 `core/graph_closure.py` 消除 `flow_verify` 与 `wiki_cross_verify` 知识重复（R5）
+- **测试**：`tests/test_new_features.py` 新增 `ArchAuditTest` 5 个用例（循环检测 / 上帝模块 / 分层违例 / 异常规模 / 健康度），全量 65 passed, 1 skipped
 
 ### v4.2.0 — 流程合规验证（非编程人员最核心的需求）
 

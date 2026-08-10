@@ -22,3 +22,11 @@ TECH_DEBT_COMMENTED_CODE_MIN_LINES = 3     # 注释代码块最少行数
 GOVERNANCE_FUNCTION_TOO_LONG = 100         # 函数过长阈值（行数）
 GOVERNANCE_FUNCTION_TOO_MANY_PARAMS = 8    # 参数过多阈值（个数）
 GOVERNANCE_NESTING_TOO_DEEP = 4            # 嵌套过深阈值（缩进级别）
+
+# 架构腐化诊断（arch_audit.py）
+ARCH_SCC_CYCLE_MIN_SIZE = 2                # 模块 CALLS 图 SCC 大小 ≥2 或自环即视为循环依赖
+ARCH_GOD_FAN_OUT_THRESHOLD = 15            # 模块扇出超过此值视为上帝模块（依赖过多下游）
+ARCH_LARGE_MODULE_SYMBOL_THRESHOLD = 20    # 单模块符号数超过此值视为异常规模
+ARCH_HEALTH_WEIGHT_CYCLE = 3.0             # 每个循环依赖扣分权重（封顶 6.0）
+ARCH_HEALTH_WEIGHT_GOD = 1.0               # 每个上帝模块扣分权重（封顶 2.0）
+ARCH_HEALTH_WEIGHT_LAYER = 1.0             # 每个分层违例扣分权重（封顶 2.0）
