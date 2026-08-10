@@ -436,7 +436,8 @@ class Server:
             "name": "coderef_memory_quality",
             "description": (
                 "记忆质量评估 + 自动补全。三项体检：引用完整性、语义覆盖、偏差检测。\n"
-                "auto_fix=True 自动补全缺失上下文并标注来源；无 LLM 时偏差检测降级 pending-human。"
+                "auto_fix=True 自动补全缺失上下文并标注来源；偏差检测自动注入全局 LLM（有 API Key 时真正复核），"
+                "无可用 LLM 时降级 pending-human。"
             ),
             "inputSchema": {"type": "object", "properties": {
                 "project_path": {"type": "string", "description": "目标项目路径"},
