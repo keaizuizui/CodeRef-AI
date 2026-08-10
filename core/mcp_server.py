@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-CodeRef MCP Server v4.2.2 — 四大引擎 + 26 个工具
+CodeRef MCP Server v4.2.4 — 四大引擎 + 26 个工具
   审计引擎     → coderef_audit / coderef_scan / coderef_scan_list / architecture / docs / query / review / frontend / whitelist / task_status
   记忆引擎     → coderef_memory_sync / memory_query / memory_status / memory_quality / prompt_mgmt
   创新识别引擎 → coderef_innovation / asset / registry
@@ -349,20 +349,34 @@ class Server:
             "name": "coderef_change_guard",
             "description": (
                 "AI 代码退化检测 —— 拦截「AI 把之前写好的代码改坏了」。\n"
-                "对比基线与新代码的能力签名，识别四类退化：校验链被删(high)、"
-                "重试/超时削弱(medium)、输入约束移除(medium)、回归风险。\n"
+                "守护引擎建立在 git 之上：先确保 git 基层，再对比基线与新代码能力签名，"
+                "识别四类退化：校验链被删(high)、重试/超时削弱(medium)、输入约束移除(medium)、回归风险。\n"
                 "vibecoder 最需要的功能：AI 改没改坏代码，提交前自动拦截。\n"
-                "动态兜底：传 diff 则精确检测；否则传 baseline_dir 全量对比；"
+                "action=guard（默认）：退化检测。\n"
+                "  动态兜底：传 diff 则精确检测；否则传 baseline_dir 全量对比；"
                 "两者皆缺时自动从 git 历史提取最近改动作为基线对比"
                 "(git-auto；若工作区干净会回退检测最近一次提交的改动)；"
                 "仍无法建立基线则明确反馈需补充输入，绝不静默返回空结论。\n"
+                "  返回附带 git_ready 与 health_baseline（最近健康基线 tag），供外层 AI 回滚参照。\n"
+                "action=ensure_git：守护前置保障。项目无 git 时自动 git init 并补齐最小配置，"
+                "使守护引擎从形同虚设变为真正可用。\n"
+                "action=anchor：锚定健康基线。把审计通过/人工确认健康的当前代码 commit 并打 "
+                "coderef-health-* tag，作为后续回滚参照。label 可选。\n"
+                "action=list_baselines：列出全部健康基线 tag。\n"
+                "回滚交由外层 AI 执行（如 git checkout <health_baseline tag>），CodeRef 仅提供确定性参照。\n"
+                "git_bin 可选：由外层 AI 用 Get-Command git / where git 探测 git 可执行文件路径或安装目录后传入，"
+                "避免依赖系统 PATH（git 常不在 PATH）。缺省回退到 PATH 的 git。\n"
                 "git_timeout 建议：小型项目(<1万行)15s；中型(1~10万行)30s；大型(>10万行)60s。"
             ),
             "inputSchema": {"type": "object", "properties": {
                 "project_path": {"type": "string", "description": "目标项目路径（新代码）"},
-                "diff": {"type": "string", "description": "git diff 文本（推荐，用于精确检测）"},
-                "baseline_dir": {"type": "string", "description": "基线目录（改动前的代码快照，可选）"},
-                "git_timeout": {"type": "integer", "description": "git-auto 兜底时 git 命令超时秒数；默认 30，小型项目 15 / 中型 30 / 大型 60"},
+                "action": {"type": "string", "enum": ["guard", "ensure_git", "anchor", "list_baselines"], "default": "guard", "description": "guard=退化检测；ensure_git=确保 git 基层；anchor=锚定健康基线；list_baselines=列出健康基线"},
+                "diff": {"type": "string", "description": "git diff 文本（action=guard，推荐，用于精确检测）"},
+                "baseline_dir": {"type": "string", "description": "基线目录（改动前的代码快照，action=guard 可选）"},
+                "label": {"type": "string", "description": "健康基线标签（action=anchor 可选，如 release-1.0）"},
+                "allow_autocommit": {"type": "boolean", "description": "anchor 时若工作区有改动是否先自动提交再打 tag（默认 true，使基线指向完整健康状态）"},
+                "git_bin": {"type": "string", "description": "git 可执行文件路径或安装目录（由外层 AI 探测后传入，可选；缺省回退 PATH 的 git）"},
+                "git_timeout": {"type": "integer", "description": "git 命令超时秒数；默认 30，小型项目 15 / 中型 30 / 大型 60"},
             }, "required": ["project_path"]},
         })
         self._tools.append({
@@ -654,16 +668,30 @@ class Server:
         }, ensure_ascii=False)
 
     def _change_guard(self, a: dict) -> str:
-        """运行 AI 代码退化检测（coderef_change_guard）"""
+        """运行 AI 代码退化检测 / 守护 git 基层管理（coderef_change_guard）"""
         from core.change_guard import ChangeGuard
         pp = a["project_path"]
-        diff = a.get("diff") or None
-        baseline = a.get("baseline_dir") or None
+        action = a.get("action") or "guard"
         timeout = a.get("git_timeout")
-        r = ChangeGuard().guard(pp, diff=diff, baseline_dir=baseline,
-                                git_timeout=timeout)
+        git_bin = a.get("git_bin") or None
+        cg = ChangeGuard()
+        if action == "ensure_git":
+            r = cg.ensure_git_repo(pp, git_timeout=timeout, git_bin=git_bin)
+        elif action == "anchor":
+            r = cg.anchor_health_baseline(
+                pp, label=a.get("label"), git_timeout=timeout,
+                allow_autocommit=a.get("allow_autocommit", True), git_bin=git_bin)
+        elif action == "list_baselines":
+            r = {"ok": True, "baselines": cg.list_health_baselines(
+                pp, git_timeout=timeout, git_bin=git_bin)}
+        else:
+            diff = a.get("diff") or None
+            baseline = a.get("baseline_dir") or None
+            r = cg.guard(pp, diff=diff, baseline_dir=baseline,
+                         git_timeout=timeout, git_bin=git_bin)
         r["tool"] = "coderef_change_guard"
         r["project_path"] = pp
+        r["action"] = action
         return json.dumps(r, ensure_ascii=False)
 
     def _change_report(self, a: dict) -> str:

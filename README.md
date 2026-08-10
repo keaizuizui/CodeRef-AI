@@ -98,7 +98,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 
 | 工具 | 功能 | 需要 LLM |
 |------|------|---------|
-| `coderef_change_guard` | AI 代码退化检测：拦截「把之前写好的代码改坏了」。动态兜底：无 diff/baseline_dir 时自动从 git 历史提取最近改动作为基线对比，无法建立基线则明确反馈需补充输入 | 否 |
+| `coderef_change_guard` | AI 代码退化检测（守护引擎建立在 git 之上）。`action=guard` 对比基线与新代码拦截退化；`ensure_git` 项目无 git 时自动建库；`anchor` 锚定健康基线 tag；`list_baselines` 列出健康基线。回滚交由外层 AI 执行。`git_bin` 可由外层 AI 探测 git 路径传入，避免依赖系统 PATH | 否 |
 | `coderef_change_report` | 把 diff 归纳为「人话版」变更说明（新增/修改/影响/风险） | 可选 |
 
 ### OWASP 合规
@@ -203,8 +203,11 @@ coderef_review(project_path="/path/to/project", mode="diff", diff="<git diff 文
 # 5. 审查前端交互（按钮 / 菜单）
 coderef_frontend(project_path="/path/to/project", mode="static", background=True)
 
-# 6. 提交前拦截 AI 把代码改坏 + 生成人话版变更说明
-coderef_change_guard(project_path="/path/to/project", diff="<git diff 文本>")
+# 6. 守护 git 基层 + 提交前拦截 AI 把代码改坏 + 锚定健康基线 + 人话版变更说明
+coderef_change_guard(project_path="/path/to/project", action="ensure_git")
+coderef_change_guard(project_path="/path/to/project", action="guard", diff="<git diff 文本>")
+coderef_change_guard(project_path="/path/to/project", action="anchor", label="release-1.0")
+coderef_change_guard(project_path="/path/to/project", action="list_baselines")
 coderef_change_report(project_path="/path/to/project", diff="<git diff 文本>")
 
 # 7. 沉淀项目里值得复用的设计
@@ -319,7 +322,7 @@ coderef-ai/
 │   ├── innovation_engine.py          # 创新识别引擎：结构化创新 + 缺口按价值挑选
 │   ├── design_registry.py            # 已知设计库（别名归一）
 │   ├── owasp_compliance.py           # OWASP LLM Top 10 合规检测
-│   ├── change_guard.py               # 变更守护：AI 代码退化检测
+│   ├── change_guard.py               # 变更守护：git 基层 + 健康基线 + 退化检测
 │   └── change_report.py              # 人话版变更报告
 ├── config/                           # 配置（settings.py + 本地 config.json，含密钥，已 gitignore）
 │   └── settings.py                   # 集中阈值/魔数配置
