@@ -230,7 +230,13 @@ pre code { border:none; background:transparent; color:#e5e7eb; }
 .badge-medium { background:#3b2f1d; color:#fcd34d; }
 .badge-low { background:#1d2b3b; color:#93c5fd; }
 .badge-advice { background:#1d3b33; color:#6ee7b7; }
+.badge-ok { background:#1d3b33; color:#6ee7b7; }
+.badge-missing { background:#3b2f1d; color:#fcd34d; }
 .empty { color:#6b7280; font-style:italic; }
+.wiki-nav { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
+.wiki-nav a { margin:0; padding:6px 14px; background:#1a1d2e; border:1px solid #2a2d3a; border-radius:8px; color:#c9cdd4; text-decoration:none; font-size:13px; }
+.wiki-nav a:hover { border-color:#3b82f6; color:#f1f5f9; }
+.wikigroup section h3 { font-size:14px; color:#c9cdd4; margin:0 0 10px; padding-bottom:6px; border-bottom:1px dashed #2a2d3a; }
 ul { padding-left:20px; margin:6px 0; }
 blockquote { border-left:3px solid #3b82f6; padding:4px 12px; color:#9ca3af; margin:8px 0; background:#14161f; border-radius:0 8px 8px 0; }
 a { color:#60a5fa; }
@@ -291,7 +297,8 @@ class HtmlReportRenderer:
 
     def render(self, pipe_result, kg_stats: Optional[dict] = None,
                wiki_dir: Optional[str] = None,
-               output_dir: Optional[str] = None) -> dict:
+               output_dir: Optional[str] = None,
+               dimension_states: Optional[dict] = None) -> dict:
         """渲染完整报告目录。
 
         Args:
@@ -299,6 +306,8 @@ class HtmlReportRenderer:
             kg_stats: CodeKnowledgeGraph.get_stats() 返回值（可选）
             wiki_dir: Wiki .md 输出目录（可选，存在则渲染 wiki.html）
             output_dir: 报告输出目录；默认 {项目上级}/coderef-report/html
+            dimension_states: 各维度（audit/kg/wiki）执行状态，用于透明化展示
+                              （未执行的维度标注"未执行"而非静默为空/全 0）
 
         Returns:
             {"ok": bool, "index": 绝对路径, "files": [..], "error": str?}
@@ -310,10 +319,10 @@ class HtmlReportRenderer:
 
         results = {}
         try:
-            results["audit.html"] = self._render_audit(pipe_result)
-            results["kg.html"] = self._render_kg(kg_stats)
-            results["wiki.html"] = self._render_wiki(wiki_dir)
-            results["index.html"] = self._render_index(pipe_result, kg_stats, wiki_dir)
+            results["audit.html"] = self._render_audit(pipe_result, dimension_states)
+            results["kg.html"] = self._render_kg(kg_stats, dimension_states)
+            results["wiki.html"] = self._render_wiki(wiki_dir, dimension_states)
+            results["index.html"] = self._render_index(pipe_result, kg_stats, wiki_dir, dimension_states)
         except Exception as e:
             return {"ok": False, "error": str(e), "files": []}
 
@@ -329,52 +338,160 @@ class HtmlReportRenderer:
 
     # ─── 各类渲染 ───
 
-    def _render_index(self, pr, kg_stats, wiki_dir) -> str:
-        findings = getattr(pr, "findings", []) or []
-        h = sum(1 for f in findings if getattr(f, "tier", None) and f.tier.value == "high")
-        m = sum(1 for f in findings if getattr(f, "tier", None) and f.tier.value == "medium")
-        lo = sum(1 for f in findings if getattr(f, "tier", None) and f.tier.value == "low")
-        adv = sum(1 for f in findings if getattr(f, "kind", "") == "advice")
-        kgn = (kg_stats or {}).get("node_count", 0)
-        kge = (kg_stats or {}).get("edge_count", 0)
-        has_wiki = bool(wiki_dir and os.path.isdir(wiki_dir))
+    def _read_overview_summary(self, wiki_dir: Optional[str]) -> str:
+        """读取 OVERVIEW.md 首段业务摘要，供 index.html 业务视角优先展示。
 
-        cards = f"""<div class="cards">
-          <div class="card"><div class="lbl">扫描文件</div><div class="val">{getattr(pr, 'total_files', 0)}</div></div>
-          <div class="card"><div class="lbl">代码行</div><div class="val">{getattr(pr, 'total_lines', 0)}</div></div>
-          <div class="card"><div class="lbl">HIGH</div><div class="val" style="color:#fca5a5">{h}</div></div>
-          <div class="card"><div class="lbl">MEDIUM</div><div class="val" style="color:#fcd34d">{m}</div></div>
-          <div class="card"><div class="lbl">LOW</div><div class="val" style="color:#93c5fd">{lo}</div></div>
-          <div class="card"><div class="lbl">建议</div><div class="val" style="color:#6ee7b7">{adv}</div></div>
-          <div class="card"><div class="lbl">图谱节点</div><div class="val">{kgn}</div></div>
-          <div class="card"><div class="lbl">图谱边</div><div class="val">{kge}</div></div>
-        </div>"""
+        业务概览优先原则：首页应先让用户看到"项目在业务上是做什么的"，
+        技术统计（扫描文件/代码行/缺陷数）降级为支撑信息。
+        """
+        if not wiki_dir or not os.path.isdir(wiki_dir):
+            return ""
+        fp = os.path.join(wiki_dir, "OVERVIEW.md")
+        if not os.path.isfile(fp):
+            return ""
+        try:
+            with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception:
+            return ""
+        for line in content.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and not line.startswith(">"):
+                return line[:220]
+        return ""
 
+    def _list_wiki_group(self, wiki_dir: Optional[str],
+                         subdir: str) -> List[str]:
+        """列出 wiki 子目录（ENTRIES/FLOWS）下的文档链接，供首页入口清单展示。"""
+        if not wiki_dir or not os.path.isdir(wiki_dir):
+            return []
+        d = os.path.join(wiki_dir, subdir)
+        if not os.path.isdir(d):
+            return []
         links = []
-        links.append(f'<h2>审计发现</h2><p>共 {len(findings)} 条发现，'
-                     f'详见 <a href="audit.html">审计发现</a>。</p>')
-        links.append('<h2>知识图谱</h2><p>项目结构图谱统计，详见 <a href="kg.html">知识图谱</a>。</p>')
-        if has_wiki:
-            links.append('<h2>Wiki 文档</h2><p>项目文档，详见 <a href="wiki.html">Wiki 文档</a>。</p>')
+        for fn in sorted(os.listdir(d)):
+            if fn.endswith(".md"):
+                rel = f"{subdir}/{fn}"
+                name = fn[:-3]
+                links.append(
+                    f'<p><a href="wiki.html#{_esc(rel)}">{_esc(name)}</a></p>')
+        return links
 
-        # 统计口径透明化：披露扫描时间与图谱时间，避免旧图谱被当作本次结果
+    def _render_index(self, pr, kg_stats, wiki_dir, dimension_states=None) -> str:
+        dims = dimension_states or {}
+        audit_d = dims.get("audit") or {}
+        kg_d = dims.get("kg") or {}
+        wiki_d = dims.get("wiki") or {}
+        audit_status = audit_d.get("status", "missing")
+        kg_status = kg_d.get("status", "missing")
+        wiki_status = wiki_d.get("status", "missing")
+
+        findings = getattr(pr, "findings", []) or []
+        # 审计计数：仅当维度"已执行"时展示真实数字，否则显示 "--" 避免把"未审计"当"0 发现"
+        if audit_status == "done":
+            h = sum(1 for f in findings if getattr(f, "tier", None) and f.tier.value == "high")
+            m = sum(1 for f in findings if getattr(f, "tier", None) and f.tier.value == "medium")
+            lo = sum(1 for f in findings if getattr(f, "tier", None) and f.tier.value == "low")
+            adv = sum(1 for f in findings if getattr(f, "kind", "") == "advice")
+        else:
+            h = m = lo = adv = "--"
+        kgn = kg_d.get("nodes", 0) if kg_status == "done" else (kg_stats or {}).get("node_count", 0)
+        kge = (kg_stats or {}).get("edge_count", 0)
+
+        def _card(lbl, val, color=None):
+            style = f' style="color:{color}"' if color else ""
+            return f'<div class="card"><div class="lbl">{lbl}</div><div class="val"{style}>{val}</div></div>'
+
+        cards = '<div class="cards">'
+        cards += _card("扫描文件", getattr(pr, "total_files", 0))
+        cards += _card("代码行", getattr(pr, "total_lines", 0))
+        cards += _card("HIGH", h, "#fca5a5" if audit_status == "done" else "#fcd34d")
+        cards += _card("MEDIUM", m, "#fcd34d" if audit_status == "done" else "#fcd34d")
+        cards += _card("LOW", lo, "#93c5fd" if audit_status == "done" else "#fcd34d")
+        cards += _card("建议", adv, "#6ee7b7" if audit_status == "done" else "#fcd34d")
+        cards += _card("图谱节点", kgn)
+        cards += _card("图谱边", kge)
+        cards += '</div>'
+
+        # 报告章节：按维度分区，每区带执行状态徽章 + 一句话摘要 + 链接
+        secs = []
+        if audit_status == "done":
+            if findings:
+                secs.append(f'<section><h2>审计发现 <span class="badge badge-ok">已执行</span></h2>'
+                            f'<p>共 <strong>{len(findings)}</strong> 条发现，详见 <a href="audit.html">审计发现</a>。</p></section>')
+            else:
+                secs.append(f'<section><h2>审计发现 <span class="badge badge-ok">已执行</span></h2>'
+                            f'<p>审计已执行，未发现任何问题。详见 <a href="audit.html">审计发现</a>。</p></section>')
+        else:
+            hint = _esc(audit_d.get("hint", "尚未执行审计，请先运行 coderef_audit"))
+            secs.append(f'<section><h2>审计发现 <span class="badge badge-missing">未执行</span></h2>'
+                        f'<p class="empty">{hint}</p></section>')
+
+        if kg_status == "done":
+            secs.append(f'<section><h2>知识图谱 <span class="badge badge-ok">已执行</span></h2>'
+                        f'<p>{_esc(kg_d.get("hint", ""))}，详见 <a href="kg.html">知识图谱</a>。</p></section>')
+        else:
+            secs.append(f'<section><h2>知识图谱 <span class="badge badge-missing">未执行</span></h2>'
+                        f'<p class="empty">{_esc(kg_d.get("hint", "尚未构建知识图谱"))}</p></section>')
+
+        if wiki_status == "done":
+            secs.append(f'<section><h2>Wiki 文档 <span class="badge badge-ok">已执行</span></h2>'
+                        f'<p>{_esc(wiki_d.get("hint", ""))}，详见 <a href="wiki.html">Wiki 文档</a>。</p></section>')
+        else:
+            secs.append(f'<section><h2>Wiki 文档 <span class="badge badge-missing">未执行</span></h2>'
+                        f'<p class="empty">{_esc(wiki_d.get("hint", "尚未生成 Wiki，请先运行 coderef_docs"))}</p></section>')
+
+        # 统计口径透明化：披露各维度时间，避免旧产物被当作本次结果
         ts = getattr(pr, "scan_ts", "") or ""
-        kgt = getattr(pr, "kg_built_at", "") or (kg_stats or {}).get("built_at", "")
+        kgt = getattr(pr, "kg_built_at", "") or kg_d.get("ts", "") or (kg_stats or {}).get("built_at", "")
         scope = getattr(pr, "scope_text", "") or ""
         note = "<section><h2>统计口径</h2>"
-        note += f"<p>本次扫描时间：<code>{ts or '未记录'}</code></p>"
-        note += f"<p>知识图谱构建：<code>{kgt or '未重建'}</code>（图谱可能滞后于代码）</p>"
+        note += f"<p>本次扫描时间：<code>{_esc(ts or '未记录')}</code></p>"
+        note += f"<p>知识图谱构建：<code>{_esc(kgt or audit_d.get('ts', '') or '未记录')}</code>（图谱可能滞后于代码）</p>"
         if scope:
             note += f"<p>审计范围：{_esc(scope)}</p>"
         note += "</section>"
 
-        body = cards + "<section><h2>报告章节</h2>" + "".join(links) + "</section>" + note
+        # 业务视角优先：首页先展示业务概览摘要，技术统计降级为支撑信息
+        body = ""
+        overview_summary = self._read_overview_summary(wiki_dir)
+        if overview_summary:
+            body += (f'<section class="biz-hero"><h2>业务视角 <span class="badge badge-ok">优先阅读</span></h2>'
+                     f'<p>{_esc(overview_summary)}…</p>'
+                     f'<p><a href="wiki.html#grp-业务视角">前往业务概览 →</a></p></section>')
+
+        # 公共入口 / 数据流清单（分层人话版的入口级 L1、数据流级 L2）
+        entry_links = self._list_wiki_group(wiki_dir, "ENTRIES")
+        flow_links = self._list_wiki_group(wiki_dir, "FLOWS")
+        if entry_links:
+            body += (f'<section><h2>公共入口 <span class="badge badge-ok">{len(entry_links)} 个</span></h2>'
+                     f'<p>每个入口的流程人话版，直接回答"这个入口是做什么、怎么做"。</p>'
+                     f'{"".join(entry_links)}</section>')
+        if flow_links:
+            body += (f'<section><h2>模块数据流 <span class="badge badge-ok">{len(flow_links)} 条</span></h2>'
+                     f'<p>模块之间如何传递数据，直接回答"谁向谁要东西"。</p>'
+                     f'{"".join(flow_links)}</section>')
+
+        body += '<section><h2>报告章节</h2>' + "".join(secs) + "</section>"
+        body += '<section><h2>技术概览</h2><p class="empty">以下为代码级统计，业务理解请以上方业务视角为主。</p>' \
+                + cards + '</section>' + note
         return _page("CodeRef 审计报告", body, _nav("index.html", self.project_name), self.project_name)
 
-    def _render_audit(self, pr) -> str:
+    def _render_audit(self, pr, dimension_states=None) -> str:
+        aname = self.project_name
+        dims = dimension_states or {}
+        audit_d = dims.get("audit") or {}
+        # 审计未执行：显式标注，而非把"未审计"渲染成"暂无发现"
+        if audit_d.get("status") == "missing":
+            hint = audit_d.get("hint", "尚未执行审计，请先运行 coderef_audit")
+            body = (f'<section><h2>审计发现 <span class="badge badge-missing">未执行</span></h2>'
+                    f'<p class="empty">{_esc(hint)}</p></section>')
+            return _page("审计发现", body, _nav("audit.html", aname), aname)
+
         findings = getattr(pr, "findings", []) or []
         if not findings:
-            body = '<section><h2>审计发现</h2><p class="empty">暂无发现</p></section>'
+            body = (f'<section><h2>审计发现 <span class="badge badge-ok">已执行</span></h2>'
+                    f'<p>审计已执行，未发现任何问题。</p></section>')
         else:
             ordered = sorted(findings, key=lambda f: (
                 {"high": 0, "medium": 1, "low": 2}.get(
@@ -408,7 +525,16 @@ class HtmlReportRenderer:
             body += f'<section><h2>检测器异常</h2><ul>{erows}</ul></section>'
         return _page("审计发现", body, _nav("audit.html", self.project_name), self.project_name)
 
-    def _render_kg(self, kg_stats) -> str:
+    def _render_kg(self, kg_stats, dimension_states=None) -> str:
+        aname = self.project_name
+        dims = dimension_states or {}
+        kg_d = dims.get("kg") or {}
+        # 图谱未执行：显式标注
+        if kg_d.get("status") == "missing":
+            hint = kg_d.get("hint", "尚未构建知识图谱，请先运行 coderef_audit 或构建图谱")
+            body = (f'<section><h2>知识图谱 <span class="badge badge-missing">未执行</span></h2>'
+                    f'<p class="empty">{_esc(hint)}</p></section>')
+            return _page("知识图谱", body, _nav("kg.html", aname), aname)
         if not kg_stats or "error" in kg_stats:
             body = '<section><h2>知识图谱</h2><p class="empty">知识图谱数据不可用</p></section>'
         else:
@@ -436,7 +562,16 @@ class HtmlReportRenderer:
                     + _table(edge_types, "边类型分布"))
         return _page("知识图谱", body, _nav("kg.html", self.project_name), self.project_name)
 
-    def _render_wiki(self, wiki_dir) -> str:
+    def _render_wiki(self, wiki_dir, dimension_states=None) -> str:
+        aname = self.project_name
+        dims = dimension_states or {}
+        wiki_d = dims.get("wiki") or {}
+        # Wiki 未执行：显式标注
+        if wiki_d.get("status") == "missing":
+            hint = wiki_d.get("hint", "尚未生成 Wiki，请先运行 coderef_docs")
+            body = (f'<section><h2>Wiki 文档 <span class="badge badge-missing">未执行</span></h2>'
+                    f'<p class="empty">{_esc(hint)}</p></section>')
+            return _page("Wiki 文档", body, _nav("wiki.html", aname), aname)
         if not wiki_dir or not os.path.isdir(wiki_dir):
             body = '<section><h2>Wiki 文档</h2><p class="empty">未提供 Wiki 目录</p></section>'
             return _page("Wiki 文档", body, _nav("wiki.html", self.project_name), self.project_name)
@@ -454,19 +589,56 @@ class HtmlReportRenderer:
             body = '<section><h2>Wiki 文档</h2><p class="empty">目录下无 .md 文档</p></section>'
             return _page("Wiki 文档", body, _nav("wiki.html", self.project_name), self.project_name)
 
-        sections = []
+        # 分组：业务视角优先，入口/数据流次之，技术文档，模块文档最后
+        _TECH = {"README.md", "ARCHITECTURE.md", "INSTALLATION.md",
+                 "USAGE.md", "API.md", "WIKI_INDEX.md"}
+        groups = {"业务视角": [], "入口流程": [], "数据流": [],
+                  "技术文档": [], "模块文档": []}
         for fp in md_files:
-            rel = os.path.relpath(fp, wiki_dir)
-            try:
-                with open(fp, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-            except Exception as e:
-                sections.append(f'<section><h2>{_esc(rel)}</h2><p class="empty">读取失败: {_esc(str(e))}</p></section>')
+            rel = os.path.relpath(fp, wiki_dir).replace("\\", "/")
+            base = os.path.basename(rel)
+            if base == "OVERVIEW.md":
+                groups["业务视角"].append(fp)
+            elif rel.startswith("ENTRIES/") or "/ENTRIES/" in rel:
+                groups["入口流程"].append(fp)
+            elif rel.startswith("FLOWS/") or "/FLOWS/" in rel:
+                groups["数据流"].append(fp)
+            elif rel.startswith("MODULES/") or "/MODULES/" in rel:
+                groups["模块文档"].append(fp)
+            else:
+                groups["技术文档"].append(fp)
+
+        # 顶部按分组的锚点导航
+        nav = '<div class="wiki-nav">'
+        for gname, files in groups.items():
+            if files:
+                nav += f'<a href="#grp-{_esc(gname)}">{_esc(gname)} ({len(files)})</a>'
+        nav += '</div>'
+
+        # 按分组渲染（业务视角组置前）
+        group_html = []
+        for gname, files in groups.items():
+            if not files:
                 continue
-            if not content.strip():
-                continue
-            sections.append(f'<section><h2 id="{_esc(rel)}">{_esc(rel)}</h2>{md_to_html(content)}</section>')
-        if not sections:
-            sections.append('<section><h2>Wiki 文档</h2><p class="empty">所有文档均为空</p></section>')
-        body = "\n".join(sections)
+            inner = []
+            for fp in files:
+                rel = os.path.relpath(fp, wiki_dir).replace("\\", "/")
+                try:
+                    with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                except Exception as e:
+                    inner.append(f'<section><h3>{_esc(rel)}</h3>'
+                                 f'<p class="empty">读取失败: {_esc(str(e))}</p></section>')
+                    continue
+                if not content.strip():
+                    continue
+                inner.append(f'<section><h3 id="{_esc(rel)}">{_esc(rel)}</h3>{md_to_html(content)}</section>')
+            if inner:
+                group_html.append(f'<section class="wikigroup" id="grp-{_esc(gname)}">'
+                                  f'<h2>{_esc(gname)} <span class="badge badge-ok">{len(inner)} 篇</span></h2>'
+                                  f'{"".join(inner)}</section>')
+
+        if not group_html:
+            group_html.append('<section><h2>Wiki 文档</h2><p class="empty">所有文档均为空</p></section>')
+        body = nav + "\n".join(group_html)
         return _page("Wiki 文档", body, _nav("wiki.html", self.project_name), self.project_name)
