@@ -2,7 +2,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.2.3** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.2.4** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -350,6 +350,16 @@ coderef-ai/
 | 开源友好 | 敏感数据集中 `cache/` 与 `config/config.json`，删除即清理，一行命令安全开源 |
 
 ## 更新日志
+
+### v4.2.4 — 变更守护引擎接入 git 健康基线（守护闭环真正落地）
+
+- **建立 git 基层 `action=ensure_git`**：项目无 git 时自动 `git init` 并补齐最小用户/分支配置，让「守护引擎从形同虚设变为真正可用」——之前守护依赖 git 基线，但 git 恰恰常常缺失，二者是联动的
+- **锚定健康基线 `action=anchor`**：把审计通过 / 人工确认健康的当前代码 commit 并打 `coderef-health-*` tag，作为后续回滚参照；返回本次 committed 文件数，并可通过 `allow_autocommit` 控制工作区有改动时是否先自动提交
+- **列出基线 `action=list_baselines`**：列出全部健康基线 tag，便于编程 AI 决定回滚到哪一版
+- **guard 增强**：动态兜底从 git 历史提取最近改动作为基线对比，返回附带 `git_ready` 与最近健康基线 `health_baseline`，供外层 AI 回滚参照
+- **新增 `git_bin` 参数**：由外层编程 AI 用 `Get-Command git` / `where git` 探测 git 可执行文件路径或安装目录后传入，避免依赖系统 PATH（git 常不在 PATH）
+- **稳定性**：git 命令统一 UTF-8 / replace 解码，杜绝 Windows 中文乱码或解码异常；`git_timeout` 支持按项目规模调整
+- **回滚边界**：回滚交由外层编程 AI 执行（如 `git checkout <health_baseline tag>`），CodeRef 仅提供确定性参照，不做强制回滚
 
 ### v4.2.3 — 误报治理与聚合 HTML 全 0 修复
 
