@@ -168,29 +168,29 @@ export CODEREF_API_KEY="ollama"
 | `coderef_audit` | 11 审计工具一键产出 + 自动降噪 + 知识图谱构建 | 后台 | 否 |
 | `coderef_scan` | 单维度审计（11 选 1），实时安全带 | 同步 | 否 |
 | `coderef_scan_list` | 列出 `coderef_scan` 可选的维度清单 | 同步 | 否 |
-| `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 同步 | 否 |
+| `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 后台 | 否 |
 | `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 后台 | 是 |
 | `coderef_docs_read` | 按需读取已生成 Wiki 文档正文 | 同步 | 否 |
 | `coderef_query` | 知识图谱结构化查询（9 种查询类型） | 同步 | 否 |
-| `coderef_review` | 代码审查：diff 变更 / 全量语义首查 | 同步 | 是 |
-| `coderef_frontend` | 前端交互审查：按钮/菜单静态枚举 | 同步 | 是 |
-| `coderef_report` | 审计报告/图谱/Wiki 聚合 HTML 报告 | 同步 | 否 |
-| `coderef_audit_advisor` | 审计策略判定（增量/全量）+ 功能维度 | 同步 | 可选 |
+| `coderef_review` | 代码审查：diff 变更 / 全量语义首查 | 后台 | 是 |
+| `coderef_frontend` | 前端交互审查：按钮/菜单静态枚举 | 后台 | 是 |
+| `coderef_report` | 审计报告/图谱/Wiki 聚合 HTML 报告 | 后台 | 否 |
+| `coderef_audit_advisor` | 审计策略判定（增量/全量）+ 功能维度 | 后台 | 可选 |
 | `coderef_flow_verify` | 流程合规验证（期望流程确证） | 同步 | 否 |
 | `coderef_arch_audit` | 架构腐化诊断（循环依赖/上帝模块/分层违例） | 同步 | 否 |
 | `coderef_whitelist` | 白名单管理 + 核心模块规则配置 | 同步 | 否 |
 | `coderef_task_status` | 后台任务状态查询 | 同步 | 否 |
-| `coderef_change_guard` | 变更守护：git 基层(ensure_git) + 退化检测(guard) + 健康基线(anchor/list_baselines)，git_bin 可由外层 AI 传入 | 同步 | 否 |
-| `coderef_change_report` | 变更人话版说明 | 同步 | 可选 |
-| `coderef_memory_sync` | 记忆层增量同步 | 同步 | 否 |
+| `coderef_change_guard` | 变更守护：git 基层(ensure_git) + 退化检测(guard) + 健康基线(anchor/list_baselines)，git_bin 可由外层 AI 传入 | 后台 | 否 |
+| `coderef_change_report` | 变更人话版说明 | 后台 | 可选 |
+| `coderef_memory_sync` | 记忆层增量同步 | 后台 | 否 |
 | `coderef_memory_query` | 记忆语义检索 + 结构查询 | 同步 | 否 |
 | `coderef_memory_status` | 认知覆盖度 + 置信度 + 盲区地图 | 同步 | 否 |
-| `coderef_memory_quality` | 记忆质量评估 + 自动补全 | 同步 | 可选 |
+| `coderef_memory_quality` | 记忆质量评估 + 自动补全 | 后台 | 可选 |
 | `coderef_prompt_mgmt` | Prompt 资产管理 | 同步 | 是 |
-| `coderef_innovation` | 识别项目创新设计 + 传播缺口 | 同步 | 是 |
-| `coderef_asset` | 设计固化 WorkflowAsset 资产 | 同步 | 是 |
+| `coderef_innovation` | 识别项目创新设计 + 传播缺口 | 后台 | 是 |
+| `coderef_asset` | 设计固化 WorkflowAsset 资产 | 后台 | 是 |
 | `coderef_registry` | 已知设计库管理，别名归一 | 同步 | 否 |
-| `coderef_owasp` | OWASP LLM Top 10 合规检测 | 同步 | 否 |
+| `coderef_owasp` | OWASP LLM Top 10 合规检测 | 后台 | 否 |
 
 ---
 
@@ -307,6 +307,14 @@ python -m core.mcp_server
 - `tree-sitter` 依赖未安装（`pip install -r requirements.txt`）
 - 工作目录路径不正确
 
+### 后台任务模式（重型工具默认）
+
+为避免任意 MCP 客户端（Trae / Claude Desktop / Cursor / Cherry Studio 等）对单次 `tools/call` 的**超时限制**，**重型工具默认后台执行**：调用立即返回 `{"status":"running","task_id":"xxxx"}`，由外层 AI 轮询 `coderef_task_status(task_id="xxxx")` 取最终结果，不再撞超时。
+
+- 默认后台：`coderef_audit` / `coderef_docs` / `coderef_review` / `coderef_frontend` / `coderef_report` / `coderef_audit_advisor` / `coderef_architecture` / `coderef_memory_sync` / `coderef_memory_quality` / `coderef_owasp` / `coderef_innovation` / `coderef_asset` / `coderef_change_guard` / `coderef_change_report`
+- 轻量工具（`coderef_scan` / `coderef_query` / `coderef_whitelist` / `coderef_docs_read` 等）保持同步快速返回
+- 显式控制：传 `background=False` 强制同步（小项目想立即拿结果），传 `background=True` 强制后台
+
 ### 后台任务一直没有完成
 
 ```python
@@ -397,7 +405,7 @@ AI 编程助手 (Trae / Claude Desktop / Cursor)
 2. **审计无需 LLM**：11 个检测器均基于静态分析，离线可用，零 API 成本
 3. **知识图谱持久化**：一次构建，跨会话复用，节省重复分析时间
 4. **交叉验证反幻觉**：多工具独立分析同一项目，相互验证，解决 AI 自查幻觉
-5. **后台任务模式**：长任务（audit / docs）异步执行，避免 MCP 超时
+5. **后台任务模式**：重型工具默认后台异步执行，避免任意 MCP 客户端（Trae / Claude Desktop / Cursor 等）的超时限制；轻量工具同步快速返回
 6. **项目隔离**：每个项目独立缓存，切换项目不互相干扰
 
 ---
