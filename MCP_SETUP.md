@@ -11,7 +11,8 @@ CodeRef-AI 通过 MCP (Model Context Protocol) 协议暴露 26 个工具给 AI �
 ## 前置条件
 
 - Python 3.10+
-- （可选）LLM API Key —— 仅 Wiki 文档生成（`coderef_docs`）需要，审计和知识图谱无需 LLM
+- （可选）LLM API Key —— 仅 Wiki 文档生成（`coderef_docs`）与业务报告需要；审计、知识图谱、架构等确定性分析无需 LLM
+- 未配置 LLM 时，`coderef_docs` 与业务报告会被**硬阻断**并明确提示"需要 LLM 请先配置 API Key"，不会产出降级/占位内容；审计、图谱、架构照常可用
 
 ---
 
@@ -28,7 +29,7 @@ pip install -r requirements.txt
 
 ## 配置 LLM（可选）
 
-> 审计和知识图谱功能**不需要 LLM**，纯静态分析即可运行。仅 Wiki 文档生成需要 LLM。
+> 审计和知识图谱功能**不需要 LLM**，纯静态分析即可运行。仅 Wiki 文档生成与业务报告需要 LLM；未配置 LLM 时这两项会被硬阻断并明确提示，不会产出降级内容。
 
 ### 方式一：环境变量（推荐）
 
