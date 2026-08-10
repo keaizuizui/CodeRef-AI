@@ -45,9 +45,10 @@ Agent 安全审计器 —— 专为 AI Agent 系统设计的风险检测
 版本: v1.0
 """
 
+import ast
 import os
 import re
-from typing import List
+from typing import List, Set
 from dataclasses import dataclass
 from collections import defaultdict
 
@@ -260,6 +261,18 @@ class AgentSecurityAuditor:
         re.compile(r'^\s*//', re.IGNORECASE),
     ]
 
+    # 扫描时排除的目录（集中定义，供文件遍历与项目级检查复用）
+    # 只排除当前目录名，不影响路径中包含该词的项目。测试目录：测试代码常含
+    # 占位符密钥（EMPTY）、调试打印，且不进入生产，默认排除以避免 PII/日志类
+    # 误报。如需审计测试代码可显式加入。
+    EXCLUDE_DIRS = {
+        "__pycache__", "node_modules", ".git", "venv", ".venv", "env",
+        "Lib", "lib", "lib64", "site-packages", "dist-packages",
+        "third_party", ".gitnexus", "data", "docs", "reports",
+        "cache", "coderef-report", "logs", "build", "dist",
+        "tests", "test", "e2e",
+    }
+
     # ─── 防御层级韧性检测（检查"缺失"的防御模式，而非"存在"的风险） ───
     RESILIENCE_GAP_CHECKS = [
         # 重试退避 —— 检测 tenacity / @retry / exponential backoff
@@ -397,25 +410,26 @@ class AgentSecurityAuditor:
         from core.shared_filter import SharedFilter
         SharedFilter.load_cache(project_path)
 
-        # 收集所有 Python 文件
+        # 收集所有 Python 文件（单一遍历，正则扫描与 AST 扫描复用同一份内容，避免二次 I/O）
         # 只排除当前目录名，不影响路径中包含该词的项目
-        exclude_dirs = {
-            "__pycache__", "node_modules", ".git", "venv", ".venv", "env",
-            "Lib", "lib", "lib64", "site-packages", "dist-packages",
-            "third_party", ".gitnexus", "data", "docs", "reports",
-            "cache", "coderef-report", "logs", "build", "dist",
-            # 测试目录：测试代码常含占位符密钥（EMPTY）、调试打印，且不进入生产，
-            # 默认排除以避免 PII/日志类误报。如需审计测试代码可显式加入。
-            "tests", "test", "e2e",
-        }
+        python_files: List[str] = []
         for root, dirs, files in os.walk(project_path):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in exclude_dirs]
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in self.EXCLUDE_DIRS]
             for f in files:
                 if not f.endswith(".py"):
                     continue
-                fpath = os.path.join(root, f)
-                file_risks = self._scan_file(fpath)
-                risks.extend(file_risks)
+                python_files.append(os.path.join(root, f))
+
+        for fpath in python_files:
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+            except (OSError, IOError):
+                continue
+            risks.extend(self._scan_file(fpath, content))
+            # AST 级参数透传失效检测（AGENT-SEC-27）：
+            # 逐行正则无法识别跨行/跨结构的「参数被配置静默覆盖」，需 AST 级分析。
+            risks.extend(self._scan_param_shadow(fpath, content))
 
         # 项目级防御层级韧性缺口检测（检查缺失的防御模式）
         resilience_gaps = self._check_resilience_gaps(project_path)
@@ -433,14 +447,10 @@ class AgentSecurityAuditor:
         self.risks = risks
         return risks
 
-    def _scan_file(self, filepath: str) -> List[AgentSecurityRisk]:
-        """扫描单个文件"""
+    def _scan_file(self, filepath: str, content: str) -> List[AgentSecurityRisk]:
+        """扫描单个文件（content 由调用方统一读取，避免二次 I/O）"""
         risks = []
-        try:
-            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                lines = f.readlines()
-        except (OSError, IOError):
-            return risks
+        lines = content.splitlines()
 
         in_docstring = False
         for i, line in enumerate(lines, 1):
@@ -530,6 +540,175 @@ class AgentSecurityAuditor:
 
         return risks
 
+    # ─── 参数透传失效检测（AGENT-SEC-27） ───
+    # 检测「函数签名声明了参数 X，但函数体从未使用 X，而是从 config/cred/settings
+    # 等配置容器读取同名值」——即工具参数被配置静默覆盖，调用方传入的实参永远不生效。
+    # 典型场景：Hermes delegate_task 的 `model=creds["model"]`（参数 model 被 delegation
+    # config 覆盖）。该缺陷是运行时语义矛盾，逐行正则在 _scan_file 里不可靠，需 AST 级分析。
+    CONFIG_CONTAINER_HINTS = (
+        "config", "conf", "cfg", "cred", "settings", "setting",
+        "env", "environ", "param", "params", "context",
+        "opts", "options",
+    )
+
+    def _scan_param_shadow(self, filepath: str, content: str) -> List[AgentSecurityRisk]:
+        """AST 级扫描单个文件：检测函数参数被配置读取静默覆盖。"""
+        risks: List[AgentSecurityRisk] = []
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            return risks
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                risks.extend(self._scan_function_param_shadow(node, filepath, content))
+        return risks
+
+    def _scan_function_param_shadow(self, node, filepath: str, content: str) -> List[AgentSecurityRisk]:
+        """检测单个函数：参数是否被同名配置读取覆盖。"""
+        risks: List[AgentSecurityRisk] = []
+        params: Set[str] = {a.arg for a in node.args.args}
+        params |= {a.arg for a in node.args.kwonlyargs}
+        if node.args.vararg:
+            params.add(node.args.vararg.arg)
+        if node.args.kwarg:
+            params.add(node.args.kwarg.arg)
+        if not params:
+            return risks
+
+        source_lines = content.splitlines()
+        for stmt in self._iter_body_assigns(node.body):
+            target = None
+            value = None
+            if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+                target = stmt.targets[0]
+                value = stmt.value
+            elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+                target = stmt.target
+                value = stmt.value
+            if not isinstance(target, ast.Name) or target.id not in params:
+                continue
+            param = target.id
+
+            # 排除 RHS 引用参数本身的兜底 + 配置覆盖判定，统一收敛到 _match_param_shadow
+            match = self._match_param_shadow(param, value)
+            if not match:
+                continue
+
+            line_no = getattr(stmt, "lineno", 0)
+            line_content = source_lines[line_no - 1].strip()[:150] if 0 < line_no <= len(source_lines) else ""
+            risks.append(AgentSecurityRisk(
+                risk_id="AGENT-SEC-27",
+                risk_name="参数透传失效（被配置静默覆盖）",
+                category="param_shadow",
+                severity="medium",
+                file_path=filepath,
+                line_number=line_no,
+                line_content=line_content,
+                detail=(
+                    f"函数参数「{param}」从未使用，函数体从配置容器「{match}」读取同名值，"
+                    f"调用方传入的实参被静默忽略。父代理会基于错误前提做判断（如误以为派了某模型）。"
+                ),
+                suggestion=(
+                    f"要么删除未生效的参数「{param}」，要么让函数体真正使用参数值；"
+                    f"若确需配置优先，应显式声明优先级并在调用处提示参数被忽略，禁止静默覆盖。"
+                ),
+            ))
+        return risks
+
+    def _match_param_shadow(self, param: str, value):
+        """若参数被同名的配置容器读取静默覆盖，返回容器名；否则返回 None。
+
+        排除 RHS 引用参数本身的合理兜底（如 `x = x or config["x"]` 的默认值兜底），
+        避免把「参数 = 参数 or 配置默认」这一常规模式误判为覆盖。
+        """
+        if value is None:
+            return None
+        if self._contains_name(value, param):
+            return None
+        return self._match_config_shadow(value, param)
+
+    @staticmethod
+    def _iter_body_assigns(body) -> List[ast.AST]:
+        """深度遍历函数体，收集赋值语句，跳过嵌套函数/类定义子树（避免作用域混淆）。"""
+        assigns: List[ast.AST] = []
+
+        def walk_list(items):
+            for item in items:
+                if isinstance(item, ast.AST):
+                    walk(item)
+
+        def walk(item: ast.AST):
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                return
+            if isinstance(item, (ast.Assign, ast.AnnAssign)):
+                assigns.append(item)
+                return
+            walk_list(list(ast.iter_child_nodes(item)))
+
+        walk_list(body)
+        return assigns
+
+    @staticmethod
+    def _contains_name(value, name: str) -> bool:
+        """判断 AST 子树中是否引用了指定变量名。"""
+        if value is None:
+            return False
+        return any(isinstance(n, ast.Name) and n.id == name for n in ast.walk(value))
+
+    def _match_config_shadow(self, value, param: str):
+        """判断 value 是否为「从配置容器读取同名参数」的表达式，命中返回容器标识，否则返回 None。
+
+        匹配三种形态：
+          - container["param"]          （Subscript）
+          - container.param            （Attribute）
+          - container.get("param")     （Call，含 os.environ.get / self.config.get）
+        容器名需含配置来源特征（config/cred/settings/env/...），且 key/属性与参数同名。
+        容器名从 Name 或 Attribute 链取叶子名：self.config → config、os.environ → environ。
+        """
+        if isinstance(value, ast.Subscript):
+            base = value.value
+            key = None
+            sl = value.slice
+            if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
+                key = sl.value
+            elif isinstance(sl, ast.Str):
+                key = sl.s
+            container = self._container_leaf_name(base)
+            if container and key == param and self._is_config_container(container):
+                return container
+        elif isinstance(value, ast.Attribute):
+            base = value.value
+            container = self._container_leaf_name(base)
+            if container and value.attr == param and self._is_config_container(container):
+                return container
+        elif isinstance(value, ast.Call):
+            func = value.func
+            if isinstance(func, ast.Attribute) and func.attr in ("get", "getenv"):
+                base = func.value
+                container = self._container_leaf_name(base)
+                if container and self._is_config_container(container):
+                    if value.args and isinstance(value.args[0], ast.Constant) \
+                            and isinstance(value.args[0].value, str) \
+                            and value.args[0].value == param:
+                        return container
+        return None
+
+    @staticmethod
+    def _container_leaf_name(base) -> str:
+        """从 Name 或 Attribute 链中提取容器叶子名。
+        config → config; os.environ → environ; self.config → config; cfg.sub → sub
+        """
+        if isinstance(base, ast.Name):
+            return base.id
+        if isinstance(base, ast.Attribute):
+            return base.attr
+        return ""
+
+    def _is_config_container(self, name: str) -> bool:
+        """判断变量名是否命中配置来源容器特征（config/cred/settings/env/...）。"""
+        n = name.lower()
+        return any(h in n for h in self.CONFIG_CONTAINER_HINTS)
+
     def _check_resilience_gaps(self, project_path: str) -> List[AgentSecurityRisk]:
         """检查防御层级韧性缺口 —— 检测缺失的防御模式
         
@@ -537,18 +716,11 @@ class AgentSecurityAuditor:
         如果某种防御模式在整个项目中都没有找到，则生成一个缺口风险。
         """
         risks = []
-        
+
         # 收集所有 Python 文件内容
-        exclude_dirs = {
-            "__pycache__", "node_modules", ".git", "venv", ".venv", "env",
-            "Lib", "lib", "lib64", "site-packages", "dist-packages",
-            "third_party", ".gitnexus", "data", "docs", "reports",
-            "cache", "coderef-report", "logs", "build", "dist",
-            "tests", "test", "e2e",
-        }
         all_content = ""
         for root, dirs, files in os.walk(project_path):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in exclude_dirs]
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in self.EXCLUDE_DIRS]
             for f in files:
                 if not f.endswith(".py"):
                     continue

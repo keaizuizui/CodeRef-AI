@@ -2,7 +2,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.2.5** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.2.6** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -350,6 +350,12 @@ coderef-ai/
 | 开源友好 | 敏感数据集中 `cache/` 与 `config/config.json`，删除即清理，一行命令安全开源 |
 
 ## 更新日志
+
+### v4.2.6 — Agent 安全审计新增「参数透传失效」检测（AGENT-SEC-27）
+
+- **新增 AGENT-SEC-27 静态检测**：`coderef_audit` 的 Agent 安全审计新增「参数透传失效 / 被配置静默覆盖」规则——检测「函数声明了参数 X，函数体却从 config/cred/settings/env 等配置容器读取同名值」的运行时语义矛盾：调用方传入的实参被静默忽略，父代理会基于错误前提做判断（如误以为派了某模型，实际用了配置里的模型）。走 AST 级分析，能识别跨行/跨结构的覆盖，避免逐行正则漏判
+- **覆盖三种容器形态**：`config["x"]` / `config.x` / `config.get("x")` 均命中，且支持 `self.config`、`self.creds`、`os.environ` 等 Attribute 链容器；`x = x or config["x"]` 合理兜底不误报，嵌套函数作用域严格隔离、非配置容器不误报
+- **工程收敛（自审查修复）**：文件遍历改为单一 `os.walk` + 单次读取（正则扫描与 AST 扫描复用同一份内容，消除二次 I/O）；`EXCLUDE_DIRS` 提取为类级常量供文件遍历与项目级检查复用，消除三处分散定义
 
 ### v4.2.5 — coderef_innovation 输出可固化清单（审计工具守边界，固化交给对方 AI）
 
