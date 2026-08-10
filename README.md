@@ -4,7 +4,7 @@
 
 **Version 4.2.3** | Python 3.10+ | MCP Protocol | MIT License
 
-> 一键审计 · 架构图谱 · 项目文档 · 知识图谱 · 健康仪表盘 · 代码审查 · 前端交互审查 · 记忆层 · 创新识别 · OWASP 合规 · 变更守护 · 流程验证
+> 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
 ---
 
@@ -15,7 +15,7 @@ CodeRef-AI 通过 MCP 协议暴露 **26 个工具**，同时服务两类人：
 - **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险。
 - **非编程人员的技术助理**：把看不懂的代码变成通俗的健康仪表盘、Wiki 文档和流程确证，让你不用读代码，也能确认项目有没有按你的设想运转。
 
-它不替代 AI，而是给 AI 一双确定性的眼睛——核心结论来自静态事实，而不是大模型的猜测。
+它不替代 AI，而是让它看到用静态事实核验过的世界——核心结论来自代码事实，而不是大模型的猜测。
 
 ## 核心优势
 
@@ -42,8 +42,6 @@ CodeRef-AI 通过 MCP 协议暴露 **26 个工具**，同时服务两类人：
 ### 6. 即装即用：纯 Python 免编译，无 API Key 也能跑
 
 安装只依赖纯 Python 包，Python 3.10-3.14 全部免编译直接装好，不在安装阶段要求 C 工具链。核心功能（审计、图谱、架构、变更守护、OWASP）不需要任何 API Key，本地跑通之后，再补一个 Key 让编程 AI 把 Wiki、代码审查这些 LLM 能力也打开。你只需要给编程 AI 一个 Key，它自己就能装好、配好、审好、读好、产出报告。
-
-> 本项目在 vibe coding 中自然产出，作为 AI 治理方向的引子；建议自行拷贝到本地后，交由你的编程 AI 复查并改造实现逻辑，使其符合你的项目。
 
 ## 四引擎架构
 
@@ -113,7 +111,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 
 如果你是**非编程人员**：把下面这份说明交给你的编程 AI，它会帮你完成安装、配置和第一轮分析，你只需要准备一个 API Key。你真正要做的，是最后打开它生成的健康仪表盘和 Wiki，看懂自己的项目。
 
-如果你**自己动手**：照下面三步走。
+如果你**自己动手**：照下面四步走。
 
 ### 1. 安装
 
@@ -121,7 +119,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 
 ```bash
 git clone https://github.com/keaizuizui/CodeRef-AI.git
-cd coderef-ai
+cd CodeRef-AI
 pip install -r requirements.txt
 ```
 
@@ -176,6 +174,8 @@ python -m core.mcp_server
 ```
 
 详细配置指南见 [MCP_SETUP.md](MCP_SETUP.md)。
+
+> 本项目由编程 AI 辅助研发，作为 AI 治理方向的实践样本。建议你拿到代码后，用 CodeRef 自己审计一遍，让报告带你理解每处实现，再按需调整。
 
 ## 典型使用流程
 
@@ -272,60 +272,64 @@ coderef_asset(project_path="/path/to/project", action="list")
 
 ```
 coderef-ai/
-├── core/
-│   ├── mcp_server.py                  # MCP Server 入口（26 个工具）
-│   ├── pipeline_runner.py             # 管线引擎（audit/architecture/docs + 知识图谱）
-│   ├── review_strategy.py             # 审计策略判定（增量/全量 + 影响闭包）
-│   ├── functional_review.py           # 功能审查（创新传播/结构复杂度等维度）
-│   ├── report_renderer.py             # 审计报告/知识图谱/Wiki → HTML 报告渲染
-│   ├── code_review.py                 # 代码审查（diff 变更/全量语义首查，evidence 标记）
-│   ├── frontend_inspector.py          # 前端交互审查（按钮/菜单静态枚举 + LLM 审查）
-│   ├── code_analyzer.py               # 代码分析引擎（AST）
-│   ├── ast_parser.py                  # AST 精细解析器（调用关系/赋值/配置）
-│   ├── code_knowledge_graph.py        # 知识图谱引擎（SQLite 持久化）
-│   ├── code_knowledge_base.py         # 代码知识库
-│   ├── health_dashboard.py            # 项目健康仪表盘（零外部依赖 HTML）
-│   ├── wiki_generator.py              # Wiki 生成器（三级管线）
-│   ├── workflow_graph.py              # 架构图生成器（vis-network）
-│   ├── diagram_generator.py           # 图表/画布生成
-│   ├── shared_filter.py               # 通用过滤基础设施（AutoNoiseFilter）
-│   ├── project_scope.py               # 项目范围管理（含 vendored/venv 过滤）
-│   ├── llm_integration.py             # LLM 集成（超时/重试/JSON 截断容错/预算）
-│   ├── business_analyzer.py           # 业务语义分析（提示注入防护）
-│   ├── cache_manager.py               # 缓存管理
-│   ├── gitnexus_client.py             # GitNexus 客户端
-│   ├── governance_audit.py            # 11 个检测器
-│   ├── agent_security_auditor.py
-│   ├── sca_checker.py
-│   ├── tech_debt_detector.py
-│   ├── integrity_checker.py
-│   ├── blind_spot_detector.py
-│   ├── innovation_propagation_detector.py
-│   ├── junk_detector.py
-│   ├── resource_gap_detector.py
-│   ├── code_simplifier.py
-│   ├── project_maturity_checker.py
-│   ├── memory_layer.py                # 记忆引擎：增量同步 + 语义查询
-│   ├── memory_quality.py              # 记忆质量评估 + 补全
-│   ├── prompt_asset_manager.py        # Prompt 资产版本化 / 对比 / A-B 测试
-│   ├── prompt_analyzer.py             # Prompt 分析
-│   ├── prompt_extractor.py            # Prompt 提取
-│   ├── innovation_engine.py           # 创新识别引擎：结构化创新 + 缺口按价值挑选
-│   ├── design_registry.py             # 已知设计库（别名归一）
-│   ├── owasp_compliance.py            # OWASP LLM Top 10 合规检测
-│   ├── change_guard.py                # 变更守护：AI 代码退化检测
-│   └── change_report.py               # 人话版变更报告
-├── config/                            # 配置（settings.py + 本地 config.json，含密钥，已 gitignore）
-│   └── settings.py
-├── utils/
-│   └── helpers.py
-# tests/ 已移除（清理无必要的回归测试代码，保持仓库精简）
-├── cache/                             # 运行时缓存（.gitignore 已忽略）
-├── coderef-report/                    # 输出报告（.gitignore 已忽略）
-├── demo-app/                          # 前端审查测试实例（含 6 个预置交互问题）
-├── setup.bat                          # Windows 配置向导
+├── core/                             # 核心引擎
+│   ├── mcp_server.py                 # MCP Server 入口（26 个工具）
+│   ├── pipeline_runner.py            # 管线引擎（audit/architecture/docs + 知识图谱）
+│   ├── tool_registry.py              # 工具注册中心（收敛管线引擎的上帝模块职责）
+│   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
+│   ├── functional_review.py          # 功能审查（创新传播/结构复杂度等维度）
+│   ├── report_renderer.py            # 审计报告/知识图谱/Wiki → HTML 报告渲染
+│   ├── code_review.py                # 代码审查（diff 变更/全量语义首查，evidence 标记）
+│   ├── frontend_inspector.py         # 前端交互审查（按钮/菜单静态枚举 + LLM 审查）
+│   ├── code_analyzer.py              # 代码分析引擎（AST）
+│   ├── ast_parser.py                 # AST 精细解析器（调用关系/赋值/配置）
+│   ├── code_models.py                # 代码数据模型（切断 CodeAnalyzer↔AstParser 循环依赖）
+│   ├── code_knowledge_graph.py       # 知识图谱引擎（SQLite 持久化）
+│   ├── code_knowledge_base.py        # 代码知识库
+│   ├── health_dashboard.py           # 项目健康仪表盘（零外部依赖 HTML）
+│   ├── wiki_generator.py             # Wiki 生成器（三级管线）
+│   ├── wiki_cross_verify.py          # Wiki 模块级交叉验证（确证徽章）
+│   ├── flow_verify.py                # 流程合规验证（步骤级，coderef_flow_verify）
+│   ├── arch_audit.py                 # 架构腐化诊断（循环依赖/上帝模块/分层违例）
+│   ├── graph_closure.py              # 调用闭包计算（flow_verify 与 wiki_cross_verify 共用）
+│   ├── workflow_graph.py             # 架构图生成器（vis-network）
+│   ├── diagram_generator.py          # 图表/画布生成
+│   ├── shared_filter.py              # 通用过滤基础设施（AutoNoiseFilter）
+│   ├── project_scope.py              # 项目范围管理（含 vendored/venv 过滤）
+│   ├── llm_integration.py            # LLM 集成（超时/重试/JSON 截断容错/预算）
+│   ├── business_analyzer.py          # 业务语义分析（提示注入防护）
+│   ├── cache_manager.py              # 缓存管理
+│   ├── gitnexus_client.py            # GitNexus 客户端
+│   ├── governance_audit.py           # 治理审计（CWE/OWASP 映射）
+│   ├── agent_security_auditor.py     # Agent 安全审计
+│   ├── sca_checker.py                # 依赖安全扫描（CVE）
+│   ├── tech_debt_detector.py         # 技术债务检测
+│   ├── integrity_checker.py          # 完整性检查
+│   ├── blind_spot_detector.py        # 盲区检测
+│   ├── innovation_propagation_detector.py  # 创新传播检测
+│   ├── junk_detector.py              # 垃圾文件检测
+│   ├── resource_gap_detector.py      # 资源遗漏检测
+│   ├── code_simplifier.py            # 代码精简检测
+│   ├── project_maturity_checker.py   # 项目成熟度评估
+│   ├── memory_layer.py               # 记忆引擎：增量同步 + 语义查询
+│   ├── memory_quality.py             # 记忆质量评估 + 补全
+│   ├── prompt_asset_manager.py       # Prompt 资产版本化 / 对比 / A-B 测试
+│   ├── prompt_analyzer.py            # Prompt 分析
+│   ├── prompt_extractor.py           # Prompt 提取
+│   ├── innovation_engine.py          # 创新识别引擎：结构化创新 + 缺口按价值挑选
+│   ├── design_registry.py            # 已知设计库（别名归一）
+│   ├── owasp_compliance.py           # OWASP LLM Top 10 合规检测
+│   ├── change_guard.py               # 变更守护：AI 代码退化检测
+│   └── change_report.py              # 人话版变更报告
+├── config/                           # 配置（settings.py + 本地 config.json，含密钥，已 gitignore）
+│   └── settings.py                   # 集中阈值/魔数配置
+├── docs/                             # 文档（config/core/utils 详细说明）
+├── cache/                            # 运行时缓存（.gitignore 已忽略）
+├── coderef-report/                   # 输出报告（.gitignore 已忽略）
+├── demo-app/                         # 前端审查测试实例（含 6 个预置交互问题）
+├── setup.bat                         # Windows 配置向导
 ├── requirements.txt
-├── MCP_SETUP.md                       # 详细配置指南
+├── MCP_SETUP.md                      # 详细配置指南
 └── LICENSE
 ```
 
@@ -344,14 +348,13 @@ coderef-ai/
 
 ## 更新日志
 
-### v4.2.3 — 误报治理与聚合 HTML 全 0 修复（社区反馈专项）
+### v4.2.3 — 误报治理与聚合 HTML 全 0 修复
 
 - **修复聚合 HTML 报告全 0**：`coderef_report` 重渲染既有产物时，若用空 `PipeResult` 聚合，`index.html` 审计卡片与 `audit.html` 明细会全部为 0 / "暂无发现"。现 `audit()` 在落盘 markdown 的同时把 findings 与统计序列化为 `audit_findings.json`，`render_report` 优先读取该 JSON 恢复后再渲染，保证重渲染审计内容完整
 - **修复 SCA CVE-2023-32690 归属错误**：`pandas` 旧表误挂该 CVE（实为 DMTF libspdm 漏洞，与 pandas 无关），已移除本地条目，由 OSV 在线查询兜底
 - **新增组件级利用面过滤**：`langchain-community` 的 CVE-2024-2965（SitemapLoader 无限递归 DoS）等只影响特定子组件的 CVE，若项目源码未实际 import/使用受影响的组件，自动降级为 `low` 并附「潜在风险」说明，避免对未使用组件机械报高危
 - **修复 arch_audit 同名模块误判**：模块识别改用项目相对路径而非 basename，`db/base.py` 与 `utils/base.py` 不再被合并计数，「base fan_in 132」等上帝模块虚高消失；跨目录单向调用不再被误判为循环依赖
 - **修复连接池探活机械打标**：`AGENT-RESILIENCE-07` 仅对实际使用数据库连接池的项目打标（精确匹配 `create_engine(`/`import sqlalchemy`/`pool_pre_ping` 等），纯 SQLite 等项目不再误报
-- **验证**：新增 5 项回归测试，全量 75 passed, 1 skipped
 
 ### v4.2.2 — 依赖瘦身：tree-sitter 降为可选（可用性承诺的关键修复）
 
@@ -359,14 +362,13 @@ coderef-ai/
 - **关键发现**：tree-sitter 实为**死依赖**——核心解析走 Python 标准库 `ast.parse`（`core/ast_parser.py`），而 `_init_parsers` 填充的 `self.parsers` 字典全项目无任何读取方。移除后功能完全不受影响
 - **改动**：从 `requirements.txt` 移除必需 `tree-sitter` / `tree-sitter-languages`，改为注释标注的**可选依赖**（保留 `_init_parsers` 容错代码，未来如需多语言解析可自行启用）
 - **更轻更稳**：`pip install -r requirements.txt` 不再触发任何 C 源码编译，Python 3.10-3.14 全部免编译直接装好，安装更快更省心
-- **验证**：全量 70 passed, 1 skipped；无 tree-sitter、无 API key 环境下端到端审计正常（13 findings, 0 errors），LLM 优雅降级为静态审查
+- **验证**：无 tree-sitter、无 API key 环境下端到端审计正常（13 findings, 0 errors），LLM 优雅降级为静态审查
 
 ### v4.2.1 — 架构腐化诊断层（MCP 工具补盲区）
 
 - **新增 `coderef_arch_audit`**：补齐 MCP 工具「看不到架构级问题」的盲区。复用知识图谱 `CALLS` 边做模块级静态诊断，输出四类架构症状：`cycles`（模块依赖图强连通分量→循环依赖）、`god_modules`（扇出过高→上帝模块）、`layer_violations`（低层依赖高层）、`large_modules`（异常模块规模），聚合为 0–10 架构健康度
 - **纯静态、确定性**：只读知识图谱，不依赖 LLM，结果稳定可复现——延续「非编程人员也能验证工程健康」的目标
 - **本轮架构债修复**：抽取 `core/code_models.py` 切断 `CodeAnalyzer↔AstParser` 循环依赖（R1）、收敛全项目函数内惰性导入（R2）、抽取 `core/tool_registry.py` 收敛 `pipeline_runner` 上帝模块（R3）、删除 `utils/helpers.py` 死代码（R4）、抽取 `core/graph_closure.py` 消除 `flow_verify` 与 `wiki_cross_verify` 知识重复（R5）
-- **测试**：`tests/test_new_features.py` 新增 `ArchAuditTest` 5 个用例（循环检测 / 上帝模块 / 分层违例 / 异常规模 / 健康度），全量 65 passed, 1 skipped
 
 ### v4.2.0 — 流程合规验证（非编程人员最核心的需求）
 
@@ -377,7 +379,6 @@ coderef-ai/
 - **缺失图谱明确反馈**：知识图谱未构建时返回明确提示需先运行 `coderef_audit` / `coderef_memory_sync`，不静默
 - **自动定位图谱**：通过 `CodeKnowledgeGraph(project_path)` 自动定位项目图谱，调用方无需传 db 路径
 - **与 `wiki_cross_verify` 的分工**：`core/flow_verify.py`（步骤级，作为 MCP 工具 `coderef_flow_verify` 暴露给非编程人员验证期望流程）与 `core/wiki_cross_verify.py`（目录级，给 Wiki 模块条目打确证徽章，由 `wiki_generator` 内部调用）共享同一套「静态 CALLS 边 + 确定性」方法论，是解决「Wiki 幻觉」的一体两面、互补不冗余——前者是步骤级流程确证，后者把确证结果回贴到 Wiki 人话描述上
-- **测试**：新增 8 个用例覆盖串行确证/并行诚实标记/闭包外/缺失符号/模块消歧义/图谱缺失反馈/自动定位/HTML 渲染
 
 ### v4.1.3 — git 超时参数化（让外层 AI 按项目规模自调超时）
 
@@ -385,7 +386,6 @@ coderef-ai/
 - **规模建议写入工具描述**：明确建议"小型项目(<1万行) 15s；中型(1~10万行) 30s；大型(>10万行) 60s"，让外层 AI 在 `tools/list` 看到即可自己决策，无需依赖工具侧猜
 - **默认值保留兼容**：`DEFAULT_GIT_TIMEOUT` 常量保持 30s（中型项目），不传即时用默认值，旧调用方式不受影响
 - **全链路透传**：MCP 工具 schema → `_change_guard` 分发 → `guard(git_timeout=...)` → `_auto_git_diff(timeout=...)` 逐层透传，无硬编码
-- **测试**：新增 3 个用例覆盖「默认值生效 / 显式传参生效 / guard 正确透传」
 
 ### v4.1.2 — 退化检测动态兜底（消除误导性空结论）
 
@@ -394,7 +394,6 @@ coderef-ai/
 - **明确的降级反馈**：git 不可用 / 非 git 仓库 / 无历史改动时，返回 `source=no-baseline` 并明确提示"退化检测未执行，请传入 diff 或 baseline_dir"，绝不假装"未检测到退化"
 - **检测依据透明化**：返回结构新增 `source` 字段（`diff` / `baseline_dir` / `git-auto` / `no-baseline`），summary 同步标注基线来源，让外层 AI 清楚结论依据
 - **优雅降级**：git 命令执行失败（超时 / 非零退出 / 无输出）逐级降级尝试，全程不抛异常
-- **测试**：新增 5 个用例覆盖 diff/baseline/无基线反馈/git 动态兜底/真实 git 仓库提取
 
 ### v4.1.1 — LLM 逐条粗筛闭环（疑似误报 → 用户 AI 反馈白名单）
 
@@ -430,8 +429,7 @@ coderef-ai/
 
 - **知识图谱查询返回构建时间**：`coderef_query` 的所有查询类型（stats/entity/callers/callees/impact/relations/file_entities/search/call_graph）统一附带 `kg_built_at` 与 `kg_note`，明确提示"图谱仅当运行 audit/docs/architecture 后才会重建，代码有改动需先重建再查询"，避免把旧图谱当成本次审计结论
 - **审计结果携带证据字段**：`coderef_audit` 返回新增 `evidence` 块，包含本次扫描时间 `scan_ts`、知识图谱构建时间 `kg_built_at`、本次扫描文件快照 `file_snapshot`（mtime+size），并声明统计口径仅覆盖快照所列文件、不代表修复状态
-- **报告显式标注统计口径**：审计报告头部新增"统计口径"章节，写明本次扫描时间、图谱构建时间，并声明 HIGH/MEDIUM/LOW 均为审计发现、不代表任何修复状态，修复需对照 git 提交单独核实
-- 移除 `tests/` 目录（清理无必要的回归测试代码，保持仓库精简）
+- 报告显式标注统计口径：审计报告头部新增"统计口径"章节，写明本次扫描时间、图谱构建时间，并声明 HIGH/MEDIUM/LOW 均为审计发现、不代表任何修复状态，修复需对照 git 提交单独核实
 
 ### v4.0.1 — 复查修复（SCA 准确性 + 报告透明性）
 
@@ -458,7 +456,6 @@ coderef-ai/
 - 新增 `coderef_review` MCP 工具：基于 git diff 的变更行内审查（mode=diff）+ 新项目全量语义首查（mode=full），覆盖 7 个审查维度，结论带 evidence 标记供交叉验证
 - 新增 `coderef_frontend` MCP 工具：静态全量枚举 HTML/JS 全部按钮（事件/确认弹窗/禁用态）与 L1-L5 菜单树，按 6 维度审查；可选 `mode=runtime` 浏览器抽查（失败自动降级）
 - 内置 `demo-app/` 测试实例（含 6 个预置交互问题）用于功能验证
-- 回归测试：新增 `test_code_review.py`、`test_frontend_inspector.py`
 
 ### v3.1 — 知识图谱 + 健康仪表盘
 
