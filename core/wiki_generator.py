@@ -145,6 +145,9 @@ class WikiGenerator:
     MAX_FILES_PER_MODULE = 30
     # LLM 单次最大输入字符数（避免 token 超限）
     MAX_CONTEXT_CHARS = 40000
+    # 分层人话版规模上限（更大项目保护：避免入口/数据流数量极大时 LLM 调用爆炸）
+    MAX_ENTRY_DOCS = 20       # 最多生成多少篇入口级(L1)人话版
+    MAX_FLOW_DOCS = 30        # 最多生成多少条数据流(L2)人话版
 
     # ─── 核心模块判定规则（可配置，AI 可追加）───
     # 默认入口文件名
@@ -1036,7 +1039,58 @@ class WikiGenerator:
             cite_warnings.append(f"- README.md: 修复了 {len(uv)} 个未验证标识符: {', '.join(uv[:8])}")
         docs.append(self._write_doc(output_dir, "README.md", readme))
 
-        # 2. ARCHITECTURE.md
+        # 2. OVERVIEW.md（业务视角，面向非技术读者，与技术文档分层）
+        overview = self._generate_overview(project_name, modules, style,
+                                           descriptions, meta)
+        uv = self._cite_verify(overview, meta, "OVERVIEW.md")
+        if uv:
+            overview = self._cite_fix(overview, "OVERVIEW.md", uv, meta)
+            cite_warnings.append(f"- OVERVIEW.md: 修复了 {len(uv)} 个未验证标识符")
+        docs.append(self._write_doc(output_dir, "OVERVIEW.md", overview))
+
+        # 2.5 分层人话版：入口级(L1) + 数据流级(L2)
+        # 面向更大规模项目：按入口/数据流分块喂 LLM（避免 token 爆炸），
+        # 实证绑定抗幻想（只翻译图谱调用链/数据流边，不编造）。图谱缺失时降级。
+        project_path = getattr(meta, "project_path", "") or ""
+        if project_path:
+            entries = self._discover_entry_points(project_path, meta)
+            if len(entries) > self.MAX_ENTRY_DOCS:
+                result.errors.append(
+                    f"检测到 {len(entries)} 个入口，仅生成前 {self.MAX_ENTRY_DOCS} 篇入口文档"
+                    f"（可分批生成或调整内部上限）")
+                entries = entries[:self.MAX_ENTRY_DOCS]
+            for entry in entries:
+                chain = self._extract_entry_chain(project_path, entry)
+                edoc = self._generate_entry_doc(project_name, entry, chain, style, meta)
+                uv = self._cite_verify(edoc, meta, f"ENTRIES/{entry['key']}.md")
+                if uv:
+                    edoc = self._cite_fix(edoc, f"ENTRIES/{entry['key']}.md", uv, meta)
+                    cite_warnings.append(f"- ENTRIES/{entry['key']}.md: 修复了 {len(uv)} 个未验证标识符")
+                os.makedirs(os.path.join(output_dir, "ENTRIES"), exist_ok=True)
+                fp = self._write_doc(output_dir, f"ENTRIES/{entry['key']}.md", edoc)
+                if fp:
+                    docs.append(fp)
+
+            flows = self._extract_cross_module_flows(project_path)
+            if len(flows) > self.MAX_FLOW_DOCS:
+                result.errors.append(
+                    f"检测到 {len(flows)} 条数据流，仅生成前 {self.MAX_FLOW_DOCS} 条"
+                    f"（可按调用热度人工挑选关键链路，或分批生成）")
+                flows = flows[:self.MAX_FLOW_DOCS]
+            for flow in flows:
+                fs = self._sanitize_doc_name(flow["source"])
+                ft = self._sanitize_doc_name(flow["target"])
+                fdoc = self._generate_flow_doc(project_name, flow, style)
+                uv = self._cite_verify(fdoc, meta, f"FLOWS/{fs}__{ft}.md")
+                if uv:
+                    fdoc = self._cite_fix(fdoc, f"FLOWS/{fs}__{ft}.md", uv, meta)
+                    cite_warnings.append(f"- FLOWS/{fs}__{ft}.md: 修复了 {len(uv)} 个未验证标识符")
+                os.makedirs(os.path.join(output_dir, "FLOWS"), exist_ok=True)
+                fp = self._write_doc(output_dir, f"FLOWS/{fs}__{ft}.md", fdoc)
+                if fp:
+                    docs.append(fp)
+
+        # 3. ARCHITECTURE.md
         arch = self._generate_architecture(project_name, project_summary, modules, style,
                                            descriptions, meta)
         uv = self._cite_verify(arch, meta, "ARCHITECTURE.md")
@@ -1184,6 +1238,79 @@ class WikiGenerator:
             "5. 不要使用「平台」「系统」「架构分层」「数据流」等暗示统一产品的词语，除非分析结果证据确凿。\n"
             "6. 宁可保守（如实列出文件），不要夸张（编造模块间协作关系）。\n"
         )
+
+    def _extract_entry_files(self, meta: ProjectCodeMetadata) -> List[str]:
+        """提取实证入口文件清单（is_entry_point 的文件），供业务概览"零幻想"引用。
+
+        入口是业务结构的实证起点：由代码静态分析标记，不经过 LLM 推断，
+        避免 LLM 编造"哪个文件是入口"。业务概览必须原样引用这份清单。
+        """
+        if not meta:
+            return []
+        entries = []
+        for mod in meta.modules:
+            for f in mod.files:
+                if getattr(f, "is_entry_point", False):
+                    rel = getattr(f, "rel_path", "")
+                    if rel and rel not in entries:
+                        entries.append(rel)
+        return entries
+
+    def _generate_overview(self, project_name: str, modules: List[WikiModule],
+                           style: str = "comprehensive",
+                           descriptions: Dict[str, str] = None,
+                           meta: ProjectCodeMetadata = None) -> str:
+        """生成 OVERVIEW.md — 业务视角报告。
+
+        面向非技术 / 非程序员读者：用大白话讲清项目是做什么的、价值在哪、
+        适合谁、怎么大致用起来。与 README/ARCHITECTURE/USAGE 等技术文档分层，
+        侧重业务理解而非实现细节（社区反馈：Wiki 过于技术化，缺一份业务人员能看懂的）。
+
+        减少幻想设计：入口清单由静态分析实证提取（_extract_entry_files），LLM 只能
+        原样引用，不得编造；每个业务断言要求标注「✅实证 / ❓推测」分级，标识符用
+        反引号包裹以便 _cite_verify 交叉校验，无法确证的宁可不说也不夸大。
+        """
+        guidelines = self._style_guidelines(style)
+        desc_text = self._summarize_descriptions(descriptions or {})
+        fact_data = self._make_arch_overview(meta, descriptions or {}) if meta else desc_text
+        entries = self._extract_entry_files(meta)
+        entry_list = "、".join(f"`{e}`" for e in entries) if entries else "（本次未检测到明确入口文件）"
+        system_prompt = (
+            f"你是一位既懂技术又会讲人话的资深产品顾问，为项目撰写一份"
+            f"面向非技术读者（业务人员、管理层、投资人）的业务视角概览。"
+            f"{guidelines}"
+            "输出纯 Markdown。\n\n"
+            "⚠️ 写作规则（减少幻想，务必遵守）：\n"
+            "1. 用大白话，避免堆砌类名、函数名；必须提及代码标识符时用 `反引号` 包裹（供证据校验）。\n"
+            "2. 只能引用下方「实证入口清单」「事实数据」「模块描述」中真实存在的模块/入口/依赖，\n"
+            "   不得编造功能模块或入口文件。\n"
+            "3. 每个断言分级标注：有模块/入口/依赖支撑的标「✅实证」；仅凭理解推断的标「❓推测」。\n"
+            "4. 不要使用「平台」「系统」「引擎」等暗示统一产品的词语。\n"
+            "5. 宁缺毋滥：无法确证的功能宁可不说，也不夸大。"
+        )
+        user_prompt = (
+            f"请为目录 **{project_name}** 编写一份业务视角概览（OVERVIEW.md）。\n\n"
+            f"Wiki 风格: {style} ({self.WIKI_STYLES.get(style, '')})\n\n"
+            f"要求包含以下小节：\n"
+            f"## 这是什么\n"
+            f"  用一两段大白话说明这个项目是做什么的、解决什么问题。\n"
+            f"## 核心价值\n"
+            f"  列出主要好处（3-5 条，通俗短句；每条尽量标注实证或推测）。\n"
+            f"## 适合谁\n"
+            f"  基于代码推断目标用户，并以「❓推测」标注。\n"
+            f"## 入口文件（实证清单，必须原样引用，不得增删）\n"
+            f"  {entry_list}\n"
+            f"  逐个用一句人话解释每个入口大致做什么。\n"
+            f"## 大致怎么用\n"
+            f"  用非技术语言描述从拿到项目到用起来的大致步骤；仅引用上述实证入口文件。\n"
+            f"## 模块干什么用\n"
+            f"  用一句话说明每个模块（目录）大致承担什么角色，标注实证或推测。\n\n"
+            f"⚠️ 全文面向非技术读者；不确定处用「❓推测」标注，切勿编造。\n\n"
+            f"=== 实证入口清单（零幻想，必引）===\n{entry_list}\n\n"
+            f"=== 事实数据（模块/入口/依赖的事实来源）===\n{fact_data[:15000]}\n\n"
+            f"=== 模块描述（理解各模块用途的参考）===\n{desc_text[:15000]}"
+        )
+        return self._llm_ask(system_prompt, user_prompt)
 
     def _generate_readme(self, project_name: str, summary: str,
                           modules: List[WikiModule], style: str = "comprehensive",
@@ -1438,6 +1565,235 @@ class WikiGenerator:
                 lines.append("")
         return "\n".join(lines)
 
+    # ═══════════════════════════════════════════════════════════════════
+    # 分层人话版：入口级(L1) + 数据流级(L2)
+    # 面向更大规模项目：自动发现入口、按入口/数据流分块喂 LLM、图谱缺失降级。
+    # 减少幻想：LLM 只能翻译/解释实证的调用链与数据流边，绑定证据，不编造。
+    # ═══════════════════════════════════════════════════════════════════
+
+    def _locate_kg_db(self, project_path: str) -> Optional[str]:
+        """定位知识图谱数据库；图谱不存在返回 None（调用方据此降级）。"""
+        try:
+            from core.code_knowledge_graph import CodeKnowledgeGraph
+            db = CodeKnowledgeGraph(project_path).db_path
+            if db and os.path.exists(db):
+                return db
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _sanitize_doc_name(name: str) -> str:
+        """把入口/数据流标识符转成安全的文件名分词。"""
+        name = re.sub(r"[^\w\u4e00-\u9fff]+", "_", name or "").strip("_")
+        return name or "untitled"
+
+    def _discover_entry_points(self, project_path: str,
+                               meta: ProjectCodeMetadata) -> List[dict]:
+        """规模化：自动发现公共业务入口。
+
+        实证优先：图谱中无 caller 的顶级函数（真·公共入口）+ is_entry_point 文件。
+        回退：仅 is_entry_point 文件对应的模块（无图谱也能给出一份，标记弱实证）。
+        返回 [{key, module, func, files, has_kg}]。
+        """
+        entry_modules = {}   # module_name -> {files, funcs}
+        if meta:
+            for mod in meta.modules:
+                ep_files = [f.rel_path for f in mod.files if f.is_entry_point]
+                if ep_files:
+                    funcs = []
+                    for f in mod.files:
+                        for fn in f.functions:
+                            funcs.append(fn["name"])
+                    entry_modules[mod.name] = {"files": ep_files, "funcs": funcs}
+
+        if not entry_modules:
+            return []
+
+        # 图谱存在 → 收集"无 caller 的函数"（这些才是公共入口的候选）
+        root_funcs = set()
+        db = self._locate_kg_db(project_path)
+        if db:
+            try:
+                from core.flow_verify import FlowVerifier
+                fv = FlowVerifier(db)
+                called = {t for targets in fv.adj.values() for t in targets}
+                for nid, n in fv.nodes.items():
+                    if n["type"] in ("function", "method") and nid not in called:
+                        root_funcs.add(n["name"].split(".")[-1])
+            except Exception:
+                root_funcs = set()
+
+        entries = []
+        for mod_name, info in entry_modules.items():
+            funcs = info["funcs"]
+            chosen = next((f for f in funcs if f in root_funcs), None) or \
+                (funcs[0] if funcs else "")
+            entries.append({
+                "key": self._sanitize_doc_name(
+                    f"{mod_name}_{chosen}" if chosen else mod_name),
+                "module": mod_name,
+                "func": chosen,
+                "files": info["files"],
+                "has_kg": bool(db),
+            })
+        return entries
+
+    def _extract_entry_chain(self, project_path: str, entry: dict) -> List[dict]:
+        """用 FlowVerifier 提取入口的实证调用链（调用闭包内函数节点）。
+
+        返回 [{id, name, file, line, doc}]；图谱缺失或入口未命中返回 []。
+        """
+        db = self._locate_kg_db(project_path)
+        if not db:
+            return []
+        try:
+            from core.flow_verify import FlowVerifier
+            fv = FlowVerifier(db)
+            spec = f"{entry['module']}.{entry['func']}" if entry.get("func") \
+                else entry["module"]
+            node = fv.find_entry(spec)
+            if not node:
+                return []
+            reach = fv._downstream(node, max_depth=8)
+            steps = []
+            seen = set()
+            for nid in reach:
+                n = fv.nodes[nid]
+                if n["type"] in ("function", "method") and nid not in seen:
+                    seen.add(nid)
+                    steps.append({
+                        "name": n["name"],
+                        "file": (n.get("file_path") or "").replace("\\", "/"),
+                        "line": n.get("start_line", 0),
+                        "doc": (n.get("props") or {}).get("doc", "") or "",
+                    })
+            return steps
+        except Exception:
+            return []
+
+    def _generate_entry_doc(self, project_name: str, entry: dict,
+                            chain: List[dict], style: str,
+                            meta: ProjectCodeMetadata) -> str:
+        """LLM 把入口的实证调用链翻译成人话（入口级 L1 人话版）。"""
+        guidelines = self._style_guidelines(style)
+        ev_lines = []
+        for i, s in enumerate(chain, 1):
+            loc = f"{s['file']}:{s['line']}" if s["file"] else s["name"]
+            doc = f" —— {s['doc'][:80]}" if s["doc"] else ""
+            ev_lines.append(f"{i}. `{s['name']}` ({loc}){doc}")
+        evidence = "\n".join(ev_lines) if ev_lines else "（本次未提取到实证调用链）"
+
+        system_prompt = (
+            f"你是一位既懂技术又擅长讲人话的产品顾问。为项目 **{project_name}** 的"
+            f"某个业务入口撰写一篇面向非技术读者的「入口流程人话版」。{guidelines}"
+            "输出纯 Markdown。\n\n"
+            "⚠️ 写作规则（减少幻想，务必遵守）：\n"
+            "1. 用大白话解释这个入口是做什么的、进来要什么、出去给什么。\n"
+            "2. 只能引用下方「实证调用链」中真实存在的函数/文件，不得编造步骤。\n"
+            "3. 提及代码标识符用 `反引号` 包裹（供证据校验）。\n"
+            "4. 每个步骤标注确信度：有实证调用链支撑标「✅实证」，仅凭理解推断标「❓推测」。\n"
+            "5. 宁缺毋滥：无法确证的步骤宁可不说，也不夸大。"
+        )
+        entry_desc = (
+            f"### {entry['module']} 入口\n"
+            f"入口函数: `{entry['func'] or '(未识别)'}`\n"
+            f"入口文件: {', '.join(entry['files']) or '(未识别)'}\n"
+            f"实证状态: {'✅ 有知识图谱实证调用链' if chain else '⚠️ 无图谱（弱实证，以下为基于模块理解的推测）'}"
+        )
+        user_prompt = (
+            f"请为入口 **{entry['module']}** 撰写一篇入口流程说明，包含：\n"
+            f"## {entry['module']} 入口是做什么的\n"
+            f"  一两段人话说明。\n"
+            f"## 它大致怎么做\n"
+            f"  依据实证调用链，按顺序用大白话描述流程步骤（每步标注实证/推测）。\n"
+            f"## 进入这个入口需要什么 / 它产出什么\n"
+            f"  基于实证调用链推断输入输出，标注实证或推测。\n\n"
+            f"=== 入口信息 ===\n{entry_desc}\n\n"
+            f"=== 实证调用链（零幻想，只能引用，不得增删编造）===\n{evidence}"
+        )
+        return self._llm_ask(system_prompt, user_prompt)
+
+    def _extract_cross_module_flows(self, project_path: str) -> List[dict]:
+        """SQL 查跨模块 CALLS 边，聚合出业务数据流（模块→模块）。
+
+        返回 [{source, target, funcs, count}]；图谱缺失返回 []（无实证则不生数据流）。
+        """
+        db = self._locate_kg_db(project_path)
+        if not db:
+            return []
+        try:
+            import sqlite3
+            conn = sqlite3.connect(db)
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute("""
+                SELECT DISTINCT a.file_path AS from_file, b.file_path AS to_file,
+                       b.name AS callee, COUNT(*) AS cnt
+                FROM edges e
+                JOIN nodes a ON a.id = e.source
+                JOIN nodes b ON b.id = e.target
+                WHERE e.type='CALLS' AND a.file_path != b.file_path
+                GROUP BY a.file_path, b.file_path, b.name
+                ORDER BY cnt DESC
+            """)
+            rows = cur.fetchall()
+            conn.close()
+
+            def _mod(fp):
+                parts = (fp or "").replace("\\", "/").split("/")
+                return parts[0] if parts else ""
+
+            flows: Dict[tuple, dict] = {}
+            for r in rows:
+                src, tgt = _mod(r["from_file"]), _mod(r["to_file"])
+                if not src or not tgt or src == tgt:
+                    continue
+                key = (src, tgt)
+                flows.setdefault(key, {"source": src, "target": tgt,
+                                       "funcs": set(), "count": 0})
+                flows[key]["funcs"].add(r["callee"])
+                flows[key]["count"] += 1
+
+            out = []
+            for v in flows.values():
+                v["funcs"] = sorted(v["funcs"])[:20]
+                out.append(v)
+            out.sort(key=lambda x: -x["count"])
+            return out
+        except Exception:
+            return []
+
+    def _generate_flow_doc(self, project_name: str, flow: dict,
+                           style: str) -> str:
+        """LLM 把跨模块数据流实证翻译成人话（数据流级 L2 人话版）。"""
+        guidelines = self._style_guidelines(style)
+        func_text = "、".join(f"`{f}`" for f in flow["funcs"]) or "（未识别具体函数）"
+        system_prompt = (
+            f"你是一位既懂技术又擅长讲人话的业务分析师。为项目 **{project_name}** 撰写一篇"
+            f"面向非技术读者的「数据流说明」，解释数据/调用如何从一个模块流向另一个模块。{guidelines}"
+            "输出纯 Markdown。\n\n"
+            "⚠️ 写作规则（减少幻想，务必遵守）：\n"
+            "1. 只能引用下方「实证数据流边」中真实存在的模块与函数，不得编造。\n"
+            "2. 提及代码标识符用 `反引号` 包裹（供证据校验）。\n"
+            "3. 不确定模块之间传递的具体字段时，用「❓推测」标注，不要假装知道。\n"
+            "4. 讲清业务意义即可，不要过度展开实现细节。"
+        )
+        user_prompt = (
+            f"请说明数据流 **{flow['source']} → {flow['target']}**：\n"
+            f"## 谁在向谁要东西\n"
+            f"  用大白话说清源模块依赖目标模块的什么能力。\n"
+            f"## 传递了什么\n"
+            f"  基于实证调用的函数推断传递内容，标注实证或推测。\n"
+            f"## 为什么这样设计\n"
+            f"  结合业务理解给出一两句推测，标注「❓推测」。\n\n"
+            f"=== 实证数据流边（零幻想，只能引用）===\n"
+            f"源模块: `{flow['source']}`\n"
+            f"目标模块: `{flow['target']}`\n"
+            f"跨模块调用函数: {func_text}\n"
+            f"调用次数: {flow['count']}"
+        )
+        return self._llm_ask(system_prompt, user_prompt)
+
     def _make_web_info(self, meta: ProjectCodeMetadata) -> str:
         """从元数据提取 Web 框架信息"""
         if not meta or not meta.has_web_framework:
@@ -1634,6 +1990,7 @@ class WikiGenerator:
             f"",
             f"| 文档 | 内容 | 适合谁 |",
             f"|------|------|--------|",
+            f"| [💡 业务概览](OVERVIEW.md) | 项目是什么、核心价值、适合谁、怎么用 | 非技术读者 |",
             f"| [📖 README](README.md) | 项目概述、快速开始 | 所有人 |",
             f"| [🏗️ 架构设计](ARCHITECTURE.md) | 系统架构、模块关系 | 开发者 |",
             f"| [📦 安装指南](INSTALLATION.md) | 手把手安装教程 | 新用户 |",
@@ -1643,6 +2000,14 @@ class WikiGenerator:
 
         if any("API.md" in d for d in docs):
             lines.append(f"| [🔌 API 文档](API.md) | API 端点说明 | 开发者 |")
+
+        # 分层人话版导航：入口流程(L1) + 数据流(L2)
+        entry_docs = [d for d in docs if os.sep + "ENTRIES" + os.sep in d]
+        flow_docs = [d for d in docs if os.sep + "FLOWS" + os.sep in d]
+        if entry_docs:
+            lines.append(f"| [🚪 入口流程](ENTRIES/) | 每个业务入口做什么、怎么做（人话版） | 非技术读者 |")
+        if flow_docs:
+            lines.append(f"| [🔗 数据流](FLOWS/) | 模块之间如何传递数据（人话版） | 非技术读者 |")
 
         lines.append("")
         lines.append(f"## 模块概览")

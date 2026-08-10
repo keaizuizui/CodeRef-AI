@@ -31,6 +31,7 @@ from collections import defaultdict
 from loguru import logger
 from core.shared_filter import SharedFilter
 from core.gitnexus_client import GitNexusEnrichment
+from core.arch_detector import detect_architecture
 from core.code_knowledge_base import CodeKnowledgeBase, LLMAnalyzer as KbLLMAnalyzer
 from core.prompt_extractor import PromptExtractor, PromptExtractionResult
 from core.prompt_analyzer import PromptAnalyzer, PromptAnalysisResult
@@ -169,6 +170,8 @@ class BusinessAnalyzer:
         self._learning_history = []    # 自学习历史
         self._prompt_memory = ""       # 自学习中累积的「硬编码 Prompt」
         self._prompt_analysis = None   # PromptAnalysisResult（缓存，避免重复分析）
+        self._arch_profile = None      # 架构画像（静态探测结果，缓存复用）
+        self._project_path = None      # 项目根路径（用于把绝对路径转模块名）
 
     @staticmethod
     def _sanitize_prompt_memory(memory: str, limit: int = 1000) -> str:
@@ -286,6 +289,18 @@ class BusinessAnalyzer:
         # Stage 0: GitNexus 增强
         enrichment = self._gitnexus_enrich(project_analysis.project_path)
         result.enrichment = enrichment
+
+        # Stage 0.25: 架构探测（独立于调用图的静态证据源，用于增强入口发现）
+        self._project_path = project_analysis.project_path
+        try:
+            self._arch_profile = detect_architecture(project_analysis.files)
+            if self._arch_profile:
+                logger.info(f"[BusinessAnalyzer] 架构探测: {self._arch_profile.label} "
+                            f"(置信度 {self._arch_profile.confidence:.2f}, "
+                            f"入口信号 {len(self._arch_profile.entry_signals)})")
+        except Exception as e:
+            self._arch_profile = None
+            logger.debug(f"[BusinessAnalyzer] 架构探测失败(继续): {e}")
         
         # Stage 0.5: Prompt 抽取 + 角色分析（核心创新：从 Prompt 中提取角色和流程）
         self._prompt_analysis = self._prompt_enrich(project_analysis.project_path)
@@ -1218,6 +1233,29 @@ class BusinessAnalyzer:
             if is_infra_path or is_infra_degree:
                 infra_modules.add(m)
         
+        # ── Step 3.5: 架构探测增强入口（独立于调用图的静态证据源）──
+        # 调用图只能表达「函数调用链」，对 Web 路由/事件监听/插件入口这类
+        # 入口发生在函数图之外的架构力不从心。用静态探测器提取的入口信号
+        # 补充入口模块判定，让入口层识别不再只依赖出度/入度。
+        if self._arch_profile and self._arch_profile.entry_signals:
+            signaled_modules = set()
+            for sig in self._arch_profile.entry_signals:
+                fp = sig.file_path
+                # 静态探测的 file_path 是绝对路径，先转成项目根相对路径再取模块名
+                if self._project_path:
+                    try:
+                        fp = os.path.relpath(fp, self._project_path)
+                    except Exception:
+                        pass
+                m = self._extract_module_from_path(fp)
+                if m in all_modules:
+                    signaled_modules.add(m)
+            newly_added = signaled_modules - entry_modules
+            entry_modules |= signaled_modules
+            if newly_added:
+                logger.info(f"[BusinessAnalyzer] 架构探测增强入口模块: "
+                           f"{sorted(newly_added)}（架构={self._arch_profile.label}）")
+
         # 业务模块：调用基础设施的模块 + 其他模块
         business_modules = set()
         for m in all_modules:
