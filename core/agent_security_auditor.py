@@ -563,12 +563,15 @@ class AgentSecurityAuditor:
         
         # 对每种防御模式，检查是否在项目中存在
         for check in self.RESILIENCE_GAP_CHECKS:
-            # AGENT-RESILIENCE-07 连接池探活：若项目根本不用数据库连接池（无 create_engine /
-            # sqlalchemy / psycopg / pymysql / asyncpg / DBUtils 等），跳过该项，
-            # 避免对 SQLite（无连接池概念）等纯文件型项目机械打标
+            # AGENT-RESILIENCE-07 连接池探活：只对"实际使用数据库连接池"的项目打标。
+            # 精确匹配导入/调用（create_engine( / import sqlalchemy / pool_pre_ping 等），
+            # 避免 sqlalchemy/psycopg 等关键词出现在注释、字符串或文档里就误触发；
+            # 纯 SQLite（sqlite3 标准库，无连接池概念）等项目直接跳过，不做机械打标。
             if check["id"] == "AGENT-RESILIENCE-07":
                 if not re.search(
-                    r'create_engine|sqlalchemy|psycopg|pymysql|mysql\.connector|asyncpg|DBUtils|pool_pre_ping|pool_recycle',
+                    r'create_engine\s*\(|import\s+sqlalchemy|from\s+sqlalchemy|'
+                    r'import\s+(psycopg|pymysql)|mysql\.connector|import\s+asyncpg|'
+                    r'DBUtils|pool_pre_ping|pool_recycle',
                     all_content, re.IGNORECASE
                 ):
                     continue
