@@ -473,6 +473,8 @@ class Pipe:
             r.report_path = os.path.join(out, fn)
             with open(r.report_path, "w", encoding="utf-8") as f:
                 f.write(r.report)
+            # 结构化 findings 落盘：供 coderef_report 重渲染复用（避免聚合 HTML 审计全 0）
+            self._dump_findings_json(r, out)
 
             # 生成健康仪表盘
             try:
@@ -711,6 +713,9 @@ class Pipe:
                 kg.close()
             if kg_stats is None:
                 return r, False
+            # 恢复上次审计的 findings 与统计，避免"重渲染既有产物"时 index 审计卡片
+            # 与 audit.html 明细全部为 0 / 空（社区反馈的聚合 HTML 全 0 bug）。
+            self._load_findings_json(project_path, r)
             # 若已有 Wiki 产物，挂到 wiki_result 供 HTML 渲染聚合 Wiki 页
             wiki_dir = self._detect_wiki_dir(project_path)
             if wiki_dir:
@@ -725,6 +730,90 @@ class Pipe:
         except Exception as e:
             r.errors.append(f"render_report: {e}")
             return r, False
+
+    # ─── 审计 findings 结构化落盘 / 恢复 ─────────────────────────────
+    # 背景：coderef_report 走 render_report 重渲染时，若用空 PipeResult 聚合，
+    #   index.html 的审计卡片与 audit.html 明细会全部为 0 / "暂无发现"（社区反馈）。
+    # 方案：audit() 落盘 markdown 的同时，把 findings 与统计序列化为 JSON；
+    #   render_report 优先读取该 JSON 恢复到 PipeResult，再渲染 HTML，
+    #   保证"重渲染既有产物"时审计内容完整，而不依赖对 markdown 的脆弱解析。
+
+    @staticmethod
+    def _finding_to_dict(f: "Finding") -> dict:
+        return {
+            "id": f.id, "tool": f.tool, "category": f.category,
+            "severity": f.severity, "file_path": f.file_path, "line": f.line,
+            "title": f.title, "detail": f.detail, "suggestion": f.suggestion,
+            "tier": f.tier.value if f.tier else "low",
+            "xval_by": list(f.xval_by or []),
+            "line_start": f.line_start, "line_end": f.line_end,
+            "kind": f.kind,
+        }
+
+    @staticmethod
+    def _finding_from_dict(d: dict) -> "Finding":
+        tier = Tier(d.get("tier", "low")) if d.get("tier") else Tier.LOW
+        return Finding(
+            id=d.get("id", ""), tool=d.get("tool", ""), category=d.get("category", ""),
+            severity=d.get("severity", "medium"), file_path=d.get("file_path", ""),
+            line=d.get("line", 0), title=d.get("title", ""), detail=d.get("detail", ""),
+            suggestion=d.get("suggestion", ""), tier=tier,
+            xval_by=list(d.get("xval_by", []) or []),
+            line_start=d.get("line_start", 0), line_end=d.get("line_end", 0),
+            kind=d.get("kind", "defect"))
+
+    @staticmethod
+    def _findings_json_path(project_path: str, out: Optional[str] = None) -> str:
+        """审计 findings JSON 的固定落盘路径（优先调用方 out，其次标准 coderef-report）。"""
+        if out:
+            return os.path.join(out, "audit_findings.json")
+        return os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "coderef-report", "audit_findings.json")
+
+    def _dump_findings_json(self, r: PipeResult, out: str) -> None:
+        """把 audit 的 findings 与统计序列化落盘，供 coderef_report 重渲染复用。"""
+        try:
+            data = {
+                "version": 1,
+                "scan_ts": r.scan_ts or "",
+                "kg_built_at": r.kg_built_at or "",
+                "total_files": r.total_files,
+                "total_lines": r.total_lines,
+                "scope_text": r.scope_text or "",
+                "findings": [self._finding_to_dict(f) for f in r.findings],
+            }
+            fp = self._findings_json_path(r.project_path, out)
+            os.makedirs(os.path.dirname(fp), exist_ok=True)
+            tmp = fp + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, fp)
+        except Exception as e:
+            r.errors.append(f"dump_findings_json: {e}")
+
+    def _load_findings_json(self, project_path: str, r: PipeResult) -> bool:
+        """从落盘的 findings JSON 恢复统计与 findings 到 r；无可用 JSON 返回 False。"""
+        candidates = [
+            self._findings_json_path(project_path),
+            os.path.join(project_path, "coderef-report", "audit_findings.json"),
+        ]
+        for fp in candidates:
+            if not os.path.isfile(fp):
+                continue
+            try:
+                with open(fp, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                r.total_files = int(data.get("total_files", 0) or 0)
+                r.total_lines = int(data.get("total_lines", 0) or 0)
+                r.scope_text = data.get("scope_text", "") or ""
+                r.scan_ts = data.get("scan_ts", "") or ""
+                r.kg_built_at = data.get("kg_built_at", "") or ""
+                r.findings = [self._finding_from_dict(d) for d in data.get("findings", [])]
+                return True
+            except Exception:
+                continue
+        return False
 
     # ═══════════════════════════════════
     # 检测器

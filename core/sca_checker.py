@@ -197,11 +197,8 @@ class SCAChecker:
         },
         # numpy：旧表 CVE-2023-32698 归属错误（非 numpy），已移除，避免误报。
         # 本地表不收录 numpy（依赖多为 >= ,由 OSV 在线查询兜底）
-        "pandas": {
-            "<2.1.0": [
-                ("CVE-2023-32690", "high", "Arbitrary code execution via crafted pickle file"),
-            ],
-        },
+        # pandas：旧表 CVE-2023-32690 归属错误（实为 DMTF libspdm 漏洞，与 pandas 无关），
+        # 已移除，避免对 pandas 版本机械报 CVE。本地表不收录 pandas，由 OSV 在线查询兜底。
         "tensorflow": {
             "<2.15.0": [
                 ("CVE-2023-49070", "critical", "Heap buffer overflow via sparse tensor"),
@@ -288,7 +285,6 @@ class SCAChecker:
         "CVE-2023-46229": "0.0.338",  # langchain
         "CVE-2023-44467": "0.0.331",  # langchain
         "CVE-2023-47129": "1.3.0",    # openai
-        "CVE-2023-32690": "2.0.3",    # pandas
         "CVE-2023-49070": "2.15.0",   # tensorflow
         "CVE-2023-49071": "2.15.0",   # tensorflow
         "CVE-2024-21751": "2.2.0",    # torch
@@ -302,6 +298,19 @@ class SCAChecker:
         "CVE-2023-29469": "5.0.0",    # lxml
         "CVE-2023-46136": "3.0.0",    # werkzeug
         "CVE-2024-1135": "22.0.0",    # gunicorn
+    }
+
+    # 组件级利用面规则表：CVE → (组件名, 检测该组件是否被实际 import/使用的正则, 说明)
+    # 某些 CVE 虽真实存在，但只影响依赖里的特定子组件（如 langchain-community 的
+    # SitemapLoader）。当项目从未 import/使用该组件时，漏洞利用面为零，应判定为
+    # "潜在风险"而非"当前漏洞"，降级处理并附说明，避免对未使用组件机械报高危。
+    EXPLOITABILITY_GATES = {
+        "CVE-2024-2965": (
+            "SitemapLoader",
+            re.compile(r'sitemaploader', re.IGNORECASE),
+            "仅影响 langchain_community.document_loaders.sitemap.SitemapLoader（无限递归 DoS）；"
+            "项目未检测到该组件被 import/使用，利用面为零，属潜在风险而非当前漏洞",
+        ),
     }
 
     def __init__(self, offline: bool = False):
@@ -343,6 +352,8 @@ class SCAChecker:
             vulns = self._check_vulnerability(dep.package, dep.version, dep.constraint)
             # 过滤 cache 白名单中的 CVE 误报
             vulns = [v for v in vulns if not SharedFilter.is_security_whitelisted(v.cve_id, dep.source_file, dep.source_line)]
+            # 组件级利用面过滤：未实际使用受影响子组件的 CVE 降级为潜在风险
+            vulns = self._apply_exploitability_gates(project_path, vulns)
             dep.vulnerabilities = vulns
 
         # 统计
@@ -461,6 +472,46 @@ class SCAChecker:
                     ))
 
         return deps
+
+    def _apply_exploitability_gates(self, project_path: str, vulns: List[DependencyVulnerability]) -> List[DependencyVulnerability]:
+        """组件级利用面过滤：对命中 EXPLOITABILITY_GATES 的 CVE，检查项目是否实际
+        import/使用受影响子组件。若未使用，则判定为"潜在风险"（severity 降为 low，
+        并在 summary 附说明），避免对未使用组件机械报高危误报。"""
+        if not vulns or not self.EXPLOITABILITY_GATES:
+            return vulns
+        # 仅当存在的 CVE 涉及利用面规则时才扫描源码，避免无谓 IO
+        hit_cves = {v.cve_id for v in vulns} & set(self.EXPLOITABILITY_GATES)
+        if not hit_cves:
+            return vulns
+        source_text = self._collect_project_source(project_path)
+        out = []
+        for v in vulns:
+            gate = self.EXPLOITABILITY_GATES.get(v.cve_id)
+            if gate:
+                _comp, pat, note = gate
+                if not pat.search(source_text or ""):
+                    v.severity = "low"
+                    v.summary = f"{v.summary}｜{note}"
+            out.append(v)
+        return out
+
+    def _collect_project_source(self, project_path: str) -> str:
+        """收集项目内所有 .py/.pyi 源码文本，用于利用面判定（跳过依赖目录）。"""
+        parts = []
+        for root, dirs, files in os.walk(project_path):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
+                "__pycache__", "node_modules", ".git", "venv", ".venv",
+                "third_party", ".gitnexus", "data", "site-packages",
+            )]
+            for f in files:
+                if f.endswith((".py", ".pyi")):
+                    fp = os.path.join(root, f)
+                    try:
+                        with open(fp, "r", encoding="utf-8", errors="ignore") as fh:
+                            parts.append(fh.read())
+                    except OSError:
+                        continue
+        return "\n".join(parts)
 
     def _check_vulnerability(self, package: str, version: str, constraint: str = "") -> List[DependencyVulnerability]:
         """检查依赖的已知漏洞"""

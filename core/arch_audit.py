@@ -34,7 +34,7 @@ from config.settings import (
     ARCH_HEALTH_WEIGHT_GOD,
     ARCH_HEALTH_WEIGHT_LAYER,
 )
-from core.graph_closure import load_graph, file_base
+from core.graph_closure import load_graph
 
 
 # 目录 → 分层（3=应用层 2=引擎层 1=基础层）；未知目录保守视为引擎层
@@ -52,10 +52,25 @@ def locate_kg_db(project_path: str):
     return db if os.path.exists(db) else None
 
 
-def module_of(node: dict) -> str:
-    """从节点 file_path 提取模块名（basename 去扩展名）。"""
-    base = file_base(node)
-    return os.path.splitext(base)[0] if base else (node.get("name") or "?")
+def module_of(node: dict, project_path: str = "") -> str:
+    """从节点 file_path 提取模块名（相对项目路径，去 .py）。
+
+    用相对路径而非 basename，避免不同目录下同名文件（如 db/base.py、utils/base.py）
+    被合并成同一模块名"base"，导致 fan_in/fan_out 虚高、同名符号重复计数、
+    甚至把非循环的跨目录调用误判成循环依赖（社区反馈的误报根因）。
+    未传 project_path 或无法归到项目内时，回退到 basename。
+    """
+    fp = (node.get("file_path") or "").replace("\\", "/")
+    base = os.path.basename(fp)
+    if fp and project_path:
+        try:
+            rel = os.path.relpath(fp, project_path).replace("\\", "/")
+            if not rel.startswith(".."):
+                base = rel
+        except Exception:
+            pass
+    root, _ = os.path.splitext(base)
+    return root if root else (node.get("name") or "?")
 
 
 def layer_of(node: dict) -> int:
@@ -66,18 +81,20 @@ def layer_of(node: dict) -> int:
 
 
 def build_module_graph(nodes: Dict[str, dict],
-                       adj: Dict[str, List[str]]) -> Dict[str, List[str]]:
+                       adj: Dict[str, List[str]],
+                       project_path: str = "") -> Dict[str, List[str]]:
     """把符号级 CALLS 边聚合为模块级依赖图（剔除自环）。
 
     返回 {模块名: [下游模块, ...]（去重、排序）}。
+    模块名用相对路径，区分不同目录下的同名文件，避免边被错误合并。
     """
     mod_adj: Dict[str, set] = defaultdict(set)
     for src, targets in adj.items():
-        ms = module_of(nodes.get(src, {}))
+        ms = module_of(nodes.get(src, {}), project_path)
         if not ms:
             continue
         for tgt in targets:
-            mt = module_of(nodes.get(tgt, {}))
+            mt = module_of(nodes.get(tgt, {}), project_path)
             if mt and mt != ms:
                 mod_adj[ms].add(mt)
     return {m: sorted(t) for m, t in mod_adj.items()}
@@ -162,7 +179,7 @@ def audit(project_path: str, db_path: str = None,
         "calls_edges": sum(len(v) for v in adj.values()),
     }
 
-    mod_adj = build_module_graph(nodes, adj)
+    mod_adj = build_module_graph(nodes, adj, project_path)
     result["graph_stats"]["modules"] = len(mod_adj)
 
     # 1) 循环依赖（模块级 SCC）
@@ -194,7 +211,7 @@ def audit(project_path: str, db_path: str = None,
     # 3) 分层违例（模块所属层取该模块下节点层的最大值）
     mod_layer: Dict[str, int] = {}
     for nid, n in nodes.items():
-        m = module_of(n)
+        m = module_of(n, project_path)
         if m:
             mod_layer[m] = max(mod_layer.get(m, 0), layer_of(n))
     layer_viol = []
@@ -213,7 +230,7 @@ def audit(project_path: str, db_path: str = None,
     mod_symbols: Dict[str, int] = defaultdict(int)
     for nid, n in nodes.items():
         if n.get("type") in ("function", "method", "class"):
-            mod_symbols[module_of(n)] += 1
+            mod_symbols[module_of(n, project_path)] += 1
     result["large_modules"] = sorted(
         ({"module": m, "symbols": c} for m, c in mod_symbols.items()
          if c > ls_t),
