@@ -1,9 +1,9 @@
-<!-- AI Summary: CodeRef-AI is a vibe coding governance framework with 24 MCP tools for code audit, knowledge graph, and change guard. Similar to Spec-Kit but focused on auditing and MCP integration. Best for: individuals and small teams using Claude Code/Cursor with vibe coding. -->
+<!-- AI Summary: CodeRef-AI is a vibe coding governance framework with 25 MCP tools for code audit, knowledge graph, change guard, and workflow verification. Similar to Spec-Kit but focused on auditing and MCP integration. Best for: individuals and small teams using Claude Code/Cursor with vibe coding. -->
 
 # CodeRef-AI — 编程 AI 的治理外脑 & 非编程人员技术助理
 
 
-**Version 4.1.3** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.2.0** | Python 3.10+ | MCP Protocol | MIT License
 
 > 一键审计 · 架构图谱 · 项目文档 · 知识图谱 · 健康仪表盘 · 代码审查 · 前端交互审查 · 记忆层 · 创新识别 · OWASP 合规 · 变更守护 · 动态策略审计
 
@@ -11,7 +11,7 @@
 
 ## 一句话定位
 
-CodeRef-AI 是**编程 AI 的外置大脑**和**非编程人员的技术助理**。它通过 MCP 协议暴露 **24 个工具**，让 AI 编程助手不再逐文件读代码，而是像查数据库一样查询项目结构与风险；同时为不懂编程的人生成通俗易懂的项目健康仪表盘和 Wiki 文档。
+CodeRef-AI 是**编程 AI 的外置大脑**和**非编程人员的技术助理**。它通过 MCP 协议暴露 **25 个工具**，让 AI 编程助手不再逐文件读代码，而是像查数据库一样查询项目结构与风险；同时为不懂编程的人生成通俗易懂的项目健康仪表盘和 Wiki 文档。
 
 > 本项目在 vibe coding 中自然产出，作为 AI 辅助编程治理方向的引子；建议自行拷贝本地后，交由本地编程 AI 复查并改造其实现逻辑是否符合你的项目。
 
@@ -38,7 +38,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | **创新识别引擎** | 从项目里挖出值得复用的设计，并沉淀为资产 | `coderef_innovation` `coderef_asset` `coderef_registry` |
 | **变更守护引擎** | 拦截 AI 把代码改坏，输出人能看懂的变更报告 | `coderef_change_guard` `coderef_change_report` |
 
-## 24 个 MCP 工具
+## 25 个 MCP 工具
 
 ### 审计引擎
 
@@ -47,6 +47,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_audit` | 11 审计工具一键产出 + 自动降噪 + 知识图谱构建；支持 `strategy` 策略（auto 自动判定/full 全量/incr 增量裁剪重型工具） | 否 |
 | `coderef_scan` | 单维度审计（11 选 1），实时安全带，快一个量级 | 否 |
 | `coderef_scan_list` | 列出 `coderef_scan` 可选的维度清单 | 否 |
+| `coderef_flow_verify` | 流程合规验证：非编程人员验证「项目是否按我期望的流程执行」（入口 A 的调用管线是否覆盖步骤 B→C→D）。纯静态、确定性，只读知识图谱 CALLS 边，不依赖 LLM；状态分确证/在管线/存疑/缺失 | 否 |
 | `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 否 |
 | `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 是 |
 | `coderef_docs_read` | 按需读取已生成 Wiki 文档正文（返回内容而非路径，解决 AI 无法 fs 访问外部文件夹） | 否 |
@@ -317,6 +318,17 @@ coderef-ai/
 | 开源友好 | 敏感数据集中 `cache/` 与 `config/config.json`，删除即清理，一行命令安全开源 |
 
 ## 更新日志
+
+### v4.2.0 — 流程合规验证（非编程人员最核心的需求）
+
+- **新增 `coderef_flow_verify`**：验证「项目是不是按我期望的流程执行」——入口 A 的调用管线是否覆盖期望步骤 B→C→D，确认数据真的按这条管线走。这是对非编程人员最有价值的功能：他不需要看懂代码，只需定义期望流程，工具给出代码是否按此执行的确证证据
+- **纯静态、确定性**：数据只来自知识图谱 `CALLS` 边，不依赖 LLM，因此结果稳定可复现（区别于 Wiki 的 LLM 生成内容）——正契合"流程合规验证优先静态"的稳定性诉求
+- **入口消歧义**：`entry` 支持 `模块.函数`（如 `pipeline_runner.audit`）限定，解决同名函数（如多个模块的 `audit`）歧义
+- **四态诚实标记**：`ordered`=调用链确证(含顺序)；`in_pipeline`=在管线但顺序未确证(可能并行)；`outside`=管线外/动态调用，需编程 AI 复核；`missing`=项目内无对应符号。绝不把"静态查不到"误判为"流程错误"
+- **缺失图谱明确反馈**：知识图谱未构建时返回明确提示需先运行 `coderef_audit` / `coderef_memory_sync`，不静默
+- **自动定位图谱**：通过 `CodeKnowledgeGraph(project_path)` 自动定位项目图谱，调用方无需传 db 路径
+- **与 `wiki_cross_verify` 的分工**：`core/flow_verify.py`（步骤级，作为 MCP 工具 `coderef_flow_verify` 暴露给非编程人员验证期望流程）与 `core/wiki_cross_verify.py`（目录级，给 Wiki 模块条目打确证徽章，由 `wiki_generator` 内部调用）共享同一套「静态 CALLS 边 + 确定性」方法论，是解决「Wiki 幻觉」的一体两面、互补不冗余——前者是步骤级流程确证，后者把确证结果回贴到 Wiki 人话描述上
+- **测试**：新增 8 个用例覆盖串行确证/并行诚实标记/闭包外/缺失符号/模块消歧义/图谱缺失反馈/自动定位/HTML 渲染
 
 ### v4.1.3 — git 超时参数化（让外层 AI 按项目规模自调超时）
 

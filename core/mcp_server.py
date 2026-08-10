@@ -308,6 +308,27 @@ class Server:
             "description": "列出 coderef_scan 可选的单维度审计清单（维度名 + 说明）。",
             "inputSchema": {"type": "object", "properties": {}},
         })
+        # ── 流程合规验证：非编程人员验证项目是否按期望流程执行 ──
+        self._tools.append({
+            "name": "coderef_flow_verify",
+            "description": (
+                "流程合规验证 —— 非编程人员最核心的需求：项目是不是按我期待的流程执行。\n"
+                "验证「入口 A 的调用管线是否覆盖期望步骤 B→C→D」，确认数据真的按这条管线走。\n"
+                "纯静态、确定性：数据只来自知识图谱 CALLS 边，不依赖 LLM。\n"
+                "entry 支持 模块.函数（如 pipeline_runner.audit）消除同名歧义；"
+                "steps 传期望步骤的符号关键词（中英文均可，编程 AI 需先把中文期望步骤映射为代码符号）。\n"
+                "状态语义：ordered=调用链确证(含顺序)；in_pipeline=在管线但顺序未确证(可能并行)；"
+                "outside=管线外/动态调用，需编程AI复核；missing=项目内无对应符号。\n"
+                "图谱不存在时会明确反馈需先构建（coderef_audit / coderef_memory_sync）。"
+            ),
+            "inputSchema": {"type": "object", "properties": {
+                "project_path": {"type": "string", "description": "目标项目路径"},
+                "entry": {"type": "string", "description": "入口符号，支持 模块.函数（如 pipeline_runner.audit）"},
+                "steps": {"type": "array", "items": {"type": "string"},
+                          "description": "期望步骤的符号关键词列表，如 ['analyze_project','build_knowledge_graph','render']"},
+                "depth": {"type": "integer", "description": "调用链搜索深度，默认 8"},
+            }, "required": ["project_path", "entry", "steps"]},
+        })
         # ── 引擎四 · 变更守护：AI 代码退化检测 + 人话版变更报告 ──
         self._tools.append({
             "name": "coderef_change_guard",
@@ -546,6 +567,8 @@ class Server:
                 return self._ok(rid, self._registry(a))
             if n == "coderef_docs_read":
                 return self._ok(rid, self._docs_read(a))
+            if n == "coderef_flow_verify":
+                return self._ok(rid, self._flow_verify(a))
             bg = a.get("background", n == "coderef_docs")
             if bg:
                 tid = str(uuid.uuid4())[:8]; rc = {}
@@ -757,6 +780,19 @@ class Server:
             max_chars=max_chars,
         )
         r["tool"] = "coderef_docs_read"
+        r["project_path"] = pp
+        return json.dumps(r, ensure_ascii=False)
+
+    def _flow_verify(self, a: dict) -> str:
+        """流程合规验证（coderef_flow_verify）"""
+        from core.flow_verify import verify_flow
+        pp = a["project_path"]
+        steps = a.get("steps") or []
+        if isinstance(steps, str):
+            # 兼容逗号分隔字符串
+            steps = [s.strip() for s in steps.split(",") if s.strip()]
+        r = verify_flow(pp, a["entry"], list(steps), depth=a.get("depth"))
+        r["tool"] = "coderef_flow_verify"
         r["project_path"] = pp
         return json.dumps(r, ensure_ascii=False)
 
