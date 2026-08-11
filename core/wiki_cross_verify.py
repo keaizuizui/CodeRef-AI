@@ -97,12 +97,15 @@ class ModuleCrossVerify:
     # ─── 模块级交叉验证 ───
 
     def verify_modules(self, wiki_modules: List[str],
-                       entry_spec: str, max_depth: int = 8) -> dict:
+                       entry_spec: str, max_depth: int = 8,
+                       dir_aliases: Optional[dict] = None) -> dict:
         """对一组 wiki 模块（目录名）做交叉验证。
 
         Args:
             wiki_modules: wiki 模块名列表（目录名，如 ['core','utils','config']）
             entry_spec: 入口，如 'pipeline_runner.audit' / 'class:pipeline_runner:Pipe'
+            dir_aliases: 模块名→实际目录名的映射（如 {"root": "项目名"}），
+                        用于处理 root 伪模块等显示名与目录名不一致的情况。
         """
         entry = self._find_entry(entry_spec)
         if not entry:
@@ -113,10 +116,12 @@ class ModuleCrossVerify:
 
         results = []
         for mod_name in wiki_modules:
-            syms = self._symbols_in_dir(mod_name)
+            # root 伪模块的目录名是项目根目录名，而非 "root"
+            dir_name = (dir_aliases or {}).get(mod_name, mod_name)
+            syms = self._symbols_in_dir(dir_name)
             if not syms:
                 # 目录无函数/方法符号：区分"图谱收录但纯配置/常量"与"真缺失"
-                if self._dir_in_graph(mod_name):
+                if self._dir_in_graph(dir_name):
                     results.append({
                         "module": mod_name, "status": "unverified",
                         "reason": "该目录在图谱中已收录，但主要是配置/常量/类，无可验证的函数调用",

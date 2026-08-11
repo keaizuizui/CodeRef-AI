@@ -66,6 +66,7 @@ _IMPACT_EDGE_TYPES = ("CALLS", "IMPORTS", "REFERENCES", "INHERITS")
 # 建议等级
 _STRATEGY_INCR = "incr"   # 增量审查
 _STRATEGY_FULL = "full"   # 全量审查
+_STRATEGY_NO_CHANGE = "no_change"   # 无变更，直接复用既有结论
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -360,10 +361,10 @@ class ReviewAdvisor:
             strategy = _STRATEGY_FULL
             reason = "项目尚无记忆层基线（首次审计），需全量审查建立基线。"
         elif changed_count == 0:
-            # 无变更：若图谱不过期则复用，否则全量重建
+            # 无变更：若图谱不过期则直接复用，否则全量重建
             if not stale:
-                strategy = _STRATEGY_INCR
-                reason = "未检测到代码变更且知识图谱在有效期内，建议增量复核（或直接复用既有结论）。"
+                strategy = _STRATEGY_NO_CHANGE
+                reason = "未检测到代码变更且知识图谱在有效期内，可直接复用既有结论。"
             else:
                 strategy = _STRATEGY_FULL
                 reason = "代码无变更但知识图谱已过期，建议全量重建图谱后再审查。"

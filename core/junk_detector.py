@@ -26,6 +26,7 @@ import os
 import re
 import hashlib
 import difflib
+from itertools import islice
 from datetime import datetime, timedelta
 from typing import Dict, List, Set
 from dataclasses import dataclass
@@ -697,12 +698,12 @@ class JunkDetector:
         """计算两个文件前 N 行的内容相似度"""
         try:
             with open(fpath1, "r", encoding="utf-8", errors="ignore") as fh:
-                lines1 = [next(fh) for _ in range(max_lines)]
+                lines1 = list(islice(fh, max_lines))
         except Exception:
             lines1 = []
         try:
             with open(fpath2, "r", encoding="utf-8", errors="ignore") as fh:
-                lines2 = [next(fh) for _ in range(max_lines)]
+                lines2 = list(islice(fh, max_lines))
         except Exception:
             lines2 = []
 

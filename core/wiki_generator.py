@@ -94,6 +94,7 @@ class WikiResult:
     subprojects: List[str] = field(default_factory=list)
     subproject_results: List[Dict] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1048,7 +1049,7 @@ class WikiGenerator:
         if uv:
             readme = self._cite_fix(readme, "README.md", uv, meta)
             cite_warnings.append(f"- README.md: 修复了 {len(uv)} 个未验证标识符: {', '.join(uv[:8])}")
-        docs.append(self._write_doc(output_dir, "README.md", readme))
+        self._emit(docs, output_dir, "README.md", readme)
 
         # 2. OVERVIEW.md（业务视角，面向非技术读者，与技术文档分层）
         overview = self._generate_overview(project_name, modules, style,
@@ -1057,7 +1058,7 @@ class WikiGenerator:
         if uv:
             overview = self._cite_fix(overview, "OVERVIEW.md", uv, meta)
             cite_warnings.append(f"- OVERVIEW.md: 修复了 {len(uv)} 个未验证标识符")
-        docs.append(self._write_doc(output_dir, "OVERVIEW.md", overview))
+        self._emit(docs, output_dir, "OVERVIEW.md", overview)
 
         # 2.5 分层人话版：入口级(L1) + 数据流级(L2)
         # 面向更大规模项目：按入口/数据流分块喂 LLM（避免 token 爆炸），
@@ -1075,7 +1076,7 @@ class WikiGenerator:
                     fv = None
             entries = self._discover_entry_points(meta, fv)
             if len(entries) > self.MAX_ENTRY_DOCS:
-                result.errors.append(
+                result.warnings.append(
                     f"检测到 {len(entries)} 个入口，仅生成前 {self.MAX_ENTRY_DOCS} 篇入口文档"
                     f"（可分批生成或调整内部上限）")
                 entries = entries[:self.MAX_ENTRY_DOCS]
@@ -1093,7 +1094,7 @@ class WikiGenerator:
 
             flows = self._extract_cross_module_flows(fv)
             if len(flows) > self.MAX_FLOW_DOCS:
-                result.errors.append(
+                result.warnings.append(
                     f"检测到 {len(flows)} 条数据流，仅生成前 {self.MAX_FLOW_DOCS} 条"
                     f"（可按调用热度人工挑选关键链路，或分批生成）")
                 flows = flows[:self.MAX_FLOW_DOCS]
@@ -1117,7 +1118,7 @@ class WikiGenerator:
         if uv:
             arch = self._cite_fix(arch, "ARCHITECTURE.md", uv, meta)
             cite_warnings.append(f"- ARCHITECTURE.md: 修复了 {len(uv)} 个未验证标识符: {', '.join(uv[:8])}")
-        docs.append(self._write_doc(output_dir, "ARCHITECTURE.md", arch))
+        self._emit(docs, output_dir, "ARCHITECTURE.md", arch)
 
         # 3. INSTALLATION.md
         install = self._generate_installation(project_name, project_summary, modules, style, meta)
@@ -1125,7 +1126,7 @@ class WikiGenerator:
         if uv:
             install = self._cite_fix(install, "INSTALLATION.md", uv, meta)
             cite_warnings.append(f"- INSTALLATION.md: 修复了 {len(uv)} 个未验证标识符")
-        docs.append(self._write_doc(output_dir, "INSTALLATION.md", install))
+        self._emit(docs, output_dir, "INSTALLATION.md", install)
 
         # 4. USAGE.md
         usage = self._generate_usage(project_name, project_summary, modules, style,
@@ -1134,7 +1135,7 @@ class WikiGenerator:
         if uv:
             usage = self._cite_fix(usage, "USAGE.md", uv, meta)
             cite_warnings.append(f"- USAGE.md: 修复了 {len(uv)} 个未验证标识符")
-        docs.append(self._write_doc(output_dir, "USAGE.md", usage))
+        self._emit(docs, output_dir, "USAGE.md", usage)
 
         # 5. API.md (如果有 Web 框架)
         if meta.has_web_framework:
@@ -1143,11 +1144,11 @@ class WikiGenerator:
             if uv:
                 api = self._cite_fix(api, "API.md", uv, meta)
                 cite_warnings.append(f"- API.md: 修复了 {len(uv)} 个未验证标识符")
-            docs.append(self._write_doc(output_dir, "API.md", api))
+            self._emit(docs, output_dir, "API.md", api)
 
         # 6. WIKI_INDEX.md（纯模板，无需 cite-verify）
         index = self._build_wiki_index(project_name, modules, docs, result)
-        docs.append(self._write_doc(output_dir, "WIKI_INDEX.md", index))
+        self._emit(docs, output_dir, "WIKI_INDEX.md", index)
 
         # 记录编校警告到 result
         if cite_warnings:
@@ -1170,7 +1171,10 @@ class WikiGenerator:
                 return {}
             v = ModuleCrossVerify(db)
             mod_names = [m.name for m in modules]
-            result = v.verify_modules(mod_names, entry_spec)
+            # root 伪模块的路径是项目根目录，其目录名是项目名而非 "root"
+            dir_aliases = {"root": os.path.basename(project_path.rstrip(os.sep))}
+            result = v.verify_modules(mod_names, entry_spec,
+                                       dir_aliases=dir_aliases)
             if not result.get("ok"):
                 return {}
             # 转为 {模块名: 徽章信息}
@@ -1460,7 +1464,7 @@ class WikiGenerator:
         cross_badges = cross_badges or {}
 
         index = self._build_module_index(modules, cross_badges)
-        docs.append(self._write_doc(modules_dir, "_index.md", index))
+        self._emit(docs, modules_dir, "_index.md", index)
 
         # 为每个核心模块生成详细文档
         for mod in modules:
@@ -1509,7 +1513,7 @@ class WikiGenerator:
             # 在 LLM 生成内容前注入徽章（徽章是铁证，不经过 LLM 幻觉）
             if badge_md and content:
                 content = badge_md + "\n" + content
-            docs.append(self._write_doc(modules_dir, f"{mod.name}.md", content))
+            self._emit(docs, modules_dir, f"{mod.name}.md", content)
 
         return docs
 
@@ -1958,8 +1962,10 @@ class WikiGenerator:
             lines.append(f"| [🔌 API 文档](API.md) | API 端点说明 | 开发者 |")
 
         # 分层人话版导航：入口流程(L1) + 数据流(L2)
-        entry_docs = [d for d in docs if os.sep + "ENTRIES" + os.sep in d]
-        flow_docs = [d for d in docs if os.sep + "FLOWS" + os.sep in d]
+        # 归一化路径分隔符，避免 Windows 上 os.path.join 产生混合分隔符导致匹配失败
+        norm = [d.replace("\\", "/") for d in docs if d]
+        entry_docs = [d for d in norm if "/ENTRIES/" in d]
+        flow_docs = [d for d in norm if "/FLOWS/" in d]
         if entry_docs:
             lines.append(f"| [🚪 入口流程](ENTRIES/) | 每个业务入口做什么、怎么做（人话版） | 非技术读者 |")
         if flow_docs:
@@ -2007,6 +2013,12 @@ class WikiGenerator:
         if deps:
             return "\n".join(deps[:5])
         return "未找到明确的依赖信息"
+
+    def _emit(self, docs: List[str], output_dir: str, name: str, content: str) -> None:
+        """安全写入文档并追加到 docs 列表（_write_doc 返回空串时不追加）。"""
+        fp = self._write_doc(output_dir, name, content)
+        if fp:
+            docs.append(fp)
 
     def _write_doc(self, output_dir: str, filename: str, content: str) -> str:
         """写入文档文件。

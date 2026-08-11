@@ -48,6 +48,7 @@ function loadData() {
     .then(function (res) { return res.json(); })
     .then(function (data) {
       var list = document.getElementById("dataList");
+      if (!list) { return; }
       list.innerHTML = "";
       data.forEach(function (item) {
         var li = document.createElement("li");

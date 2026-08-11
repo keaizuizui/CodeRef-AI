@@ -69,6 +69,12 @@ BINARY_RESOURCE_DIR_NAMES = {
 
 # 编译产物/二进制扩展名（用于 vendored 内嵌库判定）
 BINARY_EXTENSIONS = {".so", ".pyd", ".dll", ".dylib", ".a", ".lib", ".pyo"}
+# 模型权重/大型资源文件扩展名（用于资源目录判定，补充 BINARY_EXTENSIONS 无法覆盖的格式）
+RESOURCE_EXTENSIONS = {
+    ".safetensors", ".ckpt", ".bin", ".pt", ".pth", ".h5", ".hdf5",
+    ".onnx", ".pb", ".tflite", ".model", ".weights", ".parquet",
+    ".feather", ".npy", ".npz", ".pkl", ".pickle", ".gguf", ".ggml",
+}
 # Python 打包元数据目录（*.dist-info / *.egg-info）
 DIST_INFO_PATTERN = re.compile(r'^.+\.(?:dist-info|egg-info)$')
 
@@ -230,7 +236,8 @@ class ProjectScope:
             return f"Python 打包信息: {dir_name}"
 
         # 规则 2.5: 命名型环境目录（无需 pyvenv.cfg）
-        if ENV_DIR_PATTERN.match(dir_name):
+        # 若目录含源代码文件则不跳过，避免误排除真实项目代码
+        if ENV_DIR_PATTERN.match(dir_name) and not self._has_own_source(dir_path):
             return f"命名型虚拟环境: {dir_name}"
         if dir_name in VENDORED_DIR_NAMES and self._is_vendored_lib(dir_path):
             return f"vendored/内嵌第三方库: {dir_name}"
@@ -461,11 +468,29 @@ class ProjectScope:
                 code_count += 1
                 if code_count > 2:  # 含较多真源码 → 不跳过
                     return False
-            elif ext in CODE_EXTENSIONS:  # 编译产物/二进制
+            elif ext in CODE_EXTENSIONS or ext in RESOURCE_EXTENSIONS:  # 编译产物/二进制/模型权重
                 has_binary = True
 
         # 有二进制/编译产物，且几乎没有源码 → 视为资源目录
         return has_binary and code_count == 0
+
+    def _has_own_source(self, dir_path: str) -> bool:
+        """检查目录是否包含源代码文件（直接子文件）。
+
+        用于避免仅凭名称判定环境目录时误排除真实项目代码目录
+        （如项目内恰好有名为 env/ 的源代码目录）。
+        """
+        try:
+            entries = os.listdir(dir_path)
+        except (PermissionError, OSError):
+            return False
+        for entry in entries:
+            if os.path.isdir(os.path.join(dir_path, entry)):
+                continue
+            ext = os.path.splitext(entry)[1].lower()
+            if ext in SOURCE_EXTENSIONS:
+                return True
+        return False
 
     def should_scan(self, dir_path: str) -> bool:
         """

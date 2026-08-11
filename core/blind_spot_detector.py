@@ -336,10 +336,11 @@ class BlindSpotDetector:
                 result = client.query_cypher(
                     "MATCH (n) RETURN DISTINCT n.filePath LIMIT 5000"
                 )
-                for row in client._parse_markdown_table(result, ["filePath"]):
+                for row in client.parse_markdown_table(result, ["filePath"]):
                     fp = row.get("filePath", "")
                     if fp:
-                        indexed_files.add(fp)
+                        # 归一化为 / 分隔，统一 Windows \ 与 POSIX / 的差异
+                        indexed_files.add(fp.replace("\\", "/"))
             if not indexed_files:
                 logger.info("[BlindSpotDetector] GitNexus 索引为空，跳过符号索引盲区检测")
                 return spots
@@ -358,7 +359,10 @@ class BlindSpotDetector:
                 continue
 
             has_symbols = bool(re.search(r'^\s*(def|class)\s+\w+', content, re.MULTILINE))
-            if has_symbols and rel not in indexed_files and fp not in indexed_files:
+            # 归一化路径为 / 分隔后比较，避免 Windows \ 与 POSIX / 不匹配
+            rel_norm = rel.replace("\\", "/")
+            fp_norm = fp.replace("\\", "/")
+            if has_symbols and rel_norm not in indexed_files and fp_norm not in indexed_files:
                 # 计数符号
                 symbol_count = len(re.findall(r'^\s*(def|class)\s+\w+', content, re.MULTILINE))
                 spots.append(BlindSpot(

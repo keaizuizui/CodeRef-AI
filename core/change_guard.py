@@ -400,13 +400,14 @@ class ChangeGuard:
 
     def anchor_health_baseline(self, project_path: str, label: Optional[str] = None,
                                git_timeout: Optional[int] = None,
-                               allow_autocommit: bool = True,
+                               allow_autocommit: bool = False,
                                git_bin: Optional[str] = None) -> Dict[str, Any]:
         """锚定健康基线：把当前确认健康的代码 commit 并打 coderef-health-* tag。
 
         由上层（审计通过 / 人工确认健康）决定何时调用，CodeRef 只负责记录。
         若工作区有未提交改动且 allow_autocommit=True，先自动提交再打 tag，使 tag
         指向"此刻完整健康状态"；工作区干净时直接打 tag 到 HEAD。
+        若工作区有未提交改动且 allow_autocommit=False，则拒绝锚定并提示用户先提交。
 
         返回:
             {
@@ -430,6 +431,10 @@ class ChangeGuard:
                                       timeout=git_timeout, git_bin=git_bin)
         dirty = bool(rc == 0 and status_out)
         committed = 0
+        if dirty and not allow_autocommit:
+            return {"ok": False, "tag": "", "committed": 0,
+                    "message": "工作区有未提交改动且 allow_autocommit=False，请先手动提交或暂存后再锚定健康基线。",
+                    "baselines": existing}
         if dirty and allow_autocommit:
             self._git(project_path, ["add", "-A"], timeout=git_timeout, git_bin=git_bin)
             rc, _, _ = self._git(project_path, ["commit", "-m", HEALTH_COMMIT_MSG],

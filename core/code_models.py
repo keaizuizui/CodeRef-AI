@@ -13,7 +13,8 @@ code_analyzer 的数据模型（CodeFile/CodeFunction/CodeClass），两者靠�
 - 纯数据结构：不含解析/分析逻辑，to_dict/from_dict 仅做序列化。
 """
 
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
+import dataclasses
 from dataclasses import dataclass, field
 
 
@@ -82,6 +83,8 @@ class CodeFile:
     dynamic_imports: List[Dict] = field(default_factory=list)
     http_calls: List[Dict] = field(default_factory=list)
     function_calls: List[str] = field(default_factory=list)
+    # AST 解析的赋值分类（元素为 AstCodeAssignment 或序列化后的 dict）
+    ast_assignments: List[Any] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -96,6 +99,10 @@ class CodeFile:
             "dynamic_imports": self.dynamic_imports,
             "http_calls": self.http_calls,
             "function_calls": self.function_calls,
+            "ast_assignments": [
+                dataclasses.asdict(a) if dataclasses.is_dataclass(a) else a
+                for a in self.ast_assignments
+            ],
         }
 
     @staticmethod
@@ -111,4 +118,5 @@ class CodeFile:
         obj.dynamic_imports = d.get("dynamic_imports", [])
         obj.http_calls = d.get("http_calls", [])
         obj.function_calls = d.get("function_calls", [])
+        obj.ast_assignments = d.get("ast_assignments", [])
         return obj

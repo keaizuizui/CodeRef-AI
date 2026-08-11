@@ -307,11 +307,16 @@ class CodeKnowledgeGraph:
 
             # 导入边
             for imp in getattr(cf, "imports", []):
-                target_mod = f"mod:{imp.split('.')[0]}"
-                # 仅当目标模块是项目内真实存在的模块节点才建 IMPORTS 边。
-                # 标准库/第三方导入（如 os、json、requests）无对应节点，
-                # 建边只会产生"指向不存在节点"的孤儿边，被 memory_quality 误报。
-                if target_mod not in mod_ids:
+                # 依次尝试完整点分路径的每一段（从后往前），命中项目内模块即建边。
+                # 例如 `from core.code_review import parse_diff` 会依次尝试
+                # `mod:code_review`、`mod:core`，命中项目内真实模块才建边，
+                # 避免标准库/第三方导入产生孤儿边。
+                target_mod = ""
+                for seg in reversed(imp.split(".")):
+                    if f"mod:{seg}" in mod_ids:
+                        target_mod = f"mod:{seg}"
+                        break
+                if not target_mod:
                     continue
                 self._upsert_edge(KGEdge(
                     source=module_id, target=target_mod, type="IMPORTS",
