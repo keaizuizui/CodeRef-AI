@@ -363,6 +363,18 @@ CodeRef-AI 是合法开源的安全审计工具，本仓库不含任何恶意代
 
 ## 更新日志
 
+### v4.2.11 — CodeRabbit 复审 77 项修复（3 Critical + 44 Major + 30 Minor）
+
+- **Critical 修复**：`wiki_generator` 空路径导致 `os.path.relpath('')` 崩溃 → 新增 `_emit` 辅助方法统一守卫；`report_renderer` 的 `_safe_link` HTML 属性注入 → 新增 `_attr` 函数转义引号；`prompt_asset_manager` 的 `_action_compare` IndexError → 先过滤再截断 + 空列表守卫
+- **安全修复**：`flow_verify` HTML 插值未转义（XSS）；`agent_security_auditor` pickle 信任豁免移除 + docstring toggle 误判 + param_shadow 风险未渲染；`business_analyzer` 分隔符注入；`owasp_compliance` docstring toggle + markdown 管道符转义
+- **数据安全**：`change_guard` 的 `allow_autocommit` 默认改为 False；`design_registry` 损坏注册表覆盖前先备份；`mcp_server` 任务结果不再首次读取即删除
+- **功能正确性**：`code_knowledge_graph` IMPORTS 边丢弃包限定导入；`code_analyzer` 循环 IO 索引混乱 + 删除 1180 行不可达死代码；`innovation_engine` intent 过滤分母不一致；`sca_checker` [project] 段假依赖 + packaging 缺失版本比较误判 + OSV 网络失败静默；`governance_audit` 裸 def get/post 误判 + 字符串字面量 vs 变量名比较；`review_strategy` advise() 永不返回 no_change
+- **稳定性**：`graph_closure` 连接泄漏 + 自动创建空数据库；`gitnexus_client` shell=True 缺包 60s 超时；`llm_integration` APIRetryError 导致 OpenAI 异常分类全跳过；`integrity_checker` / `innovation_propagation_detector` 未初始化属性
+- **性能**：`memory_layer` 持久化剔除函数体 + `commonpath` O(n²) 优化；`frontend_inspector` LLM 调用新增上限 50
+- **跨平台**：`wiki_generator` ENTRIES/FLOWS 路径分隔符归一化；`blind_spot_detector` 索引路径归一化
+- **架构改进**：`innovation_engine` 不再访问检测器 9 个私有成员，改用公共 API；`tool_registry` ALL_AUDIT_TOOLS 从 SINGLE_TOOLS 派生消除重复维护；`tech_debt_detector` monkey-patching 改为参数传递
+- **文档对齐**：LICENSE 占位符、MCP_SETUP 依赖列表与知识图谱触发路径、README API Key 可选说明、启动日志版本号
+
 ### v4.2.9 — 架构探测 + 无 LLM 硬阻断人话报告 + HTML 图谱状态修复
 
 - **架构探测（内部增强）**：业务分析前新增轻量静态架构探测器，自动识别项目架构类型（分层/单体、Web/API、事件驱动、插件化）并提取调用图之外的入口信号（Web 路由端点、事件监听器、插件入口）。当项目入口发生在函数图之外时，入口层识别不再只依赖函数出度/入度——入口发现更贴合真实架构，业务全景分析的准确性提升
