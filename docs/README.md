@@ -16,11 +16,9 @@
 - `settings.py` — 集中管理审计工具的重构魔法数字（复杂度阈值、嵌套深度、函数长度等），避免散落硬编码
 - `config.json` — MCP Server 与审计管线的可调参数
 
-## utils/ 目录
+## 共享辅助
 
-`utils/` 存放通用辅助工具：
-
-- `helpers.py` — 跨模块复用的辅助函数（路径、格式化、通用小工具）
+`utils/` 已在 v4.2.1 架构清理中移除，详见 `utils.md`。跨模块复用逻辑已收敛到 `core/`（`core/graph_closure.py`、`core/code_models.py`、`core/tool_registry.py`）。
 
 ## 目录说明
 

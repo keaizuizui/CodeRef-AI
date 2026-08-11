@@ -168,12 +168,17 @@ def _esc(s: str) -> str:
     return _html.escape(s, quote=False)
 
 
+def _attr(s: str) -> str:
+    """转义 HTML 属性值（转义引号），防止属性注入。"""
+    return _html.escape(s or "", quote=True)
+
+
 def _safe_link(text: str, url: str) -> str:
     """生成 <a>，过滤 javascript:/vbscript:/data:text/html 等危险协议，防链接注入。"""
     low = (url or "").strip().lower()
     if low.startswith(("javascript:", "vbscript:", "data:text/html")):
         return text
-    return f'<a href="{url}" rel="noopener">{text}</a>'
+    return f'<a href="{_attr(_html.unescape(url))}" rel="noopener">{text}</a>'
 
 
 def _inline(s: str) -> str:
@@ -374,7 +379,7 @@ class HtmlReportRenderer:
                 rel = f"{subdir}/{fn}"
                 name = fn[:-3]
                 links.append(
-                    f'<p><a href="wiki.html#{_esc(rel)}">{_esc(name)}</a></p>')
+                    f'<p><a href="wiki.html#{_attr(rel)}">{_esc(name)}</a></p>')
         return links
 
     def _render_index(self, pr, kg_stats, wiki_dir, dimension_states=None) -> str:
@@ -632,9 +637,9 @@ class HtmlReportRenderer:
                     continue
                 if not content.strip():
                     continue
-                inner.append(f'<section><h3 id="{_esc(rel)}">{_esc(rel)}</h3>{md_to_html(content)}</section>')
+                inner.append(f'<section><h3 id="{_attr(rel)}">{_esc(rel)}</h3>{md_to_html(content)}</section>')
             if inner:
-                group_html.append(f'<section class="wikigroup" id="grp-{_esc(gname)}">'
+                group_html.append(f'<section class="wikigroup" id="grp-{_attr(gname)}">'
                                   f'<h2>{_esc(gname)} <span class="badge badge-ok">{len(inner)} 篇</span></h2>'
                                   f'{"".join(inner)}</section>')
 

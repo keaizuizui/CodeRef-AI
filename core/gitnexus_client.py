@@ -208,6 +208,16 @@ class GitNexusMCPClient:
                 "gitnexus CLI未找到。请先安装: npm install -g gitnexus"
             )
 
+        # 快速失败检查：shell=True 时 Popen 总会成功，需检查子进程是否立即退出
+        time.sleep(0.5)
+        if self._process.poll() is not None:
+            stderr = ""
+            try:
+                stderr = (self._process.stderr.read() or "")[:500]
+            except Exception:
+                pass
+            raise RuntimeError(f"gitnexus CLI 未找到或启动失败。请先安装: npm install -g gitnexus。stderr: {stderr}")
+
         # 启动后台读取线程
         self._response_queue = Queue()
         self._reader_thread = threading.Thread(

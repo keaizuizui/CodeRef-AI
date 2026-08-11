@@ -33,6 +33,7 @@ from config.settings import (
     ARCH_HEALTH_WEIGHT_CYCLE,
     ARCH_HEALTH_WEIGHT_GOD,
     ARCH_HEALTH_WEIGHT_LAYER,
+    ARCH_HEALTH_WEIGHT_LARGE,
 )
 from core.graph_closure import load_graph
 
@@ -107,16 +108,24 @@ def find_sccs(adj: Dict[str, List[str]]) -> List[List[str]]:
         all_nodes.update(tars)
     if not all_nodes:
         return []
-    # 正向 DFS 记录完成顺序
+    # 正向 DFS 记录完成顺序（迭代栈，避免大型项目触发 RecursionError）
     visited = set()
     order: List[str] = []
 
-    def dfs(v):
-        visited.add(v)
-        for w in adj.get(v, []):
-            if w not in visited:
-                dfs(w)
-        order.append(v)
+    def dfs(start):
+        stack = [(start, False)]
+        while stack:
+            v, processed = stack.pop()
+            if processed:
+                order.append(v)
+                continue
+            if v in visited:
+                continue
+            visited.add(v)
+            stack.append((v, True))  # 后序：子节点处理完后才添加到 order
+            for w in adj.get(v, []):
+                if w not in visited:
+                    stack.append((w, False))
 
     for v in all_nodes:
         if v not in visited:
@@ -126,16 +135,21 @@ def find_sccs(adj: Dict[str, List[str]]) -> List[List[str]]:
     for v, tars in adj.items():
         for w in tars:
             radj[w].append(v)
-    # 按完成逆序收集分量
+    # 按完成逆序收集分量（迭代栈）
     visited2 = set()
     comps: List[List[str]] = []
 
-    def rdfs(v, comp):
-        visited2.add(v)
-        comp.append(v)
-        for w in radj.get(v, []):
-            if w not in visited2:
-                rdfs(w, comp)
+    def rdfs(start, comp):
+        stack = [start]
+        while stack:
+            v = stack.pop()
+            if v in visited2:
+                continue
+            visited2.add(v)
+            comp.append(v)
+            for w in radj.get(v, []):
+                if w not in visited2:
+                    stack.append(w)
 
     for v in reversed(order):
         if v not in visited2:
@@ -241,6 +255,7 @@ def audit(project_path: str, db_path: str = None,
     score -= min(6.0, len(cycles) * ARCH_HEALTH_WEIGHT_CYCLE)
     score -= min(2.0, len(result["god_modules"]) * ARCH_HEALTH_WEIGHT_GOD)
     score -= min(2.0, len(layer_viol) * ARCH_HEALTH_WEIGHT_LAYER)
+    score -= min(2.0, len(result["large_modules"]) * ARCH_HEALTH_WEIGHT_LARGE)
     health = round(max(0.0, score), 1)
     label = ("优秀" if health >= 8.5 else "良好" if health >= 7.0 else
              "中等" if health >= 5.0 else "堪忧")

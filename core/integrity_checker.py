@@ -93,6 +93,7 @@ class IntegrityChecker:
         self._all_py_files: List[str] = []
         self._all_imports: Dict[str, Set[str]] = {}  # file_path -> set of imports
         self._all_module_names: Set[str] = set()
+        self.issues: List[IntegrityIssue] = []
 
     def check(self, project_path: str) -> str:
         """

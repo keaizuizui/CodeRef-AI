@@ -182,48 +182,15 @@ class InnovationEngine:
         tag = DESIGN_CAPABILITY_TAG.get(canonical)
         if not tag:
             return []
-        signatures = self.detector._collect_signatures(project_path)
+        signatures = self.detector.collect_signatures(project_path)
         return [sig.module_name for sig in signatures if tag in sig.tags]
 
     def _gather_clusters_gaps(self, project_path: str):
         """复用检测器底层：收集签名、聚类、做纯结构缺口检测，并按价值挑选 top-N。
 
-        与 detector.detect() 对齐：超过 MAX_GAP_SUGGESTIONS 时，拉一份候选清单
-        让 LLM 一次看全、按真实价值挑选（而非采纳率升序粗截断）。LLM 不可用/失败
-        时回退采纳率截断。同时复用同一套类级 LLM 预算兜底。
+        通过检测器公共接口 gather_clusters_gaps 调用，避免直接访问私有成员。
         """
-        # 初始化 LLM 与类级预算（engine 不经过检测器 detect() 主入口）
-        self.detector._ensure_llm()
-        self.detector._llm_budget = self.detector.LLM_TOTAL_BUDGET
-
-        signatures = self.detector._collect_signatures(project_path)
-        clusters: List[list] = []
-        if len(signatures) >= 2:
-            raw = self.detector._cluster_modules(signatures)
-            clusters = [c for c in raw if len(c) >= 2]
-
-        gaps = []
-        for cluster in clusters:
-            gaps.extend(self.detector._detect_structural_gaps(cluster))
-
-        # 去重（同一模式 → 同一目标只保留一个）
-        seen = set()
-        unique_gaps = []
-        for g in gaps:
-            key = (g.pattern.pattern_name, g.target_module)
-            if key not in seen:
-                seen.add(key)
-                unique_gaps.append(g)
-
-        # 价值挑选：复用检测器的 top-N 挑选逻辑（LLM 一次看清单 / 采纳率截断兜底）
-        if len(unique_gaps) > self.detector.MAX_GAP_SUGGESTIONS:
-            logger.info(
-                f"[InnovationEngine] 候选缺口 {len(unique_gaps)} 超出上限 "
-                f"{self.detector.MAX_GAP_SUGGESTIONS}，开始价值挑选"
-            )
-            unique_gaps = self.detector._select_valuable_gaps(unique_gaps)
-
-        return signatures, clusters, unique_gaps
+        return self.detector.gather_clusters_gaps(project_path)
 
     # ─── 检测（结构化创新识别） ────────────────────────────────
 
@@ -248,20 +215,7 @@ class InnovationEngine:
         total = len(signatures)
 
         # 为幸存缺口生成 LLM 精建议（受类级 LLM 预算约束，与 detector.detect() 对齐）
-        if self.detector._llm_available:
-            sig_by_module = {s.module_name: s for s in signatures}
-            for g in gaps:
-                if self.detector._llm_budget <= 0:
-                    logger.warning(
-                        f"[InnovationEngine] LLM 预算耗尽，剩余缺口使用结构建议"
-                    )
-                    break
-                target_sig = sig_by_module.get(g.target_module)
-                if target_sig is not None:
-                    llm_suggestion = self.detector._generate_suggestion(g.pattern, target_sig)
-                    if llm_suggestion.strip():
-                        g.suggestion = llm_suggestion
-                    self.detector._llm_budget -= 1
+        self.detector.refine_gap_suggestions(gaps, signatures)
 
         # ── workflows ──
         workflows: List[Dict[str, Any]] = []
@@ -285,13 +239,14 @@ class InnovationEngine:
         # 意图过滤
         if intent and intent in INTENT_ORDER:
             workflows = [w for w in workflows if w["intent"] == intent]
+        scope_total = len(workflows)
 
         # ── designs（每个已知设计的采用情况） ──
         designs: List[Dict[str, Any]] = []
         for canonical, info in SEED_DESIGNS.items():
             adopters = [w for w in workflows if canonical in w["adoption"]]
             adoption_n = len(adopters)
-            rate = (adoption_n / total) if total else 0.0
+            rate = (adoption_n / scope_total) if scope_total else 0.0
             if min_adoption and rate < min_adoption:
                 continue
             designs.append({

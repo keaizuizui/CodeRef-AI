@@ -293,7 +293,10 @@ class OWASPCompliance:
             if not stripped:
                 continue
             if stripped.startswith('"""') or stripped.startswith("'''"):
-                in_docstring = not in_docstring
+                q = stripped[:3]
+                # 单行 docstring（分隔符在同一行闭合）不切换状态
+                if not (len(stripped) > 5 and stripped.endswith(q)):
+                    in_docstring = not in_docstring
                 continue
             if in_docstring:
                 continue
@@ -448,6 +451,11 @@ class OWASPCompliance:
             ),
         }
 
+    @staticmethod
+    def _cell(s: str) -> str:
+        """转义 markdown 表格单元格中的管道符和换行符"""
+        return str(s).replace("|", "\\|").replace("\n", " ")
+
     def _to_markdown(self, result: dict) -> str:
         """生成中文 markdown 合规报告。"""
         s = result["summary"]
@@ -461,7 +469,7 @@ class OWASPCompliance:
             "",
             "## 覆盖概览",
             "",
-            "| 已覆盖维度 | 未覆盖维度 | 命中项 | HIGH | MEDIUM | LOW |",
+            "| 已覆盖维度 | 未覆盖维度 | 命中项 | HIGH维度 | MEDIUM维度 | LOW维度 |",
             "|---|---|---|---|---|---|",
             "| {} | {} | {} | {} | {} | {} |".format(
                 s["covered_count"], s["uncovered_count"],
@@ -498,8 +506,8 @@ class OWASPCompliance:
             lines.append("|------|------|------|------|------|")
             for f in fs[:20]:
                 lines.append("| `{}` | {} | {} | {} | {} |".format(
-                    f["file"] or "-", f["line"] or "-",
-                    f["title"][:40], f["detail"][:60], f["suggestion"][:60]))
+                    self._cell(f["file"] or "-"), f["line"] or "-",
+                    self._cell(f["title"][:40]), self._cell(f["detail"][:60]), self._cell(f["suggestion"][:60])))
             if len(fs) > 20:
                 lines.append("| ... | ... | ... | （还有 {} 条） | ... |".format(len(fs) - 20))
             lines.append("")

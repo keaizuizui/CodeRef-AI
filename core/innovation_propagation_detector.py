@@ -159,6 +159,8 @@ class InnovationPropagationDetector:
         self._sig_cache = None
         # LLM 总预算兜底（跨 Step 3/4）
         self._llm_budget = 0
+        # 结构化检测结果（detect() 赋值；初始化以避免 detect() 前访问报错）
+        self.gaps: List[PropagationGap] = []
 
     def _ensure_llm(self):
         """延迟初始化 LLM 客户端"""
@@ -174,6 +176,82 @@ class InnovationPropagationDetector:
         except Exception as e:
             logger.warning(f"LLM 初始化失败，将使用纯结构对比模式: {e}")
             self._llm_available = False
+
+    # ─── 公共接口（供 InnovationEngine 复用，避免直接访问私有成员） ───
+
+    def collect_signatures(self, project_path: str) -> List["CapabilitySignature"]:
+        """收集项目能力签名（公共接口，供外部模块复用）。"""
+        return self._collect_signatures(project_path)
+
+    def gather_clusters_gaps(
+        self, project_path: str
+    ) -> Tuple[List["CapabilitySignature"], List[list], List["PropagationGap"]]:
+        """收集签名、聚类、做纯结构缺口检测，并按价值挑选 top-N。
+
+        封装了 LLM 初始化、预算设置、签名收集、聚类、缺口检测、去重和价值挑选。
+        供 InnovationEngine 复用，避免直接访问检测器私有成员。
+        """
+        self._ensure_llm()
+        self._llm_budget = self.LLM_TOTAL_BUDGET
+
+        signatures = self._collect_signatures(project_path)
+        clusters: List[list] = []
+        if len(signatures) >= 2:
+            raw = self._cluster_modules(signatures)
+            clusters = [c for c in raw if len(c) >= 2]
+
+        gaps = []
+        for cluster in clusters:
+            gaps.extend(self._detect_structural_gaps(cluster))
+
+        # 去重（同一模式 → 同一目标只保留一个）
+        seen = set()
+        unique_gaps = []
+        for g in gaps:
+            key = (g.pattern.pattern_name, g.target_module)
+            if key not in seen:
+                seen.add(key)
+                unique_gaps.append(g)
+
+        # 价值挑选：复用检测器的 top-N 挑选逻辑
+        if len(unique_gaps) > self.MAX_GAP_SUGGESTIONS:
+            logger.info(
+                f"[InnovationPropagationDetector] 候选缺口 {len(unique_gaps)} 超出上限 "
+                f"{self.MAX_GAP_SUGGESTIONS}，开始价值挑选"
+            )
+            unique_gaps = self._select_valuable_gaps(unique_gaps)
+
+        return signatures, clusters, unique_gaps
+
+    def refine_gap_suggestions(
+        self,
+        gaps: List["PropagationGap"],
+        signatures: List["CapabilitySignature"],
+    ) -> None:
+        """为幸存缺口生成 LLM 精建议（就地修改 gaps 的 suggestion 字段）。
+
+        受类级 LLM 预算约束，与 detect() 主入口对齐。
+        """
+        if not self._llm_available:
+            return
+        sig_by_module = {s.module_name: s for s in signatures}
+        for g in gaps:
+            if self._llm_budget <= 0:
+                logger.warning(
+                    "[InnovationPropagationDetector] LLM 预算耗尽，剩余缺口使用结构建议"
+                )
+                break
+            target_sig = sig_by_module.get(g.target_module)
+            if target_sig is not None:
+                llm_suggestion = self._generate_suggestion(g.pattern, target_sig)
+                if llm_suggestion.strip():
+                    g.suggestion = llm_suggestion
+                self._llm_budget -= 1
+
+    @property
+    def llm_available(self) -> bool:
+        """LLM 是否可用。"""
+        return self._llm_available
 
     # ─── Step 1: 能力签名提取 ────────────────────────────────────
 

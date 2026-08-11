@@ -86,18 +86,24 @@ class ChangeReport:
 
         available = _llm_available(self.llm)
         items: List[Dict[str, Any]] = []
+        struct_reason = ""
 
         try:
             if available and len(units) <= MAX_UNITS_PER_PROMPT:
                 items = self._llm_summarize(project_path, units)
             else:
+                if not available:
+                    struct_reason = "LLM 不可用"
+                else:
+                    struct_reason = f"变更单元数（{len(units)}）超过单次处理上限（{MAX_UNITS_PER_PROMPT}）"
                 items = self._structural_summarize(project_path, units)
         except Exception as e:
             logger.exception(f"人话报告生成出现未预期异常: {e}")
+            struct_reason = "LLM 调用异常"
             items = self._structural_summarize(project_path, units)
 
         generated_by = "llm" if items and items[0].get("source") == "llm" else "structural"
-        summary = self._build_summary(units, items, generated_by)
+        summary = self._build_summary(units, items, generated_by, struct_reason)
         return {
             "items": items,
             "summary": summary,
@@ -245,7 +251,7 @@ class ChangeReport:
 
     # ── summary ─────────────────────────────────────────────────────
     def _build_summary(self, units: List[Dict[str, Any]], items: List[Dict[str, Any]],
-                       generated_by: str) -> str:
+                       generated_by: str, struct_reason: str = "") -> str:
         files = ", ".join(u["file"] for u in units[:5])
         more = f" 等 {len(units)} 个文件" if len(units) > 5 else ""
         total_added = sum(len(u.get("changed_lines", [])) for u in units)
@@ -255,8 +261,9 @@ class ChangeReport:
                 f"共新增约 {total_added} 行。AI 已归纳为「新增/修改/影响/风险」人话说明，"
                 f"请以实际代码为准。"
             )
+        reason = struct_reason or "LLM 不可用或解析失败"
         return (
             f"本次改动涉及 {len(units)} 个文件（{files}{more}），"
-            f"共新增约 {total_added} 行。LLM 不可用或解析失败，已降级为结构摘要，"
+            f"共新增约 {total_added} 行。{reason}，已降级为结构摘要，"
             f"请结合变更行号人工确认影响范围。"
         )

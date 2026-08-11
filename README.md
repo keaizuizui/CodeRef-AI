@@ -2,7 +2,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.2.9** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.2.10** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -109,7 +109,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 
 ## 快速开始
 
-如果你是**非编程人员**：把下面这份说明交给你的编程 AI，它会帮你完成安装、配置和第一轮分析，你只需要准备一个 API Key。你真正要做的，是最后打开它生成的健康仪表盘和 Wiki，看懂自己的项目。
+如果你是**非编程人员**：把下面这份说明交给你的编程 AI，它会帮你完成安装、配置和第一轮分析。审计、知识图谱、架构诊断等核心功能不需要 API Key；仅 Wiki 文档、代码审查等 LLM 依赖功能需要（也可用本地 Ollama 免费替代）。你真正要做的，是最后打开它生成的健康仪表盘和 Wiki，看懂自己的项目。
 
 如果你**自己动手**：照下面四步走。
 
@@ -362,6 +362,16 @@ CodeRef-AI 是合法开源的安全审计工具，本仓库不含任何恶意代
 3. **如实告知审计 AI**：若 SCA 结果缺失或被清理，先把杀毒排除项配好再跑审计，避免误删导致结论失真
 
 ## 更新日志
+
+### v4.2.10 — CodeRabbit 交叉审计修复（77 项全量修复）
+
+- **交叉审计验证**：通过 CodeRabbit CLI 对全量代码进行 LLM 语义审计，发现 77 项问题（3 Critical / 44 Major / 30 Minor），全部经代码复查确认属实并修复。验证了「多工具交叉验证」理念——静态工具提供确定性基线，LLM 审计补充语义理解
+- **安全修复（6 项）**：修复 `report_renderer.py` / `flow_verify.py` / `memory_layer.py` 的 HTML 属性注入和 XSS 转义缺失；修复 `business_analyzer.py` 分隔符注入风险；修复 `agent_security_auditor.py` 单行 docstring toggle 假阴性 + pickle.dumps 信任豁免 + param_shadow 未渲染
+- **稳定性修复（10 项）**：修复 `wiki_generator.py` 空路径导致 ValueError；`graph_closure.py` 数据库连接泄漏；`gitnexus_client.py` 子进程启动失败无快速检测；`mcp_server.py` 任务结果首次读取即销毁；`arch_audit.py` 递归 DFS 栈溢出风险等
+- **功能正确性修复（25 项）**：修复 `code_analyzer.py` 循环 IO 索引混淆 + 1180 行不可达死代码；`change_guard.py` 默认自动提交改为 False；`memory_quality.py` auto-fix 标记越界 + LLM 无偏差误报；`innovation_engine.py` 意图过滤后分母不一致；`code_knowledge_graph.py` IMPORTS 边过滤丢弃包限定导入等
+- **数据完整性修复（8 项）**：修复 `design_registry.py` 损坏注册表覆盖前不备份；`memory_quality.py` 隐式副作用传递；`pipeline_runner.py` 自定义 output_dir 恢复空 findings；`review_strategy.py` no_change 策略不可达等
+- **性能与代码质量修复（18 项）**：修复 `memory_layer.py` O(n²) commonpath + 持久化完整函数体；`frontend_inspector.py` LLM 调用无上限；`tool_registry.py` 重复定义；`llm_integration.py` APIRetryError 导入失败等
+- **文档与前端修复（10 项）**：修复 LICENSE 占位符；demo-app debug=True 安全风险；docs/README.md 文档矛盾；版本号一致性等
 
 ### v4.2.9 — 架构探测 + 无 LLM 硬阻断人话报告 + HTML 图谱状态修复
 

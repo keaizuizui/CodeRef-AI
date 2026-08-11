@@ -153,6 +153,19 @@ def _ast_to_dict(ar) -> dict:
     }
 
 
+def _strip_code(d: dict) -> dict:
+    """返回去除函数体 code 字段的浅拷贝，避免状态文件存储完整源码副本。"""
+    if not d:
+        return d
+    out = dict(d)
+    out["functions"] = [{**f, "code": ""} for f in d.get("functions", [])]
+    out["classes"] = [
+        {**c, "methods": [{**m, "code": ""} for m in c.get("methods", [])]}
+        for c in d.get("classes", [])
+    ]
+    return out
+
+
 def _ast_from_dict(d: dict):
     """从 dict 还原 AstFileResult dataclass 对象（供 CodeKnowledgeGraph.build 使用）"""
     from core.ast_parser import (
@@ -388,7 +401,7 @@ class MemoryLayer:
             "mode": mode,
             "last_sync": datetime.now().isoformat(),
             "snapshot": current_snapshot,
-            "ast_cache": new_ast,
+            "ast_cache": {fp: _strip_code(d) if d else None for fp, d in new_ast.items()},
             "kg_stats": kg_stats,
             "kb_status": kb_status,
         }
@@ -649,14 +662,18 @@ class MemoryLayer:
         """按顶层模块计算置信度高/中/低"""
         # 按顶层目录分组
         modules: Dict[str, List[str]] = {}
+        # 相对项目根（用所有文件的公共前缀近似项目根）
+        try:
+            common = os.path.commonpath(files) if files else ""
+        except ValueError:
+            common = ""
         for fp in files:
             rel = fp
-            # 相对项目根（用所有文件的公共前缀近似项目根）
-            try:
-                common = os.path.commonpath(files)
-                rel = os.path.relpath(fp, common)
-            except Exception:
-                pass
+            if common:
+                try:
+                    rel = os.path.relpath(fp, common)
+                except ValueError:
+                    pass
             parts = rel.replace(os.sep, "/").split("/")
             mod = parts[0] if len(parts) > 1 else "__root__"
             modules.setdefault(mod, []).append(fp)
@@ -733,11 +750,11 @@ class MemoryLayer:
         for s in blindspots if blindspots else []:
             risk = s.get("risk_level", "low")
             sev_cls = "sev-" + (risk if risk in ("critical", "high", "medium", "low") else "medium")
-            cat = s.get("category_label") or s.get("category", "未知")
+            cat = self._esc(s.get("category_label") or s.get("category", "未知"))
             item = s.get("item", "")
             detail = self._esc(s.get("detail", "") or "")
             bs_rows.append(f'''<div class="risk-item">
-                <span class="risk-severity {sev_cls}">{risk}</span>
+                <span class="risk-severity {sev_cls}">{self._esc(risk)}</span>
                 <div class="risk-info">
                     <div class="risk-title">{cat} · {self._esc(item)}</div>
                     <div class="risk-meta">{detail}</div>

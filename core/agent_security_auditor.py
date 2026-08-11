@@ -460,7 +460,9 @@ class AgentSecurityAuditor:
 
             # 跟踪多行 docstring
             if stripped.startswith('"""') or stripped.startswith("'''"):
-                in_docstring = not in_docstring
+                q = stripped[:3]
+                if not (len(stripped) > 5 and stripped.endswith(q)):
+                    in_docstring = not in_docstring
                 continue
             if in_docstring:
                 continue
@@ -514,11 +516,6 @@ class AgentSecurityAuditor:
                         if risk_id == "AGENT-SEC-25":
                             args = self._collect_call_args(lines, i - 1, stripped, m.start())
                             if re.search(r'timeout\s*=', args, re.IGNORECASE):
-                                continue
-                        # AGENT-SEC-23：豁免服务端内部 pickle dumps→loads 闭环（参数为内部可信变量）
-                        if risk_id == "AGENT-SEC-23":
-                            args = self._collect_call_args(lines, i - 1, stripped, m.start())
-                            if args and self._is_internal_pickle_loads(args, lines):
                                 continue
                         # 提示注入/上下文操纵：若注入点已被净化函数包裹，视为已安全处理
                         if is_sanitized and category_key in ("prompt_injection", "context_manipulation"):
@@ -880,6 +877,7 @@ class AgentSecurityAuditor:
             "autonomous": "自主行为",
             "knowledge": "知识投毒",
             "resilience_gap": "防御层级韧性缺口",
+            "param_shadow": "参数透传失效",
         }
 
         lines = [
@@ -917,9 +915,10 @@ class AgentSecurityAuditor:
             "autonomous": "Agent 可能未经确认执行自主行为",
             "knowledge": "知识库/向量数据库可能被投毒",
             "resilience_gap": "缺失的防御层级，如重试退避、模型回退、可观测性等",
+            "param_shadow": "函数参数被配置读取静默覆盖，导致调用方传入的参数失效",
         }
 
-        for cat_key in ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "resilience_gap"]:
+        for cat_key in ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "resilience_gap", "param_shadow"]:
             cat_risks = by_category.get(cat_key, [])
             if not cat_risks:
                 continue
@@ -933,7 +932,7 @@ class AgentSecurityAuditor:
         lines.append("## 详细风险列表")
         lines.append("")
 
-        for cat_key in ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "resilience_gap"]:
+        for cat_key in ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "resilience_gap", "param_shadow"]:
             cat_risks = by_category.get(cat_key, [])
             if not cat_risks:
                 continue

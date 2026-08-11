@@ -8,7 +8,7 @@ CodeRef MCP Server v4.2.4 — 四大引擎 + 26 个工具
   OWASP 合规   → coderef_owasp
 """
 
-import json, sys, os, logging, traceback, threading, uuid
+import json, sys, os, logging, traceback, threading, uuid, time
 from datetime import datetime
 from typing import Dict, List, Any
 from contextlib import contextmanager
@@ -956,8 +956,6 @@ class Server:
         if handler is not None:
             return handler(a)
         return "未知工具: " + n
-        logger.info(f"[{n}] 完成: {r.elapsed}s")
-        return r.report
 
     def _review(self, a) -> str:
         """执行代码审查（coderef_review），返回结构化 JSON 文本"""
@@ -1084,9 +1082,36 @@ class Server:
                     }, ensure_ascii=False)
                 return json.dumps({"status":"running","task_id":tid})
             rc = t["result"]
-            if "error" in rc: return json.dumps({"status":"error","task_id":tid,"error":rc["error"]})
-            r = rc.get("result",""); del tasks[tid]
+            if "error" in rc:
+                t["finished_at"] = time.time()
+                self._evict_finished_tasks(tasks)
+                return json.dumps({"status":"error","task_id":tid,"error":rc["error"]})
+            r = rc.get("result","")
+            t["finished_at"] = time.time()
+            self._evict_finished_tasks(tasks)
         return json.dumps({"status":"completed","task_id":tid,"content":r}, ensure_ascii=False)
+
+    _TASK_RETENTION_SECONDS = 300
+    _TASK_MAX_ENTRIES = 100
+
+    def _evict_finished_tasks(self, tasks: dict) -> None:
+        """驱逐已过期的完成任务，避免无限增长。"""
+        now = time.time()
+        # 先驱逐过期的
+        expired = [
+            tid for tid, t in tasks.items()
+            if t.get("finished_at") and now - t["finished_at"] > self._TASK_RETENTION_SECONDS
+        ]
+        for tid in expired:
+            del tasks[tid]
+        # 若仍超上限，按完成时间驱逐最旧的
+        if len(tasks) > self._TASK_MAX_ENTRIES:
+            finished = sorted(
+                [(tid, t.get("finished_at", 0)) for tid, t in tasks.items() if t.get("finished_at")],
+                key=lambda x: x[1]
+            )
+            for tid, _ in finished[:len(tasks) - self._TASK_MAX_ENTRIES]:
+                del tasks[tid]
 
     def _query(self, a) -> str:
         from core.pipeline_runner import Pipe
@@ -1108,7 +1133,7 @@ class Server:
             sys.stdout.reconfigure(encoding='utf-8')
         else:
             sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-        logger.info("CodeRef MCP v3.0 (audit|arch|docs) 启动")
+        logger.info(f"CodeRef MCP v{PKG_VERSION} 启动，已注册 {len(self._tools)} 个工具")
         for line in sys.stdin:
             if not (line := line.strip()): continue
             try:

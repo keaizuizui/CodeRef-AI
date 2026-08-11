@@ -64,8 +64,9 @@ _STALE_GRAPH_HOURS = 24
 _IMPACT_EDGE_TYPES = ("CALLS", "IMPORTS", "REFERENCES", "INHERITS")
 
 # 建议等级
-_STRATEGY_INCR = "incr"   # 增量审查
-_STRATEGY_FULL = "full"   # 全量审查
+_STRATEGY_INCR = "incr"              # 增量审查
+_STRATEGY_FULL = "full"              # 全量审查
+_STRATEGY_NO_CHANGE = "no_change"    # 无变更复用
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -362,8 +363,8 @@ class ReviewAdvisor:
         elif changed_count == 0:
             # 无变更：若图谱不过期则复用，否则全量重建
             if not stale:
-                strategy = _STRATEGY_INCR
-                reason = "未检测到代码变更且知识图谱在有效期内，建议增量复核（或直接复用既有结论）。"
+                strategy = _STRATEGY_NO_CHANGE
+                reason = "未检测到代码变更且知识图谱在有效期内，建议直接复用既有结论（no_change）。"
             else:
                 strategy = _STRATEGY_FULL
                 reason = "代码无变更但知识图谱已过期，建议全量重建图谱后再审查。"

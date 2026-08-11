@@ -28,14 +28,7 @@ SINGLE_TOOLS = {
 }
 
 # 全量模式下运行的全部 11 个工具（展示名, 方法名）
-ALL_AUDIT_TOOLS = [
-    ("治理审计", "_gov"), ("Agent安全", "_agent"),
-    ("依赖扫描SCA", "_sca"), ("技术债务", "_td"),
-    ("完整性检查", "_integ"), ("盲区检测", "_blind"),
-    ("创新传播", "_inn"), ("垃圾文件", "_junk"),
-    ("资源遗漏", "_resgap"), ("代码精简", "_simp"),
-    ("项目成熟度", "_matu"),
-]
+ALL_AUDIT_TOOLS = [(label, method) for label, method in SINGLE_TOOLS.values()]
 
 # 增量模式下跳过的重型全量工具（这些维度需全项目盘点，增量变更无意义）
 INCR_SKIP_TOOLS = {"_inn", "_simp", "_matu"}

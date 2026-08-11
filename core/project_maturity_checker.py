@@ -72,6 +72,17 @@ class ProjectMaturityChecker:
         target = os.path.join(project_path, pattern)
         return os.path.exists(target)
 
+    def _pyproject_has_section(self, project_path: str, section: str) -> bool:
+        """检查 pyproject.toml 是否包含指定段落（如 [tool.mypy]）"""
+        pp = os.path.join(project_path, "pyproject.toml")
+        if not os.path.isfile(pp):
+            return False
+        try:
+            with open(pp, "r", encoding="utf-8", errors="ignore") as f:
+                return section in f.read()
+        except (OSError, IOError):
+            return False
+
     def _glob_exists(self, project_path: str, pattern: str) -> bool:
         """检查是否存在 glob 匹配的文件"""
         import glob
@@ -455,7 +466,11 @@ class ProjectMaturityChecker:
                         suggestion="在 .gitignore 中添加 .env 和 __pycache__/，防止敏感信息泄露",
                     ))
             except (OSError, IOError):
-                pass
+                checks.append(MaturityCheck(
+                    check_id="MAT-CFG-04", category="config", name=".gitignore",
+                    status="warn", detail=".gitignore 存在但无法读取",
+                    suggestion="检查 .gitignore 文件权限，确保可读取",
+                ))
         else:
             checks.append(MaturityCheck(
                 check_id="MAT-CFG-04", category="config", name=".gitignore",
@@ -544,7 +559,12 @@ class ProjectMaturityChecker:
         checks = []
 
         # 类型检查
-        has_mypy = self._has_dep(deps, "mypy") or self._file_exists(project_path, "mypy.ini") or self._file_exists(project_path, "pyproject.toml")
+        has_mypy = (
+            self._has_dep(deps, "mypy")
+            or self._file_exists(project_path, "mypy.ini")
+            or self._file_exists(project_path, ".mypy.ini")
+            or self._pyproject_has_section(project_path, "[tool.mypy]")
+        )
         if has_mypy:
             checks.append(MaturityCheck(
                 check_id="MAT-QLY-01", category="quality", name="类型检查",

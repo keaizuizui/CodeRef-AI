@@ -23,7 +23,7 @@ cd /path/to/coderef-ai
 pip install -r requirements.txt
 ```
 
-核心依赖：`tree-sitter`（代码解析）、`openai`（LLM 集成）、`loguru`（日志）、`pandas`（数据处理）。
+核心依赖：`openai`（LLM 集成）、`loguru`（日志）、`pandas`（数据处理）、`numpy`（数值计算）、`requests`（HTTP）、`pyyaml`（配置）、`tqdm`（进度条）、`pathspec`（路径匹配）、`packaging`（版本解析）。`tree-sitter` 为可选依赖（多语言解析），未安装时自动降级为 Python 标准库 `ast.parse`，不影响任何分析功能。
 
 ---
 
@@ -224,7 +224,7 @@ export CODEREF_API_KEY="ollama"
 
 ## 知识图谱查询速查
 
-知识图谱在运行 audit / architecture / docs 后自动构建，持久化到 `cache/kg/`。一次构建，跨会话复用。
+知识图谱在运行 audit / architecture / docs / memory_sync 后自动构建，持久化到 `cache/kg/`。一次构建，跨会话复用。
 
 | 想知道什么 | query_type | 参数 |
 |-----------|-----------|------|
@@ -327,7 +327,7 @@ coderef_task_status(task_id="xxx")
 
 ### 知识图谱查询返回空
 
-知识图谱需要先运行 audit / architecture / docs 才会构建。如果之前没有运行过：
+知识图谱需要先运行 audit / architecture / docs / memory_sync 才会构建。如果之前没有运行过：
 
 ```python
 coderef_audit(project_path="/path/to/project", background=True)
@@ -357,7 +357,7 @@ print(client.models.list())
 ```
 AI 编程助手 (Trae / Claude Desktop / Cursor)
    │
-   └── coderef-ai MCP Server (v4.2.9, 26 个工具)
+   └── coderef-ai MCP Server (v4.2.10, 26 个工具)
           │
           ├── coderef_audit ─── 11 检测器管线
           │      ├── 治理审计 (governance_audit)

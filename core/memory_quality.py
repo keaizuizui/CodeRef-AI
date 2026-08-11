@@ -36,7 +36,7 @@ import json
 import hashlib
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 from loguru import logger
 
@@ -205,13 +205,12 @@ class MemoryQuality:
         for _eid, e in kg.get_all_edges():
             referenced.add(e.source)
             referenced.add(e.target)
-        orphan_nodes = [
-            node_ids - referenced
-        ] if False else sorted(nid for nid in node_ids if nid not in referenced)
+        orphan_nodes = sorted(nid for nid in node_ids if nid not in referenced)
 
         # 报告孤儿边
+        edge_findings: List[Dict[str, Any]] = []
         for eid, e, missing in orphan_edges[:MAX_ORPHAN_EDGES_REPORT]:
-            findings.append(self._make_finding(
+            f = self._make_finding(
                 kind=KIND_INTEGRITY,
                 file="",
                 line=0,
@@ -220,7 +219,9 @@ class MemoryQuality:
                        "引用完整性被破坏，可能影响查询/影响分析的准确性。",
                 suggestion="删除该孤儿边，或补建缺失的目标节点。",
                 severity=SEVERITY_MEDIUM,
-            ))
+            )
+            findings.append(f)
+            edge_findings.append(f)
 
         # 报告孤立节点
         for nid in orphan_nodes[:MAX_ORPHAN_NODES_REPORT]:
@@ -239,7 +240,7 @@ class MemoryQuality:
             eids = [eid for eid, _, _ in orphan_edges]
             applied = kg.delete_orphan_edges(eids)
             # 把已修复的发现标记为已自动修复
-            for f in findings[: len(eids)]:
+            for f in edge_findings:
                 f["status"] = STATUS_AUTO_FIXED
                 f["detail"] += " [已自动修复]"
 
@@ -312,7 +313,7 @@ class MemoryQuality:
 
         # auto_fix：为缺失摘要的符号自动补全并标注来源
         if auto_fix and missing:
-            store = self._load_auto_summary_store(project_path)
+            root, store = self._load_auto_summary_store(project_path)
             for sym in missing:
                 store["entries"][self._symbol_key(sym)] = {
                     "name": sym["name"],
@@ -324,7 +325,7 @@ class MemoryQuality:
                     "created_at": datetime.now().isoformat(),
                 }
                 applied += 1
-            self._save_auto_summary_store(project_path, store)
+            self._save_auto_summary_store(project_path, root, store)
             # 标记已自动补全
             for f in findings[: len(missing)]:
                 f["status"] = STATUS_AUTO_FIXED
@@ -412,8 +413,8 @@ class MemoryQuality:
         data_dir.mkdir(parents=True, exist_ok=True)
         return str(data_dir / AUTO_SUMMARY_FILE)
 
-    def _load_auto_summary_store(self, project_path: str) -> Dict[str, Any]:
-        """加载并返回该项目的 auto-summary 条目容器（含 entries）。"""
+    def _load_auto_summary_store(self, project_path: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """加载并返回 (完整存储 root, 该项目的条目容器 proj)。"""
         path = self._auto_summary_path(project_path)
         data = {"projects": {}}
         if os.path.exists(path):
@@ -429,18 +430,13 @@ class MemoryQuality:
         if proj is None:
             proj = {"path": project_path, "entries": {}}
             data["projects"][phash] = proj
-        # 返回条目容器，同时暂存 data 供保存使用
-        self._summary_store_root = data
-        return proj
+        return data, proj
 
-    def _save_auto_summary_store(self, project_path: str, proj: Dict[str, Any]):
+    def _save_auto_summary_store(self, project_path: str, root: Dict[str, Any], proj: Dict[str, Any]):
         """把更新后的项目条目容器写回完整存储。"""
-        data = getattr(self, "_summary_store_root", None)
-        if data is None:
-            data = {"projects": {}}
         phash = hashlib.md5(project_path.encode("utf-8")).hexdigest()[:12]
-        data.setdefault("projects", {})[phash] = proj
-        self._atomic_write_json(self._auto_summary_path(project_path), data)
+        root.setdefault("projects", {})[phash] = proj
+        self._atomic_write_json(self._auto_summary_path(project_path), root)
 
     # ═══════════════════════════════════════════════════════════
     # 3) 偏差检测
@@ -474,16 +470,15 @@ class MemoryQuality:
                     {"role": "user", "content": prompt_text},
                 ])
                 parsed = self._parse_findings(response)
-                if parsed:
-                    for item in parsed[:MAX_ORPHAN_EDGES_REPORT]:
-                        findings.append(self._make_finding(
-                            kind=KIND_BIAS,
-                            title=item.get("title", "记忆摘要存在偏差"),
-                            detail=item.get("detail", ""),
-                            suggestion=item.get("suggestion", ""),
-                            severity=item.get("severity", SEVERITY_LOW),
-                        ))
-                    return findings, "llm", applied
+                for item in parsed[:MAX_ORPHAN_EDGES_REPORT]:
+                    findings.append(self._make_finding(
+                        kind=KIND_BIAS,
+                        title=item.get("title", "记忆摘要存在偏差"),
+                        detail=item.get("detail", ""),
+                        suggestion=item.get("suggestion", ""),
+                        severity=item.get("severity", SEVERITY_LOW),
+                    ))
+                return findings, "llm", applied
             except Exception as e:
                 logger.warning(f"[MemoryQuality] LLM 偏差检测失败: {e}")
 

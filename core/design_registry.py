@@ -116,7 +116,12 @@ class DesignRegistry:
                 logger.info(f"[DesignRegistry] 已加载注册表: {self.registry_path}")
                 return
             except Exception as e:
-                logger.error(f"[DesignRegistry] 加载注册表失败，将重建: {e}")
+                backup = f"{self.registry_path}.corrupt-{int(datetime.now().timestamp())}"
+                try:
+                    os.replace(self.registry_path, backup)
+                    logger.error(f"[DesignRegistry] 加载注册表失败，原文件已备份到 {backup}，将重建: {e}")
+                except OSError as be:
+                    logger.error(f"[DesignRegistry] 加载注册表失败且备份失败({be})，将重建: {e}")
         # 初始化内置种子
         self._data = {
             "version": REGISTRY_VERSION,

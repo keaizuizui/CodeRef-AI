@@ -69,6 +69,12 @@ BINARY_RESOURCE_DIR_NAMES = {
 
 # 编译产物/二进制扩展名（用于 vendored 内嵌库判定）
 BINARY_EXTENSIONS = {".so", ".pyd", ".dll", ".dylib", ".a", ".lib", ".pyo"}
+
+# 模型权重/资源文件扩展名（用于大型二进制/资源目录判定）
+RESOURCE_EXTENSIONS = {
+    ".safetensors", ".ckpt", ".bin", ".pt", ".pth", ".h5", ".onnx",
+    ".npz", ".npy", ".parquet", ".mp4", ".png", ".jpg", ".jpeg", ".webp",
+}
 # Python 打包元数据目录（*.dist-info / *.egg-info）
 DIST_INFO_PATTERN = re.compile(r'^.+\.(?:dist-info|egg-info)$')
 
@@ -230,7 +236,8 @@ class ProjectScope:
             return f"Python 打包信息: {dir_name}"
 
         # 规则 2.5: 命名型环境目录（无需 pyvenv.cfg）
-        if ENV_DIR_PATTERN.match(dir_name):
+        # 内容门控：如果目录直接包含源代码文件，则不视为虚拟环境
+        if ENV_DIR_PATTERN.match(dir_name) and not self._has_own_source(dir_path):
             return f"命名型虚拟环境: {dir_name}"
         if dir_name in VENDORED_DIR_NAMES and self._is_vendored_lib(dir_path):
             return f"vendored/内嵌第三方库: {dir_name}"
@@ -437,6 +444,19 @@ class ProjectScope:
             return True
         return False
 
+    def _has_own_source(self, dir_path: str) -> bool:
+        """检查目录是否直接包含源代码文件（用于环境目录的内容门控）"""
+        try:
+            for entry in os.listdir(dir_path):
+                full = os.path.join(dir_path, entry)
+                if os.path.isfile(full):
+                    ext = os.path.splitext(entry)[1].lower()
+                    if ext in SOURCE_EXTENSIONS:
+                        return True
+        except (PermissionError, OSError):
+            pass
+        return False
+
     def _is_binary_resource_dir(self, dir_path: str) -> bool:
         """检测是否为大型二进制/资源目录（模型权重、上传产物、缓存等）。
 
@@ -461,7 +481,7 @@ class ProjectScope:
                 code_count += 1
                 if code_count > 2:  # 含较多真源码 → 不跳过
                     return False
-            elif ext in CODE_EXTENSIONS:  # 编译产物/二进制
+            elif ext in BINARY_EXTENSIONS or ext in RESOURCE_EXTENSIONS:  # 编译产物/二进制/模型权重
                 has_binary = True
 
         # 有二进制/编译产物，且几乎没有源码 → 视为资源目录

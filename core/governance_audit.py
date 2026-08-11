@@ -892,7 +892,7 @@ class GovernanceAuditor:
                         severity=severity, file_path=cf.file_path, line_number=i,
                         line_content=line.strip()[:120],
                         detail=detail,
-                        suggestion="使用 with 语句确保资源正确释放" if "rule_id" == "PITFALL-03" else "确认有备份机制，操作前做二次确认",
+                        suggestion="使用 with 语句确保资源正确释放" if rule_id == "PITFALL-03" else "确认有备份机制，操作前做二次确认",
                         pattern=rule_name,
                     ))
 
@@ -1193,9 +1193,10 @@ class GovernanceAuditor:
                 # 否则会把"检测框架名的检测器"误分类为入口层造成层级穿透误报。
                 if any(kw in code_content for kw in ['@app.route', '@app.get', '@app.post',
                                                        '@app.put', '@app.delete', '@router.',
-                                                       'Blueprint', 'APIView', 'def get(',
-                                                       'def post(', 'def put(', 'def delete(',
+                                                       'Blueprint', 'APIView',
                                                        'JSONResponse']):
+                    return "entry"
+                if re.search(r'class\s+\w+\((?:[^)]*\b(?:APIView|Resource|RequestHandler)\b[^)]*)\)', code_content) and re.search(r'def\s+(?:get|post|put|delete)\s*\(\s*self', code_content):
                     return "entry"
                 # 如果包含 ORM 模型定义 → data
                 if any(kw in code_content for kw in ['class Meta:', 'db.Model', 'BaseModel', 'Table(',

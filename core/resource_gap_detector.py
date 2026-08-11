@@ -644,6 +644,9 @@ class ResourceGapDetector:
         }
 
         for pkg_name, pkg_version in req_packages.items():
+            # 跳过归一化别名键（如 tree_sitter_languages 是 tree-sitter-languages 的别名）
+            if pkg_name in getattr(self, "_req_aliases", set()):
+                continue
             pkg_lower = pkg_name.lower().replace("-", "_")
             import_name = PACKAGE_IMPORT_MAP.get(pkg_name.lower(), pkg_lower)
 
@@ -654,8 +657,8 @@ class ResourceGapDetector:
                 if imported_lower == pkg_lower or imported_lower == import_name.lower():
                     is_used = True
                     break
-                # 模糊匹配：包名是 import 名的前缀
-                if imported_lower.startswith(pkg_lower + ".") or pkg_lower.startswith(imported_lower):
+                # 模糊匹配：包名是 import 名的前缀（要求点号边界，避免 import os 误匹配 openai）
+                if imported_lower.startswith(pkg_lower + ".") or pkg_lower.startswith(imported_lower + "."):
                     is_used = True
                     break
 
@@ -792,6 +795,7 @@ class ResourceGapDetector:
             return {}
 
         packages = {}
+        alias_keys: Set[str] = set()
         try:
             with open(req_path, "r", encoding="utf-8", errors="ignore") as fh:
                 for line in fh:
@@ -820,10 +824,12 @@ class ResourceGapDetector:
                         packages[pkg_name] = version
                         if pkg_name_norm != pkg_name:
                             packages[pkg_name_norm] = version
+                            alias_keys.add(pkg_name_norm)
 
         except Exception as e:
             logger.warning(f"[ResourceGapDetector] 解析 requirements.txt 失败: {e}")
 
+        self._req_aliases = alias_keys
         return packages
 
     # ─── 报告生成 ─────────────────────────────────────────────────

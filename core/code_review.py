@@ -262,7 +262,7 @@ def parse_diff(diff_text: str) -> List[Dict[str, Any]]:
             continue
 
         # 新文件路径（+++ b/xxx），/dev/null 表示删除文件
-        if line.startswith("+++ "):
+        if current_hunk is None and line.startswith("+++ "):
             f = line[4:].strip()
             # 去掉 "b/" 前缀（git 默认新版路径前缀）
             if f.startswith("b/"):
@@ -384,7 +384,7 @@ class CodeReviewer:
                 "", DEFAULT_LINE, f"审查引擎异常：{e}"
             ))
 
-        summary = self._build_summary(mode, processed, len(comments), available)
+        summary = self._build_summary(mode, processed, len(comments), available, dims)
         return {"comments": comments, "summary": summary, "mode": mode}
 
     # ── diff 模式 ───────────────────────────────────────────────────
@@ -619,7 +619,7 @@ class CodeReviewer:
 
     # ── summary 构造 ────────────────────────────────────────────────
     def _build_summary(self, mode: str, processed: int, comment_count: int,
-                       available: bool) -> str:
+                       available: bool, dims: Optional[List[str]] = None) -> str:
         if not available:
             return (
                 "LLM 当前不可用（未配置有效的 API Key），本次审查未调用大模型，"
@@ -627,7 +627,7 @@ class CodeReviewer:
                 f"请先在配置面板 / 环境变量中填写 API Key（如 CODEREF_API_KEY）后重试。"
                 f"（模式: {mode}，处理单元/批次: {processed}）"
             )
-        dims_desc = "全部维度"
+        dims_desc = _dimensions_str(dims)
         return (
             f"代码审查完成：模式 {mode}，处理 {processed} 个单元/批次，"
             f"审查维度 {dims_desc}，共生成 {comment_count} 条评论。"

@@ -254,21 +254,8 @@ class TechDebtDetector:
 
         # 1. 基础代码分析（将 ProjectScope 的跳过目录注入 CodeAnalyzer）
         analyzer = CodeAnalyzer()
-        # 扩展 CodeAnalyzer 的过滤规则，加入 ProjectScope 检测到的跳过目录
-        original_should_ignore = analyzer._should_ignore
-        skip_dirs = scope.get_skip_dirs()
-
-        def _enhanced_should_ignore(path):
-            if original_should_ignore(path):
-                return True
-            # 检查路径是否在 ProjectScope 的跳过目录中
-            abs_path = str(path)
-            for skip_dir in skip_dirs:
-                if abs_path.startswith(skip_dir) or abs_path == skip_dir:
-                    return True
-            return False
-
-        analyzer._should_ignore = _enhanced_should_ignore
+        # 通过公共属性注入 ProjectScope 检测到的跳过目录（避免猴子补丁私有方法 _should_ignore）
+        analyzer.extra_ignore_dirs = set(scope.get_skip_dirs())
         analysis = analyzer.analyze_project(project_path)
 
         # 2. 收集所有债务项

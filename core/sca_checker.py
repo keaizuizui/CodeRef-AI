@@ -114,7 +114,6 @@ class SCAChecker:
     # 仅这些段内的 key = "value" 才视为依赖声明，避免把 poetry 的
     # [[tool.poetry.source]]（name/url/priority 软件源配置）等元数据误解析成依赖。
     TOML_DEP_SECTIONS = {
-        "project",                     # PEP 621: [project] dependencies
         "tool.poetry.dependencies",    # poetry 运行时依赖
         "tool.poetry.group.dev.dependencies",
         "tool.pdm.dev-dependencies",
@@ -591,7 +590,9 @@ class SCAChecker:
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+        except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as e:
+            self._osv_degraded = True
+            logger.warning("OSV 查询失败 package=%s err=%s", package, e)
             return []
 
         vulns = []
@@ -655,10 +656,8 @@ class SCAChecker:
         if version == "latest":
             return True  # 无法确定版本，保守处理：命中以便提示人工核查
         if Version is None:
-            # packaging 未安装：仅能按约束前缀做字符串比较，无法判断大小
-            logger.warning("packaging 未安装，SCA 版本比较降级为字符串前缀匹配")
-            norm = constraint.lstrip("<>=!~ ")
-            return version.startswith(norm)
+            logger.warning("packaging 未安装，跳过本地版本区间判定 version=%r constraint=%r", version, constraint)
+            return False
         try:
             v = Version(version)
             c = Version(constraint.lstrip("<>=!~ "))

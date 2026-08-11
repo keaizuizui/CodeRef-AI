@@ -85,9 +85,8 @@ class LLMIntegration:
         """
         加载 LLM 配置，按优先级尝试多个来源：
         1. 环境变量（CODEREF_API_KEY / CODEREF_BASE_URL / CODEREF_MODEL）
-        2. QSettings（GUI 配置面板保存的，Windows 注册表）
-        3. config/config.json（旧版配置文件，兼容）
-        4. 默认值（DeepSeek）
+        2. config/config.json（兼容旧版配置文件）
+        3. 默认值（DeepSeek）
         """
         # ── 优先级 1：环境变量 ──
         env_key = os.environ.get("CODEREF_API_KEY", "")
@@ -144,7 +143,7 @@ class LLMIntegration:
             logger.debug(f"读取 config.json 失败: {e}")
 
         # ── 优先级 4：默认值（无 API Key） ──
-        logger.debug("未找到有效的 LLM 配置（环境变量/QSettings/config.json 均无），LLM 功能暂不可用")
+        logger.debug("未找到有效的 LLM 配置（环境变量/config.json 均无），LLM 功能暂不可用")
         return LLMConfig(
             provider=LLMProvider.DEEPSEEK,
             base_url="https://api.deepseek.com/v1",
@@ -205,11 +204,11 @@ class LLMIntegration:
         # 优先按 openai SDK 的异常类型识别
         try:
             from openai import (
-                APIConnectionError, APITimeoutError, APIRetryError,
+                APIConnectionError, APITimeoutError,
                 APIStatusError, RateLimitError,
                 AuthenticationError, PermissionDeniedError, BadRequestError,
             )
-            if isinstance(e, (APIConnectionError, APITimeoutError, APIRetryError)):
+            if isinstance(e, (APIConnectionError, APITimeoutError)):
                 return True
             if isinstance(e, RateLimitError):
                 return True

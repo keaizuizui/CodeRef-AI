@@ -23,7 +23,7 @@ WikiCrossVerify — 静态确证 ↔ 人话 wiki 的模块级交叉验证
 """
 
 import os
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from core.graph_closure import load_graph, file_base, downstream
 
 
@@ -97,7 +97,8 @@ class ModuleCrossVerify:
     # ─── 模块级交叉验证 ───
 
     def verify_modules(self, wiki_modules: List[str],
-                       entry_spec: str, max_depth: int = 8) -> dict:
+                       entry_spec: str, max_depth: int = 8,
+                       dir_aliases: Optional[Dict[str, str]] = None) -> dict:
         """对一组 wiki 模块（目录名）做交叉验证。
 
         Args:
@@ -113,10 +114,11 @@ class ModuleCrossVerify:
 
         results = []
         for mod_name in wiki_modules:
-            syms = self._symbols_in_dir(mod_name)
+            dir_name = (dir_aliases or {}).get(mod_name, mod_name)
+            syms = self._symbols_in_dir(dir_name)
             if not syms:
                 # 目录无函数/方法符号：区分"图谱收录但纯配置/常量"与"真缺失"
-                if self._dir_in_graph(mod_name):
+                if self._dir_in_graph(dir_name):
                     results.append({
                         "module": mod_name, "status": "unverified",
                         "reason": "该目录在图谱中已收录，但主要是配置/常量/类，无可验证的函数调用",

@@ -381,7 +381,7 @@ class FunctionalReviewer:
   （如 sys.path 动态注入、unittest 标准命名、检测规则自身正则、正常防御性 except 等）。
 
 ## 原则
-- 你只能依据 findings 自带信息判断，无法访问源码；因此**拿不准时一律判 needed_review**，
+- 你只能依据 findings 自带信息判断，无法访问源码；因此**拿不准时一律判 {_VERDICT_NEEDS_REVIEW}**，
   不要把不确定的条目判成 suspected_fp 或 confirmed。
 - 只有"从描述几乎可以确定是工具误报/正常设计"的条目才判 {_VERDICT_SUSPECTED_FP}。
 

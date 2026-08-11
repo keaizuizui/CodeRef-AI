@@ -54,6 +54,7 @@ MAX_MENU_LEVEL = 5              # 菜单最大层级（L1→L5）
 # 审查相关
 DEFAULT_SEVERITY = "low"        # 默认严重级别
 MAX_PROMPT_CHARS = 2000         # 单条 prompt 中上下文最长长度
+MAX_LLM_REVIEW_ITEMS = 50       # LLM 审查的元素上限（避免中型项目触发数千个串行请求）
 
 # 浏览器自动化（runtime 可选）
 RUNTIME_PAGE_TIMEOUT = 30       # 页面加载超时（秒）
@@ -380,9 +381,9 @@ class FrontendInspector:
         findings: List[Dict[str, Any]] = []
         if self._llm_available():
             try:
-                for btn in buttons:
+                for btn in buttons[:MAX_LLM_REVIEW_ITEMS]:
                     findings.extend(self._review_button(btn))
-                for node in menu_nodes:
+                for node in menu_nodes[:MAX_LLM_REVIEW_ITEMS]:
                     findings.extend(self._review_menu_node(node))
             except Exception as e:
                 logger.error(f"LLM 审查过程中发生异常: {e}")
@@ -479,6 +480,10 @@ class FrontendInspector:
         if project_path is None or not os.path.isdir(project_path):
             logger.error(f"project_path 无效或不存在: {project_path}")
             return []
+        if entry and os.path.isdir(entry):
+            project_path = entry
+        elif entry and not os.path.isfile(entry):
+            logger.warning(f"entry 无效，已回退为扫描整个项目: {entry}")
         if entry and os.path.isfile(entry):
             base = os.path.basename(entry).lower()
             if base.endswith((".html", ".htm")):

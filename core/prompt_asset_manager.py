@@ -247,13 +247,18 @@ class PromptAssetManager:
         if not info:
             return {"ok": False, "action": "compare", "error": f"资产「{name}」不存在，请先使用 version 创建。"}
 
-        versions = info.get("versions", [])[:MAX_COMPARE_VERSIONS]
+        versions = info.get("versions", [])
         if not versions:
             return {"ok": False, "action": "compare", "error": f"资产「{name}」暂无版本。"}
 
         # 可指定某版本对比，否则对比全部版本
         if version:
             versions = [v for v in versions if v.get("version") == version]
+
+        if not versions:
+            return {"ok": False, "action": "compare", "error": f"资产「{name}」不存在版本 {version}。"}
+
+        versions = versions[-MAX_COMPARE_VERSIONS:]
 
         scored = []
         for v in versions:
