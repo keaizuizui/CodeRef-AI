@@ -3,7 +3,7 @@
 CodeRef MCP Server v4.2.4 — 四大引擎 + 26 个工具
   审计引擎     → coderef_audit / coderef_scan / coderef_scan_list / architecture / docs / query / review / frontend / whitelist / task_status
   记忆引擎     → coderef_memory_sync / memory_query / memory_status / memory_quality / prompt_mgmt
-  创新识别引擎 → coderef_innovation / asset / registry
+  创新识别引擎 → coderef_innovation / asset / replicate / asset_blueprint / registry
   变更守护引擎 → coderef_change_guard / change_report
   OWASP 合规   → coderef_owasp
 """
@@ -43,11 +43,14 @@ RELIABILITY_GUIDE = (
     "CodeRef 工具可靠性清单（供外层 AI 选工具时参考）：\n"
     "【可靠，可放心日常使用】coderef_audit / coderef_scan / coderef_owasp / "
     "coderef_architecture / coderef_change_guard / coderef_change_report / coderef_query / "
-    "coderef_review / coderef_memory_* / coderef_task_status。\n"
+    "coderef_review / coderef_memory_* / coderef_task_status / coderef_verify_findings / "
+    "coderef_prompt_audit / coderef_flow_verify / coderef_arch_audit。\n"
     "【有使用边界，需注意场景】\n"
-    "  - coderef_frontend：仅扫 HTML/菜单，不适合 React/Vue SPA 组件逻辑；SPA 改用 mode=runtime 浏览器抽查。\n"
+    "  - coderef_frontend：仅静态枚举按钮/菜单'是否存在'，不确证'交互逻辑正确'；SPA 组件逻辑改用 mode=runtime 浏览器抽查。\n"
     "  - coderef_scan/audit 的 sca 维度（CVE 扫描）：不可全信。会把 poetry 配置 priority='primary' 误当依赖、"
     "把 >= 范围约束当固定版本。CVE 类发现需人工对照真实 CVE 库复核，勿直接采信。\n"
+    "  - coderef_review：规则级 + LLM 审查，语义级缺陷（XSS/死代码/跨平台）覆盖有限；"
+    "持有 LLM/CodeRabbit 论断时先用 coderef_verify_findings 做确定性核验再采信。\n"
     "【误报已修复】标准库 import 不再被 memory_quality 判为孤儿边；PII 拼接不再误报 api_address 等技术变量；"
     "测试目录默认不参与 agent 安全审计。\n"
     "【协作建议】收到 CVE/安全类发现时先人工复核再决定是否修复；超大文件/结构债属改进建议非缺陷。"
@@ -69,6 +72,30 @@ TOOL_BOUNDARY_NOTES = {
     ),
     "coderef_owasp": (
         "\n\n[可靠性] 其 CVE 检测复用 SCA，存在与 coderef_scan 相同的误报边界，违规项需人工复核。"
+    ),
+    "coderef_verify_findings": (
+        "\n\n[可靠性] verdict 由确定性逻辑打出，只核验'引用目标是否存在/是否在管线内'，"
+        "不核验'论断的语义结论是否正确'；图谱对动态调用/反射不完整，未确证不代表一定不存在。"
+    ),
+    "coderef_prompt_audit": (
+        "\n\n[可靠性] 纯规则检测，只标'可判的确证风险'；注入点为风险敞口而非已发生攻击，未标不代表绝对安全。"
+    ),
+    "coderef_replicate": (
+        "\n\n[可靠性] 缺口判定为确定性签名比对，只报告'有/没有'，不臆断'该不该采用'；"
+        "复刻指引是铺排建议，不自动改代码；template_code 缺失会标注待补全。"
+    ),
+    "coderef_asset_blueprint": (
+        "\n\n[可靠性] 仅写回确定性可填字段（entry_points / verified_findings），"
+        "不臆断 steps；蓝图完整性取决于已固化资产质量。"
+    ),
+    "coderef_prompt_governance": (
+        "\n\n[可靠性] 纯编排 + 确定性规则，不引入 LLM；各维度如实标注是否已执行，"
+        "不把'未审计'渲染成'无风险'；跨模块漂移是风险提示而非已发生故障。"
+    ),
+    "coderef_interpret": (
+        "\n\n[可靠性] 人话解读全部来自确定性原语（健康分/审计/图谱/合规/论断核验），"
+        "不引入 LLM 给结论；健康分只在确实审计过时给出，未审计绝不臆断；"
+        "Wiki 等依赖 LLM 的能力在无 API Key 时诚实阻断。"
     ),
 }
 
@@ -220,7 +247,10 @@ class Server:
                     "mode=diff（默认）：审变更范围，给出行内评论（file:line + 分级 + 证据标记）。\n"
                     "mode=full：新项目无 git 历史时一次性全量语义审查，按模块分块 batching。\n"
                     "用 LLM 语义判断 + 上下文增强，结论带 evidence 标记（pending-human/static-confirmed）供交叉验证。\n"
-                    "支持 background=True 后台执行。"
+                    "支持 background=True 后台执行。\n"
+                    "诚实边界：本工具为规则级 + LLM 审查，对语义级缺陷（XSS、死代码、跨平台、竞态、资源泄漏）"
+                    "覆盖有限。若你持有一条 LLM/CodeRabbit 论断，建议先用 coderef_verify_findings 做确定性核验"
+                    "（确证引用目标是否真实存在），再决定是否采信，避免把未核验的语义论断当事实。"
                 ),
                 "inputSchema": {"type": "object", "properties": {
                     "project_path": {"type": "string", "description": "目标项目路径"},
@@ -238,7 +268,9 @@ class Server:
                     "静态枚举 HTML/JS 所有按钮（含事件/确认弹窗/禁用）与 L1-L5 菜单树，再按 6 维度审查。\n"
                     "mode=static（默认）：静态清单 + LLM 审查，不依赖浏览器，100% 覆盖。\n"
                     "mode=runtime：需 url，用浏览器抽查关键路径，失败自动降级为静态结论。\n"
-                    "支持 background=True 后台执行。"
+                    "支持 background=True 后台执行。\n"
+                    "诚实边界：静态枚举只确证按钮/菜单'存在与否'，不确证'交互逻辑正确'；"
+                    "SPA 组件逻辑请用 mode=runtime 浏览器抽查，或联动外部前端审查工具。"
                 ),
                 "inputSchema": {"type": "object", "properties": {
                     "project_path": {"type": "string", "description": "前端项目路径"},
@@ -344,8 +376,33 @@ class Server:
                 "图谱不存在时会明确反馈需先构建（coderef_audit / coderef_memory_sync）。"
             ),
             "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-            }, "required": ["project_path"]},
+                    "project_path": {"type": "string", "description": "目标项目路径"},
+                }, "required": ["project_path"]},
+        })
+        # ── 诚实话解读护栏：确定性核验 LLM / CodeRabbit 论断 ──
+        self._tools.append({
+            "name": "coderef_verify_findings",
+            "description": (
+                "确定性核验 LLM / CodeRabbit 论断（爬取翼咽喉 + 诚实话解读护栏）。\n"
+                "编程 AI 或 CodeRabbit 给出一条'论断'（finding），本工具用知识图谱 + 静态原语"
+                "核验论断引用的代码目标是否真实存在、是否在指定入口管线内，\n"
+                "输出 verdict（确证/证伪/部分确证/无法核验）+ 证据链 + 影响面。\n"
+                "诚实话纪律：verdict 只由本工具的确定性逻辑打出，调用方 AI 无权改变；\n"
+                "无确定性证据一律存疑，绝不默认确证；确证只代表'引用目标真实存在'，不代表语义结论正确。\n"
+                "findings 传论断列表，每条含 title（必填）+ detail/file/line/rule/severity/symbols（可选）；\n"
+                "entry 可选：指定入口符号（模块.函数）核验符号是否在关键管线内；\n"
+                "out_format=html 输出自包含人话 HTML 报告（非编程人员可读）。\n"
+                "图谱不存在会明确反馈需先构建（coderef_audit / coderef_memory_sync），不返回空结论。"
+            ),
+            "inputSchema": {"type": "object", "properties": {
+                "project_path": {"type": "string", "description": "目标项目路径（自动定位知识图谱）"},
+                "findings": {"type": "array", "items": {"type": "object"},
+                             "description": "论断列表，每条含 title(必填)+detail/file/line/rule/severity/symbols(可选)"},
+                "entry": {"type": "string", "description": "可选入口符号（模块.函数），核验符号是否在关键管线内"},
+                "out_format": {"type": "string", "enum": ["json", "html", "text"], "default": "json",
+                               "description": "输出格式：json=结构化 / html=自包含人话报告 / text=终端可读"},
+                "background": {"type": "boolean", "description": "后台执行（核验需加载图谱，重型工具默认后台）", "default": True},
+            }, "required": ["project_path", "findings"]},
         })
         # ── 引擎四 · 变更守护：AI 代码退化检测 + 人话版变更报告 ──
         self._tools.append({
@@ -467,6 +524,24 @@ class Server:
                 "abtest_group": {"type": "string", "description": "A/B 组（abtest 用，A/B/promote）"},
             }, "required": ["project_path"]},
         })
+        # ── 引擎 · Prompt 审计面（4.3 诚实话护栏）────────────────
+        self._tools.append({
+            "name": "coderef_prompt_audit",
+            "description": (
+                "确定性 Prompt 合规审计：注入风险 + 一致性检测。\n"
+                "注入风险：反向指令注入 / 越狱 / 提示词泄露 / 未隔离的用户输入拼接敞口；\n"
+                "一致性：同一角色在不同模块的输出格式冲突、职责矛盾、同名定义漂移。\n"
+                "纯规则、确定性、不依赖 LLM。诚实话纪律：只标'可判的确证风险'，"
+                "注入点为风险敞口而非已发生攻击。\n"
+                "out_format=html 输出自包含人话报告（非编程人员可读）。"
+            ),
+            "inputSchema": {"type": "object", "properties": {
+                "project_path": {"type": "string", "description": "目标项目路径"},
+                "out_format": {"type": "string", "enum": ["json", "html", "text"], "default": "json",
+                               "description": "输出格式：json=结构化 / html=自包含人话报告 / text=终端可读"},
+                "background": {"type": "boolean", "description": "后台执行（需抽取全项目 prompt，重型工具默认后台）", "default": True},
+            }, "required": ["project_path"]},
+        })
         # ── 引擎三 · OWASP LLM 合规（M4）────────────────────────────
         self._tools.append({
             "name": "coderef_owasp",
@@ -500,7 +575,8 @@ class Server:
             "description": (
                 "WorkflowAsset 资产化 / 查询 / 导出。\n"
                 "action=list 列出资产；get 查单个（支持别名）；export 导出（可省略 canonical 导出全部）；"
-                "commit 固化设计为资产（需 ≥2 workflow 采用 + evidence，防污染）。"
+                "commit 固化设计为资产（需 ≥2 workflow 采用 + evidence，防污染）。\n"
+                "commit 时可选传 blueprint（结构化复刻蓝图 dict）；缺省自动从已验证 adopters 构建骨架。"
             ),
             "inputSchema": {"type": "object", "properties": {
                 "project_path": {"type": "string", "description": "目标项目路径"},
@@ -510,8 +586,40 @@ class Server:
                 "template_code": {"type": "string", "description": "可复制骨架代码（commit 用）"},
                 "patch_suggestion": {"type": "string", "description": "迁移补丁建议（commit 用）"},
                 "migration_guide": {"type": "string", "description": "迁移指南（commit 用）"},
+                "blueprint": {"type": "object", "description": "结构化复刻蓝图 dict（commit 可选；缺省自动构建骨架）"},
                 "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
             }, "required": ["project_path"]},
+        })
+        self._tools.append({
+            "name": "coderef_replicate",
+            "description": (
+                "复刻铺排：检测目标项目对某已固化资产（蓝图）的采用缺口，并生成可复刻指引。\n"
+                "输入 canonical（资产 canonical 或别名）与目标项目路径。\n"
+                "输出 gap_report（确定性缺口：已采用/未采用模块）+ steps（复刻步骤）+ entry_points"
+                "（入口，来自蓝图或已验证采用模块）+ verified_findings（复用 coderef_verify_findings 的确定性核验）。\n"
+                "诚实话护栏：本工具是审计工具，不自动改代码；未采用不等于'该采用'；"
+                "template_code 缺失会明确标注待补全，不编造。"
+            ),
+            "inputSchema": {"type": "object", "properties": {
+                "project_path": {"type": "string", "description": "目标项目路径（要复刻到的项目）"},
+                "canonical": {"type": "string", "description": "要复刻的已固化资产 canonical（或别名）"},
+                "verify_symbols": {"type": "boolean", "description": "是否对蓝图入口做确定性核验", "default": True},
+                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+            }, "required": ["project_path", "canonical"]},
+        })
+        self._tools.append({
+            "name": "coderef_asset_blueprint",
+            "description": (
+                "把复刻铺排（coderef_replicate）得出的确定性结论写回资产蓝图。\n"
+                "仅写回确定性可填字段（entry_points / verified_findings 若空），不臆断 steps。\n"
+                "供对方 AI 确认铺排有效后调用，把蓝图从骨架补全为可复刻蓝图。"
+            ),
+            "inputSchema": {"type": "object", "properties": {
+                "project_path": {"type": "string", "description": "目标项目路径"},
+                "canonical": {"type": "string", "description": "要补全蓝图的资产 canonical（或别名）"},
+                "entry_points": {"type": "array", "items": {"type": "string"}, "description": "要写入蓝图的可信入口符号列表"},
+                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+            }, "required": ["project_path", "canonical"]},
         })
         self._tools.append({
             "name": "coderef_registry",
@@ -526,6 +634,50 @@ class Server:
                 "canonical": {"type": "string", "description": "规范设计名（add/alias 用）"},
                 "alias": {"type": "string", "description": "要归一化的别名（alias 用）"},
                 "description": {"type": "string", "description": "设计说明（add 用）"},
+            }, "required": ["project_path"]},
+        })
+        self._tools.append({
+            "name": "coderef_prompt_governance",
+            "description": (
+                "Prompt 治理平台：一次调用编排 资产生命周期 × 合规审计 × 跨模块一致性。\n"
+                "action=overview → 治理总览（资产清单 + 生效版本 + 合规审计 + 跨模块漂移，一屏看清 Prompt 资产健不健康）；\n"
+                "action=assets → 资产生命周期（version 登记新版本 / list 查清单；name+content+version 登记）；\n"
+                "action=audit → 合规审计（注入风险 + 一致性）；\n"
+                "action=cross_module → 跨模块一致性专项（同一角色/场景在多模块的同名定义漂移）。\n"
+                "诚实话护栏：纯编排 + 确定性规则，不引入 LLM；各维度如实标注是否已执行，"
+                "不把'未审计'渲染成'无风险'；跨模块漂移是风险提示而非已发生故障。"
+            ),
+            "inputSchema": {"type": "object", "properties": {
+                "project_path": {"type": "string", "description": "目标项目路径"},
+                "action": {"type": "string", "enum": ["overview","assets","audit","cross_module"], "default": "overview"},
+                "name": {"type": "string", "description": "资产名（assets 登记用）"},
+                "content": {"type": "string", "description": "资产内容（assets 登记用）"},
+                "version": {"type": "string", "description": "版本号（assets 登记用）"},
+                "abtest_group": {"type": "string", "description": "A/B 分组（assets 用）"},
+                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+            }, "required": ["project_path"]},
+        })
+        self._tools.append({
+            "name": "coderef_interpret",
+            "description": (
+                "人话解读平台：让非编程人员一屏看懂 AI 项目的真实状态。\n"
+                "action=health → 健康总览（确定性人话：健康分 + 高危清单 + 图谱/合规背景；未审计时诚实提示不给分）；\n"
+                "action=dashboard → 生成健康仪表盘 HTML（非编程人员可读）；\n"
+                "action=verify → 人话核验 LLM/CodeRabbit 论断（确定性 verdict，findings_text 传多行或 JSON 数组）；\n"
+                "action=verify_html → 论断核验 + 生成 HTML 报告；\n"
+                "action=wiki → 生成 Wiki 人话文档（依赖 LLM，无 API Key 时诚实阻断）；\n"
+                "action=prompt → Prompt 治理总览；\n"
+                "action=assets → 人话解读已固化创新资产。\n"
+                "诚实话护栏：人话结论全部来自确定性原语，不引入 LLM 给结论；"
+                "健康分只在确实审计过时给出，未审计绝不臆断；依赖 LLM 的能力无 Key 时诚实阻断。"
+            ),
+            "inputSchema": {"type": "object", "properties": {
+                "project_path": {"type": "string", "description": "目标项目路径"},
+                "action": {"type": "string", "enum": ["health","dashboard","verify","verify_html","wiki","prompt","assets"], "default": "health"},
+                "findings_text": {"type": "string", "description": "论断文本（verify/verify_html 用）：多行每行一条，或 JSON 数组"},
+                "entry": {"type": "string", "description": "入口符号（verify 用，核验符号是否在关键管线内）"},
+                "out_format": {"type": "string", "enum": ["json","text","html"], "default": "json"},
+                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
             }, "required": ["project_path"]},
         })
         self._tasks: Dict[str, Any] = {}
@@ -548,6 +700,7 @@ class Server:
             "coderef_scan_list": lambda a: self._scan_list(),
             "coderef_flow_verify": self._flow_verify,
             "coderef_arch_audit": self._arch_audit,
+            "coderef_verify_findings": self._verify_findings,
             "coderef_change_guard": self._change_guard,
             "coderef_change_report": self._change_report,
             "coderef_memory_sync": self._memory_sync,
@@ -555,10 +708,15 @@ class Server:
             "coderef_memory_status": self._memory_status,
             "coderef_memory_quality": self._memory_quality,
             "coderef_prompt_mgmt": self._prompt_mgmt,
+            "coderef_prompt_audit": self._prompt_audit,
             "coderef_owasp": self._owasp,
             "coderef_innovation": self._innovation,
             "coderef_asset": self._asset,
+            "coderef_replicate": self._replicate,
+            "coderef_asset_blueprint": self._asset_blueprint,
             "coderef_registry": self._registry,
+            "coderef_prompt_governance": self._govern,
+            "coderef_interpret": self._interpret,
         }
 
         # ─── 重型工具：默认后台执行 ───────────────────────────────────
@@ -573,7 +731,9 @@ class Server:
             "coderef_report", "coderef_audit_advisor", "coderef_architecture",
             "coderef_memory_sync", "coderef_memory_quality", "coderef_owasp",
             "coderef_innovation", "coderef_asset", "coderef_change_guard",
-            "coderef_change_report",
+            "coderef_change_report", "coderef_verify_findings",
+            "coderef_prompt_audit", "coderef_replicate", "coderef_asset_blueprint",
+            "coderef_prompt_governance", "coderef_interpret",
         }
 
     def _should_background(self, n: str, a: Dict) -> bool:
@@ -818,6 +978,15 @@ class Server:
         r["project_path"] = pp
         return json.dumps(r, ensure_ascii=False)
 
+    def _prompt_audit(self, a: dict) -> str:
+        """确定性 Prompt 合规审计（coderef_prompt_audit）"""
+        from core.prompt_compliance import audit_prompt_compliance
+        pp = a["project_path"]
+        r = audit_prompt_compliance(pp, out_format=a.get("out_format", "json"))
+        r["tool"] = "coderef_prompt_audit"
+        r["project_path"] = pp
+        return json.dumps(r, ensure_ascii=False)
+
     # ── 引擎三 · OWASP 合规 ────────────────────────────────────────
     def _owasp(self, a: dict) -> str:
         """OWASP LLM Top 10 合规检测（coderef_owasp）"""
@@ -851,6 +1020,7 @@ class Server:
             description=a.get("description", ""), template_code=a.get("template_code", ""),
             patch_suggestion=a.get("patch_suggestion", ""),
             migration_guide=a.get("migration_guide", ""),
+            blueprint=a.get("blueprint"),
         )
         r["tool"] = "coderef_asset"
         r["project_path"] = pp
@@ -866,6 +1036,67 @@ class Server:
             description=a.get("description", ""),
         )
         r["tool"] = "coderef_registry"
+        r["project_path"] = pp
+        return json.dumps(r, ensure_ascii=False)
+
+    def _replicate(self, a: dict) -> str:
+        """复刻铺排：检测目标项目缺口 + 生成复刻指引（coderef_replicate）"""
+        from core.replicate_engine import replicate_design, render_report, render_html
+        pp = a["project_path"]
+        out_format = a.get("out_format", "json")
+        r = replicate_design(
+            pp, a["canonical"],
+            verify_symbols=a.get("verify_symbols", True),
+        )
+        r["tool"] = "coderef_replicate"
+        r["project_path"] = pp
+        if out_format == "html":
+            r["report_html"] = render_html(r)
+        elif out_format == "text":
+            r["report_text"] = render_report(r)
+        return json.dumps(r, ensure_ascii=False)
+
+    def _asset_blueprint(self, a: dict) -> str:
+        """把复刻铺排结论写回资产蓝图（coderef_asset_blueprint）"""
+        from core.replicate_engine import solidify_asset_blueprint
+        pp = a["project_path"]
+        entry_points = a.get("entry_points") or []
+        if isinstance(entry_points, str):
+            import re as _re
+            entry_points = [s.strip() for s in _re.split(r"[,\s;]+", entry_points) if s.strip()]
+        r = solidify_asset_blueprint(pp, a["canonical"], entry_points=list(entry_points))
+        r["tool"] = "coderef_asset_blueprint"
+        r["project_path"] = pp
+        return json.dumps(r, ensure_ascii=False)
+
+    def _govern(self, a: dict) -> str:
+        """Prompt 治理平台：编排资产生命周期 × 合规审计 × 跨模块一致性（coderef_prompt_governance）"""
+        from core.prompt_governance import govern_prompt
+        pp = a["project_path"]
+        r = govern_prompt(
+            pp,
+            action=a.get("action", "overview"),
+            name=a.get("name", ""),
+            content=a.get("content", ""),
+            version=a.get("version", ""),
+            abtest_group=a.get("abtest_group", ""),
+        )
+        r["tool"] = "coderef_prompt_governance"
+        r["project_path"] = pp
+        return json.dumps(r, ensure_ascii=False)
+
+    def _interpret(self, a: dict) -> str:
+        """人话解读平台：健康/仪表盘/论断核验/Wiki/Prompt 治理/资产（coderef_interpret）"""
+        from core.interpretation_platform import interpret_project
+        pp = a["project_path"]
+        r = interpret_project(
+            pp,
+            action=a.get("action", "health"),
+            findings_text=a.get("findings_text", ""),
+            entry=a.get("entry", ""),
+            out_format=a.get("out_format", "json"),
+        )
+        r["tool"] = "coderef_interpret"
         r["project_path"] = pp
         return json.dumps(r, ensure_ascii=False)
 
@@ -907,6 +1138,24 @@ class Server:
         r = arch_audit(pp)
         r["tool"] = "coderef_arch_audit"
         r["project_path"] = pp
+        return json.dumps(r, ensure_ascii=False)
+
+    def _verify_findings(self, a: dict) -> str:
+        """确定性核验 LLM / CodeRabbit 论断（coderef_verify_findings）"""
+        from core.verify_findings import verify_findings, render_report, render_html
+        pp = a["project_path"]
+        findings = a.get("findings") or []
+        if isinstance(findings, str):
+            findings = json.loads(findings)
+        entry = a.get("entry") or None
+        out_format = a.get("out_format", "json")
+        r = verify_findings(pp, list(findings), entry=entry)
+        r["tool"] = "coderef_verify_findings"
+        r["project_path"] = pp
+        if out_format == "html":
+            r["report_html"] = render_html(r)
+        elif out_format == "text":
+            r["report_text"] = render_report(r)
         return json.dumps(r, ensure_ascii=False)
 
     def _run(self, n, a, progress_cb=None) -> str:

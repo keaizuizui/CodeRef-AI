@@ -75,10 +75,11 @@ class CodeKnowledgeGraph:
 
     SCHEMA_VERSION = 1
 
-    def __init__(self, project_path: str):
+    def __init__(self, project_path: str, db_path: Optional[str] = None):
         self.project_path = os.path.abspath(project_path)
         self._phash = hashlib.md5(self.project_path.encode()).hexdigest()[:12]
-        self._db_path = self._make_db_path()
+        # 显式 db_path 优先（供 verify_findings 等跨项目复用图谱），缺省按 project_path 生成
+        self._db_path = os.path.abspath(db_path) if db_path else self._make_db_path()
         self._conn: Optional[sqlite3.Connection] = None
 
     # ─── 路径 ───
