@@ -247,13 +247,19 @@ class PromptAssetManager:
         if not info:
             return {"ok": False, "action": "compare", "error": f"资产「{name}」不存在，请先使用 version 创建。"}
 
-        versions = info.get("versions", [])[:MAX_COMPARE_VERSIONS]
+        versions = info.get("versions", [])
         if not versions:
             return {"ok": False, "action": "compare", "error": f"资产「{name}」暂无版本。"}
 
         # 可指定某版本对比，否则对比全部版本
         if version:
             versions = [v for v in versions if v.get("version") == version]
+
+        # 先过滤再截断，避免超过 MAX_COMPARE_VERSIONS 索引的版本被误排除
+        versions = versions[:MAX_COMPARE_VERSIONS]
+        if not versions:
+            return {"ok": False, "action": "compare",
+                    "error": f"资产「{name}」未找到版本 {version}。"}
 
         scored = []
         for v in versions:
@@ -265,7 +271,10 @@ class PromptAssetManager:
             })
 
         scored.sort(key=lambda x: x["total"], reverse=True)
-        best = scored[0]["version"] if scored else ""
+        if not scored:
+            return {"ok": False, "action": "compare",
+                    "error": f"资产「{name}」版本评分失败，无法生成对比结果。"}
+        best = scored[0]["version"]
         return {
             "ok": True, "action": "compare",
             "name": name, "best_version": best,

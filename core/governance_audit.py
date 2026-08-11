@@ -892,7 +892,7 @@ class GovernanceAuditor:
                         severity=severity, file_path=cf.file_path, line_number=i,
                         line_content=line.strip()[:120],
                         detail=detail,
-                        suggestion="使用 with 语句确保资源正确释放" if "rule_id" == "PITFALL-03" else "确认有备份机制，操作前做二次确认",
+                        suggestion="使用 with 语句确保资源正确释放" if rule_id == "PITFALL-03" else "确认有备份机制，操作前做二次确认",
                         pattern=rule_name,
                     ))
 
@@ -1191,11 +1191,19 @@ class GovernanceAuditor:
                 # 真正的 web 入口一定带路由装饰器；仅出现框架名（如检测器自身
                 # 内容含 "FastAPI"/"Flask" 字符串）不代表入口，不应据此判 entry，
                 # 否则会把"检测框架名的检测器"误分类为入口层造成层级穿透误报。
+                # 移除裸 'def get(' 等模式（cache.get() 等普通方法会被误判为入口），
+                # 仅保留装饰器模式与框架类名；类继承视图改为下方正则检测
                 if any(kw in code_content for kw in ['@app.route', '@app.get', '@app.post',
                                                        '@app.put', '@app.delete', '@router.',
-                                                       'Blueprint', 'APIView', 'def get(',
-                                                       'def post(', 'def put(', 'def delete(',
+                                                       'Blueprint', 'APIView',
                                                        'JSONResponse']):
+                    return "entry"
+                # 检测视图类子类中的 HTTP 方法定义（Django REST / Tornado 等），
+                # 仅当类继承自 APIView/Resource/RequestHandler/ViewSet/Controller 时
+                # 才将 def get/post 等视为入口
+                if re.search(r'class\s+\w+\s*\([^)]*(?:APIView|Resource|RequestHandler|ViewSet|Controller)[^)]*\)',
+                             code_content) and \
+                   re.search(r'def\s+(?:get|post|put|delete|patch)\s*\(', code_content):
                     return "entry"
                 # 如果包含 ORM 模型定义 → data
                 if any(kw in code_content for kw in ['class Meta:', 'db.Model', 'BaseModel', 'Table(',

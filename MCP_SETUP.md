@@ -23,7 +23,7 @@ cd /path/to/coderef-ai
 pip install -r requirements.txt
 ```
 
-核心依赖：`tree-sitter`（代码解析）、`openai`（LLM 集成）、`loguru`（日志）、`pandas`（数据处理）。
+核心依赖：`openai`（LLM 集成）、`loguru`（日志）、`pandas`（数据处理）。`tree-sitter` 为可选依赖，未安装时自动降级为 Python 标准库 ast.parse，不影响核心功能。
 
 ---
 
@@ -224,7 +224,7 @@ export CODEREF_API_KEY="ollama"
 
 ## 知识图谱查询速查
 
-知识图谱在运行 audit / architecture / docs 后自动构建，持久化到 `cache/kg/`。一次构建，跨会话复用。
+知识图谱在运行 audit / architecture / docs / memory_sync 后自动构建，持久化到 `cache/kg/`。一次构建，跨会话复用。
 
 | 想知道什么 | query_type | 参数 |
 |-----------|-----------|------|

@@ -20,20 +20,24 @@ from typing import Dict, List, Set, Tuple
 
 def load_graph(db_path: str) -> Tuple[Dict[str, dict], Dict[str, List[str]]]:
     """返回 (nodes, adj)，adj 仅含 CALLS 边（source -> [targets]）。"""
+    if not os.path.isfile(db_path):
+        raise FileNotFoundError(f"知识图谱数据库不存在: {db_path}")
     nodes: Dict[str, dict] = {}
     adj: Dict[str, List[str]] = defaultdict(list)
     con = sqlite3.connect(db_path)
-    con.row_factory = sqlite3.Row
-    for r in con.execute("SELECT id,type,name,file_path,start_line,props FROM nodes"):
-        d = dict(r)
-        try:
-            d["props"] = json.loads(d["props"] or "{}")
-        except Exception:
-            d["props"] = {}
-        nodes[r["id"]] = d
-    for r in con.execute("SELECT source,target FROM edges WHERE type='CALLS'"):
-        adj[r["source"]].append(r["target"])
-    con.close()
+    try:
+        con.row_factory = sqlite3.Row
+        for r in con.execute("SELECT id,type,name,file_path,start_line,props FROM nodes"):
+            d = dict(r)
+            try:
+                d["props"] = json.loads(d["props"] or "{}")
+            except Exception:
+                d["props"] = {}
+            nodes[r["id"]] = d
+        for r in con.execute("SELECT source,target FROM edges WHERE type='CALLS'"):
+            adj[r["source"]].append(r["target"])
+    finally:
+        con.close()
     return nodes, adj
 
 

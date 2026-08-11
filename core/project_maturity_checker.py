@@ -97,6 +97,17 @@ class ProjectMaturityChecker:
         """检查依赖列表中是否包含某关键词"""
         return any(keyword in d for d in deps)
 
+    def _has_mypy_in_pyproject(self, project_path: str) -> bool:
+        """检查 pyproject.toml 中是否配置了 [tool.mypy] 段落。"""
+        pyproject = os.path.join(project_path, "pyproject.toml")
+        if not os.path.isfile(pyproject):
+            return False
+        try:
+            with open(pyproject, "r", encoding="utf-8", errors="ignore") as f:
+                return "[tool.mypy]" in f.read()
+        except (OSError, IOError):
+            return False
+
     def _scan_content(self, project_path: str, pattern: str, file_ext: str = ".py") -> bool:
         """扫描项目文件内容，检查是否包含某模式"""
         rgx = re.compile(pattern, re.IGNORECASE)
@@ -454,8 +465,12 @@ class ProjectMaturityChecker:
                         status="warn", detail=".gitignore 存在但可能不完整，缺少 .env 或 __pycache__",
                         suggestion="在 .gitignore 中添加 .env 和 __pycache__/，防止敏感信息泄露",
                     ))
-            except (OSError, IOError):
-                pass
+            except (OSError, IOError) as e:
+                checks.append(MaturityCheck(
+                    check_id="MAT-CFG-04", category="config", name=".gitignore",
+                    status="warn", detail=f".gitignore 存在但读取失败: {e}",
+                    suggestion="检查 .gitignore 文件权限和编码",
+                ))
         else:
             checks.append(MaturityCheck(
                 check_id="MAT-CFG-04", category="config", name=".gitignore",
@@ -544,7 +559,9 @@ class ProjectMaturityChecker:
         checks = []
 
         # 类型检查
-        has_mypy = self._has_dep(deps, "mypy") or self._file_exists(project_path, "mypy.ini") or self._file_exists(project_path, "pyproject.toml")
+        has_mypy = (self._has_dep(deps, "mypy")
+                    or self._file_exists(project_path, "mypy.ini")
+                    or self._has_mypy_in_pyproject(project_path))
         if has_mypy:
             checks.append(MaturityCheck(
                 check_id="MAT-QLY-01", category="quality", name="类型检查",

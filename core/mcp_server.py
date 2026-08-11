@@ -599,6 +599,31 @@ class Server:
         with self._lock:
             yield self._tasks
 
+    def _evict_finished_tasks(self, tasks: Dict[str, Any], max_age: int = 3600, max_size: int = 50):
+        """清除已完成且过期的后台任务，避免 _tasks 无限增长。
+
+        策略：1) 超过 max_age 秒的已完成任务直接清除；
+              2) 已完成任务数超过 max_size 时，按 finished_at 从旧到新清除。
+        """
+        import time
+        now = time.time()
+        # 清除超时的已完成任务
+        expired = [
+            tid for tid, t in tasks.items()
+            if t.get("finished_at") is not None and now - t["finished_at"] > max_age
+        ]
+        for tid in expired:
+            del tasks[tid]
+        # 如果已完成任务仍过多，按时间从旧到新清除
+        finished = sorted(
+            [(tid, t) for tid, t in tasks.items() if t.get("finished_at") is not None],
+            key=lambda x: x[1]["finished_at"],
+        )
+        while len(finished) > max_size:
+            tid, _ = finished.pop(0)
+            if tid in tasks:
+                del tasks[tid]
+
     # ─── request ───
 
     def _handle(self, req: Dict) -> Dict:
@@ -956,8 +981,6 @@ class Server:
         if handler is not None:
             return handler(a)
         return "未知工具: " + n
-        logger.info(f"[{n}] 完成: {r.elapsed}s")
-        return r.report
 
     def _review(self, a) -> str:
         """执行代码审查（coderef_review），返回结构化 JSON 文本"""
@@ -1061,11 +1084,14 @@ class Server:
             return json.dumps({"added": n, "total": len(Pipe.whitelist_list(pp))}, ensure_ascii=False)
 
     def _tsk(self, a) -> str:
+        import time
         tid = a.get("task_id","")
         if not tid:
             with self._locked_tasks() as tasks:
+                self._evict_finished_tasks(tasks)
                 return json.dumps({"tasks":list(tasks.keys())})
         with self._locked_tasks() as tasks:
+            self._evict_finished_tasks(tasks)
             t = tasks.get(tid)
             if not t: return json.dumps({"error":f"不存在: {tid}"})
             if t["thread"].is_alive():
@@ -1084,8 +1110,12 @@ class Server:
                     }, ensure_ascii=False)
                 return json.dumps({"status":"running","task_id":tid})
             rc = t["result"]
-            if "error" in rc: return json.dumps({"status":"error","task_id":tid,"error":rc["error"]})
-            r = rc.get("result",""); del tasks[tid]
+            # 标记完成时间戳，不再首次读取即删除；由 _evict_finished_tasks 按年龄/大小清除
+            if "finished_at" not in t:
+                t["finished_at"] = time.time()
+            if "error" in rc:
+                return json.dumps({"status":"error","task_id":tid,"error":rc["error"]})
+            r = rc.get("result","")
         return json.dumps({"status":"completed","task_id":tid,"content":r}, ensure_ascii=False)
 
     def _query(self, a) -> str:
@@ -1108,7 +1138,7 @@ class Server:
             sys.stdout.reconfigure(encoding='utf-8')
         else:
             sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-        logger.info("CodeRef MCP v3.0 (audit|arch|docs) 启动")
+        logger.info(f"CodeRef MCP v{PKG_VERSION} (audit|arch|docs) 启动")
         for line in sys.stdin:
             if not (line := line.strip()): continue
             try:

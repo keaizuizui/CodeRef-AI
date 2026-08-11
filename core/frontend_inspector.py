@@ -54,6 +54,7 @@ MAX_MENU_LEVEL = 5              # 菜单最大层级（L1→L5）
 # 审查相关
 DEFAULT_SEVERITY = "low"        # 默认严重级别
 MAX_PROMPT_CHARS = 2000         # 单条 prompt 中上下文最长长度
+MAX_LLM_REVIEW_ITEMS = 50       # LLM 审查的按钮/菜单节点上限，超出则部分审查
 
 # 浏览器自动化（runtime 可选）
 RUNTIME_PAGE_TIMEOUT = 30       # 页面加载超时（秒）
@@ -380,10 +381,17 @@ class FrontendInspector:
         findings: List[Dict[str, Any]] = []
         if self._llm_available():
             try:
-                for btn in buttons:
+                reviewed_buttons = buttons[:MAX_LLM_REVIEW_ITEMS]
+                reviewed_menus = menu_nodes[:MAX_LLM_REVIEW_ITEMS]
+                for btn in reviewed_buttons:
                     findings.extend(self._review_button(btn))
-                for node in menu_nodes:
+                for node in reviewed_menus:
                     findings.extend(self._review_menu_node(node))
+                if len(buttons) > MAX_LLM_REVIEW_ITEMS or len(menu_nodes) > MAX_LLM_REVIEW_ITEMS:
+                    findings.append(self._pending_finding(
+                        "全局", f"按钮/菜单数量超过 {MAX_LLM_REVIEW_ITEMS} 上限，"
+                        f"LLM 审查为部分审查（按钮 {len(reviewed_buttons)}/{len(buttons)}，"
+                        f"菜单 {len(reviewed_menus)}/{len(menu_nodes)}），请人工复核未审查项。"))
             except Exception as e:
                 logger.error(f"LLM 审查过程中发生异常: {e}")
                 findings.append(self._pending_finding("全局", f"LLM 审查过程中发生异常: {e}"))
@@ -479,6 +487,9 @@ class FrontendInspector:
         if project_path is None or not os.path.isdir(project_path):
             logger.error(f"project_path 无效或不存在: {project_path}")
             return []
+        # entry 可指向目录（覆盖 project_path）或单个 HTML 文件
+        if entry and os.path.isdir(entry):
+            project_path = entry
         if entry and os.path.isfile(entry):
             base = os.path.basename(entry).lower()
             if base.endswith((".html", ".htm")):
