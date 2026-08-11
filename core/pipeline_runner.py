@@ -116,8 +116,11 @@ class Pipe:
     def _load(self, p: str) -> set:
         try:
             cp = self._ckpt(p)
-            return set(json.load(open(cp)).get("done", [])) if os.path.exists(cp) else set()
-        except: return set()
+            if not os.path.exists(cp):
+                return set()
+            with open(cp, "r", encoding="utf-8") as f:
+                return set(json.load(f).get("done", []))
+        except Exception: return set()
 
     # ─── AI 白名单（编程 AI 补充意见持久化）───
 
@@ -165,7 +168,8 @@ class Pipe:
         """清空白名单，返回被删除的条目数"""
         path = Pipe._whitelist_path(project_path)
         if os.path.exists(path):
-            n = len(json.load(open(path, "r", encoding="utf-8")))
+            with open(path, "r", encoding="utf-8") as f:
+                n = len(json.load(f))
             os.remove(path)
             return n
         return 0
@@ -823,7 +827,7 @@ class Pipe:
             r.dimension_states = self._collect_dimension_states(project_path, kg_stats, output_dir)
             # 恢复上次审计的 findings 与统计，避免"重渲染既有产物"时 index 审计卡片
             # 与 audit.html 明细全部为 0 / 空（社区反馈的聚合 HTML 全 0 bug）。
-            self._load_findings_json(project_path, r)
+            self._load_findings_json(project_path, r, output_dir)
             # 若已有 Wiki 产物，挂到 wiki_result 供 HTML 渲染聚合 Wiki 页
             wiki_dir = self._detect_wiki_dir(project_path)
             if wiki_dir:
@@ -900,9 +904,11 @@ class Pipe:
         except Exception as e:
             r.errors.append(f"dump_findings_json: {e}")
 
-    def _load_findings_json(self, project_path: str, r: PipeResult) -> bool:
+    def _load_findings_json(self, project_path: str, r: PipeResult,
+                            out: Optional[str] = None) -> bool:
         """从落盘的 findings JSON 恢复统计与 findings 到 r；无可用 JSON 返回 False。"""
         candidates = [
+            self._findings_json_path(project_path, out),
             self._findings_json_path(project_path),
             os.path.join(project_path, "coderef-report", "audit_findings.json"),
         ]

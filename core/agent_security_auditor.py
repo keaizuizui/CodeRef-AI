@@ -460,7 +460,10 @@ class AgentSecurityAuditor:
 
             # 跟踪多行 docstring
             if stripped.startswith('"""') or stripped.startswith("'''"):
-                in_docstring = not in_docstring
+                q = stripped[:3]
+                # 单行 docstring（如 """text"""）不切换状态
+                if not (len(stripped) > 5 and stripped.endswith(q)):
+                    in_docstring = not in_docstring
                 continue
             if in_docstring:
                 continue
@@ -514,11 +517,6 @@ class AgentSecurityAuditor:
                         if risk_id == "AGENT-SEC-25":
                             args = self._collect_call_args(lines, i - 1, stripped, m.start())
                             if re.search(r'timeout\s*=', args, re.IGNORECASE):
-                                continue
-                        # AGENT-SEC-23：豁免服务端内部 pickle dumps→loads 闭环（参数为内部可信变量）
-                        if risk_id == "AGENT-SEC-23":
-                            args = self._collect_call_args(lines, i - 1, stripped, m.start())
-                            if args and self._is_internal_pickle_loads(args, lines):
                                 continue
                         # 提示注入/上下文操纵：若注入点已被净化函数包裹，视为已安全处理
                         if is_sanitized and category_key in ("prompt_injection", "context_manipulation"):
@@ -769,28 +767,6 @@ class AgentSecurityAuditor:
         
         return risks
 
-    def _is_internal_pickle_loads(self, args: str, lines: List[str]) -> bool:
-        """判断 pickle.loads 是否属于服务端内部 dumps→loads 闭环（参数为内部可信变量）。
-
-        豁免条件：同一文件内对同一变量存在 pickle.dumps 赋值，且该 loads 调用的参数
-        就是这个变量（非 request/input/user/cookie/header 等不可信外部来源）。
-        仅当"被负载的变量在文件内被 pickle.dumps 的结果赋值"时才豁免，避免把真实
-        攻击面（如 loads 外部请求数据）一并跳过。
-        """
-        arg = args.strip()
-        # 参数必须是简单变量名（如 pickle.loads(blob)），复杂表达式不豁免
-        if not re.fullmatch(r'[A-Za-z_]\w*', arg):
-            return False
-        # 该变量必须被 pickle.dumps(...) 赋值，才构成"内部 dumps→loads 闭环"
-        if not re.search(r'\b' + re.escape(arg) + r'\s*=\s*pickle\.dumps\s*\(', "".join(lines)):
-            return False
-        # 参数本身来自不可信外部来源则不豁免
-        untrusted = re.search(
-            r'\b(request|input|user|cookie|header|query|form|body|payload|received)\b',
-            args, re.IGNORECASE
-        )
-        return not untrusted
-
     def _collect_call_args(self, lines: List[str], start_idx: int, stripped: str, from_col: int) -> str:
         """从调用起点提取完整括号内的参数（平衡括号匹配，支持跨行/嵌套调用）。
 
@@ -878,6 +854,7 @@ class AgentSecurityAuditor:
             "pii_leak": "PII泄露",
             "security_config": "安全配置",
             "autonomous": "自主行为",
+            "param_shadow": "参数透传失效",
             "knowledge": "知识投毒",
             "resilience_gap": "防御层级韧性缺口",
         }
@@ -915,11 +892,12 @@ class AgentSecurityAuditor:
             "pii_leak": "个人身份信息（PII）可能泄露到日志或响应中",
             "security_config": "安全配置不当可能导致生产环境风险",
             "autonomous": "Agent 可能未经确认执行自主行为",
+            "param_shadow": "函数参数被配置读取静默覆盖，调用方传入的实参不生效",
             "knowledge": "知识库/向量数据库可能被投毒",
             "resilience_gap": "缺失的防御层级，如重试退避、模型回退、可观测性等",
         }
 
-        for cat_key in ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "resilience_gap"]:
+        for cat_key in ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "param_shadow", "resilience_gap"]:
             cat_risks = by_category.get(cat_key, [])
             if not cat_risks:
                 continue
@@ -933,7 +911,7 @@ class AgentSecurityAuditor:
         lines.append("## 详细风险列表")
         lines.append("")
 
-        for cat_key in ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "resilience_gap"]:
+        for cat_key in ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "param_shadow", "resilience_gap"]:
             cat_risks = by_category.get(cat_key, [])
             if not cat_risks:
                 continue

@@ -22,6 +22,7 @@ flow_verify — 流程合规验证（正式集成 v1.0）
 
 import os
 from collections import defaultdict
+from html import escape as _esc
 from typing import Dict, List, Optional, Set, Tuple
 from core.graph_closure import load_graph, file_base, downstream
 
@@ -380,12 +381,13 @@ def render_html(result: dict) -> str:
     rows = []
     for i, s in enumerate(steps, 1):
         bg, label = badge(s["status"])
-        cand = "; ".join(s.get("candidates", [])[:3]) or "—"
-        ev = s.get("node", "")
+        cand = _esc("; ".join(s.get("candidates", [])[:3]) or "—")
+        ev = _esc(s.get("node", ""))
+        keyword = _esc(str(s.get("keyword", "")))
         rows.append(
             f"<tr>"
             f"<td style='padding:10px 12px;border-bottom:1px solid #eee;white-space:nowrap;color:#888;'>#{i}</td>"
-            f"<td style='padding:10px 12px;border-bottom:1px solid #eee;font-weight:600;'>{s['keyword']}</td>"
+            f"<td style='padding:10px 12px;border-bottom:1px solid #eee;font-weight:600;'>{keyword}</td>"
             f"<td style='padding:10px 12px;border-bottom:1px solid #eee;'><span style='background:{bg};color:#fff;border-radius:999px;padding:2px 10px;font-size:12px;'>{label}</span></td>"
             f"<td style='padding:10px 12px;border-bottom:1px solid #eee;color:#555;font-size:13px;'>{ev or cand}</td>"
             f"</tr>")
@@ -401,8 +403,8 @@ def render_html(result: dict) -> str:
   <div style="background:#fff;border-radius:14px;padding:28px;box-shadow:0 1px 3px rgba(0,0,0,.06);">
     <h1 style="margin:0 0 4px;font-size:22px;">流程合规验证报告</h1>
     <div style="color:#888;font-size:13px;margin-bottom:20px;">
-      入口节点：<code style="background:#f0f0f3;padding:2px 6px;border-radius:6px;">{en.get('spec','')}</code>
-      &nbsp;→&nbsp;{en.get('node','')}
+      入口节点：<code style="background:#f0f0f3;padding:2px 6px;border-radius:6px;">{_esc(en.get('spec',''))}</code>
+      &nbsp;→&nbsp;{_esc(en.get('node',''))}
       &nbsp;·&nbsp;图谱 {gs.get('nodes',0)} 节点 / {gs.get('calls_edges',0)} 调用边
     </div>
     <div style="background:{status_banner[0]}14;border-left:4px solid {status_banner[0]};padding:12px 16px;border-radius:8px;margin-bottom:20px;">

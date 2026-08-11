@@ -159,6 +159,8 @@ class InnovationPropagationDetector:
         self._sig_cache = None
         # LLM 总预算兜底（跨 Step 3/4）
         self._llm_budget = 0
+        # 检测结果缺口列表（detect() 前也可安全读取）
+        self.gaps: List[PropagationGap] = []
 
     def _ensure_llm(self):
         """延迟初始化 LLM 客户端"""
@@ -174,6 +176,45 @@ class InnovationPropagationDetector:
         except Exception as e:
             logger.warning(f"LLM 初始化失败，将使用纯结构对比模式: {e}")
             self._llm_available = False
+
+    # ─── 公共接口（供 InnovationEngine 复用，避免直接访问私有成员） ────
+
+    def prepare_analysis(self):
+        """初始化 LLM 并重置类级预算（供外部调用方在 detect() 外复用检测管线）。"""
+        self._ensure_llm()
+        self._llm_budget = self.LLM_TOTAL_BUDGET
+
+    def collect_signatures(self, project_path: str):
+        """收集项目能力签名（公共包装，供 InnovationEngine 复用）。"""
+        return self._collect_signatures(project_path)
+
+    def cluster_modules(self, signatures):
+        """模块聚类（公共包装）。"""
+        return self._cluster_modules(signatures)
+
+    def detect_structural_gaps(self, cluster):
+        """检测聚类内的结构缺口（公共包装）。"""
+        return self._detect_structural_gaps(cluster)
+
+    def select_valuable_gaps(self, gaps):
+        """按价值挑选 top-N 缺口（公共包装）。"""
+        return self._select_valuable_gaps(gaps)
+
+    def is_llm_available(self) -> bool:
+        """LLM 是否可用（公共接口）。"""
+        return self._llm_available
+
+    def get_llm_budget(self) -> int:
+        """获取剩余 LLM 预算（公共接口）。"""
+        return self._llm_budget
+
+    def consume_llm_budget(self, n: int = 1) -> None:
+        """消耗 LLM 预算（公共接口）。"""
+        self._llm_budget -= n
+
+    def generate_suggestion(self, pattern, target_sig) -> str:
+        """为缺口生成 LLM 建议（公共包装）。"""
+        return self._generate_suggestion(pattern, target_sig)
 
     # ─── Step 1: 能力签名提取 ────────────────────────────────────
 

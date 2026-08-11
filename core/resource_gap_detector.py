@@ -252,7 +252,7 @@ class ResourceGapDetector:
         5. 如果都没有，标记为缺失
         """
         # 获取 requirements.txt 中的包名
-        req_packages = self._parse_requirements(project_path)
+        req_packages, _ = self._parse_requirements(project_path)
 
         # 构建本地模块映射：模块名 -> 文件路径
         local_modules: Dict[str, str] = {}
@@ -590,7 +590,7 @@ class ResourceGapDetector:
 
         反向检查：requirements.txt 中的包 -> 代码中是否 import
         """
-        req_packages = self._parse_requirements(project_path)
+        req_packages, req_aliases = self._parse_requirements(project_path)
         if not req_packages:
             return
 
@@ -644,6 +644,9 @@ class ResourceGapDetector:
         }
 
         for pkg_name, pkg_version in req_packages.items():
+            # 跳过归一化别名键，避免对同一依赖重复报告 unused_dep
+            if pkg_name in req_aliases:
+                continue
             pkg_lower = pkg_name.lower().replace("-", "_")
             import_name = PACKAGE_IMPORT_MAP.get(pkg_name.lower(), pkg_lower)
 
@@ -654,8 +657,10 @@ class ResourceGapDetector:
                 if imported_lower == pkg_lower or imported_lower == import_name.lower():
                     is_used = True
                     break
-                # 模糊匹配：包名是 import 名的前缀
-                if imported_lower.startswith(pkg_lower + ".") or pkg_lower.startswith(imported_lower):
+                # 模糊匹配：包名与 import 名互为前缀时需点号边界，
+                # 避免 import re 误匹配 requests 等无关包
+                if (imported_lower.startswith(pkg_lower + ".")
+                        or pkg_lower.startswith(imported_lower + ".")):
                     is_used = True
                     break
 
@@ -780,18 +785,20 @@ class ResourceGapDetector:
 
     # ─── 辅助方法 ─────────────────────────────────────────────────
 
-    def _parse_requirements(self, project_path: str) -> Dict[str, str]:
+    def _parse_requirements(self, project_path: str) -> tuple:
         """
         解析 requirements.txt 文件
 
         Returns:
-            {包名: 版本号} 字典
+            (packages, aliases) —— packages 为 {包名: 版本号} 字典，
+            aliases 为归一化别名键集合（连字符→下划线后产生的重复键）。
         """
         req_path = os.path.join(project_path, "requirements.txt")
         if not os.path.isfile(req_path):
-            return {}
+            return {}, set()
 
         packages = {}
+        aliases: Set[str] = set()
         try:
             with open(req_path, "r", encoding="utf-8", errors="ignore") as fh:
                 for line in fh:
@@ -820,11 +827,12 @@ class ResourceGapDetector:
                         packages[pkg_name] = version
                         if pkg_name_norm != pkg_name:
                             packages[pkg_name_norm] = version
+                            aliases.add(pkg_name_norm)
 
         except Exception as e:
             logger.warning(f"[ResourceGapDetector] 解析 requirements.txt 失败: {e}")
 
-        return packages
+        return packages, aliases
 
     # ─── 报告生成 ─────────────────────────────────────────────────
 

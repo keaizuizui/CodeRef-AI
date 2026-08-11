@@ -97,7 +97,18 @@ class ChangeReport:
             items = self._structural_summarize(project_path, units)
 
         generated_by = "llm" if items and items[0].get("source") == "llm" else "structural"
-        summary = self._build_summary(units, items, generated_by)
+        # 确定结构化降级的原因（供 summary 准确描述）
+        if generated_by == "structural":
+            if not available:
+                degrade_reason = "LLM 不可用"
+            elif len(units) > MAX_UNITS_PER_PROMPT:
+                degrade_reason = (f"变更单元数（{len(units)}）超过单次 prompt 上限"
+                                  f"（{MAX_UNITS_PER_PROMPT}）")
+            else:
+                degrade_reason = "LLM 解析失败"
+        else:
+            degrade_reason = ""
+        summary = self._build_summary(units, items, generated_by, degrade_reason)
         return {
             "items": items,
             "summary": summary,
@@ -245,7 +256,7 @@ class ChangeReport:
 
     # ── summary ─────────────────────────────────────────────────────
     def _build_summary(self, units: List[Dict[str, Any]], items: List[Dict[str, Any]],
-                       generated_by: str) -> str:
+                       generated_by: str, degrade_reason: str = "") -> str:
         files = ", ".join(u["file"] for u in units[:5])
         more = f" 等 {len(units)} 个文件" if len(units) > 5 else ""
         total_added = sum(len(u.get("changed_lines", [])) for u in units)
@@ -257,6 +268,6 @@ class ChangeReport:
             )
         return (
             f"本次改动涉及 {len(units)} 个文件（{files}{more}），"
-            f"共新增约 {total_added} 行。LLM 不可用或解析失败，已降级为结构摘要，"
+            f"共新增约 {total_added} 行。{degrade_reason or 'LLM 不可用或解析失败'}，已降级为结构摘要，"
             f"请结合变更行号人工确认影响范围。"
         )

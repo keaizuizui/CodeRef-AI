@@ -129,7 +129,7 @@ _ENTRY_SIGNAL_PATTERNS: List[tuple] = [
     (re.compile(r"@app\.(get|post|put|delete|patch|route)\s*\(\s*[\"']([^\"']+)[\"']", re.I), "web_route", 2),
     (re.compile(r"@router\.(get|post|put|delete|patch)\s*\(\s*[\"']([^\"']+)[\"']", re.I), "web_route", 2),
     (re.compile(r"@(?:Get|Post|Put|Delete|Patch)Mapping\s*\(*(?:value\s*=\s*)?[\"']([^\"']+)[\"']", re.I), "web_route", 1),
-    (re.compile(r"app\.(get|post|put|delete|patch)\s*\(\s*[\"']/([^\"']+)[\"']", re.I), "web_route", 2),
+    (re.compile(r"app\.(get|post|put|delete|patch)\s*\(\s*[\"']/([^\"']*)[\"']", re.I), "web_route", 2),
     (re.compile(r"router\.(get|post|put|delete|patch)\s*\(\s*[\"']/([^\"']+)", re.I), "web_route", 2),
     # 事件监听器（group(1)=topic/事件名）
     (re.compile(r"@kafka_listener\s*\(\s*[\"']?([^\"',)]+)", re.I), "event_listener", 1),
@@ -233,7 +233,7 @@ def detect_architecture(files: List[CodeFile]) -> ArchitectureProfile:
             profile.arch_type = best_arch
             profile.evidence.append(
                 f"检测到 {best_count}/{total} 个文件含 {ARCH_LABELS[best_arch]} 信号"
-                f"（{ '、'.join(a for a, c in scored[:-1] if c > 0) or '无其他架构信号'}）。"
+                f"（{ '、'.join(ARCH_LABELS[a] for a, c in scored[1:] if c > 0) or '无其他架构信号'}）。"
                 if len(scored) >= 2 else
                 f"检测到 {best_count}/{total} 个文件含 {ARCH_LABELS[best_arch]} 信号。"
             )

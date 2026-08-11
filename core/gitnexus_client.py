@@ -208,6 +208,15 @@ class GitNexusMCPClient:
                 "gitnexus CLI未找到。请先安装: npm install -g gitnexus"
             )
 
+        # shell=True 下缺包不会抛 FileNotFoundError，主动检测子进程是否立即退出
+        time.sleep(0.5)
+        if self._process.poll() is not None:
+            stderr_output = self._process.stderr.read() if self._process.stderr else ""
+            raise RuntimeError(
+                "gitnexus CLI 启动后立即退出，可能未安装或配置有误。"
+                f"请先安装: npm install -g gitnexus\nstderr: {stderr_output}"
+            )
+
         # 启动后台读取线程
         self._response_queue = Queue()
         self._reader_thread = threading.Thread(
@@ -812,6 +821,10 @@ class GitNexusMCPClient:
                     return self._parse_cypher_pairs(data)
         return pairs
     
+    def parse_markdown_table(self, result: Any, columns: List[str]) -> List[Dict]:
+        """公共接口：解析 GitNexus Cypher 查询返回的 Markdown 表格格式。"""
+        return self._parse_markdown_table(result, columns)
+
     def _parse_markdown_table(self, result: Any, columns: List[str]) -> List[Dict]:
         """
         解析 GitNexus Cypher 查询返回的 Markdown 表格格式

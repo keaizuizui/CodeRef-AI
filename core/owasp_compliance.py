@@ -171,6 +171,11 @@ REPORT_TITLE = "OWASP LLM Top 10 合规检测报告"
 REPORT_VERSION = "1.0"
 
 
+def _cell(s) -> str:
+    """转义 markdown 表格单元格中的管道符和换行，防止破坏表格结构。"""
+    return str(s).replace("|", "\\|").replace("\n", " ")
+
+
 class OWASPCompliance:
     """OWASP LLM Top 10 合规检测器"""
 
@@ -293,7 +298,10 @@ class OWASPCompliance:
             if not stripped:
                 continue
             if stripped.startswith('"""') or stripped.startswith("'''"):
-                in_docstring = not in_docstring
+                q = stripped[:3]
+                # 单行 docstring（如 """text"""）不切换状态
+                if not (len(stripped) > 5 and stripped.endswith(q)):
+                    in_docstring = not in_docstring
                 continue
             if in_docstring:
                 continue
@@ -461,7 +469,7 @@ class OWASPCompliance:
             "",
             "## 覆盖概览",
             "",
-            "| 已覆盖维度 | 未覆盖维度 | 命中项 | HIGH | MEDIUM | LOW |",
+            "| 已覆盖维度 | 未覆盖维度 | 命中项 | HIGH 维度 | MEDIUM 维度 | LOW 维度 |",
             "|---|---|---|---|---|---|",
             "| {} | {} | {} | {} | {} | {} |".format(
                 s["covered_count"], s["uncovered_count"],
@@ -498,8 +506,8 @@ class OWASPCompliance:
             lines.append("|------|------|------|------|------|")
             for f in fs[:20]:
                 lines.append("| `{}` | {} | {} | {} | {} |".format(
-                    f["file"] or "-", f["line"] or "-",
-                    f["title"][:40], f["detail"][:60], f["suggestion"][:60]))
+                    _cell(f["file"] or "-"), _cell(f["line"] or "-"),
+                    _cell(f["title"][:40]), _cell(f["detail"][:60]), _cell(f["suggestion"][:60])))
             if len(fs) > 20:
                 lines.append("| ... | ... | ... | （还有 {} 条） | ... |".format(len(fs) - 20))
             lines.append("")
