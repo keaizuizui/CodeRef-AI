@@ -1,3 +1,4 @@
 # CodeRef-AI - 神奇LLM代码参考助手
 __version__ = "4.2.8"
 __author__ = "CodeRef Team"
+# Test PR for CodeRabbit review integration verification
