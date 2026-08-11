@@ -88,6 +88,7 @@ class WorkflowAsset:
         evidence: bool = False,
         solidified_at: str = "",
         source_project: str = "",
+        blueprint: Optional[Dict[str, Any]] = None,
     ):
         self.canonical = canonical
         self.category = category
@@ -102,6 +103,10 @@ class WorkflowAsset:
         self.solidified = bool(evidence) and adoption_count >= MIN_ADOPTION_FOR_SOLIDIFY
         self.solidified_at = solidified_at
         self.source_project = source_project
+        # 结构化复刻蓝图（4.3 增补）：可据此从零复刻该设计。四要素：
+        #   steps（复刻步骤）、entry_points（入口）、adopted_workflows（已验证采用）、
+        #   verified_findings（复用已验证发现，来自 verify_findings 的确定性结论）
+        self.blueprint = blueprint or {}
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -118,6 +123,7 @@ class WorkflowAsset:
             "solidified": self.solidified,
             "solidified_at": self.solidified_at,
             "source_project": self.source_project,
+            "blueprint": self.blueprint,
         }
 
     @staticmethod
@@ -135,6 +141,7 @@ class WorkflowAsset:
             evidence=data.get("evidence", False),
             solidified_at=data.get("solidified_at", ""),
             source_project=data.get("source_project", ""),
+            blueprint=data.get("blueprint") or {},
         )
 
 
@@ -184,6 +191,25 @@ class InnovationEngine:
             return []
         signatures = self.detector.collect_signatures(project_path)
         return [sig.module_name for sig in signatures if tag in sig.tags]
+
+    @staticmethod
+    def _build_blueprint_skeleton(canonical: str, adopters: List[str]) -> Dict[str, Any]:
+        """从已验证 adopters 构建复刻蓝图骨架（4.3 增量）。
+
+        骨架只含确定性可填字段：adopted_workflows（已验证采用）、steps / entry_points
+        留待 4.4 的 coderef_replicate 依据真实代码调用关系补全。缺省主体不臆断。
+        """
+        return {
+            "canonical": canonical,
+            "adopted_workflows": list(adopters),
+            "steps": [],
+            "entry_points": [],
+            "verified_findings": [],
+            "notes": (
+                "骨架由 4.3 自动构建：已验证采用清单已确证；steps / entry_points / "
+                "verified_findings 需 4.4 的 coderef_replicate 依据真实代码补全。"
+            ),
+        }
 
     def _gather_clusters_gaps(self, project_path: str):
         """复用检测器底层：收集签名、聚类、做纯结构缺口检测，并按价值挑选 top-N。
@@ -386,6 +412,7 @@ class InnovationEngine:
         template_code: str = "",
         patch_suggestion: str = "",
         migration_guide: str = "",
+        blueprint: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """资产化管理。
 
@@ -397,6 +424,8 @@ class InnovationEngine:
             template_code: commit 时的模板代码。
             patch_suggestion: commit 时的补丁建议。
             migration_guide: commit 时的迁移指南。
+            blueprint: commit 时的结构化复刻蓝图（可选）。缺省时自动从已验证
+                adopters 构建骨架（含 adopted_workflows / entry_points 占位）。
 
         Returns:
             结构化 dict。
@@ -459,6 +488,9 @@ class InnovationEngine:
                 }
 
             seed_info = SEED_DESIGNS.get(resolved, {})
+            # 蓝图：显式传入优先，否则自动从已验证 adopters 构建骨架
+            resolved_blueprint = blueprint if isinstance(blueprint, dict) and blueprint \
+                else self._build_blueprint_skeleton(resolved, adopters)
             asset = WorkflowAsset(
                 canonical=resolved,
                 category=seed_info.get("category", "misc"),
@@ -472,6 +504,7 @@ class InnovationEngine:
                 evidence=True,
                 solidified_at=datetime.now().strftime(TIMESTAMP_FORMAT),
                 source_project=project_path,
+                blueprint=resolved_blueprint,
             )
             self.registry.add_asset(asset.to_dict())
             logger.info(f"[InnovationEngine] 已固化资产「{resolved}」({adoption_count} 采用)")
@@ -506,11 +539,12 @@ def manage_asset(
     template_code: str = "",
     patch_suggestion: str = "",
     migration_guide: str = "",
+    blueprint: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """便捷函数：资产化管理。"""
     engine = InnovationEngine()
     return engine.asset(
         project_path, action, canonical=canonical, description=description,
         template_code=template_code, patch_suggestion=patch_suggestion,
-        migration_guide=migration_guide,
+        migration_guide=migration_guide, blueprint=blueprint,
     )

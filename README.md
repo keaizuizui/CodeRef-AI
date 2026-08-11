@@ -1,8 +1,8 @@
-<!-- AI Summary: CodeRef-AI exposes 26 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. Core results (audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP) are pure static analysis — no LLM, reproducible. LLM is only used for synthesis tasks (wiki, code review) and degrades gracefully without an API key. Install is pure-Python, no C compilation, works out of the box. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams who want AI that augments rather than hallucinates. -->
+<!-- AI Summary: CodeRef-AI exposes 32 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. Core results (audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, prompt compliance) are pure static analysis — no LLM, reproducible. LLM is only used for synthesis tasks (wiki, code review) and hard-blocks honestly without an API key. Builds a closed loop: verify LLM/CodeRabbit claims deterministically, replicate solidified design assets, and interpret everything in plain language for non-programmers. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams who want AI that augments rather than hallucinates. -->
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.2.11** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.5.0** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -10,9 +10,9 @@
 
 ## 它是什么
 
-CodeRef-AI 通过 MCP 协议暴露 **26 个工具**，同时服务两类人：
+CodeRef-AI 通过 MCP 协议暴露 **32 个工具**，同时服务两类人：
 
-- **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险。
+- **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险；持有一条 LLM/CodeRabbit 论断时，还能用静态图谱做确定性核验，再决定采不采信。
 - **非编程人员的技术助理**：把看不懂的代码变成通俗的健康仪表盘、Wiki 文档和流程确证，让你不用读代码，也能确认项目有没有按你的设想运转。
 
 它不替代 AI，而是让它看到用静态事实核验过的世界——核心结论来自代码事实，而不是大模型的猜测。
@@ -45,16 +45,17 @@ CodeRef-AI 通过 MCP 协议暴露 **26 个工具**，同时服务两类人：
 
 ## 四引擎架构
 
-CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → 守护」完整闭环：
+CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → 守护」完整闭环；4.3–4.5 在四引擎之上补上「确定性核验 + 平台整合」，让闭环真正可落地：
 
 | 引擎 | 解决的问题 | 核心工具 |
 |------|-----------|---------|
-| **审计引擎** | 全维度代码体检 + 图谱 + 文档 + 审查 | `coderef_audit` `coderef_query` `coderef_review` 等 |
-| **记忆引擎** | AI 对项目「记住了什么」，增量同步 + 语义查询 | `coderef_memory_*` `coderef_prompt_mgmt` |
-| **创新识别引擎** | 从项目里挖出值得复用的设计，并沉淀为资产 | `coderef_innovation` `coderef_asset` `coderef_registry` |
+| **审计引擎** | 全维度代码体检 + 图谱 + 文档 + 审查 + 论断核验 | `coderef_audit` `coderef_query` `coderef_review` `coderef_verify_findings` 等 |
+| **记忆引擎** | AI 对项目「记住了什么」，增量同步 + 语义查询 + 治理 | `coderef_memory_*` `coderef_prompt_mgmt` `coderef_prompt_governance` |
+| **创新识别引擎** | 从项目里挖出值得复用的设计，固化为资产并复刻到其他项目 | `coderef_innovation` `coderef_asset` `coderef_replicate` `coderef_registry` |
 | **变更守护引擎** | 拦截 AI 把代码改坏，输出人能看懂的变更报告 | `coderef_change_guard` `coderef_change_report` |
+| **人话解读平台** | 把确定性格子结论翻译成非编程人员听得懂的"人话" | `coderef_interpret` |
 
-## 26 个 MCP 工具
+## 32 个 MCP 工具
 
 ### 审计引擎
 
@@ -64,6 +65,8 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_scan` | 单维度审计（11 选 1），实时安全带，快一个量级 | 否 |
 | `coderef_scan_list` | 列出 `coderef_scan` 可选的维度清单 | 否 |
 | `coderef_flow_verify` | 流程合规验证：非编程人员验证「项目是否按我期望的流程执行」（入口 A 的调用管线是否覆盖步骤 B→C→D）。纯静态、确定性，只读知识图谱 CALLS 边，不依赖 LLM；状态分确证/在管线/存疑/缺失 | 否 |
+| `coderef_verify_findings` | 确定性核验 LLM/CodeRabbit 论断：论断引用的代码目标是否真实存在、是否在关键管线内。verdict（确证/证伪/部分确证/存疑）由静态图谱打出，诚实话标签来源分离，LLM 无权改结论 | 否 |
+| `coderef_prompt_audit` | Prompt 合规审计：注入风险（提示注入的模式化特征）+ 一致性（跨模块/同角色 Prompt 漂移）。纯规则、确定性、不依赖 LLM | 否 |
 | `coderef_arch_audit` | 架构腐化诊断：复用知识图谱 CALLS 边做模块级静态诊断（循环依赖/上帝模块/分层违例/异常模块规模），聚合 0–10 架构健康度。纯静态、不依赖 LLM | 否 |
 | `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 否 |
 | `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 是 |
@@ -85,6 +88,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_memory_status` | 「AI 知道什么」：认知覆盖度 + 置信度 + 盲区地图 | 否 |
 | `coderef_memory_quality` | 记忆质量评估（引用完整性/语义覆盖/偏差）+ 自动补全 | 可选 |
 | `coderef_prompt_mgmt` | Prompt 资产管理：版本 / 对比 / A-B 测试 | 是 |
+| `coderef_prompt_governance` | Prompt 治理平台：一次调用编排 资产生命周期 × 合规审计 × 跨模块一致性（overview 总览 / assets 生命周期 / audit 合规 / cross_module 漂移）。纯规则、确定性 | 否 |
 
 ### 创新识别引擎
 
@@ -92,6 +96,8 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 |------|------|---------|
 | `coderef_innovation` | 识别项目创新设计 + 传播缺口，理想清单 vs 实际实现对照 | 是 |
 | `coderef_asset` | 将验证过的设计固化 `WorkflowAsset` 资产（查询/导出/提交） | 是 |
+| `coderef_replicate` | 复刻铺排：检测目标项目对某已固化资产（蓝图）的采用缺口，并生成可复刻指引（steps + entry_points + verified_findings）。确定性缺口判定，不自动改代码 | 否 |
+| `coderef_asset_blueprint` | 把复刻铺排得出的确定性结论（entry_points / verified_findings）写回资产蓝图，补全为可复刻蓝图 | 否 |
 | `coderef_registry` | 管理已知设计库，别名归一（解决 LLM 命名漂移） | 否 |
 
 ### 变更守护引擎
@@ -106,6 +112,12 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | 工具 | 功能 | 需要 LLM |
 |------|------|---------|
 | `coderef_owasp` | OWASP LLM Top 10 合规检测，LLM01-LLM10 逐类分级 | 否 |
+
+### 人话解读平台
+
+| 工具 | 功能 | 需要 LLM |
+|------|------|---------|
+| `coderef_interpret` | 把确定性格子结论翻译成非编程人员听得懂的"人话"：action=health 健康总览（人话健康分 + 高危清单 + 图谱/合规背景，未审计时诚实提示不给分）/ dashboard 健康仪表盘 HTML / verify 论断人话核验 / verify_html 核验 HTML / wiki Wiki 生成（无 LLM 诚实阻断）/ prompt Prompt 治理总览 / assets 已固化资产解读 | 可选 |
 
 ## 快速开始
 
@@ -278,7 +290,7 @@ coderef_asset(project_path="/path/to/project", action="list")
 ```
 coderef-ai/
 ├── core/                             # 核心引擎
-│   ├── mcp_server.py                 # MCP Server 入口（26 个工具）
+│   ├── mcp_server.py                 # MCP Server 入口（32 个工具）
 │   ├── pipeline_runner.py            # 管线引擎（audit/architecture/docs + 知识图谱）
 │   ├── tool_registry.py              # 工具注册中心（收敛管线引擎的上帝模块职责）
 │   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
@@ -321,8 +333,13 @@ coderef-ai/
 │   ├── prompt_asset_manager.py       # Prompt 资产版本化 / 对比 / A-B 测试
 │   ├── prompt_analyzer.py            # Prompt 分析
 │   ├── prompt_extractor.py           # Prompt 提取
+│   ├── prompt_compliance.py          # Prompt 合规审计（注入风险 + 一致性）
+│   ├── prompt_governance.py          # Prompt 治理平台（生命周期 × 合规 × 跨模块）
 │   ├── innovation_engine.py          # 创新识别引擎：结构化创新 + 缺口按价值挑选
 │   ├── design_registry.py            # 已知设计库（别名归一）
+│   ├── replicate_engine.py           # 复刻铺排引擎（蓝图 → 缺口 → 可复刻指引）
+│   ├── verify_findings.py            # 论断确定性核验（确证/证伪/部分确证/存疑）
+│   ├── interpretation_platform.py    # 人话解读平台（健康 × 仪表盘 × Wiki × 核验）
 │   ├── owasp_compliance.py           # OWASP LLM Top 10 合规检测
 │   ├── change_guard.py               # 变更守护：git 基层 + 健康基线 + 退化检测
 │   └── change_report.py              # 人话版变更报告
@@ -362,6 +379,24 @@ CodeRef-AI 是合法开源的安全审计工具，本仓库不含任何恶意代
 3. **如实告知审计 AI**：若 SCA 结果缺失或被清理，先把杀毒排除项配好再跑审计，避免误删导致结论失真
 
 ## 更新日志
+
+### v4.5.0 — 平台整合：Prompt 治理 + 人话解读（闭环落地）
+
+- **Prompt 治理平台（`coderef_prompt_governance`）**：把 4.3 的资产生命周期（`prompt_asset_manager`）与合规审计（`prompt_compliance`）编排成统一治理视图。`action=overview` 一次调用拿到 资产生命周期 × 合规审计 × 跨模块一致性 总览；`assets` 生命周期（版本/对比/AB）；`audit` 合规审计；`cross_module` 跨模块漂移专项（同一角色/场景在多模块的同名定义漂移）。纯规则、确定性、不引入 LLM
+- **人话解读平台（`coderef_interpret`）**：让非编程人员一屏看懂 AI 项目的真实状态。`action=health` 健康总览（确定性人话健康分 + 高危清单 + 图谱/合规背景，未审计时诚实提示不给分）；`dashboard` 健康仪表盘 HTML；`verify` / `verify_html` 论断人话核验（复用 `verify_findings` 确定性 verdict）；`wiki` Wiki 生成（无 LLM 诚实阻断）；`prompt` Prompt 治理总览；`assets` 已固化资产人话解读
+- **诚实话解读闭环**：所有"人话结论"只来自确定性原语（健康分/审计/图谱/合规/论断核验），不引入 LLM 给结论；依赖 LLM 的能力（Wiki）在无 API Key 或无依赖时诚实阻断，绝不产出占位内容伪装成"已解读"；未审计 ≠ 无风险，绝不臆断项目健康
+
+### v4.4.0 — 复刻铺排引擎（创新建设翼闭环）
+
+- **复刻铺排（`coderef_replicate`）**：检测目标项目对某已固化资产（蓝图）的采用缺口，并生成可复刻指引（steps + entry_points + verified_findings）。缺口判定是确定性签名比对，只报告"有/没有"，不臆断"该不该采用"；工具是审计工具，不自动改代码
+- **蓝图固化（`coderef_asset_blueprint`）**：把复刻铺排得出的确定性结论（entry_points / verified_findings）写回资产蓝图，只填确定性可填字段，不臆断 steps
+- **innovation 引擎增强**：`WorkflowAsset` 支持 `blueprint` 字段（结构化复刻蓝图），`prompt_asset_manager` 支持蓝图参数，让"已验证采用的设计"沉淀为可复刻蓝图
+
+### v4.3.0 — 确定性核验 + Prompt 合规（驾驭翼咽喉）
+
+- **论断确定性核验（`coderef_verify_findings`）**：把 LLM/CodeRabbit 给出的论断用知识图谱 + 静态原语核验——论断引用的代码目标是否真实存在、是否在关键管线内。verdict（确证/证伪/部分确证/存疑）由确定性逻辑打出，诚实话标签来源分离，LLM 无权改结论；无确定性证据一律存疑，绝不默认 confirmed
+- **Prompt 合规审计（`coderef_prompt_audit`）**：注入风险（提示注入模式化特征）+ 一致性（跨模块/同角色 Prompt 漂移）。纯规则、确定性、不依赖 LLM
+- **谦逊让步**：所有新工具与既有工具的 description 明确标注"可靠性边界"（[可靠性] 段），让调用方 AI 知道哪些是确定性结论、哪些需要人工复核，不夸大能力
 
 ### v4.2.11 — CodeRabbit 复审 77 项修复（3 Critical + 44 Major + 30 Minor）
 
