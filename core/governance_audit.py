@@ -1193,8 +1193,7 @@ class GovernanceAuditor:
                 # 否则会把"检测框架名的检测器"误分类为入口层造成层级穿透误报。
                 if any(kw in code_content for kw in ['@app.route', '@app.get', '@app.post',
                                                        '@app.put', '@app.delete', '@router.',
-                                                       'Blueprint', 'APIView',
-                                                       'JSONResponse']):
+                                                       'Blueprint(', 'JSONResponse(']):
                     return "entry"
                 if re.search(r'class\s+\w+\((?:[^)]*\b(?:APIView|Resource|RequestHandler)\b[^)]*)\)', code_content) and re.search(r'def\s+(?:get|post|put|delete)\s*\(\s*self', code_content):
                     return "entry"

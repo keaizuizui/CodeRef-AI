@@ -293,7 +293,7 @@ class CodeAnalyzer:
                     return True
 
         # 4. 检查外部注入的额外跳过目录（带路径分隔符边界，避免误匹配同级目录）
-        if self.extra_ignore_dirs:
+        if self.extra_ignore_dirs and path.is_absolute():
             abs_path = os.path.abspath(str(path))
             for skip_dir in self.extra_ignore_dirs:
                 skip_abs = os.path.abspath(str(skip_dir))
@@ -1744,7 +1744,7 @@ class CodeAnalyzer:
         """性能风险检测"""
         # 1. 文件级循环中的IO操作
         for i, line in enumerate(lines, 1):
-            window = '\n'.join(lines[i:i + 10])
+            window = '\n'.join(lines[i - 1:i + 10])
             if ('for ' in line or 'while ' in line) and 'open(' in window:
                 issues.append({
                     'severity': 'medium',
