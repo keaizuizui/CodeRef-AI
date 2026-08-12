@@ -976,7 +976,8 @@ class GitNexusMCPClient:
                 capture_output=True,
                 text=True,
                 timeout=30,
-                shell=True
+                shell=True,
+                stdin=subprocess.DEVNULL,
             )
             return result.returncode == 0
         except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -991,7 +992,8 @@ class GitNexusMCPClient:
                 capture_output=True,
                 text=True,
                 timeout=30,
-                shell=True
+                shell=True,
+                stdin=subprocess.DEVNULL,
             )
             if result.returncode == 0:
                 return result.stdout.strip()

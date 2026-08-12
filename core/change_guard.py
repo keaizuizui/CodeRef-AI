@@ -337,6 +337,7 @@ class ChangeGuard:
             r = subprocess.run(
                 cmd, capture_output=True, text=True,
                 encoding="utf-8", errors="replace", timeout=timeout,
+                stdin=subprocess.DEVNULL,
             )
             return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
         except Exception as e:

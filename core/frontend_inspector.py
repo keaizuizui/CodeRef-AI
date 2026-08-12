@@ -22,7 +22,9 @@
 
 import os
 import re
+import time
 import ipaddress
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -59,6 +61,9 @@ MAX_MENU_LEVEL = 5              # 菜单最大层级（L1→L5）
 DEFAULT_SEVERITY = "low"        # 默认严重级别
 MAX_PROMPT_CHARS = 2000         # 单条 prompt 中上下文最长长度
 MAX_LLM_REVIEW_ITEMS = 50       # LLM 审查的按钮/菜单节点上限，超出则部分审查
+LLM_REVIEW_WORKERS = 8          # LLM 审查并发线程数（并行审查按钮/菜单节点，避免串行累积超时）
+LLM_REVIEW_PER_TIMEOUT = 120    # 单个节点 LLM 审查超时（秒），并行后整体约等于该值而非 item*该值
+LLM_REVIEW_TOTAL_TIMEOUT = 600  # LLM 审查整体总预算（秒），超时即放弃剩余节点并诚实标记，绝不无限挂起
 
 # 浏览器自动化（runtime 可选）
 RUNTIME_PAGE_TIMEOUT = 30       # 页面加载超时（秒）
@@ -403,10 +408,31 @@ class FrontendInspector:
             try:
                 reviewed_buttons = buttons[:MAX_LLM_REVIEW_ITEMS]
                 reviewed_menus = menu_nodes[:MAX_LLM_REVIEW_ITEMS]
-                for btn in reviewed_buttons:
-                    findings.extend(self._review_button(btn))
-                for node in reviewed_menus:
-                    findings.extend(self._review_menu_node(node))
+                # 并行审查按钮与菜单节点：串行逐个调用 LLM 会随节点数线性累积超时，
+                # 改为线程池并发，整体耗时 ≈ 单节点耗时（而非节点数 × 单节点耗时）。
+                # 每个节点独立受 LLM_REVIEW_PER_TIMEOUT 保护，单个节点慢不拖垮整体；
+                # 整体另设 LLM_REVIEW_TOTAL_TIMEOUT 总预算，超时即放弃剩余节点并诚实标记，
+                # 保证即便个别节点真正卡死，整体也绝不无限挂起。
+                llm_review_items = reviewed_buttons + reviewed_menus
+                with ThreadPoolExecutor(max_workers=LLM_REVIEW_WORKERS) as ex:
+                    futures = [ex.submit(self._review_item, item) for item in llm_review_items]
+                    try:
+                        for fut in as_completed(futures, timeout=LLM_REVIEW_TOTAL_TIMEOUT):
+                            try:
+                                findings.extend(fut.result(timeout=LLM_REVIEW_PER_TIMEOUT))
+                            except Exception as e:  # noqa: BLE001  (含单节点超时)
+                                logger.error(f"并发审查节点异常: {e}")
+                                findings.append(self._pending_finding(
+                                    "全局", f"并发审查节点异常: {e}"))
+                    except TimeoutError:
+                        # 总预算耗尽：as_completed 抛 TimeoutError，落到下方统一标记
+                        pass
+                    # 未完成节点如实标记为待确认，绝不静默丢弃
+                    pending = [f for f in futures if not f.done()]
+                    if pending:
+                        findings.append(self._pending_finding(
+                            "全局", f"LLM 审查总预算 {LLM_REVIEW_TOTAL_TIMEOUT}s 内未完成 "
+                            f"{len(pending)}/{len(llm_review_items)} 个节点，已放弃并请人工复核。"))
                 if len(buttons) > MAX_LLM_REVIEW_ITEMS or len(menu_nodes) > MAX_LLM_REVIEW_ITEMS:
                     findings.append(self._pending_finding(
                         "全局", f"按钮/菜单数量超过 {MAX_LLM_REVIEW_ITEMS} 上限，"
@@ -726,6 +752,12 @@ class FrontendInspector:
     def _review_menu_node(self, node: MenuNode) -> List[Dict[str, Any]]:
         prompt = self._build_menu_prompt(node)
         return self._llm_review(kind="菜单节点", item=node, prompt=prompt)
+
+    def _review_item(self, item: Any) -> List[Dict[str, Any]]:
+        """按条目类型统一分发审查（供并发线程调用）。"""
+        if isinstance(item, ButtonItem):
+            return self._review_button(item)
+        return self._review_menu_node(item)
 
     def _llm_review(self, kind: str, item: Any, prompt: str) -> List[Dict[str, Any]]:
         """调用 LLM 审查一个条目，返回 findings 列表。解析失败时降级为一条 pending 结论。"""
