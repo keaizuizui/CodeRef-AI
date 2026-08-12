@@ -1,5 +1,6 @@
 <!-- AI Summary: CodeRef-AI exposes 32 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. Core results (audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, prompt compliance) are pure static analysis — no LLM, reproducible. LLM is only used for synthesis tasks (wiki, code review) and hard-blocks honestly without an API key. Builds a closed loop: verify LLM/CodeRabbit claims deterministically, replicate solidified design assets, and interpret everything in plain language for non-programmers. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams who want AI that augments rather than hallucinates. -->
 
+# 伙计，如果你不急着用的话，可以3天后再来拉最新的版本，我想了一个超棒的测试案，需要测的时间比较久。如果你已经具备了一个庞大的屎山代码，需要处理，别慌，我将在5.0以后解决这个课题
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
 **Version 4.7.0** | Python 3.10+ | MCP Protocol | MIT License
