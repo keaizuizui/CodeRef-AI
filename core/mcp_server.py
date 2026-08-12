@@ -629,6 +629,25 @@ class Server:
             }, "required": ["project_path"]},
         })
         self._tools.append({
+            "name": "coderef_innovation_review",
+            "description": (
+                "创新复刻的 LLM 协助排查（4.7 收口）：让 LLM 阅读源项目的管线设计（知识图谱调用链）"
+                "+ wiki 文档，对『创新确认』与『复刻排查』给出 AI 判断。\n"
+                "判定三点：(1) 该设计是否确属一个创新 workflow（区别于已知/常见模式或静态能力标签误命中）；"
+                "(2) 管线调用链与 wiki 人话描述是否一致；(3) 复刻到目标项目是否合理（提供 target 时）。\n"
+                "wiki 来源『生成+兜底』：优先读已有，无则自动生成再排查。\n"
+                "诚实话护栏：确定性管线摘要照常给出；LLM 结论为 AI 意见而非确定性事实，不下『必须复刻』指令；"
+                "无 API Key 时硬阻断（只给确定性管线摘要，不产出降级判断）。"
+            ),
+            "inputSchema": {"type": "object", "properties": {
+                "project_path": {"type": "string", "description": "源项目路径（创新所在项目）"},
+                "canonical": {"type": "string", "description": "要复查的创新设计（workflow 名或资产 canonical/别名）"},
+                "target": {"type": "string", "description": "目标项目路径（可选；提供时追加复刻合理性排查）"},
+                "out_format": {"type": "string", "enum": ["json","text","html"], "default": "json"},
+                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+            }, "required": ["project_path", "canonical"]},
+        })
+        self._tools.append({
             "name": "coderef_prompt_governance",
             "description": (
                 "Prompt 治理平台：一次调用编排 资产生命周期 × 合规审计 × 跨模块一致性。\n"
@@ -711,6 +730,7 @@ class Server:
             "coderef_replicate": self._replicate,
             "coderef_replicate_apply": self._replicate_apply,
             "coderef_asset_blueprint": self._asset_blueprint,
+            "coderef_innovation_review": self._innovation_review,
             "coderef_registry": self._registry,
             "coderef_prompt_governance": self._govern,
             "coderef_interpret": self._interpret,
@@ -730,6 +750,7 @@ class Server:
             "coderef_innovation", "coderef_asset", "coderef_change_guard",
             "coderef_change_report", "coderef_verify_findings",
             "coderef_replicate", "coderef_replicate_apply", "coderef_asset_blueprint",
+            "coderef_innovation_review",
             "coderef_prompt_governance", "coderef_interpret",
         }
 
@@ -1087,6 +1108,24 @@ class Server:
         )
         r["tool"] = "coderef_replicate_apply"
         r["project_path"] = pp
+        return json.dumps(r, ensure_ascii=False)
+
+    def _innovation_review(self, a: dict) -> str:
+        """创新复刻排查：LLM 阅读管线设计 + wiki，判定创新与复刻合理性（coderef_innovation_review）"""
+        from core.innovation_review import review_innovation, render_report, render_html
+        pp = a["project_path"]
+        out_format = a.get("out_format", "json")
+        r = review_innovation(
+            pp, a["canonical"],
+            target=a.get("target", ""),
+            out_format=out_format,
+        )
+        r["tool"] = "coderef_innovation_review"
+        r["project_path"] = pp
+        if out_format == "html":
+            r["report_html"] = render_html(r)
+        elif out_format == "text":
+            r["report_text"] = render_report(r)
         return json.dumps(r, ensure_ascii=False)
 
     def _asset_blueprint(self, a: dict) -> str:
