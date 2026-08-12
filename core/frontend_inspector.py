@@ -22,9 +22,13 @@
 
 import os
 import re
+import ipaddress
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+from urllib.parse import urljoin, urlparse
+from urllib.request import Request, urlopen, build_opener, HTTPRedirectHandler
+import urllib.error
 
 from loguru import logger
 
@@ -58,6 +62,22 @@ MAX_LLM_REVIEW_ITEMS = 50       # LLM 审查的按钮/菜单节点上限，超�
 
 # 浏览器自动化（runtime 可选）
 RUNTIME_PAGE_TIMEOUT = 30       # 页面加载超时（秒）
+
+# runtime 抽查 URL 白名单（SSRF 防护）：仅允许 http/https，且 host 必须为本地/内网
+URL_ALLOWED_SCHEMES = ("http", "https")
+# 允许的 host 字面名：本机回环主机名（精确匹配，避免 127.0.0.1.evil.com 之类前缀绕过）
+URL_ALLOWED_HOSTNAMES = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+# 允许的 IP 网段（用 ipaddress 精确解析，涵盖回环/私网/链路本地等内网范围）
+URL_ALLOWED_NETWORKS = (
+    "127.0.0.0/8",      # IPv4 回环
+    "10.0.0.0/8",       # 私网 A
+    "172.16.0.0/12",    # 私网 B
+    "192.168.0.0/16",   # 私网 C
+    "169.254.0.0/16",   # 链路本地（含云元数据端点所在网段）
+    "::1/128",          # IPv6 回环
+    "fe80::/10",        # IPv6 链路本地
+    "fc00::/7",         # IPv6 ULA
+)
 
 # 六维审查清单
 CATEGORIES = ["交互正确性", "反馈缺失", "禁用与边界", "可达性", "错误处理", "一致性"]
@@ -421,6 +441,16 @@ class FrontendInspector:
             result["summary"] = "runtime 模式未提供 url，已降级为静态分析。\n" + result["summary"]
             return result
 
+        # SSRF 防护：url 必须通过白名单校验，否则拒绝访问并降级为静态分析
+        url_ok, url_err = self._validate_runtime_url(url)
+        if not url_ok:
+            logger.warning(f"runtime url 校验未通过，拒绝访问并降级为静态分析: {url_err}")
+            result = self._inspect_static(project_path, entry, check_levels)
+            result["findings"].append(self._pending_finding(
+                "运行时", f"runtime url 未通过白名单校验（{url_err}），已拒绝访问并降级为静态分析"))
+            result["summary"] = f"runtime 模式：url 未通过白名单校验（{url_err}），已拒绝访问并降级为静态分析。\n" + result["summary"]
+            return result
+
         runtime_ok = False
         runtime_findings: List[Dict[str, Any]] = []
         try:
@@ -440,9 +470,102 @@ class FrontendInspector:
             result["summary"] = "已执行浏览器自动化抽查关键路径。\n" + result["summary"]
         return result
 
+    @staticmethod
+    def _validate_runtime_url(url: str) -> tuple:
+        """校验 runtime 抽查 URL 是否在允许白名单内（SSRF 防护）。
+
+        规则：协议必须为 http/https，且 host 必须命中允许清单——字面主机名精确匹配，
+        或解析为允许的 IP 网段（回环/私网/链路本地/ULA）。用语义网段解析替代前缀
+        startswith，杜绝 127.0.0.1.evil.com、host.192.168.1.1 之类前缀绕过。
+        返回 (ok: bool, 失败原因: str)。
+        """
+        parsed = None
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return False, "url 解析失败"
+        scheme = (parsed.scheme or "").lower()
+        if scheme not in URL_ALLOWED_SCHEMES:
+            return False, f"协议 {scheme or '(空)'} 不在允许范围（仅 http/https）"
+        host = (parsed.hostname or "").strip().lower()
+        if not host:
+            return False, "缺少有效主机名"
+        # 1) 字面主机名精确匹配（含 localhost 别名）
+        if any(host == h for h in URL_ALLOWED_HOSTNAMES):
+            return True, ""
+        # 2) 解析为 IP 字面 → 网段归属判断
+        if ":" in host:
+            return False, f"目标主机 {host!r} 为 IPv6 但不在允许字面名内，已拒绝"
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            # 非 IP 字面：仅接受 localhost 家族字面名，其余主机名一律拒绝（不解析 DNS，
+            # 避免 DNS 重绑定类绕过）
+            return False, f"目标主机 {host!r} 非 IP 字面且非允许主机名，已拒绝"
+        for net in URL_ALLOWED_NETWORKS:
+            if ip.version == 4 and "/" in net and "." in net:
+                if ip in ipaddress.ip_network(net, strict=False):
+                    return True, ""
+            elif ip.version == 6 and ":" in net:
+                if ip in ipaddress.ip_network(net, strict=False):
+                    return True, ""
+        return False, f"目标主机 {host!r} 的 IP 不在本地/内网白名单，已拒绝"
+
+    @staticmethod
+    def _probe_redirect_chain(url: str, max_hops: int = 5, timeout: Optional[int] = None) -> tuple:
+        """重定向逃逸预检：手动跟随 3xx 重定向，逐跳校验落点仍在白名单内。
+
+        浏览器（selenium driver.get）默认跟随 HTTP 重定向，若内网服务返回 302 到
+        白名单外地址（外网/云端），则构成 SSRF 逃逸。此处用标准库 urlopen 手动跟随，
+        对每一跳的 Location 解析后再次走 _validate_runtime_url 校验，任一跳越界即拒绝。
+        返回 (最终 url, 错误信息或空串)。
+        """
+        if timeout is None:
+            timeout = RUNTIME_PAGE_TIMEOUT
+        # 自定义 opener：禁用自动重定向。urlopen 默认会跟随 3xx，导致此处永远收不到
+        # 重定向状态，校验形同虚设。改为不自动跟随，3xx 由本函数手动解析 Location。
+        class _NoRedirect(HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+        opener = build_opener(_NoRedirect())
+
+        current = url
+        for _ in range(max_hops):
+            ok, err = FrontendInspector._validate_runtime_url(current)
+            if not ok:
+                return current, f"重定向落点 {current!r} 越出白名单：{err}"
+            req = Request(current, method="GET", headers={"User-Agent": "coderef-frontend-inspector"})
+            try:
+                with opener.open(req, timeout=timeout) as resp:
+                    status = resp.getcode()
+                    location = resp.headers.get("Location")
+            except urllib.error.HTTPError as he:
+                status = he.code
+                location = he.headers.get("Location")
+            except Exception as e:
+                # 请求失败（连接拒绝/超时）视为不可达，交由上层决定；不把失败当逃逸
+                return current, ""
+            if status in (301, 302, 303, 307, 308) and location:
+                next_url = urljoin(current, location)
+                if next_url == current:
+                    return current, ""
+                current = next_url
+                continue
+            return current, ""
+        return current, f"重定向跳数超过上限 {max_hops}，已停止跟随"
+
     def _runtime_review(self, url: str) -> List[Dict[str, Any]]:
         """可选依赖 selenium 的浏览器抽查。未安装 selenium 时抛出 ImportError，
         由上层统一降级为静态分析。"""
+        # 重定向逃逸预检：浏览器会跟随 3xx 重定向，若内网服务跳转到白名单外地址
+        # （如云端、外网 IP），则构成 SSRF 逃逸。这里用标准库手动跟随重定向，
+        # 对每一跳目标逐一校验，确保最终落点仍在白名单内，否则拒绝访问。
+        final_url, redir_err = self._probe_redirect_chain(url)
+        if redir_err:
+            logger.warning(f"runtime url 重定向预检未通过，拒绝访问: {redir_err}")
+            raise ValueError(redir_err)
+        url = final_url
+
         from selenium import webdriver  # 可选依赖，非本项目 requirements 强制
 
         options = webdriver.ChromeOptions()

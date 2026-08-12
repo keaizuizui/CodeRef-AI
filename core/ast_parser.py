@@ -421,7 +421,7 @@ class AstParser:
                     return "config"
 
         # 常量定义：全大写变量名 + 字符串/数字常量
-        if var_is_upper and isinstance(value_node, (ast.Constant, ast.Num)):
+        if var_is_upper and isinstance(value_node, ast.Constant):
             val = getattr(value_node, 'value', None)
             if isinstance(val, str):
                 # 如果值就是变量名本身（如 E1001_KEY = "E1001_KEY"），这是错误码常量

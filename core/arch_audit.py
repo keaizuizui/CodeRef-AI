@@ -171,9 +171,9 @@ def audit(project_path: str, db_path: str = None,
         结构化诊断 dict：graph_stats / cycles / god_modules / fan_top /
         layer_violations / large_modules / summary（含 health 0-10）。
     """
-    fo_t = fan_out_threshold or ARCH_GOD_FAN_OUT_THRESHOLD
-    ls_t = large_symbol_threshold or ARCH_LARGE_MODULE_SYMBOL_THRESHOLD
-    sc_min = scc_min_size or ARCH_SCC_CYCLE_MIN_SIZE
+    fo_t = fan_out_threshold if fan_out_threshold is not None else ARCH_GOD_FAN_OUT_THRESHOLD
+    ls_t = large_symbol_threshold if large_symbol_threshold is not None else ARCH_LARGE_MODULE_SYMBOL_THRESHOLD
+    sc_min = scc_min_size if scc_min_size is not None else ARCH_SCC_CYCLE_MIN_SIZE
 
     db = db_path or locate_kg_db(project_path)
     result = {"project_path": project_path, "tool": "coderef_arch_audit",

@@ -1059,13 +1059,31 @@ class BusinessAnalyzer:
     
     def _discover_workflows(self, analysis, entities: List[BusinessEntity],
                             roles: List[UserRole], enrichment=None) -> List[BusinessWorkflow]:
-        """发现业务流程"""
-        # 优先使用 Prompt 分析中提取的工作流
+        """发现业务流程（三级降级：Prompt → LLM → 规则，绝不静默返回空/None）"""
+        # 优先级 1：Prompt 分析中提取的工作流（最精确）
         if self._prompt_analysis and self._prompt_analysis.workflows:
             workflows = self._workflows_from_prompt_analysis(self._prompt_analysis)
             if workflows:
                 logger.info(f"[BusinessAnalyzer] 从 Prompt 中提取到 {len(workflows)} 个工作流")
                 return workflows
+
+        # 优先级 2：LLM + 知识库驱动（知识库本身是确定性底座，LLM 只做语义整合）
+        if enrichment is not None:
+            try:
+                llm_flows = self._llm_workflow_discovery(analysis, entities, roles, enrichment=enrichment)
+                if llm_flows:
+                    logger.info(f"[BusinessAnalyzer] 从 LLM+知识库发现 {len(llm_flows)} 个工作流")
+                    return llm_flows
+            except Exception as e:
+                logger.warning(f"[BusinessAnalyzer] LLM 工作流发现失败，回退规则: {e}")
+
+        # 优先级 3：规则降级（docstring + 调用关系启发式，纯确定性）
+        rule_flows = self._heuristic_workflow_discovery(analysis, entities)
+        if rule_flows:
+            logger.info(f"[BusinessAnalyzer] 从规则启发式发现 {len(rule_flows)} 个工作流")
+        else:
+            logger.info("[BusinessAnalyzer] 各途径均未发现工作流，返回空列表（不在关键管线内时不阻断）")
+        return rule_flows
     
     def _organize_workflows_hierarchically(
         self, workflows: List[BusinessWorkflow], entities: List[BusinessEntity],

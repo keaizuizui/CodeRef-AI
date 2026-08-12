@@ -669,7 +669,7 @@ class AgentSecurityAuditor:
             sl = value.slice
             if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
                 key = sl.value
-            elif isinstance(sl, ast.Str):
+            elif getattr(ast, 'Str', None) is not None and isinstance(sl, ast.Str):
                 key = sl.s
             container = self._container_leaf_name(base)
             if container and key == param and self._is_config_container(container):
