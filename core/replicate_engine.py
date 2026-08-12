@@ -1,24 +1,29 @@
 # -*- coding: utf-8 -*-
 """
 replicate_engine — 复刻铺排引擎（4.4 创新建设翼：从资产蓝图到可复刻指引）
+                   + 复刻落地（4.6：把铺排指引真正落到目标项目）
 
 目标读者：编程 AI（执行复刻）与 AI 时代治理者（看懂铺排逻辑）。
 核心问题：一个已固化的 WorkflowAsset（含结构化蓝图）怎么落到另一个项目里？
 本工具检测目标项目对该设计的采用缺口，并结合蓝图 / 已验证采用清单 / 确定性
-核验结论，产出可执行的复刻铺排指引（steps + entry_points + verified_findings）。
+核验结论，产出可执行的复刻铺排指引（steps + entry_points + verified_findings）；
+4.6 起新增 apply 落地能力，把 template_code 与 patch_suggestion 落到目标项目。
 
 诚实话纪律（与 verify_findings / prompt_compliance 同源）：
 - 缺口判定是确定性的：基于"目标项目是否已采用该设计能力"的能力签名比对，
   不臆断"该不该采用"；只报告"哪些模块有、哪些没有"。
 - 复刻指引是"铺排建议"而非"自动改代码"：本工具是审计工具，不直接写代码，
   由对方 AI 依据 steps 与 template_code 自行落地；缺失的 template_code 明确标注。
+- 4.6 apply 落地：只落地"确定性可给"的内容（template_code 骨架、patch_suggestion），
+  且不覆盖目标项目已存在的同名文件——冲突时如实标注，绝不强写。
 - verified_findings 复用 verify_findings 的确定性结论：只核验引用目标是否真实存在。
 - entry_points 只从可信来源提取（蓝图已填 / 已验证采用模块的真实入口），不编造。
 
-集成方式：作为 MCP 工具 coderef_replicate 暴露。
+集成方式：作为 MCP 工具 coderef_replicate / coderef_replicate_apply 暴露。
 """
 
 import os
+import json
 from typing import Dict, List, Optional, Any
 
 from loguru import logger
@@ -43,6 +48,15 @@ STEP_ORDER = ("intent", "entry_points", "template_code", "patch_suggestion", "mi
 
 # 入口提取时，单模块最多取前 N 个候选入口
 MAX_ENTRY_CANDIDATES_PER_MODULE = 5
+
+# 落地文件的默认文件名（template_code 无显式路径时使用）
+DEFAULT_TEMPLATE_FILENAME = "replicate_template.py"
+
+# 落地清单文件名
+APPLY_MANIFEST_FILENAME = "replicate_apply_manifest.json"
+
+# 落地骨架目录名（target 项目下，集中存放落地产物，避免污染源码树）
+APPLY_OUTPUT_DIR = "coderef-replicate-apply"
 
 
 class ReplicateEngine:
@@ -414,6 +428,154 @@ class ReplicateEngine:
             "message": f"资产「{resolved}」蓝图已补全（entry_points / verified_findings）。",
         }
 
+    # ─── 复刻落地（4.6 新增） ────────────────────────────────────
+
+    def apply(
+        self,
+        project_path: str,
+        canonical: str,
+        target: str = "",
+        filename: str = "",
+        overwrite: bool = False,
+    ) -> Dict[str, Any]:
+        """把已固化资产的复刻指引落到目标项目（生成落地文件 + 落地清单）。
+
+        Args:
+            project_path: 触发调用的项目路径（用于解析资产）。
+            canonical: 要落地的已固化资产 canonical（或别名）。
+            target: 目标项目路径（默认 = project_path 对应项目根）。
+            filename: 落地文件名（默认取 template_code 标题或 DEFAULT_TEMPLATE_FILENAME）。
+            overwrite: 是否允许覆盖目标项目已存在的同名文件（默认 False，冲突时如实标注）。
+
+        Returns:
+            结构化 dict：落地文件清单 + 冲突清单 + 落地清单 manifest + 摘要。
+        """
+        asset = self._resolve_asset(canonical)
+        resolved = self.registry.resolve(canonical)
+        if not asset:
+            return {
+                "ok": False,
+                "canonical": resolved,
+                "message": f"资产「{resolved}」尚未固化，无法落地。请先调用 coderef_asset(action='commit') 固化。",
+            }
+
+        # 目标目录：显式 target 优先，否则落在目标项目根的集中落地目录下
+        root = os.path.abspath(target or project_path)
+        out_dir = os.path.join(root, APPLY_OUTPUT_DIR)
+        os.makedirs(out_dir, exist_ok=True)
+
+        written: List[Dict[str, Any]] = []
+        conflicts: List[Dict[str, Any]] = []
+
+        def _safe_dest(name: str, kind: str) -> Optional[str]:
+            """把相对文件名解析为 out_dir 内的安全绝对路径；越界（绝对路径 / 父级穿越）返回 None 并记冲突。"""
+            # 拒绝绝对路径与含父级穿越（..）的路径，避免落地文件逃逸出集中落地目录
+            if os.path.isabs(name) or ".." in name.split(os.sep):
+                conflicts.append({
+                    "kind": kind,
+                    "dest": name,
+                    "reason": f"文件名 {name!r} 含绝对路径或父级穿越（..），已拒绝落地以留在落地目录内。",
+                })
+                return None
+            dest = os.path.normpath(os.path.join(out_dir, name))
+            # 双重校验：realpath 后仍须在 out_dir 之内（防符号链接/平台归一绕过）
+            real_out = os.path.realpath(out_dir)
+            real_dest = os.path.realpath(os.path.dirname(dest))
+            if not (real_dest == real_out or real_dest.startswith(real_out + os.sep)):
+                conflicts.append({
+                    "kind": kind,
+                    "dest": dest,
+                    "reason": f"目标 {dest!r} 在落地目录之外，已拒绝写入。",
+                })
+                return None
+            return dest
+
+        # 1. 落地 template_code（确定性可给，且不覆盖已有文件）
+        template_code = asset.get("template_code") or ""
+        if (template_code or "").strip():
+            default_name = filename or DEFAULT_TEMPLATE_FILENAME
+            dest = _safe_dest(default_name, "template_code")
+            if dest is not None:
+                if os.path.exists(dest) and not overwrite:
+                    conflicts.append({
+                        "kind": "template_code",
+                        "dest": dest,
+                        "reason": "目标文件已存在（不覆盖）。如需覆盖请设置 overwrite=true。",
+                    })
+                else:
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    with open(dest, "w", encoding="utf-8") as f:
+                        f.write(template_code)
+                    written.append({"kind": "template_code", "dest": dest})
+        else:
+            conflicts.append({
+                "kind": "template_code",
+                "dest": "",
+                "reason": "资产未提供 template_code（待补全），无法落地骨架。",
+            })
+
+        # 2. 落地 patch_suggestion / migration_guide（若存在，作为说明文档）
+        for kind, value in (("patch_suggestion", asset.get("patch_suggestion")),
+                            ("migration_guide", asset.get("migration_guide"))):
+            if not (value or "").strip():
+                continue
+            ext = "_patch.md" if kind == "patch_suggestion" else "_migration.md"
+            dest = _safe_dest(f"{resolved}{ext}", kind)
+            if dest is None:
+                continue
+            if os.path.exists(dest) and not overwrite:
+                conflicts.append({"kind": kind, "dest": dest, "reason": "目标文件已存在（不覆盖）。"})
+            else:
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with open(dest, "w", encoding="utf-8") as f:
+                    f.write(str(value))
+                written.append({"kind": kind, "dest": dest})
+
+        # 3. 生成落地清单 manifest
+        manifest = {
+            "canonical": resolved,
+            "asset": {
+                "category": asset.get("category", ""),
+                "description": asset.get("description", ""),
+                "intent": asset.get("intent", ""),
+                "adoption_count": asset.get("adoption_count", 0),
+            },
+            "entry_points": (asset.get("blueprint") or {}).get("entry_points", []),
+            "target_dir": out_dir,
+            "written": written,
+            "conflicts": conflicts,
+            "overwrite": overwrite,
+            "applied_at": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "note": (
+                "落地文件为复刻骨架与说明，不自动接入目标项目源码；"
+                "请依据 entry_points 与蓝图 steps 由对方 AI 完成接入。"
+            ),
+        }
+        manifest_fp = os.path.join(out_dir, APPLY_MANIFEST_FILENAME)
+        # manifest 每次覆盖（它记录本次落地状态，非既有源文件）
+        with open(manifest_fp, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+        ok = not conflicts
+        summary = (
+            f"复刻落地完成：资产「{resolved}」骨架已生成到 {out_dir}（写 {len(written)} 个文件）。"
+            + (f" 有 {len(conflicts)} 项冲突未写入：{'；'.join(c['reason'] for c in conflicts[:3])}。"
+               if conflicts else " 无冲突。")
+            + " 落地文件为复刻骨架，不自动接入源码；接入请依据蓝图 steps 与 entry_points。"
+        )
+        return {
+            "ok": ok,
+            "tool": "coderef_replicate_apply",
+            "canonical": resolved,
+            "target_dir": out_dir,
+            "manifest_file": manifest_fp,
+            "written": written,
+            "written_count": len(written),
+            "conflicts": conflicts,
+            "conflict_count": len(conflicts),
+            "summary": summary,
+        }
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 顶层接口（MCP handler 调用）
@@ -435,6 +597,20 @@ def solidify_asset_blueprint(
 ) -> Dict[str, Any]:
     """把复刻铺排结论写回资产蓝图（确定性字段）。"""
     return ReplicateEngine().solidify_blueprint(project_path, canonical, entry_points=entry_points)
+
+
+def apply_replicate(
+    project_path: str,
+    canonical: str,
+    target: str = "",
+    filename: str = "",
+    overwrite: bool = False,
+) -> Dict[str, Any]:
+    """复刻落地：把已固化资产的复刻指引落到目标项目（4.6 新增）。"""
+    return ReplicateEngine().apply(
+        project_path, canonical,
+        target=target, filename=filename, overwrite=overwrite,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════

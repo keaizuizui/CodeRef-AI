@@ -101,8 +101,8 @@ class LLMIntegration:
             return LLMConfig(
                 provider=provider_map.get(provider_str, LLMProvider.DEEPSEEK),
                 api_key=env_key,
-                base_url=os.environ.get("CODEREF_BASE_URL", "https://api.deepseek.com/v1"),
-                model=os.environ.get("CODEREF_MODEL", "deepseek-chat"),
+                base_url=os.environ.get("CODEREF_BASE_URL", "https://api.deepseek.com"),
+                model=os.environ.get("CODEREF_MODEL", "deepseek-v4-flash"),
                 temperature=_safe_float(os.environ.get("CODEREF_TEMPERATURE"), 0.7),
                 max_tokens=_safe_int(os.environ.get("CODEREF_MAX_TOKENS"), 4096),
             )
@@ -132,8 +132,8 @@ class LLMIntegration:
                         return LLMConfig(
                             provider=provider_map.get(provider_str, LLMProvider.DEEPSEEK),
                             api_key=api_key,
-                            base_url=data.get("llm_base_url", data.get("base_url", "https://api.deepseek.com/v1")),
-                            model=data.get("llm_model", data.get("model_name", "deepseek-chat")),
+                            base_url=data.get("llm_base_url", data.get("base_url", "https://api.deepseek.com")),
+                            model=data.get("llm_model", data.get("model_name", "deepseek-v4-flash")),
                             temperature=float(data.get("llm_temperature", data.get("temperature", 0.7))),
                             max_tokens=int(data.get("llm_max_tokens", data.get("max_tokens", 4096))),
                         )
@@ -146,8 +146,8 @@ class LLMIntegration:
         logger.debug("未找到有效的 LLM 配置（环境变量/config.json 均无），LLM 功能暂不可用")
         return LLMConfig(
             provider=LLMProvider.DEEPSEEK,
-            base_url="https://api.deepseek.com/v1",
-            model="deepseek-chat",
+            base_url="https://api.deepseek.com",
+            model="deepseek-v4-flash",
             api_key=""
         )
     
@@ -175,7 +175,7 @@ class LLMIntegration:
             elif self.config.provider == LLMProvider.DEEPSEEK:
                 self.client = OpenAI(
                     api_key=api_key,
-                    base_url=self.config.base_url or "https://api.deepseek.com/v1",
+                    base_url=self.config.base_url or "https://api.deepseek.com",
                     timeout=120, max_retries=1,
                 )
             else:
@@ -444,7 +444,13 @@ class LLMIntegration:
         return bool(api_key)
 
     def chat_completion(self, messages: List[Dict[str, str]], **kwargs) -> str:
-        """执行聊天补全（含有限重试与降级回退）"""
+        """执行聊天补全（含有限重试与降级回退）
+
+        DeepSeek V4 兼容说明：V4 是推理模型，输出优先写入 reasoning_content，
+        content 在推理完成前可能为空。因此本方法：
+        1. 支持通过 extra_body 传 thinking 参数（如 {"thinking": {"type": "enabled"}}）；
+        2. 当 message.content 为空时，回退读取 reasoning_content，避免误判为"空响应"。
+        """
         if not self.client:
             if not self.config.api_key:
                 logger.warning("LLM不可用：未设置API Key。请在配置面板中填写API Key。")
@@ -457,6 +463,8 @@ class LLMIntegration:
         max_retries = 2  # 原始请求之外最多重试 2 次（含指数退避 1s/2s）
         delay = 1
         last_error = None
+        # DeepSeek V4 推理模型：允许调用方显式传 thinking 参数，否则不强制
+        extra_body = kwargs.get('extra_body') or {}
         for attempt in range(max_retries + 1):
             if attempt > 0:
                 time.sleep(delay)
@@ -467,9 +475,15 @@ class LLMIntegration:
                     messages=messages,
                     temperature=kwargs.get('temperature', self.config.temperature),
                     max_tokens=kwargs.get('max_tokens', self.config.max_tokens),
-                    timeout=timeout
+                    timeout=timeout,
+                    extra_body=extra_body or None,
                 )
-                return response.choices[0].message.content or ""
+                message = response.choices[0].message
+                content = message.content or ""
+                # DeepSeek V4 空 content 回退：推理内容在 reasoning_content
+                if not content:
+                    content = getattr(message, "reasoning_content", None) or ""
+                return content
             except Exception as e:
                 last_error = e
                 # 永久性错误（认证失败、API Key 缺失、参数错误等）不重试

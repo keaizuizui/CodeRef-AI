@@ -56,15 +56,15 @@ echo.
 echo [2/2] 填写 API 信息
 echo.
 echo 常见服务的 Base URL：
-echo   DeepSeek: https://api.deepseek.com/v1
+echo   DeepSeek: https://api.deepseek.com
 echo   OpenAI:   https://api.openai.com/v1
 echo   Ollama:   http://localhost:11434/v1
 echo.
-set /p CODEREF_BASE_URL="Base URL (默认: https://api.deepseek.com/v1): "
-if "%CODEREF_BASE_URL%"=="" set CODEREF_BASE_URL=https://api.deepseek.com/v1
+set /p CODEREF_BASE_URL="Base URL (默认: https://api.deepseek.com): "
+if "%CODEREF_BASE_URL%"=="" set CODEREF_BASE_URL=https://api.deepseek.com
 
-set /p CODEREF_MODEL="模型名 (默认: deepseek-chat): "
-if "%CODEREF_MODEL%"=="" set CODEREF_MODEL=deepseek-chat
+set /p CODEREF_MODEL="模型名 (默认: deepseek-v4-flash): "
+if "%CODEREF_MODEL%"=="" set CODEREF_MODEL=deepseek-v4-flash
 
 set /p CODEREF_API_KEY="API Key: "
 if "%CODEREF_API_KEY%"=="" (
