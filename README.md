@@ -10,7 +10,7 @@
 
 ## 它是什么
 
-CodeRef-AI 通过 MCP 协议暴露 **31 个工具**，同时服务两类人：
+CodeRef-AI 通过 MCP 协议暴露 **32 个工具**，同时服务两类人：
 
 - **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险；持有一条 LLM/CodeRabbit 论断时，还能用静态图谱做确定性核验，再决定采不采信。
 - **非编程人员的技术助理**：把看不懂的代码变成通俗的健康仪表盘、Wiki 文档和流程确证，让你不用读代码，也能确认项目有没有按你的设想运转。
@@ -55,7 +55,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | **变更守护引擎** | 拦截 AI 把代码改坏，输出人能看懂的变更报告 | `coderef_change_guard` `coderef_change_report` |
 | **人话解读平台** | 把确定性格子结论翻译成非编程人员听得懂的"人话" | `coderef_interpret` |
 
-## 31 个 MCP 工具
+## 32 个 MCP 工具
 
 ### 审计引擎
 
@@ -289,7 +289,7 @@ coderef_asset(project_path="/path/to/project", action="list")
 ```
 coderef-ai/
 ├── core/                             # 核心引擎
-│   ├── mcp_server.py                 # MCP Server 入口（31 个工具）
+│   ├── mcp_server.py                 # MCP Server 入口（32 个工具）
 │   ├── pipeline_runner.py            # 管线引擎（audit/architecture/docs + 知识图谱）
 │   ├── tool_registry.py              # 工具注册中心（收敛管线引擎的上帝模块职责）
 │   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
@@ -390,6 +390,14 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 
 ## 更新日志
 
+### v4.7.0 — 创新复刻收口：LLM 协助排查
+
+- **新增 `coderef_innovation_review`**：创新复刻的 LLM 协助排查工具，补上"创新确认 + 复刻排查"这条需要语义判断的链路。让 LLM 阅读源项目的管线设计（知识图谱调用链闭包）+ wiki 文档，判定三点：该设计是否确属创新 workflow（区别于已知/常见模式或静态能力标签误命中）、管线调用链与 wiki 人话描述是否一致、复刻到目标项目是否合理（提供 `target` 时）
+- **wiki 来源「生成+兜底」**：优先读源项目已有 wiki（`coderef_docs_read`），无则用 WikiGenerator 生成兜底再排查
+- **诚实话护栏**：确定性管线摘要（图谱调用链闭包、采用模块、入口）照常给出，不依赖 LLM；LLM 结论明确标注"AI 判断，非确定性事实"，不下"必须复刻"指令；无 API Key 时硬阻断（`is_available()` 判定），只给确定性管线摘要，不产出降级/占位判断
+- **修复入口符号提取缺陷**：入口符号改为"真实源码顶层符号优先、资产蓝图 entry_points 仅作补充"。此前若蓝图声明理想模板入口（如 `with_retry`，源项目未必真实存在），会到图谱里查不到、调用链闭包为空；修复后从采用模块源码提取真实符号，能命中图谱提取确定性调用链
+- **工具数**：32 个 MCP 工具（31 + 1 新增）
+
 ### v4.6.0 — 工具收敛：Prompt 治理合并 + 复刻落地（闭环收口）
 
 - **合并**：`coderef_prompt_mgmt`（资产生命周期：版本/对比/AB）与 `coderef_prompt_audit`（合规审计）合并进统一入口 `coderef_prompt_governance`（overview / assets / audit / cross_module）。两个旧工具从 `tools/list` 移除，但保留 handler 兼容转发（返回 `deprecated` + `migrate_to` 迁移提示），旧调用不中断
@@ -445,7 +453,7 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ### v4.2.8 — 重型工具默认后台执行（适配所有 MCP 客户端的超时限制）
 
 - **修复 MCP 工具超时（REQUEST_TIMEOUT）**：此前 `coderef_memory_sync` 等重型工具同步执行，大项目全量扫描会在 Trae 等客户端对单次 `tools/call` 的超时窗口内未完成，导致超时失败、其余工具异常。v4.2.8 起**重型工具默认后台执行**：调用立即返回 `{"status":"running","task_id":"xxxx"}`，由外层 AI 轮询 `coderef_task_status(task_id)` 取最终结果，不再撞超时
-- **默认后台的工具**：`coderef_audit` / `coderef_docs` / `coderef_review` / `coderef_frontend` / `coderef_report` / `coderef_audit_advisor` / `coderef_architecture` / `coderef_memory_sync` / `coderef_memory_quality` / `coderef_owasp` / `coderef_innovation` / `coderef_asset` / `coderef_change_guard` / `coderef_change_report`；轻量工具（`coderef_scan` / `coderef_query` / `coderef_whitelist` / `coderef_docs_read` 等）保持同步快速返回
+- **默认后台的工具**：`coderef_audit` / `coderef_docs` / `coderef_review` / `coderef_frontend` / `coderef_report` / `coderef_audit_advisor` / `coderef_architecture` / `coderef_memory_sync` / `coderef_memory_quality` / `coderef_owasp` / `coderef_innovation` / `coderef_asset` / `coderef_innovation_review` / `coderef_change_guard` / `coderef_change_report`；轻量工具（`coderef_scan` / `coderef_query` / `coderef_whitelist` / `coderef_docs_read` 等）保持同步快速返回
 - **显式控制**：所有工具支持 `background` 参数，`background=False` 强制同步（小项目想立即拿结果）、`background=True` 强制后台；统一后台分发避免散落的 if/elif，handler 与 `coderef_task_status` 全工具可用
 - **收敛统一分发**：`_call` 收敛为「统一 handler 映射 + 统一的 `background` 决策」，消除散落分支导致的重型工具被同步执行的遗漏；`_run` 统一走 `_handlers` 分发，后台线程与同步路径执行任意工具
 
