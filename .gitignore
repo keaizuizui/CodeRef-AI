@@ -25,6 +25,7 @@ coderef-report/
 
 # ─── Wiki 生成产物（不入库，本地生成即可）───
 docs/wiki/
+txt/
 
 # ─── 回归测试（不入库，本地保留即可）───
 tests/
