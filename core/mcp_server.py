@@ -1463,8 +1463,16 @@ class Server:
             sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
         logger.info(f"CodeRef MCP v{PKG_VERSION} (audit|arch|docs) 启动")
         try:
-            for line in sys.stdin:
-                if not (line := line.strip()): continue
+            # 手动 readline 阻塞读，替代 `for line in sys.stdin`：
+            # 迭代器在后台守护线程并发场景下会提前返回 EOF（即使 stdin 仍打开、fd0
+            # 仍有效），导致 server 主线程提前退出、后台任务被丢弃。
+            while True:
+                line = sys.stdin.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
                 try:
                     req = json.loads(line)
                     resp = self._handle(req)
@@ -1479,20 +1487,6 @@ class Server:
         except Exception as e:
             logger.error(f"[RUN-EXC] {type(e).__name__}: {e}")
             import traceback; logger.error(traceback.format_exc())
-        # 诊断：打印线程快照与 fd
-        try:
-            import threading as _th
-            threads = [f"{t.name}:{type(t).__name__}" for t in _th.enumerate()]
-            logger.error(f"[RUN-EOF] for-loop ended. threads={threads}")
-            for fd in (0, 1, 2):
-                try:
-                    import os as _os
-                    _os.fstat(fd)
-                    logger.error(f"[RUN-EOF] fd{fd} open")
-                except Exception as _e:
-                    logger.error(f"[RUN-EOF] fd{fd} closed: {_e}")
-        except Exception:
-            pass
         return
 
 def main(): Server().run()

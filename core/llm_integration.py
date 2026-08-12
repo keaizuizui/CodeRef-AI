@@ -274,6 +274,22 @@ class LLMIntegration:
                     return text[start:i + 1]
         return ""
 
+    @staticmethod
+    def _strip_code_block(text: str) -> str:
+        """剥离 LLM 返回的 Markdown 代码块包裹。
+
+        兼容 ```json ... ``` 与 ``` ... ``` 两种形式；未命中代码块时原样返回。
+        """
+        if not text or "```" not in text:
+            return text
+        m = re.search(r"```(?:json)?\s*\n", text, re.IGNORECASE)
+        if not m:
+            return text
+        end = text.find("```", m.end())
+        if end < 0:
+            return text
+        return text[m.end():end].strip()
+
     @classmethod
     def _try_parse_json(cls, text: str) -> Optional[Any]:
         """尝试从 LLM 返回文本中解析出 JSON 对象/数组。
@@ -287,13 +303,21 @@ class LLMIntegration:
         """
         if not text:
             return None
+        # 0. 剥离 Markdown 代码块包裹（```json ... ``` 或 ``` ... ```），露出纯 JSON
+        stripped = cls._strip_code_block(text)
+        if stripped != text:
+            text = stripped
         # 1. 整体解析
         try:
             return json.loads(text)
         except (json.JSONDecodeError, ValueError):
             pass
-        # 2. 截取平衡片段（对象优先，其次数组）
-        for open_char, close_char in (('{', '}'), ('[', ']')):
+        # 2. 截取平衡片段。按文本首字符决定优先类型：以 '[' 开头说明期望顶层是数组，
+        #    应先按数组截取完整内容（否则对象优先会把数组截成第一个元素对象，导致
+        #    调用方期望 list 却拿到 dict，误判"解析失败"）。
+        first = text.lstrip()[:1]
+        order = ('[', '{') if first == '[' else ('{', '[')
+        for open_char, close_char in ((c, ']' if c == '[' else '}') for c in order):
             fragment = cls._extract_balanced_json_fragment(text, open_char, close_char)
             if fragment:
                 try:

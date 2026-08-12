@@ -1164,6 +1164,7 @@ class CodeAnalyzer:
                 errors="replace",
                 timeout=120,
                 cwd=project_path,
+                stdin=subprocess.DEVNULL,
             )
             if result.returncode != 0:
                 logger.warning(f"[CodeAnalyzer] gitnexus 命令失败: {result.stderr.strip()[:200]}")
