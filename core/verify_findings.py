@@ -83,6 +83,7 @@ class EvidenceLabeler:
         symbols_found: List[str],
         symbols_missing: List[str],
         in_pipeline: Optional[bool] = None,
+        entry: Optional[str] = None,
         graph_exists: bool = True,
     ) -> Tuple[str, str]:
         """综合判定 verdict + 中文 reason。
@@ -115,7 +116,8 @@ class EvidenceLabeler:
             return VERDICT_CONFIRMED, "论断所指文件在项目中存在，但未提取到可进一步核验的符号"
 
         if in_pipeline is not None and not in_pipeline:
-            return VERDICT_PARTIAL, f"{base[1]}，但引用的符号不在指定入口 '{in_pipeline}' 的静态调用管线内"
+            entry_name = entry or "指定入口"
+            return VERDICT_PARTIAL, f"{base[1]}，但引用的符号不在入口 '{entry_name}' 的静态调用管线内"
         return base
 
     @staticmethod
@@ -258,20 +260,40 @@ class FindingsVerifier:
     def _file_found(self, file: str) -> Optional[bool]:
         if not file or not file.strip():
             return None
-        candidates = [file.strip()]
-        if not os.path.isabs(candidates[0]):
-            candidates.append(self.project_path + os.sep + candidates[0])
-        # 归一化（去掉 ./ 前缀）
-        norm = [os.path.normpath(c) for c in candidates]
-        for c in norm:
-            if os.path.isfile(c):
+        raw = file.strip()
+        # 构造候选：相对路径尝试拼接项目根；绝对路径直接使用
+        candidates = [raw]
+        if not os.path.isabs(raw):
+            candidates.append(self.project_path + os.sep + raw)
+        # 归一化并做项目根校验：拒绝项目目录之外的路径（含绝对路径与 ../ 穿越）
+        project_root = os.path.realpath(self.project_path)
+        norm = []
+        for c in candidates:
+            rp = os.path.realpath(os.path.normpath(c))
+            try:
+                inside = os.path.commonpath([rp, project_root]) == project_root
+            except ValueError:
+                # 不同盘符（如 C: vs D:）会抛 ValueError，按"项目外"处理
+                inside = False
+            norm.append((rp, inside))
+        for rp, inside in norm:
+            if inside and os.path.isfile(rp):
                 return True
-        # 图谱中存在该文件实体也算
+        # 图谱中存在该文件实体也算（同样限定在项目内才认）
         if self.kg is not None:
             try:
                 res = self.kg.query_file_entities(file)
                 if res.total > 0:
-                    return True
+                    if not os.path.isabs(raw):
+                        return True
+                    # 绝对路径：仅当图谱实体文件落在项目根内才算存在
+                    try:
+                        inside = os.path.commonpath(
+                            [os.path.realpath(raw), project_root]) == project_root
+                    except ValueError:
+                        inside = False
+                    if inside:
+                        return True
             except Exception:
                 pass
         return False
@@ -334,9 +356,16 @@ class FindingsVerifier:
         line = finding.get("line")
 
         # 显式 symbols 优先，否则启发式提取
+        # 健壮化：symbols 合法形态为「字符串」或「字符串列表」；数字/字典/None/
+        # 含非字符串元素的集合一律视为无显式符号，回退到文本启发式提取，绝不抛异常。
         raw_symbols = finding.get("symbols") or []
         if isinstance(raw_symbols, str):
             raw_symbols = [s.strip() for s in re.split(r"[,\s;]+", raw_symbols) if s.strip()]
+        elif isinstance(raw_symbols, (list, tuple)):
+            raw_symbols = [s.strip() for s in raw_symbols
+                           if isinstance(s, str) and s.strip()]
+        else:
+            raw_symbols = []
         symbols_all = list(raw_symbols)
         if not symbols_all:
             symbols_all = extract_symbols(title + " " + detail)
@@ -360,6 +389,7 @@ class FindingsVerifier:
             symbols_found=symbols_found,
             symbols_missing=symbols_missing,
             in_pipeline=in_pipeline,
+            entry=entry,
             graph_exists=self.graph_exists,
         )
 

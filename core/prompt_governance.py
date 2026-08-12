@@ -53,13 +53,17 @@ class PromptGovernance:
 
     def govern(self, project_path: str, action: str = "overview",
                name: str = "", content: str = "", version: str = "",
-               abtest_group: str = "") -> Dict[str, Any]:
+               abtest_group: str = "", asset_action: str = "",
+               out_format: str = "json") -> Dict[str, Any]:
         """统一治理入口，分派到具体子能力。
 
         Args:
             project_path: 项目路径
             action: overview | assets | audit | cross_module
             name/content/version/abtest_group: 透传给资产生命周期（assets 子动作用）
+            asset_action: 资产生命周期子动作（list/version/compare/abtest，assets 用；
+                          缺省按 name/version 是否给来自动判定 list 或 version）
+            out_format: 合规审计输出格式（audit 用，json/text/html）
 
         Returns:
             结构化 dict（各 action 字段不同，均含 ok/action/summary）
@@ -73,9 +77,10 @@ class PromptGovernance:
         if action == "overview":
             return self._action_overview(project_path)
         if action == "assets":
-            return self._action_assets(project_path, name, content, version, abtest_group)
+            return self._action_assets(project_path, name, content, version,
+                                       abtest_group, asset_action)
         if action == "audit":
-            return self._action_audit(project_path)
+            return self._action_audit(project_path, out_format)
         if action == "cross_module":
             return self._action_cross_module(project_path)
         # 不可达（已在上方拦截）
@@ -146,23 +151,40 @@ class PromptGovernance:
     # ─── assets：资产生命周期 ──────────────────────────────────
 
     def _action_assets(self, project_path: str, name: str, content: str,
-                       version: str, abtest_group: str) -> Dict[str, Any]:
-        """资产生命周期（版本 / 对比 / AB / 回滚）。透传底层。"""
-        r = self._asset_mgr.manage(
-            project_path, action="version" if (name or version) else "list",
-            name=name, content=content, version=version, abtest_group=abtest_group,
-        )
-        # 兼容：若用户显式想用 compare/abtest，但底层 manage 入口不支持，这里做二次分发
+                       version: str, abtest_group: str, asset_action: str) -> Dict[str, Any]:
+        """资产生命周期（list/version/compare/abtest）。透传底层，补全为完整能力。"""
+        # 显式指定子动作：直接透传
+        if asset_action in ("list", "version", "compare", "abtest"):
+            r = self._asset_mgr.manage(
+                project_path, action=asset_action,
+                name=name, content=content, version=version,
+                abtest_group=abtest_group,
+            )
+        else:
+            # 缺省：按 name/version 是否给来自动判定 list 或 version
+            r = self._asset_mgr.manage(
+                project_path,
+                action="version" if (name or version) else "list",
+                name=name, content=content, version=version,
+                abtest_group=abtest_group,
+            )
         r["tool"] = "coderef_prompt_governance"
         r["action_alias"] = "assets"
+        r["asset_action"] = asset_action or r.get("action", "")
         r["project_path"] = project_path
         return r
 
     # ─── audit：合规审计 ───────────────────────────────────────
 
-    def _action_audit(self, project_path: str) -> Dict[str, Any]:
+    def _action_audit(self, project_path: str, out_format: str = "json") -> Dict[str, Any]:
         """合规审计（注入 + 一致性）。确定性、不依赖 LLM。"""
         r = self._auditor.audit_project(project_path)
+        if out_format == "html":
+            from core.prompt_compliance import render_html
+            r["report_html"] = render_html(r)
+        elif out_format == "text":
+            from core.prompt_compliance import render_report
+            r["report_text"] = render_report(r)
         r["tool"] = "coderef_prompt_governance"
         r["action_alias"] = "audit"
         r["project_path"] = project_path
@@ -218,11 +240,17 @@ class PromptGovernance:
 
 def govern_prompt(project_path: str, action: str = "overview",
                   name: str = "", content: str = "", version: str = "",
-                  abtest_group: str = "") -> Dict[str, Any]:
-    """一键 Prompt 治理总览 / 资产生命周期 / 合规审计 / 跨模块。"""
+                  abtest_group: str = "", asset_action: str = "",
+                  out_format: str = "json") -> Dict[str, Any]:
+    """一键 Prompt 治理总览 / 资产生命周期 / 合规审计 / 跨模块。
+
+    4.6 合并：本入口已承载原 coderef_prompt_mgmt（asset_action=list/version/compare/abtest）
+    与 coderef_prompt_audit（action=audit，out_format 指定输出）的全部能力。
+    """
     return PromptGovernance().govern(
         project_path, action=action, name=name, content=content,
         version=version, abtest_group=abtest_group,
+        asset_action=asset_action, out_format=out_format,
     )
 
 

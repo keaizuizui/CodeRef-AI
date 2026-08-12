@@ -2,7 +2,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.5.0** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.6.0** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -10,7 +10,7 @@
 
 ## 它是什么
 
-CodeRef-AI 通过 MCP 协议暴露 **32 个工具**，同时服务两类人：
+CodeRef-AI 通过 MCP 协议暴露 **31 个工具**，同时服务两类人：
 
 - **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险；持有一条 LLM/CodeRabbit 论断时，还能用静态图谱做确定性核验，再决定采不采信。
 - **非编程人员的技术助理**：把看不懂的代码变成通俗的健康仪表盘、Wiki 文档和流程确证，让你不用读代码，也能确认项目有没有按你的设想运转。
@@ -45,17 +45,17 @@ CodeRef-AI 通过 MCP 协议暴露 **32 个工具**，同时服务两类人：
 
 ## 四引擎架构
 
-CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → 守护」完整闭环；4.3–4.5 在四引擎之上补上「确定性核验 + 平台整合」，让闭环真正可落地：
+CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → 守护」完整闭环；4.3–4.6 在四引擎之上补上「确定性核验 + 平台整合 + 复刻落地」，让闭环真正可落地：
 
 | 引擎 | 解决的问题 | 核心工具 |
 |------|-----------|---------|
 | **审计引擎** | 全维度代码体检 + 图谱 + 文档 + 审查 + 论断核验 | `coderef_audit` `coderef_query` `coderef_review` `coderef_verify_findings` 等 |
-| **记忆引擎** | AI 对项目「记住了什么」，增量同步 + 语义查询 + 治理 | `coderef_memory_*` `coderef_prompt_mgmt` `coderef_prompt_governance` |
+| **记忆引擎** | AI 对项目「记住了什么」，增量同步 + 语义查询 + 治理 | `coderef_memory_*` `coderef_prompt_governance` |
 | **创新识别引擎** | 从项目里挖出值得复用的设计，固化为资产并复刻到其他项目 | `coderef_innovation` `coderef_asset` `coderef_replicate` `coderef_registry` |
 | **变更守护引擎** | 拦截 AI 把代码改坏，输出人能看懂的变更报告 | `coderef_change_guard` `coderef_change_report` |
 | **人话解读平台** | 把确定性格子结论翻译成非编程人员听得懂的"人话" | `coderef_interpret` |
 
-## 32 个 MCP 工具
+## 31 个 MCP 工具
 
 ### 审计引擎
 
@@ -66,7 +66,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_scan_list` | 列出 `coderef_scan` 可选的维度清单 | 否 |
 | `coderef_flow_verify` | 流程合规验证：非编程人员验证「项目是否按我期望的流程执行」（入口 A 的调用管线是否覆盖步骤 B→C→D）。纯静态、确定性，只读知识图谱 CALLS 边，不依赖 LLM；状态分确证/在管线/存疑/缺失 | 否 |
 | `coderef_verify_findings` | 确定性核验 LLM/CodeRabbit 论断：论断引用的代码目标是否真实存在、是否在关键管线内。verdict（确证/证伪/部分确证/存疑）由静态图谱打出，诚实话标签来源分离，LLM 无权改结论 | 否 |
-| `coderef_prompt_audit` | Prompt 合规审计：注入风险（提示注入的模式化特征）+ 一致性（跨模块/同角色 Prompt 漂移）。纯规则、确定性、不依赖 LLM | 否 |
+| `coderef_prompt_governance` | Prompt 治理平台：一次调用编排 资产生命周期 × 合规审计 × 跨模块一致性（overview / assets / audit / cross_module）。`audit` 即原 `coderef_prompt_audit` 的注入风险 + 一致性检测。纯规则、确定性、不依赖 LLM | 否 |
 | `coderef_arch_audit` | 架构腐化诊断：复用知识图谱 CALLS 边做模块级静态诊断（循环依赖/上帝模块/分层违例/异常模块规模），聚合 0–10 架构健康度。纯静态、不依赖 LLM | 否 |
 | `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 否 |
 | `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 是 |
@@ -87,8 +87,6 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_memory_query` | 语义检索（向量库）+ 结构查询（知识图谱）复用项目记忆 | 否 |
 | `coderef_memory_status` | 「AI 知道什么」：认知覆盖度 + 置信度 + 盲区地图 | 否 |
 | `coderef_memory_quality` | 记忆质量评估（引用完整性/语义覆盖/偏差）+ 自动补全 | 可选 |
-| `coderef_prompt_mgmt` | Prompt 资产管理：版本 / 对比 / A-B 测试 | 是 |
-| `coderef_prompt_governance` | Prompt 治理平台：一次调用编排 资产生命周期 × 合规审计 × 跨模块一致性（overview 总览 / assets 生命周期 / audit 合规 / cross_module 漂移）。纯规则、确定性 | 否 |
 
 ### 创新识别引擎
 
@@ -97,6 +95,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_innovation` | 识别项目创新设计 + 传播缺口，理想清单 vs 实际实现对照 | 是 |
 | `coderef_asset` | 将验证过的设计固化 `WorkflowAsset` 资产（查询/导出/提交） | 是 |
 | `coderef_replicate` | 复刻铺排：检测目标项目对某已固化资产（蓝图）的采用缺口，并生成可复刻指引（steps + entry_points + verified_findings）。确定性缺口判定，不自动改代码 | 否 |
+| `coderef_replicate_apply` | 复刻落地（4.6 新增）：把已固化资产的复刻指引真正落到目标项目——写入 template_code 骨架 + patch_suggestion / migration_guide 说明，生成落地清单 manifest。诚实话护栏：只落地"确定性可给"内容，不自动接入目标源码；默认不覆盖已存在同名文件（冲突如实标注）；template_code 缺失明确标注待补全 | 否 |
 | `coderef_asset_blueprint` | 把复刻铺排得出的确定性结论（entry_points / verified_findings）写回资产蓝图，补全为可复刻蓝图 | 否 |
 | `coderef_registry` | 管理已知设计库，别名归一（解决 LLM 命名漂移） | 否 |
 
@@ -117,7 +116,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 
 | 工具 | 功能 | 需要 LLM |
 |------|------|---------|
-| `coderef_interpret` | 把确定性格子结论翻译成非编程人员听得懂的"人话"：action=health 健康总览（人话健康分 + 高危清单 + 图谱/合规背景，未审计时诚实提示不给分）/ dashboard 健康仪表盘 HTML / verify 论断人话核验 / verify_html 核验 HTML / wiki Wiki 生成（无 LLM 诚实阻断）/ prompt Prompt 治理总览 / assets 已固化资产解读 | 可选 |
+| `coderef_interpret` | 把确定性格子结论翻译成非编程人员听得懂的"人话"：action=health 健康总览（人话健康分 + 高危清单 + 图谱/合规背景，未审计时诚实提示不给分）/ dashboard 健康仪表盘 HTML / wiki Wiki 生成（无 LLM 诚实阻断）/ prompt Prompt 治理总览 / assets 已固化资产解读。4.6 起 verify / verify_html 已收敛到 `coderef_verify_findings`，本平台不再转发 | 可选 |
 
 ## 快速开始
 
@@ -150,8 +149,8 @@ setup.bat
 ```bash
 export CODEREF_API_KEY="your-api-key"
 export CODEREF_PROVIDER="deepseek"        # 支持: deepseek / openai / ollama
-export CODEREF_BASE_URL="https://api.deepseek.com/v1"
-export CODEREF_MODEL="deepseek-chat"
+export CODEREF_BASE_URL="https://api.deepseek.com"
+export CODEREF_MODEL="deepseek-v4-flash"  # 官方推荐: deepseek-v4-flash / deepseek-v4-pro
 ```
 
 **使用本地 Ollama（免费，无需 API Key）：**
@@ -290,7 +289,7 @@ coderef_asset(project_path="/path/to/project", action="list")
 ```
 coderef-ai/
 ├── core/                             # 核心引擎
-│   ├── mcp_server.py                 # MCP Server 入口（32 个工具）
+│   ├── mcp_server.py                 # MCP Server 入口（31 个工具）
 │   ├── pipeline_runner.py            # 管线引擎（audit/architecture/docs + 知识图谱）
 │   ├── tool_registry.py              # 工具注册中心（收敛管线引擎的上帝模块职责）
 │   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
@@ -337,7 +336,7 @@ coderef-ai/
 │   ├── prompt_governance.py          # Prompt 治理平台（生命周期 × 合规 × 跨模块）
 │   ├── innovation_engine.py          # 创新识别引擎：结构化创新 + 缺口按价值挑选
 │   ├── design_registry.py            # 已知设计库（别名归一）
-│   ├── replicate_engine.py           # 复刻铺排引擎（蓝图 → 缺口 → 可复刻指引）
+│   ├── replicate_engine.py           # 复刻铺排引擎（蓝图 → 缺口 → 可复刻指引 → 落地）
 │   ├── verify_findings.py            # 论断确定性核验（确证/证伪/部分确证/存疑）
 │   ├── interpretation_platform.py    # 人话解读平台（健康 × 仪表盘 × Wiki × 核验）
 │   ├── owasp_compliance.py           # OWASP LLM Top 10 合规检测
@@ -378,7 +377,33 @@ CodeRef-AI 是合法开源的安全审计工具，本仓库不含任何恶意代
 2. **厂商申诉**：向杀毒厂商提交误报申诉，说明这是合法开源审计工具（源码见本仓库），请求将 `sca_checker.py` 加入白名单；这是根治途经
 3. **如实告知审计 AI**：若 SCA 结果缺失或被清理，先把杀毒排除项配好再跑审计，避免误删导致结论失真
 
+## 项目历史
+
+CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审计、知识图谱、四大引擎与逻辑闭环。每个大版本都在回答同一个问题：让一个不懂编程的人，究竟能对自己的项目知道多少。
+
+| 版本 | 目标 |
+|------|------|
+| **1.0** | 写一份完整的项目简报，让人类搞清楚他的项目是怎么回事 |
+| **2.0** | 通过各类审计工具，让人类搞清楚他的项目有哪些常见问题 |
+| **3.0** | 通过知识图谱和 Wiki，开始建立更详细的简报 |
+| **4.0** | 通过四个引擎和四个支柱，增强工具的功能覆盖，形成逻辑闭环 |
+
 ## 更新日志
+
+### v4.6.0 — 工具收敛：Prompt 治理合并 + 复刻落地（闭环收口）
+
+- **合并**：`coderef_prompt_mgmt`（资产生命周期：版本/对比/AB）与 `coderef_prompt_audit`（合规审计）合并进统一入口 `coderef_prompt_governance`（overview / assets / audit / cross_module）。两个旧工具从 `tools/list` 移除，但保留 handler 兼容转发（返回 `deprecated` + `migrate_to` 迁移提示），旧调用不中断
+- **降级**：`coderef_interpret` 移除重复的 verify / verify_html action（论断核验本就复用 `coderef_verify_findings`，两处重复实现），调用时明确降级提示迁移到 `coderef_verify_findings`，不再静默返回"未知 action"
+- **补全**：新增 `coderef_replicate_apply` 复刻落地工具，把 4.4 的复刻铺排真正落到目标项目——写入 template_code 骨架 + patch_suggestion / migration_guide 说明，生成落地清单 manifest。诚实话护栏：只落地"确定性可给"内容，不自动接入目标源码；默认不覆盖已存在同名文件（冲突如实标注）；template_code 缺失明确标注待补全
+- **工具数**：31 个 MCP 工具（32 − 2 合并 + 1 新增）
+
+### v4.5.1 — 修复：DeepSeek V4 兼容 + 审查缺陷
+
+- **修复 DeepSeek V4 空响应**：默认 base_url 改为官方 `https://api.deepseek.com`（去掉旧 `/v1` 后缀），默认模型改为 `deepseek-v4-flash`。`chat_completion` 支持 `extra_body` 传 `thinking` 参数，并在 `message.content` 为空时回退读取 `reasoning_content`（V4 推理模型输出优先写入该字段），彻底消除"调用成功但返回空串"的误判。同步更新 `setup.bat`、`README`、`MCP_SETUP.md` 与 `config/config.json`
+- **修复 P0：`_discover_workflows` 缺 fallback**：原先仅走 Prompt 工作流，无 Prompt 时静默返回 `None`。现补全三级降级链（Prompt → LLM+知识库 → 规则启发式），绝不静默返回空/None
+- **修复 P1：`frontend_inspector` 运行时 URL 无白名单校验（SSRF）**：`_runtime_review` 新增协议与 host 白名单校验，仅允许 http/https 且 host 为本地/内网前缀，越权 URL 一律拒绝访问并降级为静态分析
+- **修复 P1：`arch_audit` 用 `or` 回退导致 0 值被忽略**：`fan_out_threshold` / `large_symbol_threshold` / `scc_min_size` 改为 `is not None` 判断，显式传 0 不再被误回退为默认阈值
+- **审查并收编 `verify_findings.py` 未提交改动**：路径穿越防护（`realpath` + `commonpath` 限定项目根内）、symbols 形态健壮化（非法类型回退文本启发式提取）、`entry` 参数透传到证据标签
 
 ### v4.5.0 — 平台整合：Prompt 治理 + 人话解读（闭环落地）
 

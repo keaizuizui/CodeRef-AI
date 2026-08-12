@@ -2,7 +2,7 @@
 
 ## 概述
 
-CodeRef-AI 通过 MCP (Model Context Protocol) 协议暴露 26 个工具给 AI 编程助手使用。配置一次后，AI 可以分析**任何项目**——每次调用时传入 `project_path` 参数即可，不需要重复配置。
+CodeRef-AI 通过 MCP (Model Context Protocol) 协议暴露 31 个工具给 AI 编程助手使用。配置一次后，AI 可以分析**任何项目**——每次调用时传入 `project_path` 参数即可，不需要重复配置。
 
 **适用客户端：** Trae / Claude Desktop / Cursor / 任何支持 MCP 的 AI 编程助手
 
@@ -38,8 +38,8 @@ pip install -r requirements.txt
 ```bash
 export CODEREF_API_KEY="your-api-key"
 export CODEREF_PROVIDER="deepseek"        # 支持: deepseek / openai / ollama
-export CODEREF_BASE_URL="https://api.deepseek.com/v1"
-export CODEREF_MODEL="deepseek-chat"
+export CODEREF_BASE_URL="https://api.deepseek.com"
+export CODEREF_MODEL="deepseek-v4-flash"
 ```
 
 **Windows PowerShell：**
@@ -47,8 +47,8 @@ export CODEREF_MODEL="deepseek-chat"
 ```powershell
 $env:CODEREF_API_KEY="your-api-key"
 $env:CODEREF_PROVIDER="deepseek"
-$env:CODEREF_BASE_URL="https://api.deepseek.com/v1"
-$env:CODEREF_MODEL="deepseek-chat"
+$env:CODEREF_BASE_URL="https://api.deepseek.com"
+$env:CODEREF_MODEL="deepseek-v4-flash"
 ```
 
 ### 方式二：交互式配置（Windows）
@@ -74,7 +74,7 @@ export CODEREF_API_KEY="ollama"
 
 | 提供商 | 推荐模型 | 说明 |
 |--------|---------|------|
-| DeepSeek | `deepseek-chat` | 性价比高，中文友好 |
+| DeepSeek | `deepseek-v4-flash` / `deepseek-v4-pro` | 官方当前推荐，性价比高，中文友好 |
 | OpenAI | `gpt-4o` / `gpt-4o-mini` | 质量最高 |
 | Ollama | `qwen2.5:7b` / `llama3.1:8b` | 免费，本地运行 |
 
@@ -162,7 +162,7 @@ export CODEREF_API_KEY="ollama"
 
 ---
 
-## 26 个 MCP 工具
+## MCP 工具
 
 | 工具 | 功能 | 模式 | 需要 LLM |
 |------|------|------|---------|
@@ -187,10 +187,15 @@ export CODEREF_API_KEY="ollama"
 | `coderef_memory_query` | 记忆语义检索 + 结构查询 | 同步 | 否 |
 | `coderef_memory_status` | 认知覆盖度 + 置信度 + 盲区地图 | 同步 | 否 |
 | `coderef_memory_quality` | 记忆质量评估 + 自动补全 | 后台 | 可选 |
-| `coderef_prompt_mgmt` | Prompt 资产管理 | 同步 | 是 |
+| `coderef_prompt_governance` | Prompt 治理平台（资产生命周期 × 合规审计 × 跨模块一致性，4.6 合并原 prompt_mgmt + prompt_audit） | 后台 | 否 |
+| `coderef_verify_findings` | 论断确定性核验（确证/证伪/部分确证/存疑） | 后台 | 否 |
 | `coderef_innovation` | 识别项目创新设计 + 传播缺口 | 后台 | 是 |
 | `coderef_asset` | 设计固化 WorkflowAsset 资产 | 后台 | 是 |
 | `coderef_registry` | 已知设计库管理，别名归一 | 同步 | 否 |
+| `coderef_asset_blueprint` | 已固化资产蓝图/复刻指引读取 | 同步 | 否 |
+| `coderef_replicate` | 复刻铺排（蓝图 → 缺口 → 可复刻指引） | 后台 | 否 |
+| `coderef_replicate_apply` | 复刻落地（把指引落到目标项目，4.6 新增） | 后台 | 否 |
+| `coderef_interpret` | 人话解读（把审计/图谱结论转成人人可读） | 后台 | 是 |
 | `coderef_owasp` | OWASP LLM Top 10 合规检测 | 后台 | 否 |
 
 ---
@@ -312,7 +317,7 @@ python -m core.mcp_server
 
 为避免任意 MCP 客户端（Trae / Claude Desktop / Cursor / Cherry Studio 等）对单次 `tools/call` 的**超时限制**，**重型工具默认后台执行**：调用立即返回 `{"status":"running","task_id":"xxxx"}`，由外层 AI 轮询 `coderef_task_status(task_id="xxxx")` 取最终结果，不再撞超时。
 
-- 默认后台：`coderef_audit` / `coderef_docs` / `coderef_review` / `coderef_frontend` / `coderef_report` / `coderef_audit_advisor` / `coderef_architecture` / `coderef_memory_sync` / `coderef_memory_quality` / `coderef_owasp` / `coderef_innovation` / `coderef_asset` / `coderef_change_guard` / `coderef_change_report`
+- 默认后台：`coderef_audit` / `coderef_docs` / `coderef_review` / `coderef_frontend` / `coderef_report` / `coderef_audit_advisor` / `coderef_architecture` / `coderef_memory_sync` / `coderef_memory_quality` / `coderef_owasp` / `coderef_innovation` / `coderef_asset` / `coderef_change_guard` / `coderef_change_report` / `coderef_verify_findings` / `coderef_replicate` / `coderef_replicate_apply` / `coderef_asset_blueprint` / `coderef_prompt_governance` / `coderef_interpret`
 - 轻量工具（`coderef_scan` / `coderef_query` / `coderef_whitelist` / `coderef_docs_read` 等）保持同步快速返回
 - 显式控制：传 `background=False` 强制同步（小项目想立即拿结果），传 `background=True` 强制后台
 
@@ -357,7 +362,7 @@ print(client.models.list())
 ```
 AI 编程助手 (Trae / Claude Desktop / Cursor)
    │
-   └── coderef-ai MCP Server (v4.2.9, 26 个工具)
+   └── coderef-ai MCP Server (v4.6.0, 31 个工具)
           │
           ├── coderef_audit ─── 11 检测器管线
           │      ├── 治理审计 (governance_audit)
@@ -394,7 +399,9 @@ AI 编程助手 (Trae / Claude Desktop / Cursor)
           ├── coderef_frontend ─── 前端交互审查（按钮/菜单静态枚举）
           ├── coderef_report ─── 审计报告/图谱/Wiki 聚合 HTML 报告
           ├── coderef_audit_advisor ─── 审计策略判定（增量/全量）
-          ├── coderef_memory_* ─── 记忆引擎（sync/query/status/quality/prompt_mgmt）
+          ├── coderef_memory_* ─── 记忆引擎（sync/query/status/quality）
+          ├── coderef_prompt_governance ─── Prompt 治理（生命周期 × 合规 × 跨模块）
+          ├── coderef_verify_findings ─── 论断确定性核验
           ├── coderef_innovation / coderef_asset / coderef_registry ─── 创新识别引擎
           ├── coderef_change_guard / coderef_change_report ─── 变更守护引擎
           └── coderef_owasp ─── OWASP LLM Top 10 合规检测
@@ -402,7 +409,7 @@ AI 编程助手 (Trae / Claude Desktop / Cursor)
 
 ### 关键设计决策
 
-1. **单 Server 集中管控**：26 个工具统一暴露，无需为每个检测器单独配置 MCP Server
+1. **单 Server 集中管控**：31 个工具统一暴露，无需为每个检测器单独配置 MCP Server
 2. **审计无需 LLM**：11 个检测器均基于静态分析，离线可用，零 API 成本
 3. **知识图谱持久化**：一次构建，跨会话复用，节省重复分析时间
 4. **交叉验证反幻觉**：多工具独立分析同一项目，相互验证，解决 AI 自查幻觉

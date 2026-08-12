@@ -30,9 +30,8 @@ from loguru import logger
 # 模块级常量（magic number 收敛）
 # ═══════════════════════════════════════════════════════════════
 
-# 平台支持的 action 集合
-INTERPRET_ACTIONS = ("health", "dashboard", "verify", "verify_html",
-                     "wiki", "prompt", "assets")
+# 平台支持的 action 集合（4.6 收敛：verify/verify_html 已移除，论断核验统一走 coderef_verify_findings）
+INTERPRET_ACTIONS = ("health", "dashboard", "wiki", "prompt", "assets")
 
 # 健康分段的"人话"护栏（宁可保守，不夸大）
 _SCORE_BANDS = (
@@ -148,15 +147,31 @@ class InterpretationPlatform:
 
         Args:
             project_path: 项目路径
-            action: health | dashboard | verify | verify_html | wiki | prompt | assets
-            findings_text: (verify/verify_html) 论断文本，多行或多条 JSON
-            entry: (verify) 可选入口符号
+            action: health | dashboard | wiki | prompt | assets
+              （4.6 收敛：论断核验请直接用 coderef_verify_findings，不再经本平台转发）
             out_format: json | text | html
 
         Returns:
             结构化 dict（各 action 字段不同，均含 ok/action/summary）
         """
         if action not in INTERPRET_ACTIONS:
+            # 4.6 降级护栏：verify/verify_html 已收敛到 coderef_verify_findings，
+            # 明确指引调用方，而非静默返回"未知 action"。
+            if action in ("verify", "verify_html"):
+                return {
+                    "ok": False,
+                    "action": action,
+                    "tool": "coderef_interpret",
+                    "project_path": os.path.abspath(project_path),
+                    "deprecated": True,
+                    "migrate_to": "coderef_verify_findings",
+                    "error": (
+                        f"action={action} 已在 4.6 从解读平台移除。论断核验请改用 "
+                        f"coderef_verify_findings（findings_text 传多行或 JSON 数组，"
+                        f"entry 指定入口符号），本平台不再转发。"
+                    ),
+                    "summary": "论断核验已收敛到 coderef_verify_findings，请改用该工具。",
+                }
             return {
                 "ok": False,
                 "action": action,
@@ -166,10 +181,6 @@ class InterpretationPlatform:
             return self._action_health(project_path)
         if action == "dashboard":
             return self._action_dashboard(project_path)
-        if action == "verify":
-            return self._action_verify(project_path, findings_text, entry, out_format)
-        if action == "verify_html":
-            return self._action_verify_html(project_path, findings_text, entry)
         if action == "wiki":
             return self._action_wiki(project_path)
         if action == "prompt":
