@@ -347,7 +347,6 @@ coderef-ai/
 ├── docs/                             # 文档（config/core/utils 详细说明）
 ├── cache/                            # 运行时缓存（.gitignore 已忽略）
 ├── coderef-report/                   # 输出报告（.gitignore 已忽略）
-├── demo-app/                         # 前端审查测试实例（含 6 个预置交互问题）
 ├── setup.bat                         # Windows 配置向导
 ├── requirements.txt
 ├── MCP_SETUP.md                      # 详细配置指南
@@ -397,7 +396,7 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 - **修复 flow_verify 判定**：拆分"存在性确证（`ok`）"与"顺序确证（`order_confirmed`）"两个标志，避免把"在管线但顺序未确证"误标为失败；`render_report` 优先报告知识图谱缺失根因；`entry_chain` 输出稳定排序保证确定性；`cross_module_flows` 去重键改用完整文件路径；`render_html` 全部插值做 HTML 转义
 - **修复 llm_integration JSON 解析**：片段提取定位整个响应中最早的结构分隔符，正确处理 LLM 在 JSON 前加说明文字导致顶层类型误判的场景
 - **设计借鉴声明**：README 新增「设计借鉴」章节，操作记忆层标注结合 mindmuxai/brain.md（Apache-2.0）与 TencentDB-Agent-Memory（MIT）；`BRAIN.md` 产物与模块 docstring 同步携带来源声明
-- **操作记忆固化**：审查发现 12 条 pitfall + 14 条 decision 已写入操作记忆层，可被 `coderef_operation_memory_query` 检索恢复
+- **操作记忆固化**：审查发现 12 条 pitfall + 14 条 decision 已写入本地操作记忆层（`data/operation_memory/`，属运行数据、不入库），可被 `coderef_operation_memory_query` 在本地检索恢复
 
 ### v4.8 — 新增 AI 操作记忆层
 
