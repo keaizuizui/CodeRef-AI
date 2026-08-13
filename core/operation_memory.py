@@ -5,6 +5,12 @@ OperationMemory v1.0 —— AI 辅助编程的操作记忆层
 为 MCP 工具 coderef_operation_memory_sync / query / find / status
 提供"东西在哪儿、从哪儿来、到哪儿去、过去的规范是什么"的持久记忆。
 
+设计参考：本模块的 `BRAIN.md` 命名、判存标准（能否从代码重建）与
+「当前理解 + 时间线」记录结构借鉴自 mindmuxai/brain.md（Apache-2.0，
+https://github.com/mindmuxai/brain.md）；分层记忆与渐进式披露思路参考
+TencentDB-Agent-Memory（MIT，https://github.com/Tencent/TencentDB-Agent-Memory）。
+CoreRef 的差异点：额外处理旁目录（WSL / 家目录 / 数据目录)下的资源定位。
+
 与 MemoryLayer（代码结构记忆）互补：
 - MemoryLayer      记忆"代码是什么"（AST、图谱、语义）
 - OperationMemory  记忆"东西在哪儿、怎么用、为什么这么做"
@@ -73,8 +79,15 @@ ENV_TOOL_BIN_SUBDIRS = settings.OMEM_ENV_TOOL_BIN_SUBDIRS
 
 # 项目根目录（Coderef-Ai-master）
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# 操作记忆存放目录
-_OMEM_DIR = os.path.join(_PROJECT_ROOT, "data", "operation_memory")
+# 操作记忆存放目录：优先环境变量 / settings 配置的用户数据目录，
+# 空则回退项目根 data/operation_memory（兼容旧路径）。
+def _resolve_omem_dir() -> str:
+    cfg = os.environ.get("OMEM_DATA_DIR", "") or (settings.OMEM_DATA_DIR or "")
+    if cfg:
+        return os.path.abspath(os.path.expanduser(cfg))
+    return os.path.join(_PROJECT_ROOT, "data", "operation_memory")
+
+_OMEM_DIR = _resolve_omem_dir()
 
 # 快照 mtime 容差（秒），与 memory_layer 保持一致
 _MTIME_TOLERANCE = 0.1
@@ -105,6 +118,9 @@ _DEPENDENCY_FILES = {
 _DOC_EXTENSIONS = (".md", ".rst", ".txt", ".html")
 _REPORT_EXTENSIONS = (".html", ".pdf", ".md")
 
+# 隐性知识类别中文标签（用于 pending 待办条目与 BRAIN 渲染）
+_KIND_LABELS = {"decision": "决策", "convention": "约定", "pitfall": "踩坑"}
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 辅助函数
@@ -120,9 +136,19 @@ def _omem_dir(project_path: str) -> str:
     return os.path.join(_OMEM_DIR, _project_hash(project_path))
 
 
-def _ensure_dirs(project_path: str) -> str:
+def _ensure_dirs(project_path: str):
+    """创建项目对应的操作记忆目录。目录创建 / 可写校验失败时抛错，
+    由调用方 sync() 捕获并返回结构化 error，不让异常逃逸。"""
     d = _omem_dir(project_path)
-    os.makedirs(d, exist_ok=True)
+    try:
+        os.makedirs(d, exist_ok=True)
+        # 可写校验：确保目录可写，避免后续写入静默失败
+        probe = os.path.join(d, ".write_probe")
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("probe")
+        os.remove(probe)
+    except Exception as e:
+        raise OSError(f"操作记忆目录不可写: {d} ({e})") from e
     return d
 
 
@@ -139,9 +165,13 @@ def _safe_read(path: str, limit: int = 0) -> str:
 
 
 def _write_atomic(path: str, data: str) -> bool:
-    """原子写（temp + os.replace），避免写一半损坏"""
+    """原子写（唯一临时文件 + os.replace），避免写一半损坏或并发写串扰。
+
+    每次写入使用进程内唯一临时文件（pid + 时间戳），杜绝共享 .tmp 路径
+    被并发写互相覆盖；写成功后再原子替换目标文件。
+    """
     try:
-        tmp = path + ".tmp"
+        tmp = f"{path}.{os.getpid()}.{datetime.now().strftime('%H%M%S%f')}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(data)
         os.replace(tmp, path)
@@ -544,11 +574,22 @@ class KnowledgeExtractor:
     def extract(self, sources: List[dict]) -> Dict[str, List[dict]]:
         """从文档来源提炼隐性知识，返回按 kind 归类的条目。
 
-        LLM 不可用时返回空 dict（调用方降级为"待人工确认"）。
+        LLM 不可用时降级为"待人工确认"：仍写入带 pending 标记的提醒条目，
+        使 status() 的 pending_human 能识别到"有隐性知识待人工补充"，而不是静默返回空。
         """
         result: Dict[str, List[dict]] = {"decision": [], "convention": [], "pitfall": []}
         if not self.llm_available():
             logger.info("[OperationMemory] LLM 不可用，隐性知识提炼降级为待人工确认")
+            now = datetime.now().isoformat(timespec="seconds")
+            for k in result:
+                result[k].append({
+                    "summary": f"{_KIND_LABELS.get(k, k)}知识待人工确认",
+                    "detail": "运行 sync 时未检测到可用 LLM / API Key，未自动提炼。"
+                              "请人工补充，或配置 LLM 后重跑 coderef_operation_memory_sync。",
+                    "source": "operation_memory",
+                    "time": now,
+                    "pending": True,
+                })
             return result
 
         for src in sources[:EXTRACT_GRAPH_LIMIT]:
@@ -637,23 +678,20 @@ class OperationMemory:
             return {"status": "error", "mode": mode,
                     "message": "项目路径不存在", "total_resources": 0}
 
-        d = _ensure_dirs(project_path)
+        try:
+            d = _ensure_dirs(project_path)
+        except OSError as e:
+            return {"status": "error", "mode": mode, "message": str(e), "total_resources": 0}
         ledger_path = os.path.join(d, "ledger.json")
         brain_path = os.path.join(d, "BRAIN.md")
         timeline_path = os.path.join(d, "timeline.md")
 
-        # 1. 静态审计：主目录资源
-        scanner = ResourceScanner(project_path)
-        resources = scanner.scan()
-
-        # 2. 旁目录探测
-        side_dirs = _probe_side_dirs(project_path)
-
-        # 3. 增量判断：对比上次快照
+        # 3. 增量判断：对比上次快照（必须放在文件扫描之前）
         prev = self._load_ledger(project_path)
         changed_reason = "full"
         if mode == "incr" and prev:
             old_snap = prev.get("snapshot", {})
+            # 先计算当前快照，判断是否变更
             files = _walk_files(project_path)
             cur_snap = _compute_snapshot(files)
             changed = any(not _same_file(old_snap.get(fp), cur_snap.get(fp))
@@ -661,13 +699,23 @@ class OperationMemory:
             changed = changed or len(files) != len(old_snap)
             if not changed:
                 logger.info("[OperationMemory] 增量同步：文件无变更，复用已有记忆")
+                # 无变更 → 复用既有资源和旁目录，不重新扫描
                 return {
                     "status": "ok", "mode": mode, "changed": False,
                     "message": "文件无变更，复用已有操作记忆",
-                    "resources": _count_resources(resources),
-                    "side_dirs": side_dirs,
+                    "resources": prev["resources"],
+                    "side_dirs": prev["side_dirs"],
+                    "ledger_path": _omem_dir(project_path),
+                    "brain_path": os.path.join(_omem_dir(project_path), "BRAIN.md"),
                 }
             changed_reason = "incr-changed"
+
+        # 1. 静态审计：主目录资源（增量变更后才需要全量重扫）
+        scanner = ResourceScanner(project_path)
+        resources = scanner.scan()
+
+        # 2. 旁目录探测（增量变更后才需要重探）
+        side_dirs = _probe_side_dirs(project_path)
 
         # 4. 隐性知识提炼（可选）
         knowledge: Dict[str, List[dict]] = {"decision": [], "convention": [], "pitfall": []}
@@ -698,9 +746,16 @@ class OperationMemory:
             ledger["snapshot"] = {}
 
         # 6. 持久化
-        _write_atomic(ledger_path, json.dumps(ledger, ensure_ascii=False, indent=2))
-        _write_atomic(brain_path, self._render_brain(ledger))
-        self._append_timeline(project_path, ledger, timeline_path)
+        ok_ledger = _write_atomic(ledger_path, json.dumps(ledger, ensure_ascii=False, indent=2))
+        ok_brain = _write_atomic(brain_path, self._render_brain(ledger))
+        ok_timeline = self._append_timeline(project_path, ledger, timeline_path)
+        if not (ok_ledger and ok_brain and ok_timeline):
+            return {
+                "status": "error",
+                "mode": mode,
+                "message": "操作记忆写入失败",
+                "total_resources": 0,
+            }
 
         return {
             "status": "ok",
@@ -751,6 +806,9 @@ class OperationMemory:
             f"- 最近同步：{ledger.get('last_sync', '-')}",
             f"- LLM 提炼：{'可用' if ledger.get('llm_available') else '未启用 / 待人工确认'}",
             "",
+            "> 本页的 `BRAIN.md` 命名、判存标准与时间线机制，借鉴自 mindmuxai/brain.md"
+            "（Apache-2.0）；分层记忆与渐进式披露思路参考 TencentDB-Agent-Memory（MIT）。",
+            "",
             "## 资源定位",
             _render_resources(ledger.get("resources", {})),
             "",
@@ -764,7 +822,7 @@ class OperationMemory:
         return "\n".join(lines)
 
     def _append_timeline(self, project_path: str, ledger: dict,
-                         timeline_path: str) -> None:
+                         timeline_path: str) -> bool:
         """追加式时间线（保留最近 N 条，可追溯）"""
         stamp = ledger.get("last_sync", "-")
         cc = _count_resources(ledger.get("resources", {}).items())
@@ -778,7 +836,7 @@ class OperationMemory:
         # 保留最近 N 条
         if len(lines) > TIMELINE_MAX + 2:
             lines = lines[:2] + lines[-(TIMELINE_MAX - 2):]
-        _write_atomic(timeline_path, "\n".join(lines) + "\n")
+        return _write_atomic(timeline_path, "\n".join(lines) + "\n")
 
     def query(self, project_path: str, query_type: str = "all",
               keyword: str = "", limit: int = 10) -> dict:
@@ -940,13 +998,14 @@ def _render_knowledge(knowledge: dict) -> str:
     if not any(knowledge.values()):
         return "（暂无，可运行 coderef_operation_memory_sync 启用 LLM 提炼）"
     out: List[str] = []
-    labels = {"decision": "决策", "convention": "约定", "pitfall": "踩坑"}
+    labels = _KIND_LABELS
     for k, items in knowledge.items():
         if not items:
             continue
         out.append(f"### {labels.get(k, k)}")
         for it in items[:10]:
-            out.append(f"- **{it.get('summary', '')}**（来源：{it.get('source', '-')}）")
+            flag = "⚠ 待人工确认" if it.get("pending") else ""
+            out.append(f"- **{it.get('summary', '')}**（来源：{it.get('source', '-')}）{flag}")
             if it.get("detail"):
                 out.append(f"  - {it['detail']}")
     return "\n".join(out)

@@ -141,6 +141,7 @@ class FlowVerifier:
         """返回入口的实证下游调用链（函数/方法节点），步骤含 name/file/line/doc。
 
         入口未命中返回 []；图谱由本实例承载，不重复加载全图。
+        输出按 (文件路径, 起始行) 稳定排序，保证跨调用确定性。
         """
         node = self.find_entry(spec)
         if not node:
@@ -158,6 +159,7 @@ class FlowVerifier:
                     "line": n.get("start_line", 0),
                     "doc": (n.get("props") or {}).get("doc", "") or "",
                 })
+        steps.sort(key=lambda s: (s["file"], s["line"], s["name"]))
         return steps
 
     def cross_module_flows(self) -> List[dict]:
@@ -174,15 +176,19 @@ class FlowVerifier:
         flows: Dict[Tuple[str, str], dict] = {}
         seen_keys: Set[Tuple[str, str, str]] = set()
         for src, targets in self.adj.items():
-            smod = _mod(self.nodes[src].get("file_path", ""))
+            sfile = self.nodes[src].get("file_path", "")
+            smod = _mod(sfile)
             if not smod:
                 continue
             for tgt in targets:
-                tmod = _mod(self.nodes[tgt].get("file_path", ""))
+                tfile = self.nodes[tgt].get("file_path", "")
+                tmod = _mod(tfile)
                 if not tmod or tmod == smod:
                     continue
                 callee = self.nodes[tgt].get("name", "")
-                key = (smod, tmod, callee)
+                # 去重键用完整 (源文件, 目标文件, 被调函数) 而非仅模块名，
+                # 避免同一模块对内的多条边因共享模块名被误判为同一条，导致 count 低估。
+                key = (sfile, tfile, callee)
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
@@ -194,7 +200,7 @@ class FlowVerifier:
         for v in flows.values():
             v["funcs"] = sorted(v["funcs"])[:20]
             out.append(v)
-        out.sort(key=lambda x: -x["count"])
+        out.sort(key=lambda x: (-x["count"], x["source"], x["target"]))
         return out
 
     # ─── 主验证 ───
@@ -224,7 +230,11 @@ class FlowVerifier:
                       "id": entry,
                       "node": f"{en['name']} ({file_base(en)}:{en['start_line']})"},
             "steps": [],
+            # ok：存在性层面是否全部通过（无 outside / missing）。
+            # order_confirmed：是否所有命中步骤都达到顺序确证（ordered）。
+            # 两者分离，避免把"在管线但顺序未确证"当成完全成功，避免误导非编程人员。
             "ok": True,
+            "order_confirmed": True,
             "graph_stats": {"nodes": len(self.nodes),
                             "calls_edges": sum(len(v) for v in self.adj.values())},
         }
@@ -239,6 +249,7 @@ class FlowVerifier:
                     "evidence": [], "candidates": [],
                 })
                 result["ok"] = False
+                result["order_confirmed"] = False
                 continue
 
             # 1) 存在性：是否在入口调用闭包内
@@ -253,6 +264,7 @@ class FlowVerifier:
                                    for s in hits[:5]],
                 })
                 result["ok"] = False
+                result["order_confirmed"] = False
                 continue
 
             # 2) 顺序性：能否从 current 继续推下一步
@@ -283,7 +295,9 @@ class FlowVerifier:
                     "candidates": [f"{self.nodes[s]['name']} ({file_base(self.nodes[s])}:{self.nodes[s]['start_line']})"
                                    for s in in_pipe[:5]],
                 })
-                # 顺序未确证：不推进 current，避免错误地基于丢弃的兄弟节点做顺序断言
+                # 顺序未确证：不推进 current，避免错误地基于丢弃的兄弟节点做顺序断言。
+                # ok 保持 True（存在性确证），但 order_confirmed=False，诚实标注顺序未确证。
+                result["order_confirmed"] = False
 
         return result
 
@@ -331,13 +345,20 @@ def render_report(result: dict) -> str:
     """纯文本报告（终端/日志可读）。"""
     lines = []
     lines.append("流程合规验证报告" + "=" * 3)
+    gs = result.get("graph_stats", {})
+    # 图谱缺失（has_kg=False）优先于入口判断：入口 found=False 是"图谱不存在"的
+    # 附带结果，不应误报为"入口未找到"。必须在 missing-entry 分支之前处理。
+    if gs.get("has_kg") is False:
+        lines.append(f"知识图谱不存在: {gs.get('db', '')}")
+        lines.append("请先运行 coderef_audit 或 coderef_memory_sync 构建知识图谱，再执行流程验证。")
+        return "\n".join(lines)
+
     en = result.get("entry", {})
     if not en.get("found"):
         lines.append(f"入口: {en.get('spec')} → 未找到（请确认函数名，或使用 模块.函数 消除歧义）")
         return "\n".join(lines)
 
     lines.append(f"入口: {en['spec']} → {en['node']}")
-    gs = result.get("graph_stats", {})
     lines.append(f"图谱: {gs.get('nodes', 0)} 个节点, {gs.get('calls_edges', 0)} 条调用边")
     lines.append(f"期望步骤数: {len(result['steps'])}")
     lines.append("")
@@ -357,8 +378,12 @@ def render_report(result: dict) -> str:
                          "或在运行时打点确认是否真的被调用")
 
     lines.append("")
-    verdict = "全部步骤在入口管线中确证。" if result.get("ok") \
-        else "存在缺失/存疑步骤，需结合动态运行复核，或确认期望流程是否与实现一致。"
+    if result.get("ok"):
+        verdict = ("全部步骤在入口管线中确证。" if result.get("order_confirmed")
+                   else "步骤均确认在入口管线中，但存在顺序未确证（可能并行），"
+                        "需结合入口调度代码或运行时复核顺序。")
+    else:
+        verdict = "存在缺失/存疑步骤，需结合动态运行复核，或确认期望流程是否与实现一致。"
     lines.append(f"结论: {verdict}")
     lines.append("")
     lines.append("图例: [OK]=入口调用链确证(含顺序); [~]=在入口管线但顺序未确证(可能并行);"
@@ -374,6 +399,39 @@ def render_html(result: dict) -> str:
     gs = result.get("graph_stats", {})
     steps = result.get("steps", [])
     ok = result.get("ok", False)
+    order_confirmed = result.get("order_confirmed", False)
+
+    # 图谱缺失优先于入口判断，避免误报"入口未找到"
+    if gs.get("has_kg") is False:
+        return f"""<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>流程合规验证报告</title></head>
+<body style="margin:0;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;background:#f6f7f9;color:#222;">
+<div style="max-width:900px;margin:0 auto;padding:32px 20px;">
+  <div style="background:#fff;border-radius:14px;padding:28px;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+    <h1 style="margin:0 0 4px;font-size:22px;">流程合规验证报告</h1>
+    <div style="background:#EFAA17;border-left:4px solid #EFAA17;padding:12px 16px;border-radius:8px;margin-top:16px;">
+      <strong>知识图谱不存在</strong>
+      <div style="margin-top:6px;color:#555;font-size:13px;">{_esc(gs.get('db',''))}</div>
+      <div style="margin-top:6px;color:#555;font-size:13px;">请先运行 coderef_audit 或 coderef_memory_sync 构建知识图谱，再执行流程验证。</div>
+    </div>
+  </div>
+</div></body></html>"""
+
+    if not en.get("found"):
+        return f"""<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>流程合规验证报告</title></head>
+<body style="margin:0;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;background:#f6f7f9;color:#222;">
+<div style="max-width:900px;margin:0 auto;padding:32px 20px;">
+  <div style="background:#fff;border-radius:14px;padding:28px;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+    <h1 style="margin:0 0 4px;font-size:22px;">流程合规验证报告</h1>
+    <div style="background:#E8463A;border-left:4px solid #E8463A;padding:12px 16px;border-radius:8px;margin-top:16px;">
+      <strong>入口未找到</strong>
+      <div style="margin-top:6px;color:#555;font-size:13px;">入口 <code>{_esc(en.get('spec',''))}</code> 未找到，请确认函数名，或使用 模块.函数 消除歧义。</div>
+    </div>
+  </div>
+</div></body></html>"""
 
     def badge(status):
         return {
@@ -397,8 +455,12 @@ def render_html(result: dict) -> str:
             f"<td style='padding:10px 12px;border-bottom:1px solid #eee;color:#555;font-size:13px;'>{ev or cand}</td>"
             f"</tr>")
 
-    status_banner = ("#1DC981", "全部步骤已在入口管线中确证") if ok else \
-        ("#EFAA17", "存在存疑/缺失步骤，需结合动态运行复核")
+    if ok and order_confirmed:
+        status_banner = ("#1DC981", "全部步骤已在入口管线中确证")
+    elif ok:
+        status_banner = ("#2E86DE", "步骤均在入口管线中，但存在顺序未确证（可能并行），需复核顺序")
+    else:
+        status_banner = ("#EFAA17", "存在存疑/缺失步骤，需结合动态运行复核")
 
     return f"""<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">

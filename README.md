@@ -1,14 +1,8 @@
 <!-- AI Summary: CodeRef-AI exposes 32 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. Core results (audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, prompt compliance) are pure static analysis — no LLM, reproducible. LLM is only used for synthesis tasks (wiki, code review) and hard-blocks honestly without an API key. Builds a closed loop: verify LLM/CodeRabbit claims deterministically, replicate solidified design assets, and interpret everything in plain language for non-programmers. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams who want AI that augments rather than hallucinates. -->
 
-### 伙计，如果你不急着用的话，可以3天后再来拉最新的版本，我想了一个超棒的测试案，需要测的时间比较久。
-#### 当前版本的目标是：
-#### ①形成逻辑闭环【幻觉需要审计，审计需要静态，静态没有人话，人话需要AI，AI具有幻觉】
-#### ②形成治理闭环【人类需要的不是代码的审计，而是这个项目到底被AI搞成什么鬼东西了】
-### 如果你已经具备了一个庞大的屎山代码，需要处理，别慌，我将在5.0以后解决这个课题
-
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.7.0** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.8.0** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -613,6 +607,15 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 - 统一管线引擎：共享 AST 扫描 + 检查点续跑 + 后台任务
 - 三级自动降噪（AutoNoiseFilter）：白名单 + NOISE_RULES + 合并汇总
 - 交叉验证：多工具独立分析互验，产生置信度分级
+
+## 设计借鉴
+
+CodeRef-AI v4.8 的操作记忆层（`BRAIN.md` 产物、判存标准、时间线机制）在设计上结合了以下开源项目的方案：
+
+- **mindmuxai/brain.md**（Apache-2.0）—— 提供了 `BRAIN.md` 命名、「能否从代码重建」的判存标准、以及「当前理解 + 时间线」的记录结构。参考：[https://github.com/mindmuxai/brain.md](https://github.com/mindmuxai/brain.md)
+- **TencentDB-Agent-Memory**（MIT）—— 提供了分层记忆与渐进式披露的思路，控制上下文 token 占用。参考：[https://github.com/Tencent/TencentDB-Agent-Memory](https://github.com/Tencent/TencentDB-Agent-Memory)
+
+完整取舍分析见 [操作记忆层设计文档](docs/operation-memory-design/operation-memory-design.html)。
 
 ## 许可证
 

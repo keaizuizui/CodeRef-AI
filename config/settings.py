@@ -95,3 +95,8 @@ OMEM_ENV_TOOL_ROOTS = (
 
 # 便携根下的 bin 子目录名（相对便携根）
 OMEM_ENV_TOOL_BIN_SUBDIRS = ("bin", "cmd", "mingw64/bin", "usr/bin", "Scripts")
+
+# 操作记忆数据目录（可配置，默认用户数据目录，避免写入项目根）。
+# 设为空串时回退到项目根下 data/operation_memory（兼容旧行为）。
+# 支持环境变量 / 直接改本文件两种方式。
+OMEM_DATA_DIR = ""
