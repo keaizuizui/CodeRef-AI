@@ -95,6 +95,8 @@ class CodeAnalyzer:
         'Python3.14', 'Python3.13', 'Python3.12',
         # 第三方集成代码（不是你写的）
         'third_party', 'third-party',
+        # Composer/NPM 等包管理器依赖目录（PHP vendor / Ruby bundle 等）
+        'vendor', 'bundle', 'node_modules/.store',
     }
     
     # 忽略的文件名模式（正则表达式）— 仅排除编译产物
@@ -757,7 +759,7 @@ class CodeAnalyzer:
         config_path = None
         for root, dirs, files in os.walk(analysis.project_path):
             # 跳过常见的非项目目录
-            dirs[:] = [d for d in dirs if d not in ('node_modules', '__pycache__', '.git', 'venv', '.venv', 'data')]
+            dirs[:] = [d for d in dirs if d not in ('node_modules', '__pycache__', '.git', 'venv', '.venv', 'data', 'vendor')]
             for fname in files:
                 if fname in ('config.yaml', 'config.yml'):
                     config_path = os.path.join(root, fname)
