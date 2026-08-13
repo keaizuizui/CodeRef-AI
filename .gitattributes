@@ -1,0 +1,18 @@
+# 统一文本行尾为 LF 存储（git 官方推荐换行符规范化）
+# text=auto：文本文件在入库时规范为 LF，检出时按平台 autocrlf 处理
+* text=auto
+
+# 二进制文件：禁止行尾转换
+*.ttf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.eot binary
+*.otf binary
+*.db binary
+*.pyc binary
+*.zip binary
