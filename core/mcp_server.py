@@ -746,7 +746,8 @@ class Server:
         self.HEAVY_TOOLS = {
             "coderef_audit", "coderef_docs", "coderef_review", "coderef_frontend",
             "coderef_report", "coderef_audit_advisor", "coderef_architecture",
-            "coderef_memory_sync", "coderef_memory_quality", "coderef_owasp",
+            "coderef_memory_sync", "coderef_memory_quality", "coderef_memory_status",
+            "coderef_owasp",
             "coderef_innovation", "coderef_asset", "coderef_change_guard",
             "coderef_change_report", "coderef_verify_findings",
             "coderef_replicate", "coderef_replicate_apply", "coderef_asset_blueprint",
