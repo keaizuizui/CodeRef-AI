@@ -312,11 +312,18 @@ class LLMIntegration:
             return json.loads(text)
         except (json.JSONDecodeError, ValueError):
             pass
-        # 2. 截取平衡片段。按文本首字符决定优先类型：以 '[' 开头说明期望顶层是数组，
+        # 2. 截取平衡片段。定位整个响应中最早出现的结构分隔符（'[' 或 '{'），
+        #    以更靠前的那个作为优先顶层类型：若数组先出现说明期望顶层是数组，
         #    应先按数组截取完整内容（否则对象优先会把数组截成第一个元素对象，导致
         #    调用方期望 list 却拿到 dict，误判"解析失败"）。
-        first = text.lstrip()[:1]
-        order = ('[', '{') if first == '[' else ('{', '[')
+        #    不能只看首字符——LLM 常在 JSON 前加说明文字（如 "Here is the list:"）。
+        i_open = text.find('[')
+        i_brace = text.find('{')
+        if i_open < 0:
+            i_open = len(text) + 1
+        if i_brace < 0:
+            i_brace = len(text) + 1
+        order = ('[', '{') if i_open < i_brace else ('{', '[')
         for open_char, close_char in ((c, ']' if c == '[' else '}') for c in order):
             fragment = cls._extract_balanced_json_fragment(text, open_char, close_char)
             if fragment:
