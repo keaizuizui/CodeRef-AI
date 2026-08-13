@@ -70,13 +70,18 @@ class FlowVerifier:
         if spec in self.nodes:
             return spec
         if "." in spec:
-            mod, name = spec.rsplit(".", 1)
+            # 支持 模块.函数 / 模块.类.方法 / 任意层级限定。
+            # 取最后一段为符号名，其余为限定前缀（模块路径某一段或类名）。
+            *prefixes, name = spec.split(".")
+            prefixes = [p for p in prefixes if p]
             best = None
             for nid, n in self.nodes.items():
-                if n["name"] == name and (mod in (n.get("file_path") or "").lower()
-                                          or mod in n["name"].lower()):
-                    if best is None or n["type"] in ("function", "method"):
-                        best = nid
+                if n["name"] == name and prefixes:
+                    fp = (n.get("file_path") or "").lower()
+                    nm = n["name"].lower()
+                    if any(p in fp or p in nm for p in prefixes):
+                        if best is None or n["type"] in ("function", "method"):
+                            best = nid
             if best:
                 return best
         key = spec.lower()
