@@ -37,3 +37,33 @@ ARCH_DETECT_MAX_ENTRY_SIGNALS = 80         # 入口信号总数上限，防止�
 ARCH_DETECT_MAX_TARGET_LEN = 60            # 入口目标描述截断长度
 ARCH_DETECT_CONFIDENCE_FLOOR = 0.05        # 至少命中 1 个文件时的置信度兜底加成
 ARCH_DETECT_CONFIDENCE_CAP = 1.0           # 置信度上限
+
+# ═══════════════════════════════════════════════════════════════════
+# 操作记忆层（operation_memory.py）
+# ═══════════════════════════════════════════════════════════════════
+
+# 资源类型清单（静态审计可识别的资源类别）
+OMEM_RESOURCE_TYPES = ("git", "model", "api", "tool", "doc", "dependency", "report")
+
+# 旁目录敏感特征：命中即视为敏感，只记录位置不收录内容
+OMEM_SENSITIVE_DIR_HINTS = ("key", "secret", "credential", "token", "password", ".ssh")
+
+# 旁目录探明上限：单次同步最多探测的旁目录数，防止扩散
+OMEM_MAX_SIDE_DIRS = 20
+
+# 静态审计单分类命中上限：防止单分类条目过多拖慢 / 撑爆配置
+OMEM_MAX_PER_CATEGORY = 200
+
+# 模型权重文件扩展名（用于模型资源定位）
+OMEM_MODEL_EXTENSIONS = (
+    ".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".onnx",
+    ".gguf", ".ggml", ".h5", ".tflite", ".pb", ".pkl",
+)
+
+# LLM 提炼请求相关
+OMEM_LLM_TIMEOUT = 90          # LLM 提炼单次超时（秒）
+OMEM_LLM_MAX_CHARS_SOURCE = 6000  # 喂给 LLM 的单来源文本截断长度
+OMEM_EXTRACT_GRAPH_LIMIT = 30  # 单次同步最多提炼的隐性知识基数
+
+# 时间线保留条数上限（追加式，防无限膨胀）
+OMEM_TIMELINE_MAX = 200
