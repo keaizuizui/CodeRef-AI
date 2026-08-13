@@ -2,7 +2,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.8.0** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.8.1** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -389,6 +389,43 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 | **4.0** | 通过四个引擎和四个支柱，增强工具的功能覆盖，形成逻辑闭环 |
 
 ## 更新日志
+
+### v4.8.1 — 换行符正规化 + CodeRabbit 修复 + 操作记忆来源声明
+
+- **换行符正规化**：新增 `.gitattributes`（`* text=auto`），全仓文本统一为 LF 存储，根治历史遗留的 CRLF/LF 行尾混乱（此前每个文件都被误判为全量改动）
+- **修复 operation_memory 写入可靠性**：写入失败显式传播（任一持久化失败返回 `error`）、数据目录可配置（`OMEM_DATA_DIR`）、原子写改用 PID+时间戳唯一临时文件、增量快照比较提到资源扫描之前、LLM 不可用时生成 pending-human 待办条目
+- **修复 flow_verify 判定**：拆分"存在性确证（`ok`）"与"顺序确证（`order_confirmed`）"两个标志，避免把"在管线但顺序未确证"误标为失败；`render_report` 优先报告知识图谱缺失根因；`entry_chain` 输出稳定排序保证确定性；`cross_module_flows` 去重键改用完整文件路径；`render_html` 全部插值做 HTML 转义
+- **修复 llm_integration JSON 解析**：片段提取定位整个响应中最早的结构分隔符，正确处理 LLM 在 JSON 前加说明文字导致顶层类型误判的场景
+- **设计借鉴声明**：README 新增「设计借鉴」章节，操作记忆层标注结合 mindmuxai/brain.md（Apache-2.0）与 TencentDB-Agent-Memory（MIT）；`BRAIN.md` 产物与模块 docstring 同步携带来源声明
+- **操作记忆固化**：审查发现 12 条 pitfall + 14 条 decision 已写入操作记忆层，可被 `coderef_operation_memory_query` 检索恢复
+
+### v4.8 — 新增 AI 操作记忆层
+
+- **操作记忆层（`coderef_operation_memory_sync` / `query` / `find` / `status`）**：为 AI 辅助编程提供"东西在哪儿、从哪儿来、到哪儿去、过去规范是什么"的持久记忆。解决对话过多后上下文丢失的课题——主要存资源位置（git 便携包、模型权重、测试工具、API 存放处、开发背景报告、外部依赖来源），而非存具体代码
+- **静态审计 + LLM 提炼混合**：资源发现走确定性静态审计（`operation_memory.py`），隐性知识（决策/约定/踩坑）由 LLM 从文档提炼，无 API Key 时诚实降级为待人工确认
+- **旁目录探测**：除主开发目录外，探测家目录 / 数据目录等旁目录下的资源位置，仅记录位置不记录内容，兼顾隐私
+- **增量同步**：基于 mtime+size 快照比较，文件无变更时跳过全量扫描，大幅提升同步速度
+- **便携工具探测**：`env_tool` 探测便携根下 bin/cmd/mingw64 等子目录，解决本地使用便携 git 等工具不在 PATH 时找不到的问题
+- **工具数**：仍为 32 个 MCP 工具（新增 4 个操作记忆工具）
+
+### v4.7.4 — memory_status 后台化
+
+- **修复较大项目同步超时**：`coderef_memory_status` 纳入后台化重型工具（HEAVY_TOOLS），避免 120s 同步超时，改用轮询获取结果
+
+### v4.7.3 — 扫描忽略依赖目录
+
+- **修复超大项目审计超时**：扫描忽略 `vendor` / `bundle` 依赖目录（PHP/Node 等项目的依赖目录动辄数千文件），避免超大项目审计超时
+
+### v4.7.2 — flow_verify 入口三段式匹配修复
+
+- **支持 `模块.类.方法` 层级限定**：`coderef_flow_verify` 入口符号匹配支持三段式层级限定，精确定位方法级入口
+
+### v4.7.1 — MCP 服务端 stdin 修复 + 前端 LLM 审查并行化 + JSON 解析加固
+
+- **修复 MCP 服务端 stdin**：修正服务端标准输入读取，保证 MCP 长连接稳定
+- **前端 LLM 审查并行化**：LLM 审查节点改用线程池并行（8 workers），单节点 120s 超时、总预算 600s，全项目审查耗时从串行数小时降至 170s 量级
+- **JSON 解析加固**：`_try_parse_json` 优先按首字符判断数组/对象、剥离 ```` ```json ```` 代码块，修复 JSON 数组被误当对象导致 findings 从 204 掉到 242 的解析问题
+- **subprocess 防挂起**：子进程调用增加防挂起机制，避免长时间无输出时卡死
 
 ### v4.7.0 — 创新复刻收口：LLM 协助排查
 
