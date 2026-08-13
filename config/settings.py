@@ -43,7 +43,8 @@ ARCH_DETECT_CONFIDENCE_CAP = 1.0           # 置信度上限
 # ═══════════════════════════════════════════════════════════════════
 
 # 资源类型清单（静态审计可识别的资源类别）
-OMEM_RESOURCE_TYPES = ("git", "model", "api", "tool", "doc", "dependency", "report")
+# env_tool：外部开发工具可执行文件位置（git/python/node 等便携包）
+OMEM_RESOURCE_TYPES = ("git", "model", "api", "tool", "doc", "dependency", "report", "env_tool")
 
 # 旁目录敏感特征：命中即视为敏感，只记录位置不收录内容
 OMEM_SENSITIVE_DIR_HINTS = ("key", "secret", "credential", "token", "password", ".ssh")
@@ -67,3 +68,30 @@ OMEM_EXTRACT_GRAPH_LIMIT = 30  # 单次同步最多提炼的隐性知识基数
 
 # 时间线保留条数上限（追加式，防无限膨胀）
 OMEM_TIMELINE_MAX = 200
+
+# ═══════════════════════════════════════════════════════════════════
+# 环境工具探测（env_tool）：识别外部开发工具可执行文件位置
+# ═══════════════════════════════════════════════════════════════════
+
+# 候选工具：工具名 -> (可执行文件名, 说明)
+OMEM_ENV_TOOL_BINS = {
+    "git": ("git.exe", "版本控制"),
+    "python": ("python.exe", "Python 解释器"),
+    "node": ("node.exe", "Node.js 运行时"),
+    "ollama": ("ollama.exe", "本地 LLM 服务"),
+    "ffmpeg": ("ffmpeg.exe", "音视频处理"),
+}
+
+# 常见便携根目录（支持 glob 通配，如 work/*/PortableGit）。
+# PATH 中找不到工具时，在这些位置探测可执行文件，解决便携工具不在 PATH 的问题。
+OMEM_ENV_TOOL_ROOTS = (
+    "~/.trae-cn/work/*/PortableGit",
+    "~/.trae-cn/work/*/*/PortableGit",
+    "~/AppData/Local/Programs/Git",
+    "~/AppData/Local/Programs/Python",
+    "C:/Program Files/Git",
+    "C:/Program Files (x86)/Git",
+)
+
+# 便携根下的 bin 子目录名（相对便携根）
+OMEM_ENV_TOOL_BIN_SUBDIRS = ("bin", "cmd", "mingw64/bin", "usr/bin", "Scripts")

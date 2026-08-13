@@ -38,6 +38,8 @@ OperationMemory v1.0 —— AI 辅助编程的操作记忆层
 import os
 import re
 import json
+import glob
+import shutil
 import hashlib
 from datetime import datetime
 from typing import Dict, List, Optional, Any
@@ -65,6 +67,9 @@ LLM_TIMEOUT = settings.OMEM_LLM_TIMEOUT
 LLM_MAX_CHARS_SOURCE = settings.OMEM_LLM_MAX_CHARS_SOURCE
 EXTRACT_GRAPH_LIMIT = settings.OMEM_EXTRACT_GRAPH_LIMIT
 TIMELINE_MAX = settings.OMEM_TIMELINE_MAX
+ENV_TOOL_BINS = settings.OMEM_ENV_TOOL_BINS
+ENV_TOOL_ROOTS = settings.OMEM_ENV_TOOL_ROOTS
+ENV_TOOL_BIN_SUBDIRS = settings.OMEM_ENV_TOOL_BIN_SUBDIRS
 
 # 项目根目录（Coderef-Ai-master）
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -226,6 +231,8 @@ class ResourceScanner:
         self._detect_tools(files, result)
         # 文档 / 报告
         self._detect_docs_reports(files, result)
+        # 外部开发工具可执行文件
+        self._detect_env_tools(result)
 
         # 每分类截断，防止撑爆
         for k in result:
@@ -337,8 +344,60 @@ class ResourceScanner:
                     "note": "说明 / 规范文档",
                 })
 
+    def _detect_env_tools(self, result: Dict[str, List[dict]]) -> None:
+        """探测外部开发工具可执行文件位置（解决便携工具不在 PATH 的问题）。
 
-def _summarize_deps(base: str, content: str) -> str:
+        先在 PATH 中查找，找不到再在常见便携根目录探测（如 PortablbeGit）。
+        只记录位置与来源，不承载任何工具逻辑。
+        """
+        for tool, (bin_name, desc) in ENV_TOOL_BINS.items():
+            path = _find_tool_executable(tool, bin_name)
+            if not path:
+                continue
+            result["env_tool"].append({
+                "name": tool,
+                "path": path,
+                "location": "env",
+                "source": _tool_location_source(path),
+                "note": f"{desc}（可执行文件位置）",
+            })
+
+
+def _find_tool_executable(tool: str, bin_name: str) -> str:
+    """先在 PATH 查找，再在常见便携根探测。返回可执行文件绝对路径，找不到返回空串。"""
+    # 1. PATH 中查找
+    try:
+        p = shutil.which(tool) or shutil.which(bin_name)
+        if p:
+            return os.path.abspath(p)
+    except Exception:
+        pass
+    # 2. 常见便携根探测（支持 glob 通配）
+    for root_pat in ENV_TOOL_ROOTS:
+        try:
+            roots = glob.glob(os.path.expanduser(root_pat))
+        except Exception:
+            continue
+        for root in roots:
+            if not os.path.isdir(root):
+                continue
+            for sub in ENV_TOOL_BIN_SUBDIRS:
+                cand = os.path.join(root, sub.replace("/", os.sep), bin_name)
+                if os.path.isfile(cand):
+                    return os.path.abspath(cand)
+    return ""
+
+
+def _tool_location_source(path: str) -> str:
+    """根据可执行文件路径推断工具来源，供 AI 理解便携 / 系统差异。"""
+    low = path.lower()
+    if "portablegit" in low:
+        return "便携 git 包（不在 PATH）"
+    if "\\program files\\" in low:
+        return "系统安装（PATH 可能不含）"
+    if "\\appdata\\" in low:
+        return "用户级安装（PATH 可能不含）"
+    return "PATH 可执行"
     """从依赖清单内容提取简短的版本 / 来源摘要"""
     if not content:
         return "（空清单）"
@@ -358,6 +417,43 @@ def _fmt_size(size: float) -> str:
     if size >= 1 << 10:
         return f"{size / (1 << 10):.1f} KB"
     return f"{int(size)} B"
+
+
+def _summarize_deps(filename: str, content: str) -> str:
+    """从依赖清单文件内容提炼一行摘要（best-effort，失败返回占位说明）。
+
+    对不同清单格式做轻量解析：抓取顶层包名 / 依赖名，避免原样倾倒大文件。
+    """
+    if not content:
+        return "无可读内容"
+    try:
+        lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
+        if not lines:
+            return "空清单"
+        if filename == "package.json":
+            # 抓 dependencies / devDependencies 的键名
+            names = re.findall(r'"(?!"(?:dependencies|devDependencies|peerDependencies|optionalDependencies)"":)\s*"([A-Za-z0-9@._/-]+)"\s*:', content)
+            if not names:
+                names = re.findall(r'"([A-Za-z0-9@._/-]+)"\s*:\s*"', content)
+            picked = names[:20]
+        else:
+            # requirements/pyproject/Cargo/go/Gemfile 等：取每行包名（去掉版本/约束/注释）
+            picked = []
+            for ln in lines:
+                if ln.startswith(("#", "-", "[", "//", "#[")):
+                    continue
+                if "== " in ln or ">=" in ln or "~=" in ln or "==" in ln:
+                    picked.append(ln)
+                elif " " not in ln and ln:
+                    picked.append(ln)
+                if len(picked) >= 20:
+                    break
+        if not picked:
+            return "依赖较多，未识别到顶层包名"
+        shown = ", ".join(picked)
+        return shown if len(shown) <= 200 else shown[:200] + "…"
+    except Exception:
+        return "依赖清单较复杂，未能自动摘要"
 
 
 # ═══════════════════════════════════════════════════════════════════
