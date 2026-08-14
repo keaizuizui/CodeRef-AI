@@ -52,6 +52,8 @@ class DependencyInfo:
     # 版本约束运算符（如 ">=" / "==" / 空表示无约束）。范围约束（>= > < <= ~=）无法
     # 确定精确安装版本，不应作为固定版本触发 OSV 精确命中的误报。
     constraint: str = ""
+    # 依赖所在生态（默认 PyPI）。非 Python 依赖（npm / Go）据此选择 OSV ecosystem。
+    ecosystem: str = "PyPI"
 
     @property
     def has_vuln(self) -> bool:
@@ -266,6 +268,20 @@ class SCAChecker:
                 ("CVE-2024-1135", "high", "Transfer-Encoding 头处理存在请求走私类风险"),
             ],
         },
+        # npm 生态高频高危依赖（缺陷 8：非 Python 供应链漏洞漏检）
+        "lodash": {
+            "<4.17.21": [
+                ("CVE-2021-23337", "high", "lodash 存在模板命令执行/原型污染类风险"),
+            ],
+            "<4.17.12": [
+                ("CVE-2019-10744", "high", "lodash 存在原型污染漏洞"),
+            ],
+        },
+        "express": {
+            "<4.17.3": [
+                ("CVE-2022-24999", "high", "express qs 解析存在拒绝服务（ReDoS）风险"),
+            ],
+        },
     }
 
     # 本地库各 CVE 的修复版本（CVE ID -> 修复版本）。
@@ -304,6 +320,9 @@ class SCAChecker:
         "CVE-2023-29469": "5.0.0",    # lxml
         "CVE-2023-46136": "3.0.0",    # werkzeug
         "CVE-2024-1135": "22.0.0",    # gunicorn
+        "CVE-2021-23337": "4.17.21",  # lodash
+        "CVE-2019-10744": "4.17.12",  # lodash
+        "CVE-2022-24999": "4.17.3",   # express
     }
 
     # 组件级利用面规则表：CVE → (组件名, 检测该组件是否被实际 import/使用的正则, 说明)
@@ -355,7 +374,7 @@ class SCAChecker:
 
         # 检查漏洞
         for dep in unique_deps:
-            vulns = self._check_vulnerability(dep.package, dep.version, dep.constraint)
+            vulns = self._check_vulnerability(dep.package, dep.version, dep.constraint, dep.ecosystem)
             # 过滤 cache 白名单中的 CVE 误报
             vulns = [v for v in vulns if not SharedFilter.is_security_whitelisted(v.cve_id, dep.source_file, dep.source_line)]
             # 组件级利用面过滤：未实际使用受影响子组件的 CVE 降级为潜在风险
@@ -398,6 +417,12 @@ class SCAChecker:
             "setup.cfg",
             "Pipfile",
             "Pipfile.lock",
+            # 非 Python 依赖清单（缺陷 8：多语言供应链漏洞漏检）
+            "package.json",
+            "package-lock.json",
+            "go.mod",
+            "pom.xml",
+            "composer.json",
         ]
         for root, dirs, files in os.walk(project_path):
             dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
@@ -419,6 +444,13 @@ class SCAChecker:
             return deps
 
         basename = os.path.basename(filepath)
+
+        # 非 Python 依赖清单（缺陷 8）：JSON / go.mod 无法复用逐行 TOML/requirements 逻辑，
+        # 走独立解析路径。
+        if basename == "package.json":
+            return self._parse_package_json(filepath)
+        if basename == "go.mod":
+            return self._parse_gomod(filepath)
 
         cur_section = ""  # 当前 TOML 段（仅 pyproject.toml）
 
@@ -479,6 +511,73 @@ class SCAChecker:
 
         return deps
 
+    def _parse_package_json(self, filepath: str) -> List[DependencyInfo]:
+        """解析 package.json，提取 dependencies / devDependencies（缺陷 8）。
+
+        版本常为 npm 语义化写法（^x.y.z / ~x.y.z / >=x.y.z），无法据此确定精确安装
+        版本，故剥离运算符作为"声明基线版本"供本地库范围匹配，constraint 保留用于
+        跳过 OSV 精确命中（避免把 ^4.17.20 误当 4.17.20 精确命中）。
+        """
+        deps = []
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                data = json.load(f)
+        except Exception:
+            return deps
+        # JSON 无法精确定位 key 所在行，使用 0（文件级定位；有漏洞时文件路径仍可定位）
+        for section in ("dependencies", "devDependencies"):
+            obj = data.get(section) or {}
+            for name, ver in obj.items():
+                if not isinstance(ver, str):
+                    continue
+                op, ver_clean = self._split_version_constraint(ver.strip())
+                deps.append(DependencyInfo(
+                    package=name, version=ver_clean,
+                    source_file=filepath, source_line=0,
+                    constraint=op, ecosystem="npm",
+                ))
+        return deps
+
+    def _parse_gomod(self, filepath: str) -> List[DependencyInfo]:
+        """解析 go.mod 的 require 依赖（缺陷 8）。
+
+        支持两种形式：
+          require module v1.2.3
+          require (
+              module v1.2.3
+              module v1.2.3 // indirect
+          )
+        """
+        deps = []
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+        except (OSError, IOError):
+            return deps
+        in_block = False
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("//"):
+                continue
+            if stripped == "require (":
+                in_block = True
+                continue
+            if stripped == ")":
+                in_block = False
+                continue
+            if in_block or stripped.startswith("require "):
+                # 去掉行首 require 前缀（块内行无此前缀）
+                content = stripped[len("require "):].strip() if stripped.startswith("require ") else stripped
+                m = re.match(r'^(\S+)\s+(v?\d[^\s]*)', content)
+                if m:
+                    ver = m.group(2).lstrip("v")
+                    deps.append(DependencyInfo(
+                        package=m.group(1), version=ver,
+                        source_file=filepath, source_line=i,
+                        constraint="", ecosystem="Go",
+                    ))
+        return deps
+
     def _apply_exploitability_gates(self, project_path: str, vulns: List[DependencyVulnerability]) -> List[DependencyVulnerability]:
         """组件级利用面过滤：对命中 EXPLOITABILITY_GATES 的 CVE，检查项目是否实际
         import/使用受影响子组件。若未使用，则判定为"潜在风险"（severity 降为 low，
@@ -519,7 +618,7 @@ class SCAChecker:
                         continue
         return "\n".join(parts)
 
-    def _check_vulnerability(self, package: str, version: str, constraint: str = "") -> List[DependencyVulnerability]:
+    def _check_vulnerability(self, package: str, version: str, constraint: str = "", ecosystem: str = "PyPI") -> List[DependencyVulnerability]:
         """检查依赖的已知漏洞"""
         vulns = []
 
@@ -541,7 +640,7 @@ class SCAChecker:
         #    产生误报。范围约束的实际安装版本未知，交由本地库判断即可。
         if not self.offline and not constraint:
             try:
-                online_vulns = self._query_osv(package, version)
+                online_vulns = self._query_osv(package, version, ecosystem)
                 existing_cves = {v.cve_id for v in vulns}
                 for v in online_vulns:
                     if v.cve_id not in existing_cves:
@@ -580,9 +679,9 @@ class SCAChecker:
             return op, ver
         return "", ver_raw.strip()
 
-    def _query_osv(self, package: str, version: str) -> List[DependencyVulnerability]:
+    def _query_osv(self, package: str, version: str, ecosystem: str = "PyPI") -> List[DependencyVulnerability]:
         payload = json.dumps({
-            "package": {"name": package, "ecosystem": "PyPI"},
+            "package": {"name": package, "ecosystem": ecosystem},
             "version": version,
         }).encode("utf-8")
         req = urllib.request.Request(

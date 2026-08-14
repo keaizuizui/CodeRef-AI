@@ -236,7 +236,14 @@ class PromptComplianceAuditor:
         valid = [p for p in prompts if isinstance(p, dict) and (p.get("content") or "").strip()]
         findings: List[Dict[str, Any]] = []
         for p in valid:
-            findings.extend(_detect_injection(p))
+            # 注入 findings 必须携带源文件，保证"能定位到具体文件"（缺陷 6 的定位闭环）。
+            # 否则即使检测到 SKILL.md / prompts/agent.md 的注入风险，结果也无法告诉用户出自哪个文件。
+            src = p.get("file_path") or p.get("source_module") or ""
+            for f in _detect_injection(p):
+                if src and not f.get("source"):
+                    f["source"] = src
+                    f["file_path"] = src
+                findings.append(f)
         findings.extend(_detect_consistency(valid))
 
         # 分级统计

@@ -390,6 +390,16 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 
 ## 更新日志
 
+### v4.8.2 — 证据审计修复 11 项缺陷（爆发合并 / 多语言 / Prompt 提取）
+
+- **爆发式合并修复**：`_burst_merge` 保留组内最高严重度（此前 7 个 critical 被误降为 LOW），记录全部位置到 `locations` 字段，按 `count` 加权计数（此前 54 处爆发被压成 4 条），并保留原始 `detail`（含命中代码行）供符号级证据核验
+- **SCA 多生态支持**：`sca_checker` 新增 npm（`package.json`）/ Go（`go.mod`）依赖解析并按 OSV 生态查询，修复 lodash/express 等 npm 高危依赖漏检（此前仅扫 Python）
+- **跨语言安全模式**：`governance_audit` 补充 Go（`exec.Command`）/ PHP（`unserialize`、`system`）/ Java / Node.js 命令执行与反序列化检测，修复非 Python 项目关键风险漏报
+- **Prompt 提取多语言**：`prompt_extractor` 扩展扫描 Markdown（`SKILL.md` / `prompts/**` `/agent.md`），修复仅扫 `*.py` 导致的提示词注入风险漏检
+- **注入定位闭环**：`prompt_compliance` 注入 findings 携带源文件，保证风险可定位到具体文件
+- **健康分口径统一**：`run_single` 与全量 `_compute_health` 统一单维度健康分，空项目返回 `N/A` 而非误报
+- **agent 维度兜底**：`agent_security_auditor` 对含 LLM 依赖的项目仍正常产出风险，修复"有 LLM 项目健康分异常"；`blind_spot_detector` 修复空标题条目
+
 ### v4.8.1 — 换行符正规化 + CodeRabbit 修复 + 操作记忆来源声明
 
 - **换行符正规化**：新增 `.gitattributes`（`* text=auto`），全仓文本统一为 LF 存储，根治历史遗留的 CRLF/LF 行尾混乱（此前每个文件都被误判为全量改动）

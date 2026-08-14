@@ -334,7 +334,9 @@ class Server:
                 "速度快一个量级（不建知识图谱/不生成 dashboard），适合 AI 写完一个模块后即时自查。\n"
                 "tool 可选: gov治理 / agent安全 / sca依赖CVE / td技术债务 / integ完整性 / "
                 "blind盲区 / inn创新传播 / junk垃圾文件 / resgap资源遗漏 / simp代码精简 / matu成熟度。\n"
-                "先用 coderef_scan_list 查看可选维度清单。返回该维度 findings（tier 分级 + file/line + suggestion）。"
+                "先用 coderef_scan_list 查看可选维度清单。返回该维度 findings（tier 分级 + file/line + suggestion）。\n"
+                "[可靠性] 单维度扫描只跑一个工具，无法产生「多工具交叉验证」的 xval_by 字段"
+                "（交叉验证需 coderef_audit 全量多工具互验），请勿把空 xval_by 误判为异常。"
             ),
             "inputSchema": {"type": "object", "properties": {
                 "project_path": {"type": "string", "description": "目标项目路径"},

@@ -129,10 +129,11 @@ class GovernanceReport:
         return len(self.violations)
 
     @property
-    def clean_score(self) -> int:
-        """治理健康分（0-100）"""
+    def clean_score(self) -> Optional[int]:
+        """治理健康分（0-100）。无代码文件时返回 None（N/A），
+        避免"空项目健康分=100"的静默满分误导（证据审计缺陷 9）。"""
         if self.total_files == 0:
-            return 100
+            return None
         penalty = self.blocker_count * 25 + self.critical_count * 15 + self.high_count * 5 + self.medium_count * 2 + self.low_count * 0.5
         return max(0, min(100, 100 - int(penalty / max(self.total_files, 1) * 10)))
 
@@ -211,10 +212,16 @@ class GovernanceAuditor:
     UNSAFE_DESERIALIZE = [
         (re.compile(r'pickle\.(?:load|loads)\s*\(', re.IGNORECASE),
          "IRON-SEC-04", "不安全反序列化", "high",
-         "pickle.load/loads 可被利用执行任意代码。应使用 json 或安全的序列化格式"),
+         "pickle.load/loads 可被利用执行任意代码。应使用 json 或安全的序列化格式",
+         "改用 json 或安全的序列化格式（如 msgpack）"),
         (re.compile(r'yaml\.(?:load|full_load)\s*\(', re.IGNORECASE),
          "IRON-SEC-04", "不安全反序列化", "high",
-         "yaml.load 可被利用执行任意代码。应使用 yaml.safe_load()"),
+         "yaml.load 可被利用执行任意代码。应使用 yaml.safe_load()",
+         "改用 yaml.safe_load()"),
+        (re.compile(r'\bunserialize\s*\(', re.IGNORECASE),
+         "IRON-SEC-04", "不安全反序列化(PHP)", "high",
+         "PHP 的 unserialize() 可被利用触发对象注入/任意代码执行，若数据来自用户输入（$_POST/$_COOKIE）风险极高。",
+         "避免对不可信输入使用 unserialize()；改用 json_decode() 或对反序列化对象做白名单校验"),
     ]
 
     # 硬编码 URL/端口
@@ -238,6 +245,29 @@ class GovernanceAuditor:
          "IRON-SEC-06", "危险函数调用(exec)", "critical",
          "exec() 会执行任意 Python 代码，是最高危的函数之一。通俗解释：exec 比 eval 更危险，相当于把家门钥匙和保险柜密码一起给了陌生人。",
          "几乎永远不应该使用 exec()。如果确需动态代码执行，考虑使用受限的沙箱环境"),
+    ]
+
+    # 跨语言危险命令执行（Go/PHP/Java/Node 等）—— 多语言适配（证据审计缺陷 7）
+    # 原有规则只覆盖 Python（subprocess/os.system/eval/exec），对 Go/PHP/Java/JS
+    # 项目的系统命令执行"看不见"。这里补充主流后端语言的命令执行函数检测，
+    # 作为审计关注点提示（确认命令与参数来源可信），避免非 Python 项目致命漏洞静默漏检。
+    CROSS_LANG_COMMAND_EXEC = [
+        (re.compile(r'exec\.Command\s*\(', re.IGNORECASE),   # Go
+         "IRON-SEC-17", "系统命令执行(exec.Command)", "high",
+         "调用 exec.Command 执行系统命令，若命令或参数可被外部输入影响，存在命令注入风险。",
+         "确认命令与参数均来自可信来源；对用户输入做白名单校验，避免拼接成命令"),
+        (re.compile(r'(?<!os\.)\b(?:shell_exec|system|passthru|pcntl_exec|proc_open)\s*\(', re.IGNORECASE),  # PHP
+         "IRON-SEC-17", "系统命令执行(PHP)", "high",
+         "PHP 调用 system/shell_exec 等执行系统命令，若参数来自用户输入（$_GET/$_POST/$_REQUEST），存在远程命令执行风险。",
+         "避免使用命令执行函数；改用安全的库，或对输入做严格白名单校验"),
+        (re.compile(r'Runtime\s*\.\s*getRuntime\s*\(\)\s*\.\s*exec|ProcessBuilder\s*\(', re.IGNORECASE),  # Java
+         "IRON-SEC-17", "系统命令执行(Java)", "high",
+         "调用 Runtime.exec / ProcessBuilder 执行系统命令，若参数可被外部输入影响，存在命令注入风险。",
+         "确认命令与参数来源可信；对用户输入做白名单校验"),
+        (re.compile(r'child_process\s*\.\s*(?:exec|execSync|spawn|spawnSync)\s*\(', re.IGNORECASE),  # Node
+         "IRON-SEC-17", "系统命令执行(Node)", "high",
+         "调用 child_process.exec/spawn 执行系统命令，若参数可被外部输入影响，存在命令注入风险。",
+         "优先使用 spawn 的数组参数形式；对用户输入做白名单校验"),
     ]
 
     # 不安全的子进程调用（shell=True 未校验参数）
@@ -512,7 +542,14 @@ class GovernanceAuditor:
         logger.info(f"[GovernanceAudit] 审计完成: {len(violations)} 条违规 "
                      f"(critical={report.critical_count}, high={report.high_count}, "
                      f"medium={report.medium_count}, low={report.low_count}) "
-                     f"健康分={report.clean_score}")
+                     f"健康分={report.clean_score if report.clean_score is not None else 'N/A'}")
+
+        # 缺陷 9：无代码文件时显式提示，避免"静默健康（满分）"误导
+        if analysis.total_files == 0:
+            logger.warning(
+                f"[GovernanceAudit] 未发现任何可分析的代码文件，"
+                f"当前审计结果健康分为 N/A（非满分），审计可能无意义。"
+                f"项目路径: {project_path}")
 
         return self._generate_report(report)
 
@@ -655,14 +692,14 @@ class GovernanceAuditor:
 
             # 不安全反序列化
             if not is_pattern_def:
-                for pattern, rule_id, rule_name, severity, detail in self.UNSAFE_DESERIALIZE:
+                for pattern, rule_id, rule_name, severity, detail, suggestion in self.UNSAFE_DESERIALIZE:
                     if pattern.search(line_stripped):
                         violations.append(GovernanceViolation(
                             rule_id=rule_id, rule_name=rule_name, category="security",
                             severity=severity, file_path=cf.file_path, line_number=i,
                             line_content=line_stripped[:120],
                             detail=detail,
-                            suggestion="使用 json.loads() 或 yaml.safe_load() 替代",
+                            suggestion=suggestion,
                         ))
 
             # 硬编码网络地址
@@ -690,6 +727,17 @@ class GovernanceAuditor:
 
             # 不安全的子进程调用（shell=True）
             for pattern, rule_id, rule_name, severity, detail, suggestion in self.UNSAFE_SUBPROCESS:
+                if pattern.search(line_stripped):
+                    violations.append(GovernanceViolation(
+                        rule_id=rule_id, rule_name=rule_name, category="security",
+                        severity=severity, file_path=cf.file_path, line_number=i,
+                        line_content=line_stripped[:120],
+                        detail=detail,
+                        suggestion=suggestion,
+                    ))
+
+            # 跨语言系统命令执行（Go/PHP/Java/Node）—— 缺陷 7：非 Python 项目危险命令漏检
+            for pattern, rule_id, rule_name, severity, detail, suggestion in self.CROSS_LANG_COMMAND_EXEC:
                 if pattern.search(line_stripped):
                     violations.append(GovernanceViolation(
                         rule_id=rule_id, rule_name=rule_name, category="security",
@@ -1287,20 +1335,24 @@ class GovernanceAuditor:
             cat_counts[v.category] += 1
             sev_counts[v.severity] += 1
 
-        # 健康分颜色
-        if report.clean_score >= 80:
-            score_emoji = "🟢"
-        elif report.clean_score >= 50:
-            score_emoji = "🟡"
+        # 健康分颜色（无代码文件时 clean_score 为 None → 显示 N/A）
+        if report.clean_score is not None:
+            if report.clean_score >= 80:
+                score_emoji = "🟢"
+            elif report.clean_score >= 50:
+                score_emoji = "🟡"
+            else:
+                score_emoji = "🔴"
+            score_text = f"{score_emoji} **{report.clean_score}/100**"
         else:
-            score_emoji = "🔴"
+            score_text = "⚪ **N/A**（未发现可分析代码文件）"
 
         lines = []
         lines.append(f"# 🔍 代码治理审计报告")
         lines.append(f"")
         lines.append(f"**项目路径**: `{report.project_path}`  ")
         lines.append(f"**扫描范围**: {report.total_files} 个文件, {report.total_lines} 行  ")
-        lines.append(f"**治理健康分**: {score_emoji} **{report.clean_score}/100**  ")
+        lines.append(f"**治理健康分**: {score_text}  ")
         lines.append(f"")
 
         # 总览

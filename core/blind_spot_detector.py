@@ -199,7 +199,7 @@ class BlindSpotDetector:
                                if os.path.dirname(fp) == py_dir)
                 spots.append(BlindSpot(
                     category="doc_blindspot",
-                    item=rel or "根目录",
+                    item=(rel if rel not in ("", ".") else "根目录"),
                     detail=f"目录下有 {py_count} 个 Python 文件，但项目没有 docs/ 目录",
                     file_path=py_dir,
                     risk_level="high",
@@ -235,7 +235,7 @@ class BlindSpotDetector:
                 risk = "high" if py_count >= 5 else ("medium" if py_count >= 2 else "low")
                 spots.append(BlindSpot(
                     category="doc_blindspot",
-                    item=rel or "根目录",
+                    item=(rel if rel not in ("", ".") else "根目录"),
                     detail=f"目录下有 {py_count} 个 Python 文件，但 docs/ 中无对应文档",
                     file_path=py_dir,
                     risk_level=risk,

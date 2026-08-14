@@ -730,9 +730,34 @@ class AgentSecurityAuditor:
         
         if not all_content.strip():
             return risks
-        
+
+        # 缺陷 11：LLM 韧性缺口检查的前提是"项目确实调用 LLM"。
+        # 若项目不含任何 LLM 调用信号（import openai/anthropic、completions.create、
+        # chat.completions 等），则"缺少重试退避/模型回退/上下文截断"等缺口是无依据的
+        # 误报，应跳过，避免对非 LLM 项目污染审计结论。
+        LLM_SIGNAL = re.compile(
+            r'\b(?:chat\.completions|completions\.create|chat_completions|'
+            r'LLMRegistry|ModelRegistry)\b|'
+            r'\bimport\s+(?:openai|anthropic)\b|'
+            r'\bfrom\s+(?:openai|anthropic)\b|'
+            r'\b(?:openai|anthropic)\.(?:OpenAI|AsyncOpenAI|Client|Anthropic)\b',
+            re.IGNORECASE)
+        has_llm = bool(LLM_SIGNAL.search(all_content))
+        # 仅当项目使用 LLM 时才检查的 LLM 强相关韧性缺口
+        LLM_ONLY_GAP_IDS = {
+            "AGENT-RESILIENCE-01", "AGENT-RESILIENCE-02",
+            "AGENT-RESILIENCE-03", "AGENT-RESILIENCE-04",
+        }
+        if not has_llm:
+            logger.info(
+                "[AgentSecurityAudit] 项目未检测到 LLM 调用信号，跳过 LLM 韧性缺口检查"
+                "（避免对非 LLM 项目误报缺少重试退避等）")
+
         # 对每种防御模式，检查是否在项目中存在
         for check in self.RESILIENCE_GAP_CHECKS:
+            # 无 LLM 项目：跳过 LLM 强相关缺口
+            if not has_llm and check["id"] in LLM_ONLY_GAP_IDS:
+                continue
             # AGENT-RESILIENCE-07 连接池探活：只对"实际使用数据库连接池"的项目打标。
             # 精确匹配导入/调用（create_engine( / import sqlalchemy / pool_pre_ping 等），
             # 避免 sqlalchemy/psycopg 等关键词出现在注释、字符串或文档里就误触发；
