@@ -36,6 +36,12 @@ class Finding:
     # 汇总层据此区分"建议项"与"缺陷项"，避免把工程化 warn 等建议误报为缺陷。
     # 带默认值，向后兼容所有不含 kind 的现有 Finding 构造调用。
     kind: str = "defect"
+    # 爆发式合并（_burst_merge）后保留的真实数量与全部位置。
+    # count=1 表示未聚合（单条）；>1 表示该 finding 代表 N 条同 tool+category 违规。
+    # locations 记录被合并的全部 file:line，避免"标题写共 N 条却无法定位其余 N-1 条"。
+    # 带默认值，向后兼容所有不含 count/locations 的现有 Finding 构造调用。
+    count: int = 1
+    locations: List[str] = field(default_factory=list)
 
     @property
     def line_label(self) -> str:
@@ -65,6 +71,9 @@ class PipeResult:
     functional_review: dict = field(default_factory=dict)   # FunctionalReviewer.review() 返回值
     # 动态兜底：本次审计实际采用的策略（full/incr/no_change），由 audit() 在跑工具前判定
     audit_strategy: str = "full"
+    # 统一健康分（0-100）。空项目（0 代码文件）为 None（N/A）。
+    # 由 _compute_health 统一计算，保证 run_single 与 audit 两入口一致（缺陷 10）。
+    health_score: Optional[int] = None
 
 class Pipe:
 
@@ -87,6 +96,29 @@ class Pipe:
         if s in ("medium", "warning", "info"):
             return Tier.MEDIUM
         return Tier.LOW
+
+    @staticmethod
+    def _compute_health(r: 'PipeResult') -> Optional[int]:
+        """统一健康分计算入口（0-100）。空项目（0 代码文件）返回 None（N/A）。
+
+        口径与 health_dashboard._calc_score 一致（基于 findings 的 tier 扣分，
+        HIGH -5 / MEDIUM -1 / LOW -0.2，最低 0），保证单维度 run_single 与全量
+        audit 的健康分一致（证据审计缺陷 10）。空项目不返回 100，返回 None 表示
+        "审计无意义/N/A"，避免"静默健康满分"误导（缺陷 9）。
+        """
+        if getattr(r, "total_files", 0) == 0:
+            return None
+        if not r.findings:
+            return 100
+        score = 100.0
+        for f in r.findings:
+            if f.tier == Tier.HIGH:
+                score -= 5
+            elif f.tier == Tier.MEDIUM:
+                score -= 1
+            elif f.tier == Tier.LOW:
+                score -= 0.2
+        return max(0, int(score))
 
     @staticmethod
     def _phash(p: str) -> str:
@@ -509,6 +541,7 @@ class Pipe:
         except Exception as e:
             r.errors.append(str(e))
 
+        r.health_score = self._compute_health(r)
         r.elapsed = round(time.time() - self._t0, 1)
         return r
 
@@ -554,10 +587,16 @@ class Pipe:
             # 全新 done 集合，不读 checkpoint，保证单工具独立、可复现
             fn(project_path, r, set())
             if r.findings:
+                # 缺陷 4：单维度扫描也走交叉验证（_xval），保持与全量 audit 管线一致。
+                # 单维度下所有 finding 同属一个 tool，_xval 的"多工具命中同一位置→HIGH"
+                # 不会误升级（len(tools)>=2 不成立），因此无副作用；若未来单维度
+                # 支持多工具则自动生效。交叉验证的局限在 MCP 描述中如实声明。
+                self._xval(r)
                 self._denoise(r)
             r.elapsed = round(time.time() - self._t0, 1)
         except Exception as e:
             r.errors.append(str(e))
+        r.health_score = self._compute_health(r)
         r.elapsed = round(time.time() - self._t0, 1)
         return r
 
@@ -948,10 +987,18 @@ class Pipe:
             ro = getattr(a, "report", None)
             if ro:
                 for v in ro.violations:
+                    # 缺陷 5：gov violations 的 title/detail 缺少数符号引用，导致
+                    # extract_symbols(title+detail) 返回空、符号级证据核验(L3)失效。
+                    # 把命中的代码行（line_content，含函数调用等符号）附加到 detail，
+                    # 使符号核验可提取到具体函数/模块名。
+                    hit_line = getattr(v, "line_content", "") or ""
+                    det = v.detail
+                    if hit_line:
+                        det = f"{det}｜命中代码: {hit_line}"
                     r.findings.append(Finding(id=f"gov-{len(r.findings)}", tool="gov",
                         category=v.category, severity=v.severity,
                         file_path=v.file_path, line=v.line_number,
-                        title=v.rule_name, detail=v.detail,
+                        title=v.rule_name, detail=det,
                         suggestion=v.suggestion, tier=Tier.MEDIUM))
             done.add("gov"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"gov: {e}")
@@ -1399,7 +1446,12 @@ class Pipe:
 
     @staticmethod
     def _burst_merge(findings: List[Finding]) -> List[Finding]:
-        """同 tool + category 超过阈值 → 保留 1 条 + 统计摘要"""
+        """同 tool + category 超过阈值 → 保留 1 条 + 统计摘要
+
+        聚合时保留组内**最高** tier/severity（而非无条件降级为 LOW），
+        并把真实数量与全部位置写入 count/locations，避免严重度失真、
+        位置丢失、数量低估（对应证据审计缺陷 1/2/3）。
+        """
         by_key = {}
         for f in findings:
             k = (f.tool, f.category)
@@ -1412,9 +1464,30 @@ class Pipe:
             else:
                 # 保留第 1 条 + 摘要
                 first = group[0]
+                # 缺陷 1：保留组内最高 tier（HIGH > MEDIUM > LOW），不无条件降级
+                _tier_order = {Tier.HIGH: 0, Tier.MEDIUM: 1, Tier.LOW: 2}
+                max_tier = min(group, key=lambda f: _tier_order.get(f.tier, 9)).tier
+                # 保留组内最高 severity 文本（critical > high > medium > low）
+                _sev_order = {"critical": 0, "blocker": 0, "high": 1,
+                              "medium": 2, "low": 3}
+                max_sev = min(group, key=lambda f: _sev_order.get(
+                    (f.severity or "medium").lower(), 9)).severity
+                first.tier = max_tier
+                first.severity = max_sev
+                # 缺陷 2/3：记录真实数量与全部位置
+                first.count = len(group)
+                locs = [f"{f.file_path}:{f.line}" for f in group if f.file_path]
+                first.locations = locs
                 first.title = f"[共 {len(group)} 条] {first.title}"
-                first.detail = f"此项在 {len(set(f.file_path for f in group))} 个文件中出现 {len(group)} 次，为爆发式重复，合并显示。"
-                first.tier = Tier.LOW
+                loc_preview = ", ".join(locs[:20])
+                if len(locs) > 20:
+                    loc_preview += f" 等 {len(locs)} 处"
+                # 缺陷 5：保留原始 detail（含 gov 附加的"命中代码"，供符号级证据核验），
+                # 在其后追加爆发式统计，避免覆盖 line_content 导致 L3 符号提取失效。
+                base_detail = first.detail or ""
+                first.detail = (f"{base_detail}（此项为爆发式重复，共 {len(group)} 次，涉及 "
+                                f"{len(set(f.file_path for f in group))} 个文件，"
+                                f"组内最高严重度: {max_sev}。全部位置见 locations 字段，示例: {loc_preview}）")
                 result.append(first)
         return result
 
@@ -1426,6 +1499,10 @@ class Pipe:
             r.elapsed = round(time.time() - self._t0, 1)
         # 把"建议项"(kind=advice) 与"缺陷项"(defect) 分开统计/展示，
         # 建议项不计入 HIGH/MEDIUM/LOW 缺陷表，避免工程化改进建议被误报为缺陷。
+        # 统计按 count 加权：爆发式合并项（count>1）代表 N 条真实违规，
+        # 不能按 1 条计，否则 len(findings) 与真实违规数严重不符（证据审计缺陷 3）。
+        def _weighted(fl):
+            return sum(getattr(f, "count", 1) for f in fl)
         h = [f for f in r.findings if f.tier == Tier.HIGH and f.kind != "advice"]
         m = [f for f in r.findings if f.tier == Tier.MEDIUM and f.kind != "advice"]
         l = [f for f in r.findings if f.tier == Tier.LOW and f.kind != "advice"]
@@ -1443,7 +1520,7 @@ class Pipe:
             "## 置信度",
             f"| 🔴 HIGH | 🟡 MEDIUM | ⚪ LOW | 💡 建议 |",
             f"|----------|------------|---------|---------|",
-            f"| {len(h)} | {len(m)} | {len(l)} | {len(adv)} |",
+            f"| {_weighted(h)} | {_weighted(m)} | {_weighted(l)} | {_weighted(adv)} |",
             "",
         ]
         if r.scope_text:
