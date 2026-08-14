@@ -84,6 +84,8 @@ OMEM_ENV_TOOL_BINS = {
 
 # 常见便携根目录（支持 glob 通配，如 work/*/PortableGit）。
 # PATH 中找不到工具时，在这些位置探测可执行文件，解决便携工具不在 PATH 的问题。
+# 末尾几项覆盖"项目内嵌解释器 / 测试 venv"：它们不在 PATH、也不在标准便携根，
+# 若不显式列出，自动探测会漏掉（如 目标工具 自带 python）。
 OMEM_ENV_TOOL_ROOTS = (
     "~/.trae-cn/work/*/PortableGit",
     "~/.trae-cn/work/*/*/PortableGit",
@@ -91,10 +93,14 @@ OMEM_ENV_TOOL_ROOTS = (
     "~/AppData/Local/Programs/Python",
     "C:/Program Files/Git",
     "C:/Program Files (x86)/Git",
+    # --- 项目内嵌解释器 / 测试 venv（自动探测补充）---
+    "~/Desktop/目标工具/目标工具",                        # 目标工具 自带 python
+    "~/Desktop/1111/Coderef-Test/测试用例/*/.venv",       # Coderef-Test 用例 venv
 )
 
 # 便携根下的 bin 子目录名（相对便携根）
-OMEM_ENV_TOOL_BIN_SUBDIRS = ("bin", "cmd", "mingw64/bin", "usr/bin", "Scripts")
+# "python" 用于 目标工具 内嵌解释器（位于 <root>/python/python.exe）
+OMEM_ENV_TOOL_BIN_SUBDIRS = ("bin", "cmd", "mingw64/bin", "usr/bin", "Scripts", "python")
 
 # 操作记忆数据目录（可配置，默认用户数据目录，避免写入项目根）。
 # 设为空串时回退到项目根下 data/operation_memory（兼容旧行为）。
