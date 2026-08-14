@@ -13,7 +13,7 @@ SQLite 存储：节点（函数/类/模块/配置/常量/路由）+ 边（CALLS/
 存储路径：cache/kg/{project_md5}.db
 """
 
-import os, sys, json, hashlib, sqlite3, csv, time
+import os, sys, json, hashlib, sqlite3, csv, time, re
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
@@ -214,6 +214,8 @@ class CodeKnowledgeGraph:
                 self._build_from_ast(ast_results, stats)
             if gitnexus_dir and os.path.isdir(gitnexus_dir):
                 self._build_from_gitnexus(gitnexus_dir, stats)
+            # 扫描 Go 文件（含 Go 组件的项目流程断链检测补盲；纯 Python 项目零开销）
+            self._build_from_go(self.project_path, stats)
         except Exception as e:
             stats["errors"].append(str(e))
             logger.error(f"[KG] 构建失败: {e}")
@@ -349,7 +351,8 @@ class CodeKnowledgeGraph:
                 if callee_id:
                     self._upsert_edge(KGEdge(
                         source=caller_id, target=callee_id, type="CALLS",
-                        props={"line": call.line, "full_name": call.func_name}))
+                        props={"line": call.line, "full_name": call.func_name,
+                               "keyword_args": list(getattr(call, "keyword_args", []))}))
                     n += 1
 
             # 赋值语句 → Config / Constant 节点
@@ -373,6 +376,120 @@ class CodeKnowledgeGraph:
                         n += 1
 
         stats["nodes"] += n
+
+    # ─── 从 Go 文件构建（flow_verify 跨语言补盲） ───
+
+    # Go 函数/方法定义：`func Name(` 或 `func (r *Recv) Name(`
+    _GO_FUNC_RE = re.compile(
+        r'^\s*func\s+(?:(\([^)]*\))\s+)?([A-Za-z_]\w*)\s*\(', re.MULTILINE)
+    # Go 函数/方法调用：`obj.Method(` / `pkg.Func(` / `Func(`（取最末一段标识符）
+    _GO_CALL_RE = re.compile(
+        r'(?<![\w.\[])(?:[A-Za-z_]\w*\.)*([A-Za-z_]\w*)\s*\(')
+
+    def _build_from_go(self, project_path, stats: dict):
+        """扫描 .go 文件，用轻量确证性正则把函数/方法与调用关系纳入知识图谱。
+
+        背景：知识图谱此前只覆盖 Python AST，含 Go 组件的项目（如 aichatwiki 的
+        augmented/ 增强检索）流程断链检测漏报。此方法用确证性正则（不装完整 Go
+        AST parser，零外部依赖）为每个 Go 函数/方法生成 go_func 节点，并把函数体
+        写入 props['doc']（供 flow_verify 的 keyword/doc 检索命中），同时提取函数
+        体内调用生成 CALLS 边。对纯 Python 项目安全（无 .go 文件即零开销）。
+        """
+        n_nodes = 0
+        n_edges = 0
+        for root, dirs, files in os.walk(project_path):
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in
+                       ('node_modules', 'venv', '.venv', 'env', '.git', 'dist',
+                        'build', 'vendor')]
+            for fn in files:
+                if not fn.endswith('.go'):
+                    continue
+                fp = os.path.join(root, fn)
+                try:
+                    with open(fp, 'r', encoding='utf-8', errors='ignore') as fh:
+                        content = fh.read()
+                except Exception as e:
+                    stats["errors"].append(f"Go 读取失败 {fp}: {e}")
+                    continue
+                lines = content.splitlines()
+                funcs = list(self._GO_FUNC_RE.finditer(content))
+                module_name = os.path.splitext(fn)[0]
+                for i, m in enumerate(funcs):
+                    recv = m.group(1)
+                    name = m.group(2)
+                    start_line = content[:m.start()].count('\n') + 1
+                    # 函数体：从定义行到下一个函数定义（或文件末尾）
+                    end_line = (content[:funcs[i + 1].start()].count('\n')
+                                if i + 1 < len(funcs) else len(lines))
+                    body = "\n".join(lines[start_line - 1:end_line])
+                    # 节点名：方法带 Receiver 类型前缀，如 Indexer.FullRebuild
+                    recv_type = ""
+                    if recv:
+                        rm = re.search(
+                            r'\*\s*([A-Za-z_]\w*)|(?:^|\s)([A-Za-z_]\w*)\s*$',
+                            recv.strip())
+                        if rm:
+                            recv_type = rm.group(1) or rm.group(2)
+                    node_name = f"{recv_type}.{name}" if recv_type else name
+                    nid = f"gofunc:{module_name}:{node_name}"
+                    self._upsert_node(KGNode(
+                        id=nid, type="go_func", name=node_name,
+                        file_path=fp, start_line=start_line, end_line=end_line,
+                        props={"language": "go",
+                               "params": self._go_params(content, m.end()),
+                               "doc": body[:1000]}))
+                    n_nodes += 1
+                    # 函数体内调用 → CALLS 边（目标在图谱中存在才建边）
+                    for cm in self._GO_CALL_RE.finditer(body):
+                        callee = cm.group(1)
+                        tgt = self._find_go_callee(callee)
+                        if tgt and tgt != nid:
+                            self._upsert_edge(KGEdge(
+                                source=nid, target=tgt, type="CALLS",
+                                props={"line": start_line - 1 +
+                                       body[:cm.start()].count('\n'),
+                                       "full_name": cm.group(0).rstrip('(')}))
+                            n_edges += 1
+        stats["nodes"] += n_nodes
+        stats["edges"] += n_edges
+
+    def _find_go_callee(self, name: str) -> Optional[str]:
+        """按 Go 被调名定位图谱节点：先精确匹配名，再匹配 `Receiver.Method` 后缀。"""
+        row = self._conn.execute(
+            "SELECT id FROM nodes WHERE name=? LIMIT 1", (name,)).fetchone()
+        if row:
+            return row["id"]
+        row = self._conn.execute(
+            "SELECT id FROM nodes WHERE name LIKE ? LIMIT 1",
+            (f"%.{name}",)).fetchone()
+        return row["id"] if row else None
+
+    @staticmethod
+    def _go_params(content: str, pos: int) -> List[str]:
+        """从函数名 `(` 之后浅析取逗号分隔的形参名（仅展示用，非完整解析）。"""
+        depth = 0
+        i = pos
+        parts = []
+        start = pos
+        while i < len(content):
+            c = content[i]
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                if depth == 0:
+                    parts.append(content[start:i])
+                    break
+                depth -= 1
+            elif c == ',' and depth == 1:
+                parts.append(content[start:i])
+                start = i + 1
+            i += 1
+        names = []
+        for p in parts:
+            pm = re.match(r'\s*([A-Za-z_]\w*)', p)
+            if pm:
+                names.append(pm.group(1))
+        return names
 
     # ─── 从 GitNexus CSV 构建 ───
 

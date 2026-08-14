@@ -85,6 +85,7 @@ class AstCodeCall:
     line: int
     is_method_call: bool  # 是否是方法调用（如 obj.method()）
     args_count: int       # 参数数量
+    keyword_args: List[str] = field(default_factory=list)  # 关键字参数名（如 f(x=1) → ['x']）
 
 
 @dataclass
@@ -465,12 +466,15 @@ class AstParser:
             func_name = ast.unparse(node.func) if hasattr(ast, 'unparse') else '?'
 
         args_count = len(node.args) + len(node.keywords)
+        # 关键字参数名（仅显式 `name=value` 形式，`**kwargs` 展开的 kw.arg 为 None 需剔除）
+        keyword_args = [kw.arg for kw in node.keywords if kw.arg]
 
         result.calls.append(AstCodeCall(
             func_name=func_name,
             line=getattr(node, 'lineno', 0),
             is_method_call=is_method,
             args_count=args_count,
+            keyword_args=keyword_args,
         ))
 
 

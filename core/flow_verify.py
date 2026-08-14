@@ -24,7 +24,7 @@ import os
 from collections import defaultdict
 from html import escape as _esc
 from typing import Dict, List, Optional, Set, Tuple
-from core.graph_closure import load_graph, file_base, downstream
+from core.graph_closure import load_graph, load_call_edges, file_base, downstream
 
 try:
     from loguru import logger
@@ -43,6 +43,30 @@ def _kg_db_path(project_path: str) -> str:
     return CodeKnowledgeGraph(project_path).db_path
 
 
+def ensure_kg(project_path: str, db_path: Optional[str] = None) -> str:
+    """确保知识图谱就绪：图谱缺失时自动构建（full 全量），返回 db 路径。
+
+    流程验证依赖图谱 CALLS 边。若调用方未预先执行 coderef_memory_sync 构建图谱，
+    本函数会就地补建，避免 flow_verify 因图谱缺失而整体短路（defect-hit 0% 的根因）。
+    构建失败时返回原 db_path（交给调用方按 has_kg:false 诚实反馈）。
+    """
+    if db_path is None:
+        db_path = _kg_db_path(project_path)
+    if os.path.exists(db_path):
+        return db_path
+    try:
+        from core.memory_layer import MemoryLayer
+        _log(f"图谱缺失({db_path})，自动执行 memory_sync 构建…")
+        r = MemoryLayer().sync(project_path, mode="full")
+        if r.get("status") == "ok" and os.path.exists(db_path):
+            _log(f"图谱自动构建完成: {r.get('kg')}")
+            return db_path
+        _log(f"图谱自动构建未完成: status={r.get('status')} kg={r.get('kg')}")
+    except Exception as e:  # pragma: no cover
+        _log(f"图谱自动构建异常: {type(e).__name__}: {e}")
+    return db_path
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 验证器
 # ═══════════════════════════════════════════════════════════════════
@@ -50,6 +74,11 @@ def _kg_db_path(project_path: str) -> str:
 class FlowVerifier:
     def __init__(self, db_path: str):
         self.nodes, self.adj = load_graph(db_path)
+        # CALLS 边 props（含 keyword_args），供参数契约检测
+        try:
+            self.call_edges = load_call_edges(db_path)
+        except Exception:  # pragma: no cover
+            self.call_edges = {}
         # 名称索引：小写名 -> [id]；也索引方法后缀名
         self.name_index = defaultdict(list)
         for nid, n in self.nodes.items():
@@ -129,6 +158,70 @@ class FlowVerifier:
     def _downstream(self, start_id: str, max_depth: int = 8) -> Set[str]:
         return downstream(self.adj, start_id, max_depth=max_depth)
 
+    # ─── 参数契约检测 ───
+
+    @staticmethod
+    def _normalize_params(params: List[str]):
+        """把签名参数列表归一化为形参名集合，并返回是否含 **kwargs。
+
+        处理形式：`a` / `a=1` / `a: int` / `a: int = 5` / `*args` / `**kwargs`。
+        `**kwargs` 表明可接受任意关键字参数，契约检测应放行。
+        """
+        names: Set[str] = set()
+        has_kwargs = False
+        for p in params or []:
+            s = str(p).strip()
+            if not s:
+                continue
+            if s.startswith("**"):
+                has_kwargs = True
+                continue
+            if s.startswith("*"):
+                continue  # *args 只接收位置参数
+            name = s.split("=")[0].split(":")[0].strip()
+            if name:
+                names.add(name)
+        return names, has_kwargs
+
+    def param_contract_scan(self) -> List[dict]:
+        """扫描图谱内所有 CALLS 边，检测「调用点显式关键字参数名 ≠ 被调函数签名形参名」。
+
+        这是静态可确证的硬信号（如调 script2video_pipeline(character_registry=...) 而签名是
+        character_portraits_registry），无需 LLM。仅检测图谱内已索引的项目内函数：
+        - 被调节点必须是项目内函数/方法（第三方/内置不在图谱，天然跳过）；
+        - 被调签名含 **kwargs 时放行（可接受任意关键字参数）；
+        - 仅报告显式 `name=value` 关键字参数，忽略位置参数与 **kwargs 展开。
+        """
+        issues: List[dict] = []
+        for (src, tgt), props in self.call_edges.items():
+            kw = props.get("keyword_args") or []
+            if not kw:
+                continue
+            tgt_node = self.nodes.get(tgt)
+            if not tgt_node or tgt_node["type"] not in ("function", "method"):
+                continue
+            params = (tgt_node.get("props") or {}).get("params") or []
+            names, has_kwargs = self._normalize_params(params)
+            if has_kwargs:
+                continue
+            bad = [k for k in kw if k not in names]
+            if not bad:
+                continue
+            src_node = self.nodes.get(src)
+            issues.append({
+                "caller": src_node["name"] if src_node else src,
+                "caller_id": src,
+                "callee": tgt_node["name"],
+                "callee_file": file_base(tgt_node),
+                "callee_line": tgt_node.get("start_line", 0),
+                "call_line": props.get("line", 0),
+                "mismatch": bad,
+                "params": sorted(names),
+            })
+        # 稳定排序，保证跨调用确定性
+        issues.sort(key=lambda x: (x["callee_file"], x["callee_line"], x["call_line"]))
+        return issues
+
     # ─── 公开查询（供 Wiki 等下游复用，避免外部直查 schema / 私有成员）───
 
     def root_functions(self) -> Set[str]:
@@ -205,6 +298,17 @@ class FlowVerifier:
 
     # ─── 主验证 ───
 
+    def _cross_lang_nodes(self) -> List[dict]:
+        """列出图谱中所有非 Python 语言节点（如 Go），供跨语言补盲。"""
+        return sorted(
+            [{"name": n["name"], "type": n.get("type", ""),
+              "file": (n.get("file_path") or "").replace("\\", "/"),
+              "line": n.get("start_line", 0),
+              "doc": (n.get("props") or {}).get("doc", "")[:200]}
+             for nid, n in self.nodes.items()
+             if (n.get("props") or {}).get("language") == "go"],
+            key=lambda x: (x["file"], x["line"]))
+
     def verify(self, entry_spec: str, steps: List[str],
                max_depth: int = 8) -> dict:
         """验证入口管线是否覆盖期望步骤。
@@ -221,15 +325,32 @@ class FlowVerifier:
         if not entry:
             return {"entry": {"spec": entry_spec, "found": False},
                     "steps": [], "ok": False,
-                    "summary": f"入口未找到: {entry_spec}"}
+                    "summary": f"入口未找到: {entry_spec}",
+                    "cross_lang": self._cross_lang_nodes()}
 
         en = self.nodes[entry]
         root_reach = self._downstream(entry, max_depth=max_depth)
+
+        # 参数契约检测：全图「调用关键字参数名 ≠ 签名形参名」的静态可确证信号。
+        # 独立于步骤匹配输出，避免与入口闭包是否包含该调用边耦合——即使某步骤因
+        # 动态调用被判 outside，契约断裂仍能如实上报（如 vimax 的 character_registry 断链）。
+        contracts = self.param_contract_scan()
+        # 跨语言组件补盲：图谱中非 Python 语言节点（如 Go）即使不在入口闭包/步骤内也
+        # 一并列出，供调用方/缺陷命中识别"存在但可能未接入主链路"的跨语言函数
+        #（如 aichatwiki augmented/ 的 Go 增强检索）。纯 Python 项目此列表为空，零影响。
+        cross_lang = self._cross_lang_nodes()
         result = {
             "entry": {"spec": entry_spec, "found": True,
                       "id": entry,
                       "node": f"{en['name']} ({file_base(en)}:{en['start_line']})"},
             "steps": [],
+            "param_contract": contracts,
+            # 契约断裂若发生在入口调用闭包内，作为高置信信号触发 ok=False，
+            # 避免"流程走通但参数对不上"的假通过；闭包外的契约断裂仅如实展示。
+            "param_contract_in_entry": [c for c in contracts
+                                        if c.get("caller_id") in root_reach],
+            # 跨语言组件（Go 等）清单 —— flow_verify 跨语言补盲
+            "cross_lang": cross_lang,
             # ok：存在性层面是否全部通过（无 outside / missing）。
             # order_confirmed：是否所有命中步骤都达到顺序确证（ordered）。
             # 两者分离，避免把"在管线但顺序未确证"当成完全成功，避免误导非编程人员。
@@ -299,6 +420,12 @@ class FlowVerifier:
                 # ok 保持 True（存在性确证），但 order_confirmed=False，诚实标注顺序未确证。
                 result["order_confirmed"] = False
 
+        # 入口调用闭包内的参数契约断裂是硬错误：流程即使走通，参数名也对不上，
+        # 运行时必然 TypeError。一旦存在，整体判定失败，避免假通过。
+        if result["param_contract_in_entry"]:
+            result["ok"] = False
+            result["order_confirmed"] = False
+
         return result
 
 
@@ -324,6 +451,8 @@ def verify_flow(project_path: str, entry: str, steps: List[str],
         depth = 8
     if db_path is None:
         db_path = _kg_db_path(project_path)
+    # 图谱缺失时自动构建（coderef_memory_sync），避免 flow_verify 因图谱缺失整体短路。
+    db_path = ensure_kg(project_path, db_path)
     if not os.path.exists(db_path):
         return {
             "ok": False,
@@ -378,12 +507,20 @@ def render_report(result: dict) -> str:
                          "或在运行时打点确认是否真的被调用")
 
     lines.append("")
+    # 参数契约检测：调用点显式关键字参数名 ≠ 被调函数签名形参名（静态确证，运行时必 TypeError）
+    contracts = result.get("param_contract", [])
+    if contracts:
+        lines.append(f"参数契约断裂: {len(contracts)} 处")
+        for c in contracts[:20]:
+            loc = f"{c['callee_file']}:{c['callee_line']}"
+            lines.append(f"  [契约] {c['caller']} → {c['callee']}({loc}) "
+                         f"调用参数 {', '.join(c['mismatch'])} 不在签名 {', '.join(c.get('params', []))} 中")
     if result.get("ok"):
         verdict = ("全部步骤在入口管线中确证。" if result.get("order_confirmed")
                    else "步骤均确认在入口管线中，但存在顺序未确证（可能并行），"
                         "需结合入口调度代码或运行时复核顺序。")
     else:
-        verdict = "存在缺失/存疑步骤，需结合动态运行复核，或确认期望流程是否与实现一致。"
+        verdict = "存在缺失/存疑/契约断裂步骤，需结合动态运行复核，或确认期望流程是否与实现一致。"
     lines.append(f"结论: {verdict}")
     lines.append("")
     lines.append("图例: [OK]=入口调用链确证(含顺序); [~]=在入口管线但顺序未确证(可能并行);"
@@ -455,12 +592,40 @@ def render_html(result: dict) -> str:
             f"<td style='padding:10px 12px;border-bottom:1px solid #eee;color:#555;font-size:13px;'>{ev or cand}</td>"
             f"</tr>")
 
+    contracts = result.get("param_contract", [])
     if ok and order_confirmed:
         status_banner = ("#1DC981", "全部步骤已在入口管线中确证")
     elif ok:
         status_banner = ("#2E86DE", "步骤均在入口管线中，但存在顺序未确证（可能并行），需复核顺序")
+    elif result.get("param_contract_in_entry"):
+        status_banner = ("#E8463A", "入口调用链存在参数契约断裂（调用参数名与签名不符），运行时必报错")
     else:
         status_banner = ("#EFAA17", "存在存疑/缺失步骤，需结合动态运行复核")
+
+    # 参数契约断裂表（全图静态确证信号）
+    params_html = ""
+    if contracts:
+        prows = []
+        for c in contracts[:20]:
+            prows.append(
+                f"<tr>"
+                f"<td style='padding:8px 12px;border-bottom:1px solid #eee;font-weight:600;'>{_esc(c['caller'])}</td>"
+                f"<td style='padding:8px 12px;border-bottom:1px solid #eee;'>{_esc(c['callee'])}<br>"
+                f"<span style='color:#aaa;font-size:12px;'>{_esc(c['callee_file'])}:{c['callee_line']}</span></td>"
+                f"<td style='padding:8px 12px;border-bottom:1px solid #eee;color:#E8463A;font-weight:600;'>{_esc(', '.join(c['mismatch']))}</td>"
+                f"<td style='padding:8px 12px;border-bottom:1px solid #eee;color:#555;font-size:13px;'>{_esc(', '.join(c.get('params', [])) or '—')}</td>"
+                f"</tr>")
+        params_html = f"""<div style="margin-top:24px;">
+  <h3 style="margin:0 0 8px;font-size:15px;color:#E8463A;">参数契约断裂（{len(contracts)} 处）</h3>
+  <table style="width:100%;border-collapse:collapse;font-size:14px;">
+    <thead><tr style="text-align:left;color:#888;font-size:12px;border-bottom:2px solid #eee;">
+      <th style="padding:8px 12px;">调用方</th><th style="padding:8px 12px;">被调函数</th>
+      <th style="padding:8px 12px;">多余参数</th><th style="padding:8px 12px;">签名形参</th>
+    </tr></thead>
+    <tbody>{''.join(prows)}</tbody>
+  </table>
+  <div style="margin-top:6px;font-size:12px;color:#999;">调用方显式传入的关键字参数名不在被调函数签名中，运行时必然触发 TypeError。</div>
+</div>"""
 
     return f"""<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -484,6 +649,7 @@ def render_html(result: dict) -> str:
       </tr></thead>
       <tbody>{''.join(rows)}</tbody>
     </table>
+    {params_html}
     <div style="margin-top:20px;font-size:12px;color:#999;line-height:1.8;">
       图例：<span style="color:#1DC981;">确证</span>=入口调用链确证(含顺序)；
       <span style="color:#2E86DE;">在管线</span>=确认在入口管线，但顺序未确证(可能并行)；

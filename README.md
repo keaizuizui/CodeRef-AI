@@ -390,6 +390,16 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 
 ## 更新日志
 
+### v4.8.3 — 并行盲区补修（跨语言 / 参数契约 / 供应链 / Agent 安全）
+
+- **Agent 安全补盲**：`agent_security_auditor` 新增 LLM 命令执行（`ShellTool` / `tool.run`）、LLM 生成 SQL 注入、FastAPI 路由认证缺失、密钥明文落盘（`save_env` / 写 `.env`）检测，修复 agent 维度漏报
+- **跨语言安全检测**：`agent_security_auditor` 新增 Go（`exec.Command` / SSRF）/ Node.js（`child_process` / `eval`）/ PHP（`system` / `eval`）命令执行与反序列化检测，并下沉 SSRF、路径遍历、`--no-sandbox`、信息泄露通用模式
+- **参数契约数据链**：`ast_parser` / `graph_closure` / `memory_layer` 打通调用参数 `keyword_args` 全链路（解析→加载 CALLS 边→写入图谱）；`flow_verify` 新增 `param_contract_scan` 参数契约检测与 `_normalize_params` 归一化
+- **Go 知识图谱与流程补盲**：`code_knowledge_graph` 新增 Go 函数定义与调用解析；`flow_verify` 入口未命中时仍输出跨语言 Go 节点（`_cross_lang_nodes`），避免多语言项目整链短路
+- **SCA 依赖补盲**：`sca_checker` 新增过时依赖 / 未锁定依赖 / 供应链运行时自动安装检测；对无依赖清单项目通过 `import` 提取第三方包（`_detect_unpinned_from_imports`），并接入 `pipeline_runner` findings
+- **治理与 Prompt 补盲**：`governance_audit` 新增文档（`.md` / `.skill`）密钥明文与审查绕过表述检测（`_scan_doc_secrets`）；`prompt_compliance` 新增治理提示检测；`prompt_extractor` 扩展 `.txt` 文件扫描
+- **便携工具探测**：`settings.py` 便携根子目录新增 `python`，支持自动探测项目内嵌解释器
+
 ### v4.8.2 — 证据审计修复 11 项缺陷（爆发合并 / 多语言 / Prompt 提取）
 
 - **爆发式合并修复**：`_burst_merge` 保留组内最高严重度（此前 7 个 critical 被误降为 LOW），记录全部位置到 `locations` 字段，按 `count` 加权计数（此前 54 处爆发被压成 4 条），并保留原始 `detail`（含命中代码行）供符号级证据核验

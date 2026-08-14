@@ -233,6 +233,83 @@ class AgentSecurityAuditor:
          "添加 rate limiter（如 token bucket），限制每分钟调用次数"),
     ]
 
+    # ─── 跨语言检测（Go / Node / PHP）─────────────────────────────
+    # Agent 系统常由多语言组件构成（Go 后端 / Node 前端 / PHP 服务），传统逐语言
+    # 扫描只覆盖 Python 会系统性漏检。以下模式组按文件扩展名路由，命中即确证性
+    # 危险操作信号（命令执行 / 提权 / 配置模板注入 / 路径穿越 / 动态代码执行）。
+    # 每条：(pattern, risk_id, risk_name, severity, detail, suggestion)
+
+    # Go：常见于独立 RPC/服务端组件（如 chatwiki llm_runner server.go）
+    GO_PATTERNS = [
+        # shell -c 命令注入：exec.Command(..., "/bin/sh", "-c", req.Command)
+        (re.compile(r'exec\.Command[^(]*\([^)]*"/bin/sh"', re.IGNORECASE),
+         "AGENT-SEC-30", "命令注入（Go shell）", "blocker",
+         "exec.Command 以 /bin/sh -c 执行命令，若命令字符串含外部可控输入（如 RPC 请求字段）可导致任意命令执行",
+         "禁止拼接 shell 字符串；改用参数数组传参 + 命令白名单 + 进程沙箱隔离"),
+        # sudo 提权执行
+        (re.compile(r'exec\.Command[^(]*\([^)]*"sudo"', re.IGNORECASE),
+         "AGENT-SEC-31", "提权命令执行（sudo）", "blocker",
+         "以 sudo 提权执行系统命令，配合未鉴权接口可向本机投递恶意配置或命令",
+         "避免以 root/sudo 执行；特权操作应最小化权限并强制先行鉴权"),
+        # 通用 exec.Command（未匹配 shell/sudo 的其余命令执行）
+        (re.compile(r'exec\.Command(?:Context)?\s*\(', re.IGNORECASE),
+         "AGENT-SEC-32", "危险命令执行（Go）", "high",
+         "检测到 os/exec 命令执行，若命令或参数含外部可控输入可被利用",
+         "校验命令与参数来源，使用参数数组而非 shell 字符串拼接"),
+        # nginx 配置模板注入
+        (re.compile(r'fmt\.Sprintf\s*\([^)]*proxy_pass|proxy_pass\s+http://%?s', re.IGNORECASE),
+         "AGENT-SEC-33", "配置模板注入（nginx）", "high",
+         "用户可控值拼接进 nginx 配置模板（proxy_pass/server_name），可注入配置、SSRF 或路径穿越",
+         "对 Upstream 做白名单与字符白名单校验，禁止直接拼接配置模板"),
+        # 文件名拼接路径穿越
+        (re.compile(r'fmt\.Sprintf\s*\([^)]*%s\.(?:crt|key|conf|pem|html)', re.IGNORECASE),
+         "AGENT-SEC-34", "文件路径穿越（Go）", "high",
+         "用户可控值拼接进文件名（如 %s.crt），含 ../ 或路径分隔符可写出许可目录写入任意路径",
+         "清洗文件名，禁止路径分隔符与 ..，落盘前校验绝对路径位于许可目录内"),
+        # URL query string 手工拼接未编码
+        (re.compile(r'(?:[a-z_]+)\s*\+=?\s*[a-z_]+["\']&?["\']\s*\+|encoded\s*\+=', re.IGNORECASE),
+         "AGENT-SEC-35", "URL 拼接未编码（Go）", "medium",
+         "手工拼接 query string 未做 url.QueryEscape，含 &/空格/中文会破坏参数或注入额外参数",
+         "使用 url.Values.Encode() 构造查询参数，避免手工字符串拼接"),
+    ]
+
+    # Node/TS：常见于前端/服务端 JS（如 aichatwiki frontend、web 端）
+    NODE_PATTERNS = [
+        # child_process 命令执行
+        (re.compile(r'(?:require\(["\']child_process|from["\']child_process|execSync|spawnSync|execFile)', re.IGNORECASE),
+         "AGENT-SEC-36", "命令注入（Node）", "blocker",
+         "检测到 child_process 命令执行，参数含外部输入会导致任意命令执行",
+         "禁止拼接 shell 命令，使用 execFile 参数数组 + 命令白名单"),
+        # 动态代码执行
+        (re.compile(r'\beval\s*\(|new\s+Function\s*\(', re.IGNORECASE),
+         "AGENT-SEC-37", "动态代码执行（eval）", "high",
+         "检测到 eval/Function 动态执行代码，外部可控会导致任意代码执行",
+         "避免 eval，使用 JSON.parse 等安全解析代替"),
+    ]
+
+    # PHP：常见于遗留服务端（如 chatwiki php/worker.php）
+    PHP_PATTERNS = [
+        (re.compile(r'\b(?:exec|shell_exec|system|passthru|proc_open)\s*\(', re.IGNORECASE),
+         "AGENT-SEC-38", "命令注入（PHP）", "blocker",
+         "检测到 PHP 命令执行函数，参数含外部输入会导致任意命令执行",
+         "禁止命令执行，或使用白名单 + 参数转义"),
+        (re.compile(r'\beval\s*\(|assert\s*\(.*\)|create_function\s*\(', re.IGNORECASE),
+         "AGENT-SEC-39", "动态代码执行（PHP）", "high",
+         "检测到 eval/assert 动态执行代码，外部可控导致任意代码执行",
+         "避免 eval，使用安全的解析方式"),
+    ]
+
+    # 文件扩展名 → 跨语言模式组
+    CROSSLANG_GROUPS = {
+        ".go": ("go", GO_PATTERNS),
+        ".ts": ("node", NODE_PATTERNS),
+        ".tsx": ("node", NODE_PATTERNS),
+        ".js": ("node", NODE_PATTERNS),
+        ".jsx": ("node", NODE_PATTERNS),
+        ".vue": ("node", NODE_PATTERNS),
+        ".php": ("php", PHP_PATTERNS),
+    }
+
     # ─── 自主行为检测 ───
     AUTONOMOUS_ACTION_PATTERNS = [
         # 自动重试逻辑（else 分支中有 retry/redo/recreate）
@@ -252,6 +329,122 @@ class AgentSecurityAuditor:
          "配置应设为只读，或添加配置变更审计日志"),
         # 缺少 human-in-the-loop
         # 通过检测是否有 confirm/approve 相关函数来实现
+    ]
+
+    # ─── SSRF 面检测 ───
+    # 聚焦"结果 URL 直接下载"这类 SSRF 面（fetch_url_text 等把外部/不可信 URL 直接
+    # 交给网络请求下载，无 scheme/host 白名单）。AGENT-SEC-09 只报通用网络请求，
+    # 此处针对"URL 直接抓取"给出更具体的 SSRF 面信号。
+    SSRF_PATTERNS = [
+        (re.compile(r'(?:fetch_url_text|requests\.(?:get|post|put)|httpx\.(?:get|post)|urllib\.request\.urlopen)\s*\(', re.IGNORECASE),
+         "AGENT-SEC-SSRF", "SSRF 面", "high",
+         "检测到对外部/不可信 URL 直接发起网络请求下载，无 scheme/host 白名单校验，攻击者可注入内网地址触发 SSRF",
+         "为网络请求目标添加 scheme/host 白名单，禁止访问内网/保留地址段"),
+        # aiohttp / requests.Session 异步客户端下载（session.get）
+        (re.compile(r'(?:self\.)?session\.get\s*\(', re.IGNORECASE),
+         "AGENT-SEC-SSRF", "SSRF 面（Session 下载）", "high",
+         "检测到经 Session 客户端（aiohttp/requests.Session）对外部/不可信 URL 发起下载，无 scheme/host 白名单，可注入内网地址触发 SSRF",
+         "约束下载 URL 的 scheme/host，禁止内网与保留地址段"),
+        # 自定义下载封装（_get_bytes 等直接把不可信 URL 交给网络层）
+        (re.compile(r'_get_bytes\s*\(', re.IGNORECASE),
+         "AGENT-SEC-SSRF", "SSRF 面（自定义下载）", "high",
+         "检测到自定义下载封装（_get_bytes 等）直接把外部/不可信 URL 交给网络下载，无 scheme/host 白名单，可被诱导访问内网/云元数据地址",
+         "为下载封装的目标 URL 添加 scheme/host 白名单校验"),
+        # 引用图 URL 直接原样转发透传（http/https/data 开头的不校验直接返回）
+        (re.compile(r'_image_uri\s*\(', re.IGNORECASE),
+         "AGENT-SEC-SSRF", "SSRF 面（引用图转发）", "high",
+         "检测到引用图 URL 转换函数（_image_uri 等）对 http/https/data 开头的 URL 不校验直接转发透传，用户/LLM 可控 URL 形成 SSRF 诱饵向量",
+         "对透传的上游 URL 做 scheme/host 白名单校验，禁止内网地址"),
+    ]
+
+    # ─── 路径穿越检测 ───
+    PATH_TRAVERSAL_PATTERNS = [
+        # 用户可控输入直接拼接构造文件路径（data_dir/base_dir/... 与外部变量拼接，未净化
+        # 规范化），../../ 可越权读写任意文件。
+        (re.compile(r'(?:settings\.)?(?:data_dir|base_dir|root_dir|upload_dir|output_dir|storage_dir|work_dir)\s*(?:/|\\\\|\.join|os\.path\.join)\s*[a-z_][\w]*', re.IGNORECASE),
+         "AGENT-SEC-PT", "路径穿越", "high",
+         "检测到用户可控输入直接拼接文件路径，未做路径净化/规范化，../../ 可越权读写任意文件",
+         "对输入做路径规范化并校验在允许根目录内，拒绝 .. 与绝对路径"),
+        # os.path.join 拼接目录根 + 用户可控变量（history_root / *_root：变量直接拼接）
+        (re.compile(r'os\.path\.join\s*\([^)]*(?:history_root|[a-z_]+_root)[^)]*\)', re.IGNORECASE),
+         "AGENT-SEC-PT", "路径穿越", "high",
+         "检测到 os.path.join 将目录根与用户可控变量拼接构造文件路径，未净化 ../ 可越权读写任意文件（配合 send_file 等可能直接外泄服务器文件）",
+         "清洗用户可控 segment，校验拼接后绝对路径位于允许根目录内"),
+        # os.path.join 中工作目录 + 插值（working_dir / character_dir 与 f-string 插值变量拼接）
+        (re.compile(r'os\.path\.join\s*\([^)]*(?:working_dir|character_dir)[^)]*\{', re.IGNORECASE),
+         "AGENT-SEC-PT", "路径穿越", "high",
+         "检测到 os.path.join 将工作目录与 f-string 插值变量（如 LLM 生成的 identifier）拼接构造路径，未净化 ../ 可穿越工作目录",
+         "对插值 segment 调用净化函数（如 safe_path_component），校验拼接后路径位于工作目录内"),
+    ]
+
+    # ─── 反序列化检测 ───
+    DESERIALIZATION_PATTERNS = [
+        (re.compile(r'pickle\.(?:load|loads)\s*\(', re.IGNORECASE),
+         "AGENT-SEC-DESER", "反序列化任意代码执行", "blocker",
+         "检测到从文件/不可信输入 pickle.load 反序列化，可触发任意代码执行",
+         "禁止对不可信数据使用 pickle；改用安全的 JSON 序列化并校验数据来源"),
+    ]
+
+    # ─── 浏览器沙箱禁用检测 ───
+    BROWSER_SANDBOX_PATTERNS = [
+        (re.compile(r'"--no-sandbox"|\'--no-sandbox\'', re.IGNORECASE),
+         "AGENT-SEC-SANDBOX", "浏览器沙箱禁用", "medium",
+         "检测到启动浏览器时禁用沙箱（--no-sandbox），访问不可信站点时放大浏览器漏洞利用面",
+         "移除 --no-sandbox；如必须仅用于隔离专用环境并严格限制访问站点"),
+    ]
+
+    # ─── 信息泄露检测（HTTP 接口返回内部路径/配置）───
+    INFO_LEAK_PATTERNS = [
+        (re.compile(r'["\'](?:data_dir|config_path|gpt_config_path|[a-z_]*_path|[a-z_]*_dir)["\']\s*:\s*str\(\s*settings\.', re.IGNORECASE),
+         "AGENT-SEC-LEAK", "信息泄露", "high",
+         "检测到 HTTP 接口返回内部路径/配置信息（data_dir/config_path 等），向任意访问者泄露服务器结构",
+         "从对外响应中移除内部路径与配置细节，仅返回必要字段"),
+    ]
+
+    # ─── LLM 工具执行滥用 / SQL 注入链检测 ───
+    # LangChain 工具（ShellTool）与数据库链（SQLDatabaseChain）把 LLM 可控输入直接交
+    # 给危险执行器，无白名单/参数校验，构成 RCE / 注入入口。
+    LLM_EXEC_PATTERNS = [
+        (re.compile(r'\bShellTool\b', re.IGNORECASE),
+         "AGENT-SEC-LMEXEC", "命令执行（LangChain ShellTool）", "blocker",
+         "检测到 LangChain ShellTool 将 LLM 可控 query 直接交给系统 Shell 执行，无白名单/参数校验，高危 RCE 入口",
+         "为 shell 工具添加命令白名单与参数校验，或禁用该工具"),
+        (re.compile(r'tool\.run\s*\(.*tool_input', re.IGNORECASE),
+         "AGENT-SEC-LMEXEC", "命令执行（tool.run）", "blocker",
+         "检测到 BaseToolOutput(tool.run(tool_input=query)) 将 LLM 可控输入直接交给命令执行工具，可执行任意系统命令",
+         "限制 run 工具可执行命令集合，校验 tool_input 来源"),
+        (re.compile(r'\bdb_chain\.invoke\s*\(', re.IGNORECASE),
+         "AGENT-SEC-LMEXEC", "SQL 注入链（db_chain.invoke）", "high",
+         "检测到直接 invoke LLM 生成的 SQL（SQLDatabaseChain），无 read_only 拦截或可被绕过的注入链，可执行任意 SQL",
+         "为数据库链强制只读连接，对生成的 SQL 做语法与关键字白名单校验"),
+        (re.compile(r'\bSQLDatabaseChain\b', re.IGNORECASE),
+         "AGENT-SEC-LMEXEC", "SQL 注入链（SQLDatabaseChain）", "high",
+         "检测到 SQLDatabaseChain 将自然语言转 SQL 并执行 LLM 生成的查询，read_only 拦截器可被注释/多语句绕过",
+         "使用只读连接并校验生成的 SQL，禁止写操作"),
+    ]
+
+    # ─── FastAPI 路由缺失鉴权依赖检测 ───
+    AUTH_MISSING_PATTERNS = [
+        (re.compile(r'\bnew_router\s*\((?!.*dependencies)', re.IGNORECASE),
+         "AGENT-SEC-AUTH", "API 路由缺失鉴权", "high",
+         "检测到 FastAPI/路由 new_router() 未挂载鉴权依赖（dependencies=[Depends(verify_token)]），对应接口可被任意调用",
+         "为路由挂载统一鉴权依赖 dependencies=[Depends(verify_token)]，避免逐接口遗漏"),
+    ]
+
+    # ─── 密钥明文落盘检测 ───
+    SECRET_WRITE_PATTERNS = [
+        (re.compile(r'\bsave_env\s*\(', re.IGNORECASE),
+         "AGENT-SEC-SECRET", "密钥明文落盘（save_env）", "high",
+         "检测到 save_env 类方法将 API Key 等密钥明文写入 .env 落盘，密钥来源分散且明文存储",
+         "将密钥交由密钥管理服务/环境变量注入，避免明文写入 .env 文件"),
+        (re.compile(r'(?:write_text|open\s*\([^)]*\.env[^)]*["\']w)\(?.*', re.IGNORECASE),
+         "AGENT-SEC-SECRET", "密钥明文落盘（.env 写入）", "high",
+         "检测到向 .env 以写模式写入内容，若包含 API Key/密钥则明文落盘",
+         "避免将密钥写入 .env；使用密钥管理服务并限制文件权限"),
+        (re.compile(r'(?:API_KEY|api_key|API_SECRET|api_secret)\s*=\s*\{?self\.', re.IGNORECASE),
+         "AGENT-SEC-SECRET", "密钥明文落盘（密钥写盘）", "high",
+         "检测到 API Key 明文赋值/写入（如 f\"...API_KEY={self.xxx.api_key}\" 落盘），密钥明文存储",
+         "使用密钥管理服务存储密钥，禁止明文落盘"),
     ]
 
     # 排除模式（工具定义中的注释/文档字符串）
@@ -410,26 +603,28 @@ class AgentSecurityAuditor:
         from core.shared_filter import SharedFilter
         SharedFilter.load_cache(project_path)
 
-        # 收集所有 Python 文件（单一遍历，正则扫描与 AST 扫描复用同一份内容，避免二次 I/O）
-        # 只排除当前目录名，不影响路径中包含该词的项目
-        python_files: List[str] = []
+        # 收集所有受支持语言的文件（单一遍历，正则扫描与 AST 扫描复用同一份内容，避免二次 I/O）
+        # 只排除当前目录名，不影响路径中包含该词的项目。
+        # Python 走完整 8 维 + 参数透传 AST 扫描；Go/Node/PHP 走各自跨语言安全模式组。
+        scan_files: List[str] = []
         for root, dirs, files in os.walk(project_path):
             dirs[:] = [d for d in dirs if not d.startswith(".") and d not in self.EXCLUDE_DIRS]
             for f in files:
-                if not f.endswith(".py"):
-                    continue
-                python_files.append(os.path.join(root, f))
+                ext = os.path.splitext(f)[1].lower()
+                if ext == ".py" or ext in self.CROSSLANG_GROUPS:
+                    scan_files.append(os.path.join(root, f))
 
-        for fpath in python_files:
+        for fpath in scan_files:
+            ext = os.path.splitext(fpath)[1].lower()
             try:
                 with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
                     content = f.read()
             except (OSError, IOError):
                 continue
-            risks.extend(self._scan_file(fpath, content))
-            # AST 级参数透传失效检测（AGENT-SEC-27）：
-            # 逐行正则无法识别跨行/跨结构的「参数被配置静默覆盖」，需 AST 级分析。
-            risks.extend(self._scan_param_shadow(fpath, content))
+            risks.extend(self._scan_file(fpath, content, ext))
+            # AST 级参数透传失效检测（AGENT-SEC-27）：仅 Python（AST 解析器为 Python 专用）
+            if ext == ".py":
+                risks.extend(self._scan_param_shadow(fpath, content))
 
         # 项目级防御层级韧性缺口检测（检查缺失的防御模式）
         resilience_gaps = self._check_resilience_gaps(project_path)
@@ -447,8 +642,14 @@ class AgentSecurityAuditor:
         self.risks = risks
         return risks
 
-    def _scan_file(self, filepath: str, content: str) -> List[AgentSecurityRisk]:
-        """扫描单个文件（content 由调用方统一读取，避免二次 I/O）"""
+    def _scan_file(self, filepath: str, content: str, ext: str = ".py") -> List[AgentSecurityRisk]:
+        """扫描单个文件（content 由调用方统一读取，避免二次 I/O）。
+
+        ext 决定路由：`.py` 走完整 8 维（含 docstring 跟踪 / logger 判断等 Python 语义）；
+        Go/Node/PHP 走各自跨语言安全模式组（逐行正则，无 Python 语义）。
+        """
+        if ext != ".py":
+            return self._scan_crosslang_file(filepath, content, ext)
         risks = []
         lines = content.splitlines()
 
@@ -499,6 +700,14 @@ class AgentSecurityAuditor:
                 (self.PII_LEAK_PATTERNS, "pii_leak"),
                 (self.SECURITY_CONFIG_PATTERNS, "security_config"),
                 (self.AUTONOMOUS_ACTION_PATTERNS, "autonomous"),
+                (self.SSRF_PATTERNS, "ssrf"),
+                (self.PATH_TRAVERSAL_PATTERNS, "path_traversal"),
+                (self.DESERIALIZATION_PATTERNS, "deserialization"),
+                (self.BROWSER_SANDBOX_PATTERNS, "browser_sandbox"),
+                (self.INFO_LEAK_PATTERNS, "info_leak"),
+                (self.LLM_EXEC_PATTERNS, "tool_misuse"),
+                (self.AUTH_MISSING_PATTERNS, "security_config"),
+                (self.SECRET_WRITE_PATTERNS, "security_config"),
             ]:
                 # PII 检测需要检查 logger 行，其他检测跳过 logger 行
                 if category_key != "pii_leak" and is_logger:
@@ -536,6 +745,40 @@ class AgentSecurityAuditor:
                             suggestion=suggestion,
                         ))
 
+        return risks
+
+    def _scan_crosslang_file(self, filepath: str, content: str, ext: str) -> List[AgentSecurityRisk]:
+        """扫描 Go / Node / PHP 文件：仅应用该语言的跨语言安全模式组。
+
+        跨语言文件无 Python 语义（无 docstring / logger 行判断），直接逐行正则匹配。
+        命中即确证性危险操作信号。跳过注释行（// 、#），避免文档中的示例误报。
+        """
+        risks: List[AgentSecurityRisk] = []
+        group = self.CROSSLANG_GROUPS[ext][1]
+        lines = content.splitlines()
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # 跳过注释行（Go // 、Python/Shell # 、PHP #）/ 块注释起止由单行态近似处理
+            if stripped.startswith("//") or stripped.startswith("#") or stripped.startswith("/*"):
+                continue
+            for pattern, risk_id, risk_name, severity, detail, suggestion in group:
+                if pattern.search(stripped):
+                    # 跳过模式定义自身（如本项目该文件内联的正则字符串）
+                    if self._is_pattern_definition(stripped, risk_name):
+                        continue
+                    risks.append(AgentSecurityRisk(
+                        risk_id=risk_id,
+                        risk_name=risk_name,
+                        category="tool_misuse",
+                        severity=severity,
+                        file_path=filepath,
+                        line_number=i,
+                        line_content=stripped[:150],
+                        detail=detail,
+                        suggestion=suggestion,
+                    ))
         return risks
 
     # ─── 参数透传失效检测（AGENT-SEC-27） ───
@@ -749,9 +992,8 @@ class AgentSecurityAuditor:
             "AGENT-RESILIENCE-03", "AGENT-RESILIENCE-04",
         }
         if not has_llm:
-            logger.info(
-                "[AgentSecurityAudit] 项目未检测到 LLM 调用信号，跳过 LLM 韧性缺口检查"
-                "（避免对非 LLM 项目误报缺少重试退避等）")
+            print("[AgentSecurityAudit] 项目未检测到 LLM 调用信号，跳过 LLM 韧性缺口检查"
+                  "（避免对非 LLM 项目误报缺少重试退避等）")
 
         # 对每种防御模式，检查是否在项目中存在
         for check in self.RESILIENCE_GAP_CHECKS:
