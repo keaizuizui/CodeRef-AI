@@ -126,16 +126,24 @@ class PromptExtractor:
         """
         result = PromptExtractionResult(project_path=project_path)
         
+        # 缺陷 6：prompt 资产不只存在于 .py。AI 编程项目（skill/agent 体系）的
+        # prompt 注入载体主要是 Markdown（SKILL.md、prompts/、agents/、.cursor/rules 等），
+        # 只扫 .py 会 100% 漏检这些主流载体。扩展扫描 *.md，并对 md 走文本提取。
         py_files = list(Path(project_path).rglob("*.py"))
-        result.total_files_scanned = len(py_files)
+        md_files = list(Path(project_path).rglob("*.md"))
+        scan_files = py_files + md_files
+        result.total_files_scanned = len(scan_files)
         
-        for py_file in py_files:
+        for scan_file in scan_files:
             # 跳过虚拟环境和缓存
-            if any(skip in str(py_file) for skip in ['__pycache__', '.venv', 'venv', 'node_modules', '.git']):
+            if any(skip in str(scan_file) for skip in ['__pycache__', '.venv', 'venv', 'node_modules', '.git']):
                 continue
             
             try:
-                prompts = self._extract_from_file(str(py_file), project_path)
+                if scan_file.suffix.lower() == ".md":
+                    prompts = self._extract_from_markdown(str(scan_file), project_path)
+                else:
+                    prompts = self._extract_from_file(str(scan_file), project_path)
                 for p in prompts:
                     if p.content_hash not in self._seen_hashes:
                         self._seen_hashes.add(p.content_hash)
@@ -148,7 +156,7 @@ class PromptExtractor:
                         result.modules[p.source_module] = \
                             result.modules.get(p.source_module, 0) + 1
             except Exception as e:
-                logger.debug(f"[PromptExtractor] 跳过 {py_file}: {e}")
+                logger.debug(f"[PromptExtractor] 跳过 {scan_file}: {e}")
         
         result.total_prompts_found = len(result.prompts)
         logger.info(f"[PromptExtractor] 抽取完成: {result.total_files_scanned} 文件 → "
@@ -180,6 +188,53 @@ class PromptExtractor:
                 if rp.variable_name not in ast_names:
                     prompts.append(rp)
         
+        return prompts
+    
+    def _extract_from_markdown(self, file_path: str, project_path: str) -> List[ExtractedPrompt]:
+        """从 Markdown 文件（SKILL.md / prompts/ / agents/ / .cursor/rules 等）提取 prompt。
+
+        Markdown 不是 Python，无法走 AST；这里把正文作为一条 prompt 提取，交给下游
+        prompt_governance 的注入检测判断是否含风险。AI 编程项目的 prompt 注入载体
+        以 Markdown 为主（证据审计缺陷 6），必须纳入审计范围。
+        """
+        prompts = []
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()
+        except Exception:
+            return prompts
+        if not content.strip():
+            return prompts
+
+        # 去掉 YAML frontmatter（--- ... ---），frontmatter 是元数据而非 prompt 正文
+        body = content
+        if content.lstrip().startswith('---'):
+            m = re.match(r'^---\s*\n.*?\n---\s*\n', content, re.DOTALL)
+            if m:
+                body = content[m.end():]
+
+        # 只提取"看起来像指令"的正文（含角色/任务/指令关键词），避免把纯说明文档当 prompt。
+        # 但 SKILL.md 与 prompts/、agents/、.cursor、rules 目录下的文件本身就是指令资产，
+        # 即使正文较短/关键词少也应提取，确保注入检测覆盖到。
+        is_instruction_asset = (
+            os.path.basename(file_path).lower() == "skill.md"
+            or any(k in file_path.lower() for k in
+                   ("/prompts/", "/agents/", "/.cursor/", "/rules/", "prompts\\", "agents\\", ".cursor\\", "rules\\"))
+        )
+        if not is_instruction_asset and not self._is_likely_prompt(body):
+            return prompts
+
+        prompt = self._build_prompt(
+            file_path=file_path,
+            source=content,
+            lines=content.split('\n'),
+            var_name=os.path.basename(file_path),
+            content=body,
+            line_start=1,
+            project_path=project_path,
+            template_format="markdown",
+        )
+        prompts.append(prompt)
         return prompts
     
     def _extract_ast_assignments(
