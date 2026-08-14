@@ -193,31 +193,32 @@ class FlowVerifier:
         - 仅报告显式 `name=value` 关键字参数，忽略位置参数与 **kwargs 展开。
         """
         issues: List[dict] = []
-        for (src, tgt), props in self.call_edges.items():
-            kw = props.get("keyword_args") or []
-            if not kw:
-                continue
-            tgt_node = self.nodes.get(tgt)
-            if not tgt_node or tgt_node["type"] not in ("function", "method"):
-                continue
-            params = (tgt_node.get("props") or {}).get("params") or []
-            names, has_kwargs = self._normalize_params(params)
-            if has_kwargs:
-                continue
-            bad = [k for k in kw if k not in names]
-            if not bad:
-                continue
-            src_node = self.nodes.get(src)
-            issues.append({
-                "caller": src_node["name"] if src_node else src,
-                "caller_id": src,
-                "callee": tgt_node["name"],
-                "callee_file": file_base(tgt_node),
-                "callee_line": tgt_node.get("start_line", 0),
-                "call_line": props.get("line", 0),
-                "mismatch": bad,
-                "params": sorted(names),
-            })
+        for (src, tgt), edge_list in self.call_edges.items():
+            for props in edge_list:
+                kw = props.get("keyword_args") or []
+                if not kw:
+                    continue
+                tgt_node = self.nodes.get(tgt)
+                if not tgt_node or tgt_node["type"] not in ("function", "method"):
+                    continue
+                params = (tgt_node.get("props") or {}).get("params") or []
+                names, has_kwargs = self._normalize_params(params)
+                if has_kwargs:
+                    continue
+                bad = [k for k in kw if k not in names]
+                if not bad:
+                    continue
+                src_node = self.nodes.get(src)
+                issues.append({
+                    "caller": src_node["name"] if src_node else src,
+                    "caller_id": src,
+                    "callee": tgt_node["name"],
+                    "callee_file": file_base(tgt_node),
+                    "callee_line": tgt_node.get("start_line", 0),
+                    "call_line": props.get("line", 0),
+                    "mismatch": bad,
+                    "params": sorted(names),
+                })
         # 稳定排序，保证跨调用确定性
         issues.sort(key=lambda x: (x["callee_file"], x["callee_line"], x["call_line"]))
         return issues

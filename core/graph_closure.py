@@ -41,15 +41,16 @@ def load_graph(db_path: str) -> Tuple[Dict[str, dict], Dict[str, List[str]]]:
     return nodes, adj
 
 
-def load_call_edges(db_path: str) -> Dict[Tuple[str, str], dict]:
+def load_call_edges(db_path: str) -> Dict[Tuple[str, str], List[dict]]:
     """加载全部 CALLS 边的 props（含 line / full_name / keyword_args）。
 
+    同一对 (source, target) 可能在多处被调用，返回 list 保留全部调用点，
+    避免 dict 覆盖只留最后一个调用点的 line / keyword_args（参数契约漏报根因）。
     与 load_graph 分离，避免破坏 `nodes, adj = load_graph(...)` 的三处既有调用方。
-    返回 key=(source, target)，value=该边 props dict。供 flow_verify 做参数契约检测。
     """
     if not os.path.isfile(db_path):
         raise FileNotFoundError(f"知识图谱数据库不存在: {db_path}")
-    out: Dict[Tuple[str, str], dict] = {}
+    out: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
     try:
@@ -59,7 +60,7 @@ def load_call_edges(db_path: str) -> Dict[Tuple[str, str], dict]:
                 props = json.loads(r["props"] or "{}")
             except Exception:
                 props = {}
-            out[(r["source"], r["target"])] = props
+            out[(r["source"], r["target"])].append(props)
     finally:
         con.close()
     return out

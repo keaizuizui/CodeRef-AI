@@ -46,11 +46,14 @@ Agent 安全审计器 —— 专为 AI Agent 系统设计的风险检测
 """
 
 import ast
+import logging
 import os
 import re
 from typing import List, Set
 from dataclasses import dataclass
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -721,11 +724,13 @@ class AgentSecurityAuditor:
                         # 跳过模式定义自身（如类中的正则表达式定义）
                         if self._is_pattern_definition(stripped, risk_name):
                             continue
-                        # AGENT-SEC-25：提取完整调用参数（平衡括号，支持跨行/嵌套），
-                        # 若已显式传入 timeout 关键字参数，则不算"无超时"误报
-                        if risk_id == "AGENT-SEC-25":
+                        # 提取完整调用参数（平衡括号，支持跨行/嵌套），避免单行匹配误报：
+                        # AGENT-SEC-25 无 timeout；AGENT-SEC-AUTH 多行 router 调用挂载了 dependencies
+                        if risk_id in ("AGENT-SEC-25", "AGENT-SEC-AUTH"):
                             args = self._collect_call_args(lines, i - 1, stripped, m.start())
-                            if re.search(r'timeout\s*=', args, re.IGNORECASE):
+                            if risk_id == "AGENT-SEC-25" and re.search(r'timeout\s*=', args, re.IGNORECASE):
+                                continue
+                            if risk_id == "AGENT-SEC-AUTH" and re.search(r'dependencies\s*=', args, re.IGNORECASE):
                                 continue
                         # 提示注入/上下文操纵：若注入点已被净化函数包裹，视为已安全处理
                         if is_sanitized and category_key in ("prompt_injection", "context_manipulation"):
@@ -992,8 +997,9 @@ class AgentSecurityAuditor:
             "AGENT-RESILIENCE-03", "AGENT-RESILIENCE-04",
         }
         if not has_llm:
-            print("[AgentSecurityAudit] 项目未检测到 LLM 调用信号，跳过 LLM 韧性缺口检查"
-                  "（避免对非 LLM 项目误报缺少重试退避等）")
+            logger.info(
+                "[AgentSecurityAudit] 项目未检测到 LLM 调用信号，跳过 LLM 韧性缺口检查"
+                "（避免对非 LLM 项目误报缺少重试退避等）")
 
         # 对每种防御模式，检查是否在项目中存在
         for check in self.RESILIENCE_GAP_CHECKS:

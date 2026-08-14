@@ -1265,6 +1265,10 @@ class GovernanceAuditor:
             ls = line.strip()
             if ls.startswith("#") or ls.startswith("//"):
                 continue
+            # 跳过检测器自身正则规则定义行（SECRET_PERSIST_PATTERNS 的 re.compile(...)），
+            # 避免审计 Coderef 自身时把规则定义当真实落盘误报。真实落盘代码不含 re.compile(。
+            if "re.compile(" in ls:
+                continue
             for pattern, rule_id, rule_name, severity, detail in self.SECRET_PERSIST_PATTERNS:
                 if pattern.search(ls):
                     violations.append(GovernanceViolation(
