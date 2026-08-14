@@ -131,7 +131,10 @@ class PromptExtractor:
         # 只扫 .py 会 100% 漏检这些主流载体。扩展扫描 *.md，并对 md 走文本提取。
         py_files = list(Path(project_path).rglob("*.py"))
         md_files = list(Path(project_path).rglob("*.md"))
-        scan_files = py_files + md_files
+        # 治理缺陷：知识包/提示词库等纯文本指令内容文件（如 目标产品 的
+        # knowledge_pack/*.txt）也是 prompt 资产，只扫 .py/.md 会漏检其内容污染。
+        txt_files = list(Path(project_path).rglob("*.txt"))
+        scan_files = py_files + md_files + txt_files
         result.total_files_scanned = len(scan_files)
         
         for scan_file in scan_files:
@@ -142,6 +145,8 @@ class PromptExtractor:
             try:
                 if scan_file.suffix.lower() == ".md":
                     prompts = self._extract_from_markdown(str(scan_file), project_path)
+                elif scan_file.suffix.lower() == ".txt":
+                    prompts = self._extract_from_textfile(str(scan_file), project_path)
                 else:
                     prompts = self._extract_from_file(str(scan_file), project_path)
                 for p in prompts:
@@ -233,6 +238,43 @@ class PromptExtractor:
             line_start=1,
             project_path=project_path,
             template_format="markdown",
+            keep_full=is_instruction_asset,
+        )
+        prompts.append(prompt)
+        return prompts
+
+    def _extract_from_textfile(self, file_path: str, project_path: str) -> List[ExtractedPrompt]:
+        """从纯文本指令内容文件（知识包 / 提示词库 .txt）提取 prompt。
+
+        知识包/提示词库（如 目标产品 的 brand/cognition/knowledge_pack/*.txt）是
+        供 LLM 引用的内容资产，其内容污染（伪科学/违禁宣称）会示范污染下游生成。
+        仅当文件位于指令内容目录时提取，整文件作为一条 prompt 资产保留全文，
+        供 prompt_governance 做治理检测。
+        """
+        low = file_path.lower().replace("\\", "/")
+        if not any(k in low for k in (
+                "knowledge_pack", "cognition", "/knowledge/", "/knowledge\\",
+                "/prompts/", "prompts\\", "/skills/", "skills\\",
+                "prompt_lib", "知识库", "提示词", "llm/", "llm\\")):
+            return []
+        prompts = []
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()
+        except Exception:
+            return prompts
+        if not content.strip():
+            return prompts
+        prompt = self._build_prompt(
+            file_path=file_path,
+            source=content,
+            lines=content.split('\n'),
+            var_name=os.path.basename(file_path),
+            content=content,
+            line_start=1,
+            project_path=project_path,
+            template_format="text",
+            keep_full=True,
         )
         prompts.append(prompt)
         return prompts
@@ -396,6 +438,7 @@ class PromptExtractor:
         project_path: str,
         template_format: str = "triple_quote",
         variables: List[str] = None,
+        keep_full: bool = False,
     ) -> ExtractedPrompt:
         """构建 ExtractedPrompt 对象"""
         import hashlib
@@ -403,8 +446,9 @@ class PromptExtractor:
         # 计算内容哈希
         content_hash = hashlib.sha256(content.encode('utf-8', errors='replace')).hexdigest()[:16]
         
-        # 截断内容
-        display_content = content[:3000]
+        # 截断内容。指令资产（SKILL.md / 知识包 .txt）保留全文，使治理/注入检测
+        # 能覆盖文件任意位置（治理隐患常出现在中后段，3000 截断会漏检）。
+        display_content = content if keep_full else content[:3000]
         
         # 计算结束行号
         line_end = line_start + content.count('\n')

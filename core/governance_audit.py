@@ -357,6 +357,56 @@ class GovernanceAuditor:
         r'(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key|client_secret)\s*[:=]\s*["\']?([^"\'#\s]{8,})["\']?', re.IGNORECASE
     )
 
+    # ===== 文档类文件（.md/.SKILL/.txt）的治理合规检测 =====
+    # 治理合规盲区：SKILL.md / 文档中的明文凭据与审查绕过表述（已有真实项目缺陷验证）
+    # 文档文件扩展名
+    DOC_EXTENSIONS = {".md", ".markdown", ".txt", ".skill"}
+
+    # 文档中的明文密钥环境变量赋值：如 SN_API_KEY=xxx、BRAND_LLM_API_KEY=xxx、KEY=xxx
+    # 仅匹配密钥类环境变量名 + 赋值，避免误报普通说明文字
+    DOC_SECRET_PATTERNS = [
+        (re.compile(r'\b[A-Z0-9_]+(?:_API_KEY|_APISECRET|_SECRET_KEY|_ACCESS_KEY|_PRIVATE_KEY|_CLIENT_SECRET)\b\s*=', re.IGNORECASE),
+         "IRON-SEC-01", "文档明文密钥赋值", "critical",
+         "文档中展示了密钥环境变量的明文赋值（如 *_API_KEY=...），若被用户照抄写入配置文件会造成凭据明文落盘。应改用占位符并提示从密钥管理服务获取。"),
+        (re.compile(r'\bsk-[A-Za-z0-9_\-]{8,}\b'),
+         "IRON-SEC-01", "文档明文密钥赋值", "critical",
+         "文档中出现了 sk- 开头的明文 API 密钥，可能是泄露的真实密钥。应立即撤销并改用密钥管理服务。"),
+    ]
+
+    # 文档中引导把密钥写入凭据配置文件（.env 等）
+    DOC_ENV_CRED_PATTERNS = [
+        (re.compile(r'\.env\b[^\n]*\b(?:API_KEY|SECRET|TOKEN|CREDENTIAL|[A-Z0-9_]*KEY)\b', re.IGNORECASE),
+         "IRON-SEC-01", "引导密钥写入凭据文件", "critical",
+         "文档引导/示范将密钥类环境变量（API_KEY/SECRET/TOKEN/KEY）写入 .env 凭据配置文件，属于明文凭据落盘的高风险指引。应引导使用密钥管理服务或加密存储。"),
+        (re.compile(r'(?:写入|保存|配置到|export)\s*[^\n]*\.env\b', re.IGNORECASE),
+         "IRON-SEC-01", "引导密钥写入凭据文件", "high",
+         "文档引导将配置（可能含密钥）写入 .env 凭据配置文件，若包含 API Key 属于明文凭据落盘。应避免在文档中示范密钥明文写入凭据文件。"),
+    ]
+
+    # 文档中的审查绕过类表述（削弱合规审查严格度）
+    GOV_BYPASS_PATTERNS = [
+        (re.compile(r'忽略清单'), "审查绕过(忽略清单)", "high",
+         "文档建立了'忽略清单'以跳过合规审查，属治理合规盲区。忽略清单应受审计追踪，不得静默放行。"),
+        (re.compile(r'直接放行'), "审查绕过(直接放行)", "high",
+         "文档声明对命中项'直接放行'不审查，削弱了合规审查严格度，属治理合规盲区。"),
+        (re.compile(r'一律不输出'), "审查绕过(一律不输出)", "high",
+         "文档规定'一律不输出来些风险'，隐藏了非致命但仍需记录的风险，属治理合规盲区。应保留风险日志供审计。"),
+        (re.compile(r'直接跳过[^\n]*不报告'), "审查绕过(直接跳过不报告)", "high",
+         "文档规定'直接跳过且不报告风险'，削弱了合规审查的可审计性，属治理合规盲区。"),
+    ]
+
+    # ===== 代码中密钥明文落盘（写入 .env 等凭据文件）=====
+    # f-string 密钥赋值格式化进字符串（如 f"BRAND_LLM_API_KEY={self.llm.api_key}"）
+    # 值来源必须为 api_key/secret/token/key 变量，确保确证性
+    SECRET_PERSIST_PATTERNS = [
+        (re.compile(r'f["\'][^"\']*\b[A-Z0-9_]*(?:API|ACCESS|SECRET|PRIVATE|CLIENT)[_-]?KEY\b\s*=\s*\{[^}]*\b(?:api_key|secret|token|key)\b', re.IGNORECASE),
+         "IRON-SEC-01", "密钥明文落盘", "critical",
+         "将 API Key 以 'KEY={...}' 形式格式化进字符串（通常用于写入 .env 等凭据配置文件），属于明文凭据落盘，应改用密钥管理服务。"),
+    ]
+
+    # 密钥落盘方法名（如 def save_env / write_env / export_env）
+    SECRET_PERSIST_FUNC = re.compile(r'def\s+\w*(?:save_env|write_env|export_env|dump_env)\w*\s*\(')
+
     # 敏感信息泄露（日志/调试输出中暴露敏感变量）
     SENSITIVE_LOG = [
         (re.compile(r'(?:print|log(?:ger)?\.(?:debug|info|warning|error)|console\.log)\s*\([^)]*\b(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)\b', re.IGNORECASE),
@@ -506,6 +556,8 @@ class GovernanceAuditor:
         for cf in analysis.files:
             # 安全铁律
             violations.extend(self._check_security(cf))
+            # 密钥明文落盘（写入 .env 等凭据文件）
+            violations.extend(self._check_secret_persistence(cf))
             # 错题本模式
             violations.extend(self._check_pitfalls(cf))
             # 异步函数中同步阻塞（AST 级别检测）
@@ -518,6 +570,9 @@ class GovernanceAuditor:
 
         # 3.5 非 Python 文件机密扫描（.env/.yaml/.json/.toml等）
         violations.extend(self._scan_non_py_secrets(project_path))
+
+        # 3.6 文档类文件（.md/.SKILL/.txt）治理合规扫描（明文凭据 + 审查绕过）
+        violations.extend(self._scan_doc_secrets(project_path))
 
         # 3.7 集中过滤 cache 白名单（确保所有违规都经过白名单检查）
         #    注意：_check_security 内部也有过滤，这里做集中兜底
@@ -1150,6 +1205,97 @@ class GovernanceAuditor:
                             ))
                 except (OSError, IOError, UnicodeDecodeError):
                     pass
+        return violations
+
+    def _scan_doc_secrets(self, project_path: str) -> List[GovernanceViolation]:
+        """
+        扫描文档类文件（.md/.SKILL/.txt）中的治理合规缺陷：
+        1. 明文密钥环境变量赋值（如 SN_API_KEY=xxx）
+        2. 引导/示范把密钥写入凭据配置文件（.env 等）
+        3. 审查绕过类表述（忽略清单/白名单/直接放行/一律不输出）
+        """
+        violations = []
+        for root, dirs, files in os.walk(project_path):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
+                "__pycache__", "node_modules", ".git", "venv", ".venv", "data",
+                "third_party", ".gitnexus", "docs", "reports",
+            )]
+            for f in files:
+                ext = os.path.splitext(f)[1].lower()
+                if ext not in self.DOC_EXTENSIONS:
+                    continue
+                fpath = os.path.join(root, f)
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
+                        for lineno, line in enumerate(fh, 1):
+                            for pattern, rule_id, rule_name, severity, detail in self.DOC_SECRET_PATTERNS:
+                                if pattern.search(line):
+                                    violations.append(self._doc_violation(
+                                        rule_id, rule_name, severity, detail, fpath, lineno, line))
+                            for pattern, rule_id, rule_name, severity, detail in self.DOC_ENV_CRED_PATTERNS:
+                                if pattern.search(line):
+                                    violations.append(self._doc_violation(
+                                        rule_id, rule_name, severity, detail, fpath, lineno, line))
+                            for pattern, rule_name, severity, detail in self.GOV_BYPASS_PATTERNS:
+                                if pattern.search(line):
+                                    violations.append(self._doc_violation(
+                                        "IRON-GOV-01", rule_name, severity, detail, fpath, lineno, line))
+                except (OSError, IOError, UnicodeDecodeError):
+                    pass
+        return violations
+
+    @staticmethod
+    def _doc_violation(rule_id, rule_name, severity, detail, fpath, lineno, line) -> GovernanceViolation:
+        """构造文档类违规项"""
+        return GovernanceViolation(
+            rule_id=rule_id, rule_name=rule_name, category="security",
+            severity=severity, file_path=fpath, line_number=lineno,
+            line_content=line.strip()[:120], detail=detail,
+            suggestion="将凭据改为占位符并从密钥管理服务读取；审查绕过/忽略清单应受审计追踪，不得静默放行",
+        )
+
+    def _check_secret_persistence(self, cf) -> List[GovernanceViolation]:
+        """检测代码中把密钥明文落盘到 .env 等凭据文件（如 def save_env 写入 API_KEY）"""
+        violations = []
+        lines = cf.raw_content.splitlines() if cf.raw_content else []
+        total = len(lines)
+
+        # 1) 行级 f-string 密钥赋值落盘（如 f"BRAND_LLM_API_KEY={self.llm.api_key}"）
+        for i, line in enumerate(lines, 1):
+            ls = line.strip()
+            if ls.startswith("#") or ls.startswith("//"):
+                continue
+            for pattern, rule_id, rule_name, severity, detail in self.SECRET_PERSIST_PATTERNS:
+                if pattern.search(ls):
+                    violations.append(GovernanceViolation(
+                        rule_id=rule_id, rule_name=rule_name, category="security",
+                        severity=severity, file_path=cf.file_path, line_number=i,
+                        line_content=ls[:120], detail=detail,
+                        suggestion="改用密钥管理服务或加密存储，避免 API Key 明文落盘到 .env 等凭据文件",
+                    ))
+
+        # 2) 方法级：save_env/write_env 类方法，且方法体内含密钥变量 + .env 写入
+        for i, line in enumerate(lines):
+            if self.SECRET_PERSIST_FUNC.search(line):
+                body = [line]
+                j = i + 1
+                while j < total:
+                    nxt = lines[j]
+                    if re.match(r'^\s*(?:def|class)\s+', nxt):
+                        break
+                    body.append(nxt)
+                    j += 1
+                bodytext = "\n".join(body)
+                if re.search(r'\b(?:api_key|API_KEY|secret|token|SECRET_KEY)\b', bodytext) and \
+                   re.search(r'\.env\b|write_text|\.write\s*\(', bodytext):
+                    violations.append(GovernanceViolation(
+                        rule_id="IRON-SEC-01", rule_name="密钥明文落盘",
+                        category="security", severity="critical",
+                        file_path=cf.file_path, line_number=i + 1,
+                        line_content=line.strip()[:120],
+                        detail=f"方法 {line.strip()[:40]} 将 API Key 明文写入 .env 凭据文件，属明文凭据落盘。",
+                        suggestion="改用密钥管理服务或加密存储，避免 API Key 明文落盘到 .env",
+                    ))
         return violations
 
     def _check_architecture(self, analysis) -> List[GovernanceViolation]:

@@ -140,7 +140,8 @@ def _ast_to_dict(ar) -> dict:
         "classes": [_ast_class_to_dict(c) for c in ar.classes],
         "calls": [
             {"func_name": c.func_name, "line": c.line,
-             "is_method_call": c.is_method_call, "args_count": c.args_count}
+             "is_method_call": c.is_method_call, "args_count": c.args_count,
+             "keyword_args": list(getattr(c, "keyword_args", []))}
             for c in ar.calls
         ],
         "assignments": [
@@ -211,7 +212,8 @@ def _ast_from_dict(d: dict):
     result.calls = [
         AstCodeCall(func_name=c["func_name"], line=c.get("line", 0),
                     is_method_call=c.get("is_method_call", False),
-                    args_count=c.get("args_count", 0))
+                    args_count=c.get("args_count", 0),
+                    keyword_args=list(c.get("keyword_args", [])))
         for c in d.get("calls", [])
     ]
     result.assignments = [

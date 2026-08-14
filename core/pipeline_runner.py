@@ -1042,6 +1042,31 @@ class Pipe:
                     title=f"依赖扫描完成：扫描 {scanned} 个依赖，未发现已知漏洞",
                     detail="SCA 工具已执行，本项目依赖未命中本地/OSV 已知漏洞库。",
                     suggestion="", tier=Tier.LOW))
+            # 非 CVE 类供应链风险（供应链安装 / 依赖未锁定 / 弃用依赖）
+            for risk in getattr(rep, "supply_chain_risks", []):
+                r.findings.append(Finding(id=f"sca-{len(r.findings)}", tool="sca",
+                    category="supply_chain_install", severity="high",
+                    file_path=risk.get("file", ""), line=risk.get("line", 0),
+                    title=f"供应链安装风险：运行时自动安装第三方包（{risk.get('file','')}:{risk.get('line',0)}）",
+                    detail=risk.get("detail", ""),
+                    suggestion="运行时禁止自动安装第三方包；改为启动前显式安装并锁定版本/hash 校验，包名来源需经人工确认",
+                    tier=Tier.HIGH))
+            for risk in getattr(rep, "unpinned_deps", []):
+                r.findings.append(Finding(id=f"sca-{len(r.findings)}", tool="sca",
+                    category="unpinned_dependency", severity="medium",
+                    file_path=risk.get("source_file", ""), line=risk.get("source_line", 0),
+                    title=f"依赖未锁定：{risk.get('package','')} {risk.get('version','')}",
+                    detail=risk.get("detail", ""),
+                    suggestion="为依赖固定精确版本并生成 lock 文件（如 requirements.lock/poetry.lock），保证构建可复现",
+                    tier=Tier.MEDIUM))
+            for risk in getattr(rep, "deprecated_deps", []):
+                r.findings.append(Finding(id=f"sca-{len(r.findings)}", tool="sca",
+                    category="deprecated_dependency", severity="medium",
+                    file_path=risk.get("source_file", ""), line=risk.get("source_line", 0),
+                    title=f"弃用依赖：{risk.get('package','')}（迁移至 {risk.get('migration','')}）",
+                    detail=risk.get("detail", ""),
+                    suggestion=f"迁移至官方替代 {risk.get('migration','')}",
+                    tier=Tier.MEDIUM))
             done.add("sca"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"sca: {e}")
 

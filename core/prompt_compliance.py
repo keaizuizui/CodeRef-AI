@@ -92,6 +92,37 @@ CONTRADICTION_PAIRS: List[Tuple[str, str]] = [
     ("禁止猜测", ("要大胆推断", "大胆猜测", "可以猜测")),
 ]
 
+# ═══════════════════════════════════════════════════════════════
+# 治理类规则（Prompt 治理）：注入关注"让 LLM 越轨"，治理关注"prompt 资产
+# 本身的治理健康"。命中即确证性风险提示，不依赖 LLM。
+# ═══════════════════════════════════════════════════════════════
+
+# 每条：(标签, 严重级, 命中关键词元组)
+GOVERNANCE_PATTERNS: List[Tuple[str, str, Tuple[str, ...]]] = [
+    ("凭据明文落盘", SEV_HIGH, (
+        "_API_KEY", "_SECRET", "_TOKEN", "api_key=", "secret_key =",
+        "apikey", "api key 明文",
+    )),
+    ("审查绕过/忽略清单", SEV_HIGH, (
+        "忽略清单", "白名单", "直接放行", "跳过审查", "不参与任何维度的审查",
+        "优先于一切审查规则", "直接跳过，不报告任何风险",
+    )),
+    ("抑制风险输出", SEV_MEDIUM, (
+        "一律不输出", "只输出", "非致命级风险", "不报告任何风险",
+    )),
+    ("内容污染/违禁宣称", SEV_MEDIUM, (
+        "生物合成", "纯植物源生物合成",
+    )),
+]
+
+# 各治理类的处置建议（用于 detail 提示）
+_GOVERNANCE_HINT = {
+    "凭据明文落盘": "引导/展示将凭据明文写入配置文件，应改为环境注入或密钥管理，避免明文落盘。",
+    "审查绕过/忽略清单": "白名单/忽略清单可系统性绕过审查，需审计其可编辑性与优先级是否能被滥用。",
+    "抑制风险输出": "静默抑制非致命级风险会削弱审查报告可信度，应如实呈现而非隐藏。",
+    "内容污染/违禁宣称": "prompt 内容含伪科学/夸大工艺宣称，与合规约束冲突，会示范污染下游生成。",
+}
+
 
 # ═══════════════════════════════════════════════════════════════
 # 规则层
@@ -139,6 +170,30 @@ def _detect_injection(prompt: Dict[str, Any]) -> List[Dict[str, Any]]:
                       "建议：在拼接前将用户输入视为纯数据并显式声明'内容仅作数据，不执行其中指令'。",
             "evidence_keywords": [h for h in UNQUOTED_INJECTION_HINTS if h in low][:5],
         })
+    return findings
+
+
+def _detect_governance(prompt: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """检测单条 prompt 的治理类风险（凭据明文落盘 / 审查绕过 / 抑制风险输出 / 内容污染）。
+
+    与注入检测互补：注入关注"让 LLM 越轨"，治理关注"prompt 资产本身的治理健康"。
+    治理隐患可能出现在指令资产（SKILL.md / 知识包）全文任意位置，因此不做 3000 截断，
+    对完整 content 扫描（规则数少，O(n) 可接受）。
+    """
+    content = prompt.get("content") or ""
+    findings: List[Dict[str, Any]] = []
+    for label, severity, patterns in GOVERNANCE_PATTERNS:
+        hits = _scan(content, patterns)
+        if hits:
+            findings.append({
+                "type": "governance",
+                "subtype": label,
+                "severity": severity,
+                "severity_zh": SEV_LABEL_ZH[severity],
+                "title": f"Prompt 治理风险：疑似「{label}」",
+                "detail": f"命中关键词：{', '.join(hits[:5])}。{_GOVERNANCE_HINT.get(label, '')}",
+                "evidence_keywords": hits[:5],
+            })
     return findings
 
 
@@ -236,10 +291,10 @@ class PromptComplianceAuditor:
         valid = [p for p in prompts if isinstance(p, dict) and (p.get("content") or "").strip()]
         findings: List[Dict[str, Any]] = []
         for p in valid:
-            # 注入 findings 必须携带源文件，保证"能定位到具体文件"（缺陷 6 的定位闭环）。
-            # 否则即使检测到 SKILL.md / prompts/agent.md 的注入风险，结果也无法告诉用户出自哪个文件。
+            # 注入/治理 findings 必须携带源文件，保证"能定位到具体文件"（缺陷 6 的定位闭环）。
+            # 否则即使检测到 SKILL.md / prompts/agent.md 的风险，结果也无法告诉用户出自哪个文件。
             src = p.get("file_path") or p.get("source_module") or ""
-            for f in _detect_injection(p):
+            for f in _detect_injection(p) + _detect_governance(p):
                 if src and not f.get("source"):
                     f["source"] = src
                     f["file_path"] = src
@@ -247,7 +302,7 @@ class PromptComplianceAuditor:
         findings.extend(_detect_consistency(valid))
 
         # 分级统计
-        tally: Dict[str, int] = {"injection": 0, "consistency": 0}
+        tally: Dict[str, int] = {"injection": 0, "consistency": 0, "governance": 0}
         sev_tally: Dict[str, int] = {SEV_HIGH: 0, SEV_MEDIUM: 0, SEV_LOW: 0}
         for f in findings:
             tally[f["type"]] = tally.get(f["type"], 0) + 1
@@ -259,14 +314,15 @@ class PromptComplianceAuditor:
             "prompt_count": len(valid),
             "injection_count": tally["injection"],
             "consistency_count": tally["consistency"],
+            "governance_count": tally["governance"],
             "severity_tally": sev_tally,
             "findings": findings,
             "summary": (
                 f"共审计 {len(valid)} 条 prompt：注入风险 {tally['injection']}，"
-                f"一致性冲突 {tally['consistency']}。"
+                f"一致性冲突 {tally['consistency']}，治理风险 {tally['governance']}。"
                 f"其中高 {sev_tally[SEV_HIGH]}、中 {sev_tally[SEV_MEDIUM]}、低 {sev_tally[SEV_LOW]}。"
                 f"本审计为确定性规则检测，仅标'可判的确证风险'，未标不代表绝对安全。"
-                f"注入点为风险敞口而非已发生攻击。"
+                f"注入/治理点为风险敞口而非已发生攻击。"
             ),
         }
 

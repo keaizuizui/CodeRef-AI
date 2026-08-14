@@ -9,6 +9,7 @@ SCA (Software Composition Analysis) 依赖扫描器
 
 import os
 import re
+import sys
 import json
 import hashlib
 import logging
@@ -82,6 +83,10 @@ class SCAReport:
     low_count: int = 0
     offline_mode: bool = False
     osv_status: str = "ok"  # ok / degraded（在线查询失败，仅本地库）
+    # 非 CVE 类供应链风险（缺陷 hit 补齐：供应链安装/依赖未锁定/弃用依赖）
+    supply_chain_risks: List[dict] = field(default_factory=list)  # 运行时自动安装第三方包
+    unpinned_deps: List[dict] = field(default_factory=list)       # 依赖未锁定/无版本约束
+    deprecated_deps: List[dict] = field(default_factory=list)     # 已弃用依赖（如 jwt-go）
 
     @property
     def clean_score(self) -> float:
@@ -119,13 +124,30 @@ class SCAChecker:
         # 注意："project"（PEP 621）已移除——其 dependencies 为数组形式
         # (dependencies = ["pkg>=1.0", ...])，TOML_PATTERN 无法匹配；
         # 而 [project] 中的标量键（name/version 等）会被误解析为依赖。
-        # PEP 621 数组形式依赖需单独解析，此处暂不处理。
+        # PEP 621 数组形式依赖需单独解析（见 _parse_dep_file 中 project 段的
+        # _PEP621_DEPS_START / _parse_toml_array_line 分支），此处不再用逐行匹配。
         "tool.poetry.dependencies",    # poetry 运行时依赖
         "tool.poetry.group.dev.dependencies",
         "tool.pdm.dev-dependencies",
         "tool.uv",                     # uv 依赖
         "dependency-groups",
     }
+
+    # PEP 621 [project] / [dependency-groups] 的数组形式依赖声明起始行：
+    #   dependencies = [
+    #     "aiohttp>=3.12.14",
+    #     "opencv-python",
+    #   ]
+    _PEP621_DEPS_START = re.compile(
+        r'^\s*dependencies\s*=\s*\[',
+        re.IGNORECASE,
+    )
+    # 数组元素：引号内包名（可含 extras 如 scenedetect[opencv]）+ 可选版本约束
+    _TOML_ARR_ITEM_RE = re.compile(
+        r'["\']\s*([a-zA-Z0-9_.\-]+(?:\[[^\]]*\])?)\s*'
+        r'([><=!~^]*\s*[a-zA-Z0-9_.\-+*]*)\s*["\']',
+        re.IGNORECASE,
+    )
 
     # OSV API endpoint
     OSV_API_URL = "https://api.osv.dev/v1/query"
@@ -325,6 +347,16 @@ class SCAChecker:
         "CVE-2022-24999": "4.17.3",   # express
     }
 
+    # 已弃用依赖表：包名 -> (官方迁移目标, 说明)。
+    # 命中即报"弃用依赖"风险（非 CVE 漏洞，但会引入已维护者停更的已知缺陷面）。
+    DEPRECATED_DEPS = {
+        "dgrijalva/jwt-go": (
+            "github.com/golang-jwt/jwt",
+            "dgrijalva/jwt-go 已被维护者弃用并停更（官方迁移至 golang-jwt），"
+            "预发布版本存在已知签名/密钥处理问题，被实际使用时建议迁移",
+        ),
+    }
+
     # 组件级利用面规则表：CVE → (组件名, 检测该组件是否被实际 import/使用的正则, 说明)
     # 某些 CVE 虽真实存在，但只影响依赖里的特定子组件（如 langchain-community 的
     # SitemapLoader）。当项目从未 import/使用该组件时，漏洞利用面为零，应判定为
@@ -355,10 +387,16 @@ class SCAChecker:
             dependencies.extend(deps)
 
         if not dependencies:
+            # 盲区1：项目内无任何依赖清单文件，却直接 import 大量第三方包，版本完全
+            # 不可复现。扫描 import 语句识别第三方包，按"依赖未锁定"补齐报告。
+            unpinned = self._detect_unpinned_from_imports(project_path)
+            supply_chain_risks = self._detect_supply_chain_install(project_path)
             report = SCAReport(
                 project_path=project_path,
                 total_deps=0, scanned_deps=0, vulnerable_deps=0,
                 total_vulnerabilities=0, dependencies=[],
+                unpinned_deps=unpinned,
+                supply_chain_risks=supply_chain_risks,
             )
             self.report = report
             return report
@@ -389,6 +427,11 @@ class SCAChecker:
         medium = sum(1 for d in vulnerable for v in d.vulnerabilities if v.severity == "medium")
         low = sum(1 for d in vulnerable for v in d.vulnerabilities if v.severity == "low")
 
+        # 非 CVE 类供应链风险（缺陷 hit 补齐）：依赖未锁定 / 弃用依赖 / 供应链安装
+        supply_chain_risks = self._detect_supply_chain_install(project_path)
+        unpinned_deps = self._detect_unpinned_deps(unique_deps, dep_files)
+        deprecated_deps = self._detect_deprecated_deps(unique_deps)
+
         report = SCAReport(
             project_path=project_path,
             total_deps=len(unique_deps),
@@ -402,6 +445,9 @@ class SCAChecker:
             low_count=low,
             offline_mode=self.offline,
             osv_status="degraded" if self._osv_degraded else "ok",
+            supply_chain_risks=supply_chain_risks,
+            unpinned_deps=unpinned_deps,
+            deprecated_deps=deprecated_deps,
         )
         # 暴露结构化结果，供管线统一收集
         self.report = report
@@ -453,6 +499,7 @@ class SCAChecker:
             return self._parse_gomod(filepath)
 
         cur_section = ""  # 当前 TOML 段（仅 pyproject.toml）
+        pyproject_deps_buf = None  # PEP 621 [project]/[dependency-groups] 数组依赖收集缓冲
 
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
@@ -486,7 +533,27 @@ class SCAChecker:
                 sec = self._match_toml_section(stripped)
                 if sec is not None:
                     cur_section = sec
+                    pyproject_deps_buf = None  # 离开数组
                     continue
+                # PEP 621 [project] / [dependency-groups] 数组形式依赖：
+                #   dependencies = [
+                #     "aiohttp>=3.12.14",
+                #     "opencv-python",
+                #   ]
+                if cur_section in ("project", "dependency-groups"):
+                    if pyproject_deps_buf is not None:
+                        # 正在收集数组元素
+                        pyproject_deps_buf.append(stripped)
+                        if "]" in stripped:
+                            self._emit_toml_array_items(pyproject_deps_buf, filepath, deps)
+                            pyproject_deps_buf = None
+                        continue
+                    if self._PEP621_DEPS_START.match(stripped):
+                        pyproject_deps_buf = [stripped]
+                        if "]" in stripped:
+                            self._emit_toml_array_items(pyproject_deps_buf, filepath, deps)
+                            pyproject_deps_buf = None
+                        continue
                 # 仅依赖段内的 key = "value" 视为依赖
                 if cur_section not in self.TOML_DEP_SECTIONS:
                     continue
@@ -510,6 +577,30 @@ class SCAChecker:
                     ))
 
         return deps
+
+    def _emit_toml_array_items(self, buf_lines: List[str], filepath: str, deps: List[DependencyInfo]) -> None:
+        """把 PEP 621 数组声明的多行文本解析为依赖项并追加到 deps。
+
+        例：["aiohttp>=3.12.14", "opencv-python", "scenedetect[opencv]>=0.6.7.1"]
+        """
+        text = " ".join(buf_lines)
+        for mm in self._TOML_ARR_ITEM_RE.finditer(text):
+            pkg = re.sub(r'\[.*\]', '', mm.group(1)).strip()
+            if not pkg:
+                continue
+            ver_raw = (mm.group(2) or "").strip()
+            if not ver_raw:
+                deps.append(DependencyInfo(
+                    package=pkg, version="latest",
+                    source_file=filepath, source_line=0,
+                ))
+            else:
+                op, ver = self._split_version_constraint(ver_raw)
+                deps.append(DependencyInfo(
+                    package=pkg, version=ver,
+                    source_file=filepath, source_line=0,
+                    constraint=op,
+                ))
 
     def _parse_package_json(self, filepath: str) -> List[DependencyInfo]:
         """解析 package.json，提取 dependencies / devDependencies（缺陷 8）。
@@ -577,6 +668,180 @@ class SCAChecker:
                         constraint="", ecosystem="Go",
                     ))
         return deps
+
+    def _detect_deprecated_deps(self, deps: List[DependencyInfo]) -> List[dict]:
+        """检测已弃用依赖（如 dgrijalva/jwt-go，含 go.mod 的 /vN 主版本后缀）。"""
+        out = []
+        for dep in deps:
+            # go.mod 依赖常带主版本后缀（如 dgrijalva/jwt-go/v4）与域名前缀
+            # （github.com/dgrijalva/jwt-go/v4），归一化为纯路径后匹配弃用表
+            bare = re.sub(r'^[^/]+/', '', dep.package)   # 去 github.com/ 等域名前缀
+            bare = re.sub(r'/v\d+$', '', bare)           # 去 /v4 主版本后缀
+            info = self.DEPRECATED_DEPS.get(bare)
+            if not info:
+                continue
+            migration, note = info
+            out.append({
+                "package": dep.package,
+                "version": dep.version,
+                "source_file": dep.source_file,
+                "source_line": dep.source_line,
+                "migration": migration,
+                "detail": note,
+            })
+        return out
+
+    # 未锁定判定用的范围运算符（无法确定精确安装版本）
+    _UNPINNED_RANGE_OPS = (">=", ">", "<=", "<", "~=", "!=", "^", "~")
+
+    # Python 标准库模块名（用于盲区1：目录无依赖清单时，从 import 语句识别第三方包）。
+    # 优先用 sys.stdlib_module_names（Python 3.10+），低版本降级为内置集合。
+    STDLIB_MODULES = frozenset(getattr(sys, "stdlib_module_names", ())) or frozenset({
+        "__future__", "__main__", "_thread", "abc", "argparse", "ast", "asyncio",
+        "atexit", "base64", "binascii", "bisect", "builtins", "bz2", "calendar",
+        "cmath", "collections", "colorsys", "concurrent", "configparser", "contextlib",
+        "copy", "csv", "ctypes", "dataclasses", "datetime", "decimal", "difflib",
+        "dis", "email", "enum", "errno", "faulthandler", "fcntl", "filecmp", "fnmatch",
+        "fractions", "ftplib", "functools", "gc", "getopt", "getpass", "glob", "gzip",
+        "hashlib", "heapq", "hmac", "html", "http", "importlib", "inspect", "io",
+        "ipaddress", "itertools", "json", "keyword", "linecache", "locale", "logging",
+        "lzma", "mailbox", "marshal", "math", "mimetypes", "multiprocessing", "numbers",
+        "operator", "os", "pathlib", "pickle", "platform", "plistlib", "pprint", "queue",
+        "random", "re", "readline", "reprlib", "resource", "select", "selectors",
+        "shelve", "shlex", "shutil", "signal", "site", "socket", "socketserver",
+        "sqlite3", "ssl", "stat", "statistics", "string", "struct", "subprocess", "sys",
+        "sysconfig", "tarfile", "tempfile", "textwrap", "threading", "time", "timeit",
+        "tkinter", "token", "tokenize", "traceback", "tracemalloc", "types", "typing",
+        "unicodedata", "unittest", "urllib", "uuid", "venv", "warnings", "wave", "weakref",
+        "webbrowser", "winreg", "xml", "xmlrpc", "zipfile", "zipimport", "zoneinfo",
+    })
+
+    # 盲区1：import 语句提取（顶层模块名）
+    _IMPORT_TOP_RE = re.compile(r'^\s*(?:import|from)\s+([\w]+)', re.IGNORECASE)
+
+    def _detect_unpinned_deps(self, deps: List[DependencyInfo], dep_files: List[str]) -> List[dict]:
+        """检测依赖未锁定：裸包名无版本约束，或仅用范围约束且无 lock 文件。
+
+        供应链风险：依赖版本不可精确复现，构建不可复现，存在引入已知漏洞小版本风险。
+        """
+        has_lock = any(f.endswith((".lock", "Pipfile.lock", "go.sum"))
+                       for f in dep_files)
+        out = []
+        for dep in deps:
+            # 裸包名（无任何版本约束）
+            if dep.version == "latest":
+                out.append({
+                    "package": dep.package, "version": "无",
+                    "source_file": dep.source_file, "source_line": dep.source_line,
+                    "detail": f"依赖未锁定：{os.path.basename(dep.source_file)} 的 dependencies "
+                              "无版本约束（裸包名），构建不可复现，存在供应链风险",
+                })
+                continue
+            # 范围约束且无 lock 文件 → 版本不可精确复现
+            if has_lock:
+                continue
+            if dep.constraint in self._UNPINNED_RANGE_OPS:
+                out.append({
+                    "package": dep.package, "version": dep.version,
+                    "source_file": dep.source_file, "source_line": dep.source_line,
+                    "detail": f"依赖未锁定：{os.path.basename(dep.source_file)} 的 dependencies "
+                              f"使用范围约束 {dep.constraint} 且无 lock 文件，"
+                              "版本不可精确复现，存在供应链风险",
+                })
+        # 去重（同一包多次出现只报一次）
+        seen, uniq = set(), []
+        for it in out:
+            k = it["package"]
+            if k not in seen:
+                seen.add(k)
+                uniq.append(it)
+        return uniq
+
+    def _detect_unpinned_from_imports(self, project_path: str) -> List[dict]:
+        """盲区1：目录内无任何依赖清单文件时，扫描 import 语句识别第三方包。
+
+        项目直接 import 大量第三方包（torch / opencv-cv2 / sklearn 等），却没有任何
+        requirements/pyproject/lock 记录，版本完全不可复现。把这类第三方包按"依赖
+        未锁定"报告，detail 说明根因。排除标准库与项目内自有模块，避免误报。
+        """
+        local_modules = set()
+        py_files = []
+        for root, dirs, files in os.walk(project_path):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
+                "__pycache__", "node_modules", ".git", "venv", ".venv",
+                "third_party", ".gitnexus", "data", "site-packages",
+            )]
+            for f in files:
+                if f.endswith(".py"):
+                    fp = os.path.join(root, f)
+                    py_files.append(fp)
+                    local_modules.add(Path(f).stem)
+        third_party = {}
+        for fp in py_files:
+            try:
+                with open(fp, "r", encoding="utf-8", errors="ignore") as fh:
+                    lines = fh.readlines()
+            except OSError:
+                continue
+            for line in lines:
+                m = self._IMPORT_TOP_RE.match(line.strip())
+                if not m:
+                    continue
+                top = m.group(1)
+                if not top or top.startswith("_"):
+                    continue
+                if top in self.STDLIB_MODULES or top in local_modules:
+                    continue
+                if top not in third_party:
+                    third_party[top] = fp
+        return [
+            {
+                "package": pkg, "version": "无",
+                "source_file": fp, "source_line": 0,
+                "detail": f"目录无依赖清单文件，依赖 {pkg} 无法复现版本（依赖未锁定），"
+                          "构建不可复现，存在供应链风险",
+            }
+            for pkg, fp in sorted(third_party.items())
+        ]
+
+    # 运行时自动安装第三方包的触发模式（供应链安装风险）
+    _SUPPLY_INSTALL_PATTERNS = (
+        re.compile(r'(?:subprocess|os\.system|os\.popen|os\.spawn)\s*(?:\.\w+)?\s*\([^)]*pip\s+install', re.IGNORECASE),
+        re.compile(r'check_call\s*\([^)]*pip\b', re.IGNORECASE),
+        re.compile(r'["\']pip["\']\s*,\s*["\']install["\']', re.IGNORECASE),
+        re.compile(r'["\']pip[\'"](?:\s*s\s*)?\s*install', re.IGNORECASE),
+    )
+
+    def _detect_supply_chain_install(self, project_path: str) -> List[dict]:
+        """检测运行时自动安装第三方包的行为（供应链安装风险）。
+
+        项目在 import 缺失时通过 subprocess / os.system 等运行时执行 pip install 自动安装
+        第三方包到生产进程，包名常来自硬编码映射，无版本锁定/无 hash 校验，属供应链投毒风险。
+        """
+        out = []
+        for root, dirs, files in os.walk(project_path):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
+                "__pycache__", "node_modules", ".git", "venv", ".venv",
+                "third_party", ".gitnexus", "data", "site-packages",
+            )]
+            for f in files:
+                if not f.endswith((".py", ".pyi", ".sh", ".bat", ".go", ".js", ".ts")):
+                    continue
+                fp = os.path.join(root, f)
+                try:
+                    with open(fp, "r", encoding="utf-8", errors="ignore") as fh:
+                        lines = fh.readlines()
+                except OSError:
+                    continue
+                for i, line in enumerate(lines, 1):
+                    if any(p.search(line) for p in self._SUPPLY_INSTALL_PATTERNS):
+                        out.append({
+                            "file": fp, "line": i,
+                            "detail": "检测到运行时自动安装第三方包（pip install），"
+                                      "无版本锁定/无 hash 校验，包名来自源码，属供应链投毒风险",
+                        })
+                        break  # 每文件最多报一条定位
+        return out
 
     def _apply_exploitability_gates(self, project_path: str, vulns: List[DependencyVulnerability]) -> List[DependencyVulnerability]:
         """组件级利用面过滤：对命中 EXPLOITABILITY_GATES 的 CVE，检查项目是否实际
@@ -785,6 +1050,30 @@ class SCAChecker:
             logger.warning("SCA 版本解析失败 version=%r constraint=%r err=%s", version, constraint, e)
             return False
 
+    def _render_supply_chain_section(self, report: SCAReport) -> List[str]:
+        """渲染"非漏洞类供应链风险"段落（供应链安装 / 依赖未锁定 / 弃用依赖）。
+
+        独立成 helper，使无 CVE 漏洞时也能渲染这些风险（依赖未锁定等），避免
+        目录无依赖清单 / pyproject 依赖未锁定等缺陷被"未发现已知漏洞"提前返回掩盖。
+        """
+        out = ["### 非漏洞类供应链风险", ""]
+        if not (report.supply_chain_risks or report.unpinned_deps or report.deprecated_deps):
+            out.append("✅ 未发现供应链安装 / 依赖未锁定 / 弃用依赖问题。")
+        else:
+            if report.supply_chain_risks:
+                out.append("**供应链安装风险**（运行时自动安装第三方包）：")
+                for it in report.supply_chain_risks[:20]:
+                    out.append(f"- `{it.get('file')}:{it.get('line')}` — {it.get('detail')}")
+            if report.unpinned_deps:
+                out.append("**依赖未锁定**（版本不可精确复现）：")
+                for it in report.unpinned_deps[:20]:
+                    out.append(f"- `{it.get('package')}` @ {it.get('source_file')}:{it.get('source_line')} — {it.get('detail')}")
+            if report.deprecated_deps:
+                out.append("**弃用依赖**：")
+                for it in report.deprecated_deps[:20]:
+                    out.append(f"- `{it.get('package')} {it.get('version')}` — 迁移至 `{it.get('migration')}`；{it.get('detail')}")
+        return out
+
     def to_report(self, report: SCAReport) -> str:
         """生成 SCA 报告"""
         lines = [
@@ -818,6 +1107,11 @@ class SCAChecker:
 
         if not report.vulnerable_deps:
             lines.append("✅ 未发现已知漏洞。")
+            lines.append("")
+            lines.extend(self._render_supply_chain_section(report))
+            lines.append("")
+            lines.append("---")
+            lines.append("*扫描由 CodeRef SCA Checker 执行*")
             return "\n".join(lines)
 
         # 漏洞详情
@@ -837,6 +1131,8 @@ class SCAChecker:
                     f"{vuln.summary[:80]} | {fixed} |"
                 )
 
+        lines.append("")
+        lines.extend(self._render_supply_chain_section(report))
         lines.append("")
         lines.append("---")
         lines.append("*扫描由 CodeRef SCA Checker 执行*")

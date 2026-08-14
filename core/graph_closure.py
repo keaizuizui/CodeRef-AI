@@ -41,6 +41,30 @@ def load_graph(db_path: str) -> Tuple[Dict[str, dict], Dict[str, List[str]]]:
     return nodes, adj
 
 
+def load_call_edges(db_path: str) -> Dict[Tuple[str, str], dict]:
+    """加载全部 CALLS 边的 props（含 line / full_name / keyword_args）。
+
+    与 load_graph 分离，避免破坏 `nodes, adj = load_graph(...)` 的三处既有调用方。
+    返回 key=(source, target)，value=该边 props dict。供 flow_verify 做参数契约检测。
+    """
+    if not os.path.isfile(db_path):
+        raise FileNotFoundError(f"知识图谱数据库不存在: {db_path}")
+    out: Dict[Tuple[str, str], dict] = {}
+    con = sqlite3.connect(db_path)
+    con.row_factory = sqlite3.Row
+    try:
+        for r in con.execute(
+                "SELECT source,target,props FROM edges WHERE type='CALLS'"):
+            try:
+                props = json.loads(r["props"] or "{}")
+            except Exception:
+                props = {}
+            out[(r["source"], r["target"])] = props
+    finally:
+        con.close()
+    return out
+
+
 def file_base(n: dict) -> str:
     return os.path.basename(n.get("file_path") or "") or ""
 
