@@ -544,13 +544,13 @@ class SCAChecker:
                     if pyproject_deps_buf is not None:
                         # 正在收集数组元素
                         pyproject_deps_buf.append(stripped)
-                        if "]" in stripped:
+                        if self._toml_array_closed(" ".join(pyproject_deps_buf)):
                             self._emit_toml_array_items(pyproject_deps_buf, filepath, deps)
                             pyproject_deps_buf = None
                         continue
                     if self._PEP621_DEPS_START.match(stripped):
                         pyproject_deps_buf = [stripped]
-                        if "]" in stripped:
+                        if self._toml_array_closed(stripped):
                             self._emit_toml_array_items(pyproject_deps_buf, filepath, deps)
                             pyproject_deps_buf = None
                         continue
@@ -577,6 +577,30 @@ class SCAChecker:
                     ))
 
         return deps
+
+    @staticmethod
+    def _toml_array_closed(text: str) -> bool:
+        """判断文本内 TOML 数组括号是否已闭合（跳过引号内的 `[`/`]`）。
+
+        依赖 extras（如 `"scenedetect[opencv]>=0.6.7.1"`）含 `]`，若按"行内是否
+        出现 ]"判断会误判数组提前结束，故需按括号深度（忽略字符串内）判定。
+        """
+        depth = 0
+        in_str = False
+        quote = None
+        for ch in text:
+            if in_str:
+                if ch == quote:
+                    in_str = False
+                continue
+            if ch in ('"', "'"):
+                in_str = True
+                quote = ch
+            elif ch == '[':
+                depth += 1
+            elif ch == ']':
+                depth -= 1
+        return depth <= 0
 
     def _emit_toml_array_items(self, buf_lines: List[str], filepath: str, deps: List[DependencyInfo]) -> None:
         """把 PEP 621 数组声明的多行文本解析为依赖项并追加到 deps。
@@ -674,10 +698,15 @@ class SCAChecker:
         out = []
         for dep in deps:
             # go.mod 依赖常带主版本后缀（如 dgrijalva/jwt-go/v4）与域名前缀
-            # （github.com/dgrijalva/jwt-go/v4），归一化为纯路径后匹配弃用表
-            bare = re.sub(r'^[^/]+/', '', dep.package)   # 去 github.com/ 等域名前缀
-            bare = re.sub(r'/v\d+$', '', bare)           # 去 /v4 主版本后缀
-            info = self.DEPRECATED_DEPS.get(bare)
+            # （github.com/dgrijalva/jwt-go/v4）。先只去 /vN 主版本后缀，再按"等于
+            # 或以后缀结尾"匹配弃用表——保留纯路径（如 dgrijalva/jwt-go）也能命中，
+            # 避免无条件截掉首段导致纯路径漏报。
+            bare = re.sub(r'/v\d+$', '', dep.package)
+            info = None
+            for key, val in self.DEPRECATED_DEPS.items():
+                if bare == key or bare.endswith("/" + key):
+                    info = val
+                    break
             if not info:
                 continue
             migration, note = info
@@ -724,8 +753,11 @@ class SCAChecker:
 
         供应链风险：依赖版本不可精确复现，构建不可复现，存在引入已知漏洞小版本风险。
         """
-        has_lock = any(f.endswith((".lock", "Pipfile.lock", "go.sum"))
-                       for f in dep_files)
+        # 依赖锁文件按文件名识别（补全 npm/Go/composer 的常用锁文件）
+        _LOCK_BASENAMES = {"package-lock.json", "go.sum", "composer.lock", "Pipfile.lock"}
+        has_lock = any(
+            os.path.basename(f) in _LOCK_BASENAMES or f.endswith(".lock")
+            for f in dep_files)
         out = []
         for dep in deps:
             # 裸包名（无任何版本约束）
@@ -771,6 +803,10 @@ class SCAChecker:
                 "__pycache__", "node_modules", ".git", "venv", ".venv",
                 "third_party", ".gitnexus", "data", "site-packages",
             )]
+            # 包目录名本身也是本地模块（import core / from myapp import x），
+            # 但排除项目根目录名，避免把项目根误当第三方包
+            if root != os.path.abspath(project_path):
+                local_modules.add(os.path.basename(root))
             for f in files:
                 if f.endswith(".py"):
                     fp = os.path.join(root, f)

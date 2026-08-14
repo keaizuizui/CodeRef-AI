@@ -425,8 +425,11 @@ class CodeKnowledgeGraph:
                     # 节点名：方法带 Receiver 类型前缀，如 Indexer.FullRebuild
                     recv_type = ""
                     if recv:
+                        # value receiver 形如 `(i Indexer)`（含右括号），需允许尾部 `)`
+                        # 才能正确取到 `Indexer`；pointer receiver `(*Recv)` 走第一支
                         rm = re.search(
-                            r'\*\s*([A-Za-z_]\w*)|(?:^|\s)([A-Za-z_]\w*)\s*$',
+                            r'\*\s*([A-Za-z_]\w*)\s*\)?\s*$'
+                            r'|(?:^|\s)([A-Za-z_]\w*)\s*\)?\s*$',
                             recv.strip())
                         if rm:
                             recv_type = rm.group(1) or rm.group(2)
@@ -453,14 +456,26 @@ class CodeKnowledgeGraph:
         stats["nodes"] += n_nodes
         stats["edges"] += n_edges
 
+    # Go 语言关键字 / 内置函数：_GO_CALL_RE 会命中 `if(`、`len(` 等，需在建边前跳过
+    _GO_KEYWORDS = frozenset({
+        "if", "for", "switch", "select", "go", "defer", "func", "return",
+        "len", "cap", "append", "copy", "delete", "make", "new", "panic",
+        "recover", "close", "clear", "min", "max", "print", "println",
+        "range", "case", "default", "break", "continue", "fallthrough",
+    })
+
     def _find_go_callee(self, name: str) -> Optional[str]:
-        """按 Go 被调名定位图谱节点：先精确匹配名，再匹配 `Receiver.Method` 后缀。"""
+        """按 Go 被调名定位图谱节点：先精确匹配名，再匹配 `Receiver.Method` 后缀。
+
+        仅匹配 go_func 节点，避免跨语言同名节点（如 Python 函数）被误连。
+        """
         row = self._conn.execute(
-            "SELECT id FROM nodes WHERE name=? LIMIT 1", (name,)).fetchone()
+            "SELECT id FROM nodes WHERE type='go_func' AND name=? LIMIT 1",
+            (name,)).fetchone()
         if row:
             return row["id"]
         row = self._conn.execute(
-            "SELECT id FROM nodes WHERE name LIKE ? LIMIT 1",
+            "SELECT id FROM nodes WHERE type='go_func' AND name LIKE ? LIMIT 1",
             (f"%.{name}",)).fetchone()
         return row["id"] if row else None
 
