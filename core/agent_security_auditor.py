@@ -278,8 +278,8 @@ class AgentSecurityAuditor:
         # manage/admin/save_ 等敏感路径，若未挂载鉴权中间件/校验可被任意调用。
         # 命中即确证性"敏感端点"信号，后续是否真未鉴权由人工/上下文确认。
         (re.compile(r'(?:Route|RouteGroup|router|mux|engine|group|Handle|HandleFunc|\.POST|\.GET|\.Any)\s*[\[\(][^`"\n]{0,60}[`"\']/(?:manage|admin|save|upload|config|secret|setting)[`"\']?', re.IGNORECASE),
-         "AGENT-SEC-40", "敏感路由缺少鉴权（Go）", "high",
-         "注册到敏感管理端点（manage/admin/save_ 等）的路由，若未挂载鉴权中间件/校验可被任意调用，构成未鉴权管理面",
+         "AGENT-SEC-40", "敏感路由缺少鉴权（Go）", "medium",
+         "注册到敏感管理端点（manage/admin/save_ 等）的路由可能未鉴权，构成未鉴权管理面；仅凭路由路径为低置信度信号，实际是否挂载鉴权中间件需结合上下文确认",
          "为敏感路由统一挂载鉴权中间件与权限校验，禁止无鉴权开放管理/配置端点"),
         # 黑名单式 Python 沙箱过滤：仅字符串 Contains/ToLower 匹配黑名单关键词，
         # 可被多空格/换行/字符串拼接等变体绕过；最终代码经 exec 拼接用 python -c
@@ -758,9 +758,11 @@ class AgentSecurityAuditor:
                 re.search(r'["\'](?:error|message)["\']\s*:\s*f?["\']', stripped)
                 and not re.search(r'role\s*[:=]', stripped)
             )
-            # 判断是否为 URL 路径拼接（f"{host}/api/v1/{var}"），构造网络请求而非 prompt
+            # 判断是否为 URL 路径拼接（f"{host}/api/v1/{var}"），构造网络请求而非 prompt。
+            # 仅豁免确证的 HTTP(S) URL 构造；裸 "/" 分支会把 "Use /help for {x}" 等
+            # prompt 误判为 URL 拼接而漏掉注入，故只保留 http(s):// 前缀限定。
             is_url_concat = bool(
-                re.search(r'f["\'].*(?:https?://|/)\{', stripped, re.IGNORECASE)
+                re.search(r'f["\'].*(?:https?://)\{', stripped, re.IGNORECASE)
             )
 
             # 检测所有维度
