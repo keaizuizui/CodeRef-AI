@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.8.3** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.8.4** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -411,6 +411,13 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 | **4.0** | 通过四个引擎和四个支柱，增强工具的功能覆盖，形成逻辑闭环 |
 
 ## 更新日志
+
+### v4.8.4 — 缺陷命中回归修复（AST 静态信号 / 合并详情展示 / Agent 安全增强）
+
+- **AST 静态信号扫描（新增 `ast_signals` 模块）**：`flow_verify` 集成 `scan_project`，针对调用图无法覆盖的缺陷补充四类可验证信号——`detect_silent_except`（except 块内无日志/无 raise 的静默吞异常）、`detect_unused_helpers`（`_` 开头私有函数从未被调用，排除测试文件）、`detect_missing_param_pass`（调用缺少关键维度/尺寸参数透传）、`detect_dir_contract_break`（目录契约命名不一致，如缓存目录 batch_id 与时间戳命名并存）。提示性信号不计 `ok` 失败，避免把"提示"误判为"流程失败"
+- **Agent 安全补盲**：`agent_security_auditor` 新增 PromQL 注入（`http://`+`query` 拼接）、认证绕过（`@login_required` 缺失 + 前导断言）、空中间件空认证检测等模式，修复 目标项目 等 PromQL/鉴权类缺陷漏报
+- **合并项详情展示**：`pipeline_runner` 新增 `_row_desc`，HIGH 表格行包含合并项 `count` 与 `detail` 关键内容（如治理违规关键词），修复合并后 detail 丢失导致报告文本缺关键词
+- **注册表维度修正**：redink pipeline 断链归入 `flow_verify` 维度（此前误标 `flow_verify`+`agent`，导致 agent 维度误报漏报并存）
 
 ### v4.8.3 — 并行盲区补修（跨语言 / 参数契约 / 供应链 / Agent 安全）
 
