@@ -10,7 +10,7 @@ CodeRef MCP Server v4.6 — 四大引擎 + 工具
   人话解读     → coderef_interpret
 """
 
-import json, sys, os, logging, traceback, threading, uuid
+import json, sys, os, logging, traceback, threading, time, uuid
 from datetime import datetime
 from typing import Dict, List, Any
 from contextlib import contextmanager
@@ -35,6 +35,20 @@ logging.basicConfig(level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stderr)])
 logger = logging.getLogger("coderef")
+
+
+# ─── 后台任务超时兜底常量 ─────────────────────────────────────
+# 超大项目上单个后台工具（如 coderef_docs 全量生成、coderef_scan 的 gov 全量盘点）
+# 一次调用可能远超 host 层轮询上限（真实案例 poll_timeout=900 用尽整步失败）。
+# 后台线程为 daemon 会一直跑下去，_tsk 原只判 thread.is_alive()，永远返回 running，
+# 导致外层 AI 在轮询用尽后拿到空结果。此处定义超时阈值：线程运行超过该秒数后，
+# _tsk 不再无限返回 running，而是返回"部分完成 + 未完成提示"的诚实结构化结果，
+# 让外层 AI 在放弃轮询前能拿到非空、不误导的部分结论（宁可部分完成，不要静默失败）。
+# 取略低于常见 host 轮询上限（900s），保证 partial 状态在轮询用尽前可被读到。
+MAX_BG_TASK_SECONDS = 860
+# 分片提示门槛：后台任务运行超过该秒数时，在 partial 结果中建议调用方改用分片/增量
+# 方式继续（如 resume=true 续跑、对子项目/维度逐个扫描），提示分片为更稳妥的路径。
+BG_PARTIAL_SUGGEST_SECONDS = 300
 
 
 # ─── 工具可靠性清单 ─────────────────────────────────────────────
@@ -342,6 +356,9 @@ class Server:
                 "project_path": {"type": "string", "description": "目标项目路径"},
                 "tool": {"type": "string", "enum": [k for k, _ in self._SINGLE_TOOL_LABELS],
                          "description": "要审计的维度，如 gov / agent / sca / td / integ / blind / inn / junk / resgap / simp / matu"},
+                "background": {"type": "boolean",
+                    "description": "后台执行（超大项目单维度如 gov 会全量盘点，可能超过单次调用超时，默认后台返回 task_id 用 coderef_task_status 查询）",
+                    "default": True},
             }, "required": ["project_path", "tool"]},
         })
         self._tools.append({
@@ -819,6 +836,10 @@ class Server:
             "coderef_replicate", "coderef_replicate_apply", "coderef_asset_blueprint",
             "coderef_innovation_review",
             "coderef_prompt_governance", "coderef_interpret",
+            # coderef_scan 单维度在超大项目上也会全量盘点（如 gov 全项目治理审计，
+            # 真实案例 目标项目 跑 131.5s 撞 rpc 层单次调用超时）。加入重工具集使其
+            # 默认后台执行，单次 tools/call 立即返回 task_id，避免同步撞超时。
+            "coderef_scan",
         }
 
     def _should_background(self, n: str, a: Dict) -> bool:
@@ -910,7 +931,8 @@ class Server:
                 t = threading.Thread(target=lambda: self._bg(rc, n, a), daemon=True)
                 t.start()
                 with self._locked_tasks() as tasks:
-                    tasks[tid] = {"thread":t,"result":rc,"tool":n}
+                    tasks[tid] = {"thread":t,"result":rc,"tool":n,
+                                  "started_at":time.time()}
                 logger.info(f"后台: {tid} {n}")
                 return self._ok(rid, json.dumps({"status":"running","task_id":tid,
                     "message":f"已启动。coderef_task_status(task_id='{tid}') 查询进度"}, ensure_ascii=False))
@@ -1528,6 +1550,38 @@ class Server:
             t = tasks.get(tid)
             if not t: return json.dumps({"error":f"不存在: {tid}"})
             if t["thread"].is_alive():
+                # 超时兜底：超大项目单次后台任务可能远超 host 层轮询上限而一直 running，
+                # 导致外层 AI 轮询（poll_timeout）用尽后整步失败、结果被丢弃。运行超过
+                # 阈值时改返回"部分完成 + 未完成提示"的诚实结构化结果，让调用方在放弃
+                # 轮询前能拿到非空、不误导的部分结论（宁可部分完成，不要静默失败）。
+                elapsed = time.time() - t.get("started_at") if t.get("started_at") else 0.0
+                if elapsed > MAX_BG_TASK_SECONDS:
+                    rc = t["result"]
+                    prog = rc.get("progress")
+                    partial = {
+                        "status": "partial",
+                        "task_id": tid,
+                        "elapsed": round(elapsed, 1),
+                        "partial": True,
+                        "message": (
+                            f"任务已运行 {round(elapsed,1)}s，超过后台兜底阈值 "
+                            f"({MAX_BG_TASK_SECONDS}s)，仍在后台继续执行，可稍后重查；"
+                            "本次返回当前已处理部分，未完成清单见下。"
+                        ),
+                    }
+                    if prog:
+                        partial["progress"] = prog
+                        partial["progress_text"] = (
+                            f"已完成 {prog['done']}/{prog['total']} 阶段，当前: {prog['stage']}"
+                            + (f"（{prog.get('detail')}）" if prog.get("detail") else "")
+                        )
+                    if elapsed > BG_PARTIAL_SUGGEST_SECONDS:
+                        partial["suggestion"] = (
+                            "超大项目建议改用分片/增量方式：coderef_audit 用 incr 策略、"
+                            "coderef_docs 用 resume=true 续跑，或对子项目/维度逐个扫描，"
+                            "避免单次全量超时。已生成的产物（文档/报告）已按模块落盘，可先行使用。"
+                        )
+                    return json.dumps(partial, ensure_ascii=False)
                 # 运行中：回传当前阶段进度（若有）
                 rc = t["result"]
                 prog = rc.get("progress")
