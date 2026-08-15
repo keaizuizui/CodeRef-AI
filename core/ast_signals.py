@@ -151,8 +151,26 @@ def _is_size_param(name: str) -> bool:
     return any(h in low for h in _SIZE_PARAM_HINTS)
 
 
+def _sig_of(node) -> Dict[str, bool]:
+    """提取函数/方法签名参数: name -> has_default。"""
+    args = node.args
+    params: Dict[str, bool] = {}
+    n_defaults = len(args.defaults)
+    pos_names = [a.arg for a in args.args]
+    for i, name in enumerate(pos_names):
+        params[name] = i >= len(pos_names) - n_defaults
+    for a in args.kwonlyargs:
+        params[a.arg] = True
+    return params
+
+
 def _collect_func_signatures(project_path: str) -> Dict[str, dict]:
-    """跨文件收集项目内函数签名: name -> {params: {name: has_default}, file, line}。"""
+    """跨文件收集项目内函数签名: 限定名 -> {params, file, line}。
+
+    类方法用 `ClassName.method` 限定名，模块级函数用裸名，避免同名函数
+    （不同类同名方法 / 类方法与模块函数同名）在签名表里互相覆盖，导致
+    detect_missing_param_pass 用任意一个签名误判调用点。
+    """
     sigs: Dict[str, dict] = {}
     for path in _iter_py_files(project_path):
         tree = _parse(path)
@@ -160,30 +178,65 @@ def _collect_func_signatures(project_path: str) -> Dict[str, dict]:
             continue
         rel = _rel(project_path, path)
         for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            args = node.args
-            params: Dict[str, bool] = {}
-            n_defaults = len(args.defaults)
-            pos_names = [a.arg for a in args.args]
-            for i, name in enumerate(pos_names):
-                params[name] = i >= len(pos_names) - n_defaults
-            for a in args.kwonlyargs:
-                params[a.arg] = True
-            sigs[node.name] = {"params": params, "file": rel, "line": node.lineno}
+            if isinstance(node, ast.ClassDef):
+                for sub in node.body:
+                    if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        key = f"{node.name}.{sub.name}"
+                        sigs.setdefault(key, {"params": _sig_of(sub),
+                                              "file": rel, "line": sub.lineno})
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # 模块级函数用裸名（类方法已用限定名入库，不与模块级冲突）
+                sigs.setdefault(node.name, {"params": _sig_of(node),
+                                            "file": rel, "line": node.lineno})
     return sigs
+
+
+def _iter_with_owner(node, owner=None):
+    """深度优先遍历，为每个节点附带其所属类名（位于类内时）。"""
+    for child in ast.iter_child_nodes(node):
+        cur = owner
+        if isinstance(child, ast.ClassDef):
+            cur = child.name
+        yield child, cur
+        yield from _iter_with_owner(child, cur)
+
+
+def _call_keys(node, owner) -> List[str]:
+    """把调用目标解析为签名表限定名候选（限定名优先，裸名兜底）。
+
+    限定名既避免同名覆盖误配，又通过裸名兜底保留对模块级/裸函数调用的命中，
+    防止把 `convert_text_layers(...)` 这类非 self 调用漏检。
+    """
+    f = node.func
+    if isinstance(f, ast.Name):
+        return [f.id]
+    if isinstance(f, ast.Attribute):
+        cands: List[str] = []
+        if isinstance(f.value, ast.Name) and f.value.id == "self" and owner:
+            cands.append(f"{owner}.{f.attr}")
+        elif isinstance(f.value, ast.Name):
+            cands.append(f"{f.value.id}.{f.attr}")
+        cands.append(f.attr)
+        return cands
+    return []
 
 
 def detect_missing_param_pass(tree, rel_path, sigs: Dict[str, dict]) -> List[dict]:
     """检测调用点未传关键尺寸/坐标参数（被调函数签名有带默认值的该参数）。"""
     out: List[dict] = []
-    for node in ast.walk(tree):
+    for node, owner in _iter_with_owner(tree):
         if not isinstance(node, ast.Call):
             continue
-        fname = _call_name(node.func)
-        if not fname or fname not in sigs:
+        # 用限定名在签名表里定位，miss 时跳过该调用（避免用任意同名签名误判）
+        params = None
+        callee = None
+        for cand in _call_keys(node, owner):
+            if cand in sigs:
+                params = sigs[cand]["params"]
+                callee = cand
+                break
+        if params is None:
             continue
-        params = sigs[fname]["params"]
         names = list(params.keys())
         passed: Set[str] = set()
         for i in range(len(node.args)):
@@ -201,9 +254,9 @@ def detect_missing_param_pass(tree, rel_path, sigs: Dict[str, dict]) -> List[dic
                 "signal": "missing_param_pass",
                 "file": rel_path,
                 "line": node.lineno,
-                "callee": fname,
+                "callee": callee,
                 "param": pname,
-                "detail": f"调用 {fname} 未传关键尺寸/坐标参数 {pname}（回落默认值，"
+                "detail": f"调用 {callee} 未传关键尺寸/坐标参数 {pname}（回落默认值，"
                           f"非默认画布/坐标下定位可能错误）",
             })
     return out

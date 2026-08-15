@@ -1014,7 +1014,7 @@ class Pipe:
                     file_path=getattr(s,"file_path",""), line=getattr(s,"line_number",0),
                     title=f"[{getattr(s,'risk_id','')}] {getattr(s,'risk_name','')}",
                     detail=getattr(s,"detail",""), suggestion=getattr(s,"suggestion",""),
-                    tier=Tier.HIGH if getattr(s,"severity","") in ("blocker","critical") else Tier.MEDIUM))
+                    tier=self._tier_for(getattr(s,"severity","medium"))))
             done.add("agent"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"agent: {e}")
 
@@ -1315,7 +1315,8 @@ class Pipe:
             "category_keywords": {"security"},
             "title_keywords": {"iron-sec-10", "弱加密", "不安全的加密"},
             "detail_exclude_keywords": ["sign", "签名", "token", "密钥", "认证",
-                                        "密码", "nonce", "credential", "口令"],
+                                        "密码", "nonce", "credential", "口令",
+                                        "key", "api_key", "secret", "password", "auth"],
             "action": "suppress",
             "reason": "MD5 用于项目路径哈希，非安全场景",
         },
@@ -1457,9 +1458,15 @@ class Pipe:
         """同文件 + 同规则 + 邻行 → 合并为 1 条"""
         if not findings:
             return findings
-        # 按 (file, tool, category) 分组排序
+        # 提取 title 中的 [risk_id]（与 _burst_merge 分组键一致，避免不同风险类型被误合并）
+        def _rk(f: Finding) -> str:
+            t = (f.title or "").lstrip()
+            if t.startswith("[") and "]" in t:
+                return t[1:t.index("]")]
+            return ""
+        # 排序键叠加 risk_id：同文件同规则同风险类型才相邻
         findings.sort(key=lambda f: (
-            f.file_path, f.tool, f.category, f.line
+            f.file_path, f.tool, f.category, _rk(f), f.line
         ))
         result = []
         for f in findings:
@@ -1468,6 +1475,7 @@ class Pipe:
                 if (f.file_path == prev.file_path
                         and f.tool == prev.tool
                         and f.category == prev.category
+                        and _rk(f) == _rk(prev)
                         and f.line - prev.line <= Pipe.ADJACENT_LINE_WINDOW):
                     # 合并相邻行：记录真实行号区间，标题保持明确，不再退化为"(等多行)"
                     if not prev.line_start:

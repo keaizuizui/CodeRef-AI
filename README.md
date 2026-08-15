@@ -418,6 +418,7 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 - **Agent 安全补盲**：`agent_security_auditor` 新增 PromQL 注入（`http://`+`query` 拼接）、认证绕过（`@login_required` 缺失 + 前导断言）、空中间件空认证检测等模式，修复 aichatwiki 等 PromQL/鉴权类缺陷漏报
 - **合并项详情展示**：`pipeline_runner` 新增 `_row_desc`，HIGH 表格行包含合并项 `count` 与 `detail` 关键内容（如治理违规关键词），修复合并后 detail 丢失导致报告文本缺关键词
 - **注册表维度修正**：redink pipeline 断链归入 `flow_verify` 维度（此前误标 `flow_verify`+`agent`，导致 agent 维度误报漏报并存）
+- **CodeRabbit 复审修复**：`ast_signals` 函数签名改用限定符号（`ClassName.method` 区分同名方法，避免签名互相覆盖导致 `detect_missing_param_pass` 误判）；`pipeline_runner` 的 agent 严重度改用 `_tier_for` 正确映射 HIGH、相邻行去重键叠加 `[risk_id]` 避免不同风险类型被误合并、MD5 噪声规则的 `detail_exclude` 补充英文安全词；`agent_security_auditor` 的 URL 拼接豁免收紧为仅 HTTP(S) 前缀（避免 `Use /help for {x}` 类 prompt 被误判）、AGENT-SEC-40 敏感路由降为 medium（仅凭路由路径为低置信度信号）
 
 ### v4.8.3 — 并行盲区补修（跨语言 / 参数契约 / 供应链 / Agent 安全）
 
