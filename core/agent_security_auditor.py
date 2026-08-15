@@ -73,6 +73,14 @@ class AgentSecurityRisk:
 
 SEVERITY_ORDER = {"blocker": 0, "critical": 1, "high": 2, "medium": 3, "low": 4}
 
+# AGENT-SEC-53 共享写调用正则：GO_PATTERNS 的候选匹配与 AgentSecurityAuditor 的
+# 文件级确认（_crosslang_file_signal_lines）必须复用同一编译对象，避免两处正则漂移
+# 导致"候选命中但确认匹配不到"或反之。用 .{0,200}? 支持嵌套参数（如
+# WriteFile(sanitize(req.Path))）；模块级常量供类体内类属性列表与实例方法共用。
+_SEC53_WRITE_RE = re.compile(
+    r'(?:WriteFile|WriteFileByString|WriteFileByBytes|os\.WriteFile|os\.Create|os\.OpenFile|WriteAt)'
+    r'\s*\(.{0,200}?\b(?:req|body)\.[A-Za-z_]+', re.IGNORECASE)
+
 
 class AgentSecurityAuditor:
     """Agent 安全审计器"""
@@ -302,7 +310,7 @@ class AgentSecurityAuditor:
          "对共享文件写入加 Mutex/RWMutex 保护，或使用原子写入（临时文件+改名）"),
         # 未过滤外部输入：RPC/HTTP 请求参数字段直接作为文件写入目标/内容，未做路径净化与白名单。
         # 命令方向已被 AGENT-SEC-30/31/32 覆盖，此处聚焦写文件方向；需整文件确认参数来自请求体。
-        (re.compile(r'(?:WriteFile|WriteFileByString|WriteFileByBytes|os\.WriteFile|os\.Create|os\.OpenFile|WriteAt)\s*\(.{0,200}?\b(?:req|body)\.[A-Za-z_]+', re.IGNORECASE),
+        (_SEC53_WRITE_RE,
          "AGENT-SEC-53", "未过滤外部输入（请求参数直入文件写入）", "high",
          "检测到来自请求/RPC 的参数直接作为文件写入目标或内容，未做路径净化与白名单校验，可越权写入任意路径",
          "校验写入路径位于许可目录内，对写入内容做白名单/类型校验"),
@@ -373,7 +381,7 @@ class AgentSecurityAuditor:
          "对请求目标 host 做协议与内网地址白名单校验，禁止转发不可信 URL"),
         # 密钥透传：app_secret 等敏感密钥从外部参数直接透传进请求体
         # （目标项目 php/plugins/official_access_token/controllers/DefaultController.php:70 盲区）
-        (re.compile(r'[\'"]secret[\'"]\s*=>\s*\$arguments', re.IGNORECASE),
+        (re.compile(r'[\'"](?:\w*_)?secret[\'"]\s*=>\s*\$arguments', re.IGNORECASE),
          "AGENT-SEC-49", "密钥透传/日志泄露", "high",
          "检测到 app_secret 等敏感密钥从外部参数直接透传进请求体，密钥可被日志记录、中转泄露或在网络层明文暴露",
          "密钥由服务端配置注入，禁止从请求参数透传敏感密钥"),
@@ -1012,9 +1020,7 @@ class AgentSecurityAuditor:
                     result.add(content[:gm.start()].count("\n") + 1)
             return result
         if risk_id == "AGENT-SEC-53":
-            return {content[:m.start()].count("\n") + 1 for m in re.finditer(
-                r'(?:WriteFile|WriteFileByString|WriteFileByBytes|os\.WriteFile|os\.Create|os\.OpenFile|WriteAt)'
-                r'\s*\([^)]*\b(?:req|body)\.[A-Za-z_]+', content, re.IGNORECASE)}
+            return {content[:m.start()].count("\n") + 1 for m in _SEC53_WRITE_RE.finditer(content)}
         if risk_id == "AGENT-SEC-55":
             result = set()
             for m in re.finditer(
@@ -1063,7 +1069,10 @@ class AgentSecurityAuditor:
         result = set()
         for m in hit_re.finditer(content):
             line_no = content[:m.start()].count("\n") + 1
-            window = "\n".join(lines[line_no: line_no + 60])
+            # line_no 为 1-based，需转成 0-based 起点再取窗口，否则漏掉命中行本身
+            #（命中行与 sink 同行时 sink 落在被跳过的 index 上，判断会漏报）。
+            start = line_no - 1
+            window = "\n".join(lines[start: start + 60])
             if sink_re.search(window):
                 result.add(line_no)
         return result
