@@ -21,6 +21,7 @@ flow_verify — 流程合规验证（正式集成 v1.0）
 """
 
 import os
+import re
 from collections import defaultdict
 from html import escape as _esc
 from typing import Dict, List, Optional, Set, Tuple
@@ -300,12 +301,17 @@ class FlowVerifier:
     # ─── 主验证 ───
 
     def _cross_lang_nodes(self) -> List[dict]:
-        """列出图谱中所有非 Python 语言节点（如 Go），供跨语言补盲。"""
+        """列出图谱中所有非 Python 语言节点（如 Go），供跨语言补盲。
+
+        只输出结构化节点元信息（name/type/file/line），不 dump docstring。
+        docstring 常含代码片段与路径引用（如 Go 节点 doc 里出现
+        "php/worker.php"、插件名等），若一并 dump 会与缺陷关键词/文件路径
+        发生文本子串误命中，把"节点清单"误判为"缺陷检出"（假阳性）。
+        """
         return sorted(
             [{"name": n["name"], "type": n.get("type", ""),
               "file": (n.get("file_path") or "").replace("\\", "/"),
-              "line": n.get("start_line", 0),
-              "doc": (n.get("props") or {}).get("doc", "")[:200]}
+              "line": n.get("start_line", 0)}
              for nid, n in self.nodes.items()
              if (n.get("props") or {}).get("language") == "go"],
             key=lambda x: (x["file"], x["line"]))
@@ -431,6 +437,87 @@ class FlowVerifier:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 跨语言插件契约断链检测
+# ═══════════════════════════════════════════════════════════════════
+
+_SKIP_CONTRACT_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules",
+                       "vendor", "dist", "build", "static", "assets"}
+
+
+def cross_lang_contract_scan(project_path: str) -> List[dict]:
+    """跨语言插件契约断链检测：前端/Go 引用的业务插件名 vs PHP 插件实现目录。
+
+    背景：chatwiki worker.php 用 `setModule($plugin, "\\app\\plugins\\{$plugin}\\Module")`
+    动态加载插件，插件名即 `php/plugins/<name>/` 目录名。前端 Vue/JS 的
+    `pluginName = 'xxx'` 与 Go 的 `"action":"a/b"` / `Param("action","a/b")` 引用
+    同名插件，而 PHP 端无对应目录即跨语言契约断裂——运行时加载失败/静默降级。
+
+    只收集"业务组件"目录下的插件名引用，排除前端 UI 插件目录
+    （`components/plugins/`）与构建产物（`static/`），避免把 canvasHistory/elk
+    等纯前端 UI 插件误判为 PHP 插件断链。输出结构化信号（medium 提示性），
+    不置流程失败。
+    """
+    if not project_path or not os.path.isdir(project_path):
+        return []
+    # 1) PHP 插件实现目录：任意名为 plugins 的目录（走 php/plugins/<name>/）
+    php_plugins: Set[str] = set()
+    for root, dirs, _ in os.walk(project_path):
+        if os.path.basename(root) == "plugins":
+            for d in dirs:
+                php_plugins.add(d.lower())
+    if not php_plugins:
+        return []
+    # 2) 收集前端/Go 引用插件名
+    plug_re = re.compile(r'''pluginName\s*=\s*['"]([a-zA-Z][a-zA-Z0-9_\-]*)['"]''', re.I)
+    action_re = re.compile(
+        r'''(?:Param\(\s*['"]action['"]\s*,\s*|['"]action['"]\s*:\s*)['"]([a-zA-Z][a-zA-Z0-9_\-]*)/''',
+        re.I)
+    refs: Dict[str, List[tuple]] = {}
+    for root, dirs, files in os.walk(project_path):
+        dirs[:] = [d for d in dirs if d not in _SKIP_CONTRACT_DIRS]
+        # 排除前端 UI 插件目录（components/plugins/）、PHP 插件实现目录本身
+        if os.path.basename(root) == "plugins":
+            continue
+        for fn in files:
+            if not fn.endswith((".vue", ".js", ".ts", ".go", ".php")):
+                continue
+            path = os.path.join(root, fn)
+            try:
+                lines = open(path, encoding="utf-8", errors="ignore").read().splitlines()
+            except Exception:
+                continue
+            rel = os.path.relpath(path, project_path).replace("\\", "/")
+            for i, line in enumerate(lines, 1):
+                for m in plug_re.finditer(line):
+                    refs.setdefault(m.group(1).lower(), []).append((rel, i))
+                for m in action_re.finditer(line):
+                    if m.group(1):
+                        refs.setdefault(m.group(1).lower(), []).append((rel, i))
+    # 3) 比对：引用但无 PHP 实现 → 断链
+    out: List[dict] = []
+    for name, locs in sorted(refs.items()):
+        if name in php_plugins:
+            continue
+        uniq: List[tuple] = []
+        for loc in locs:
+            if loc not in uniq:
+                uniq.append(loc)
+        for rel, line in uniq[:3]:
+            out.append({
+                "signal": "cross_lang_plugin_break",
+                "severity": "medium",
+                "plugin": name,
+                "file": rel,
+                "line": line,
+                "implemented": sorted(php_plugins),
+                "detail": f"前端/Go 引用插件「{name}」但 PHP plugins/ 目录无同名实现"
+                          f"(现有: {', '.join(sorted(php_plugins))})，"
+                          f"跨语言插件名契约断裂，运行时将加载失败或静默降级",
+            })
+    return out
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 顶层接口（MCP handler 调用）
 # ═══════════════════════════════════════════════════════════════════
 
@@ -474,6 +561,13 @@ def verify_flow(project_path: str, entry: str, steps: List[str],
     except Exception as e:  # pragma: no cover
         _log(f"static_signals 扫描异常: {type(e).__name__}: {e}")
         result["static_signals"] = []
+    # 跨语言插件契约断链检测：前端/Go 引用插件名 vs PHP plugins/ 实现目录。
+    # 静态可确证信号，提示性（medium），不置 ok=False，避免把"提示"误判为"流程失败"。
+    try:
+        result["cross_lang_contract"] = cross_lang_contract_scan(project_path)
+    except Exception as e:  # pragma: no cover
+        _log(f"cross_lang_contract_scan 异常: {type(e).__name__}: {e}")
+        result["cross_lang_contract"] = []
     return result
 
 

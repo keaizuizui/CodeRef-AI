@@ -288,6 +288,33 @@ class AgentSecurityAuditor:
          "AGENT-SEC-41", "沙箱绕过面（黑名单过滤）", "high",
          "Python 沙箱仅靠字符串 Contains+ToLower 黑名单过滤，可经多空格/换行/字符串拼接等变体绕过黑名单；最终代码经 exec 拼接用 python -c 执行，进程不隔离",
          "改用 AST 解析 + 白名单 + 进程级沙箱（seccomp/容器）隔离执行"),
+        # ticker 泄漏：创建 time.NewTicker 但全文件无 Stop（chatwiki internal/ delete.go 盲区）。
+        # 需整文件确认缺失 Stop，见 _crosslang_file_signal_lines。
+        (re.compile(r'time\.NewTicker\s*\(', re.IGNORECASE),
+         "AGENT-SEC-51", "定时器泄漏（time.NewTicker 未 Stop）", "medium",
+         "检测到 time.NewTicker 创建定时器但未调用 Stop，goroutine 与底层定时器资源永不释放，长期运行导致资源泄漏",
+         "defer ticker.Stop() 及时释放定时器资源"),
+        # goroutine 内直接写文件（可能是多个 goroutine 并发写同一文件/资源），无互斥锁保护。
+        # 需整文件确认 goroutine 块内确有写文件，见 _crosslang_file_signal_lines。
+        (re.compile(r'go\s+func\s*\(', re.IGNORECASE),
+         "AGENT-SEC-52", "并发写（goroutine 内写文件）", "medium",
+         "检测到 goroutine 内直接写文件且无互斥锁，多个 goroutine 并发写同一文件/资源可导致数据损坏或数据竞争",
+         "对共享文件写入加 Mutex/RWMutex 保护，或使用原子写入（临时文件+改名）"),
+        # 未过滤外部输入：RPC/HTTP 请求参数字段直接作为文件写入目标/内容，未做路径净化与白名单。
+        # 命令方向已被 AGENT-SEC-30/31/32 覆盖，此处聚焦写文件方向；需整文件确认参数来自请求体。
+        (re.compile(r'(?:WriteFile|WriteFileByString|WriteFileByBytes|os\.WriteFile|os\.Create|os\.OpenFile|WriteAt)\s*\(.{0,200}?\b(?:req|body)\.[A-Za-z_]+', re.IGNORECASE),
+         "AGENT-SEC-53", "未过滤外部输入（请求参数直入文件写入）", "high",
+         "检测到来自请求/RPC 的参数直接作为文件写入目标或内容，未做路径净化与白名单校验，可越权写入任意路径",
+         "校验写入路径位于许可目录内，对写入内容做白名单/类型校验"),
+        # Go 端动态执行 PHP 插件类名：请求体（req/body/payload/param）经 json.Marshal
+        # 序列化后交给 LambdaPool.Exec 执行 PHP 插件，插件类名/动作名取自函数参数（外部
+        # 请求字段透传）且未做白名单，与 PHP 侧动态类名 AGENT-SEC-45 同类但发生在 Go 侧
+        # （chatwiki multi_pool.go:117）。单行 json.Marshal(req) 仅为候选，须整文件存在
+        # 插件执行面确证（见 _crosslang_file_signal_lines），避免匹配普通 JSON 序列化。
+        (re.compile(r'json\.Marshal\s*\(\s*(?:req|body|payload|param)[a-zA-Z0-9_]*\s*\)', re.IGNORECASE),
+         "AGENT-SEC-55", "跨语言插件类名注入（Go→PHP 执行面）", "high",
+         "检测到 Go 端将外部请求字段（req/body/payload/param）经 json.Marshal 序列化后执行 PHP 插件，插件类名/动作名来自外部输入且未做白名单校验，可跨语言注入任意 PHP 插件执行逻辑",
+         "对插件类名/动作名做白名单校验，禁止直接采用外部输入作为插件标识"),
     ]
 
     # Node/TS：常见于前端/服务端 JS（如 aichatwiki frontend、web 端）
@@ -314,6 +341,48 @@ class AgentSecurityAuditor:
          "AGENT-SEC-39", "动态代码执行（PHP）", "high",
          "检测到 eval/assert 动态执行代码，外部可控导致任意代码执行",
          "避免 eval，使用安全的解析方式"),
+        # 生产调试开关暴露：YII_DEBUG/YII_ENV 硬编码为 true/dev，未受环境隔离
+        # （chatwiki php/worker.php:13 盲区）
+        (re.compile(r'define\s*\(\s*[\'"]YII_(?:DEBUG|ENV)[\'"]\s*,\s*[\'"]?(?:true|on|dev|development)[\'"]?', re.IGNORECASE),
+         "AGENT-SEC-44", "生产调试开关暴露", "high",
+         "检测到 YII_DEBUG/YII_ENV 硬编码为 true/dev，生产环境暴露调试信息与堆栈，未受环境隔离",
+         "调试开关由环境变量注入，生产环境关闭 display_errors 与 YII_DEBUG"),
+        # 动态类名/类加载注入：基于外部输入（插件名）拼装类名后加载/实例化
+        # （chatwiki php/worker.php:45 盲区）
+        (re.compile(r'(?:setModule\s*\(\s*\$|new\s+\$[a-z_][\w]*\s*\(|\\app\\(?:plugins|components)\\{)', re.IGNORECASE),
+         "AGENT-SEC-45", "动态类名/类加载注入", "high",
+         "检测到基于外部输入（如插件名）动态拼装类名并加载/实例化模块，外部可控类名可加载任意类触发任意逻辑",
+         "对插件/类名做白名单校验，禁止直接拼接外部输入作为类名"),
+        # 任意 action 调用面：runAction 接收的外部 action 直接触发模块 action
+        # （chatwiki php/worker.php:51 盲区）
+        (re.compile(r'->\s*runAction\s*\(\s*\$', re.IGNORECASE),
+         "AGENT-SEC-46", "任意 action 调用面", "high",
+         "检测到 runAction 接收外部请求参数（action 来自请求体），攻击者可调用模块内任意未授权 action",
+         "对 action 做白名单校验，禁止透传外部参数直接触发 action"),
+        # 跨语言 RPC 日志转发无过滤：日志文本原样经 RPC 转发到 Go 服务
+        # （chatwiki php/components/GoTarget.php:59 盲区）
+        (re.compile(r'rpc\s*->\s*call\s*\(', re.IGNORECASE),
+         "AGENT-SEC-47", "跨语言 RPC 日志转发无过滤", "medium",
+         "检测到经 RPC 把日志文本（含外部可控内容）原样转发到 Go 服务，无过滤/转义，可能污染下游日志或被注入伪造记录",
+         "对转发内容做转义与长度限制，落库前校验来源与格式"),
+        # SSRF 转发面：外部配置/用户可控 host 拼装 URL 后直接发起 HTTP 请求
+        # （chatwiki php/plugins/official_article/controllers/DefaultController.php:251 盲区）
+        (re.compile(r'\$fullUrl\s*=\s*\$[a-z_][\w]*\s*\.\s*\$', re.IGNORECASE),
+         "AGENT-SEC-48", "SSRF 转发面", "high",
+         "检测到外部配置/用户可控 host 拼装 URL 后直接交由 HTTP 客户端请求，host 无协议与内网地址白名单校验，可被诱导访问内网/元数据地址",
+         "对请求目标 host 做协议与内网地址白名单校验，禁止转发不可信 URL"),
+        # 密钥透传：app_secret 等敏感密钥从外部参数直接透传进请求体
+        # （chatwiki php/plugins/official_access_token/controllers/DefaultController.php:70 盲区）
+        (re.compile(r'[\'"]secret[\'"]\s*=>\s*\$arguments', re.IGNORECASE),
+         "AGENT-SEC-49", "密钥透传/日志泄露", "high",
+         "检测到 app_secret 等敏感密钥从外部参数直接透传进请求体，密钥可被日志记录、中转泄露或在网络层明文暴露",
+         "密钥由服务端配置注入，禁止从请求参数透传敏感密钥"),
+        # SSRF 诱饵可达性：HTTP 请求目标 host 直接取自外部配置（环境变量），无协议白名单
+        # （chatwiki php/plugins/official_article/controllers/DefaultController.php:251 盲区）
+        (re.compile(r'getenv\s*\(\s*[\'"]\w+_(?:HOST|URL)[\'"]\s*\)', re.IGNORECASE),
+         "AGENT-SEC-50", "SSRF 诱饵可达性", "medium",
+         "检测到 HTTP 请求目标 host 直接取自外部配置（环境变量等），无协议/host 白名单，成为可被诱导的 SSRF 诱饵向量",
+         "对配置来源的 host 做协议与内网地址校验后再发起请求"),
     ]
 
     # 文件扩展名 → 跨语言模式组
@@ -400,6 +469,12 @@ class AgentSecurityAuditor:
          "AGENT-SEC-DESER", "反序列化任意代码执行", "blocker",
          "检测到从文件/不可信输入 pickle.load 反序列化，可触发任意代码执行",
          "禁止对不可信数据使用 pickle；改用安全的 JSON 序列化并校验数据来源"),
+        # 知识图谱文件加载未校验来源：json/pickle 加载 knowledge_graph 相关路径文件。
+        # （aichatwiki retrieval.py:47 盲区）需整文件确认加载的是图谱文件，见 _scan_file。
+        (re.compile(r'(?:json\.load|pickle\.load)\s*\(', re.IGNORECASE),
+         "AGENT-SEC-54", "知识图谱文件加载未校验来源", "medium",
+         "检测到对 knowledge_graph 相关路径文件执行 json/pickle 加载，未校验文件来源是否可信目录或是否被外部可写，知识图谱文件可被投毒污染检索结果",
+         "校验图谱文件位于可信目录且仅由受信进程可写，加载前做来源与完整性校验"),
     ]
 
     # ─── 浏览器沙箱禁用检测 ───
@@ -813,6 +888,10 @@ class AgentSecurityAuditor:
                         # 提示注入：若是 URL 路径拼接（构造网络请求），非 prompt，跳过
                         if is_url_concat and category_key == "prompt_injection":
                             continue
+                        # 知识图谱投毒：仅当整文件确实加载 knowledge_graph 相关路径文件才报警，
+                        # 避免把任意 json.load 误判为图谱加载
+                        if risk_id == "AGENT-SEC-54" and "knowledge_graph" not in content:
+                            continue
                         risks.append(AgentSecurityRisk(
                             risk_id=risk_id,
                             risk_name=risk_name,
@@ -832,9 +911,16 @@ class AgentSecurityAuditor:
 
         跨语言文件无 Python 语义（无 docstring / logger 行判断），直接逐行正则匹配。
         命中即确证性危险操作信号。跳过注释行（// 、#），避免文档中的示例误报。
+        少数规则（ticker 泄漏 / 并发写 / 未过滤输入）单行命中只能作为候选，须结合
+        整文件上下文确证（见 _crosslang_file_signal_lines），否则跳过避免误报。
         """
         risks: List[AgentSecurityRisk] = []
         group = self.CROSSLANG_GROUPS[ext][1]
+        # 预计算需要整文件确证的文件级规则报警行号（1-based）
+        file_level_lines: dict = {}
+        for pattern, rid, *_ in group:
+            if rid in self._CROSSLANG_FILE_LEVEL_RULES:
+                file_level_lines.setdefault(rid, self._crosslang_file_signal_lines(rid, content))
         lines = content.splitlines()
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
@@ -848,6 +934,9 @@ class AgentSecurityAuditor:
                     # 跳过模式定义自身（如本项目该文件内联的正则字符串）
                     if self._is_pattern_definition(stripped, risk_name):
                         continue
+                    # 文件级规则：单行命中仅当整文件上下文确证（行号在预计算集合内）才报警
+                    if risk_id in file_level_lines and i not in file_level_lines[risk_id]:
+                        continue
                     risks.append(AgentSecurityRisk(
                         risk_id=risk_id,
                         risk_name=risk_name,
@@ -860,6 +949,44 @@ class AgentSecurityAuditor:
                         suggestion=suggestion,
                     ))
         return risks
+
+    # 需要整文件上下文确证（而非单行命中即报警）的跨语言规则
+    _CROSSLANG_FILE_LEVEL_RULES = frozenset({"AGENT-SEC-51", "AGENT-SEC-52", "AGENT-SEC-53", "AGENT-SEC-55"})
+
+    def _crosslang_file_signal_lines(self, risk_id: str, content: str) -> set:
+        """返回跨语言文件级规则应报警的行号集合（1-based）；无风险返回空集。
+
+        这些规则仅凭单行会误报（NewTicker 往往伴随 Stop、goroutine 内未必写文件、
+        写文件参数未必来自请求体），须结合整文件判定确证：
+          - AGENT-SEC-51 ticker 泄漏：存在 NewTicker 且整文件无任何 .Stop( 调用
+          - AGENT-SEC-52 并发写：goroutine 块内确实存在文件写入调用
+          - AGENT-SEC-53 未过滤输入：写文件调用参数里确实出现请求/RPC 字段
+        """
+        if risk_id == "AGENT-SEC-51":
+            if re.search(r'\.Stop\s*\(', content, re.IGNORECASE):
+                return set()
+            return {content[:m.start()].count("\n") + 1
+                    for m in re.finditer(r'time\.NewTicker\s*\(', content, re.IGNORECASE)}
+        if risk_id == "AGENT-SEC-52":
+            lines = set()
+            for m in re.finditer(r'go\s+func\s*\([^)]*\)\s*\{(.{0,2000}?)(?=\n\s*\})', content, re.DOTALL):
+                if re.search(r'(?:WriteFile|WriteFileByString|WriteFileByBytes|WriteAt|os\.Create|os\.OpenFile)', m.group(1)):
+                    lines.add(content[:m.start()].count("\n") + 1)
+            return lines
+        if risk_id == "AGENT-SEC-53":
+            return {content[:m.start()].count("\n") + 1 for m in re.finditer(
+                r'(?:WriteFile|WriteFileByString|WriteFileByBytes|os\.WriteFile|os\.Create|os\.OpenFile|WriteAt)'
+                r'\s*\([^)]*\b(?:req|body)\.[A-Za-z_]+', content, re.IGNORECASE)}
+        if risk_id == "AGENT-SEC-55":
+            # 确证 Go→PHP 插件执行面：函数名/标识含 Exec 与 Plugin（ExecLambdaPhpPlugin）
+            # 或存在 LambdaPool.Exec 调用，判定请求体序列化确用于插件执行而非普通 JSON 编码。
+            if not re.search(r'(?:ExecLambdaPhpPlugin|LambdaPool\s*\.\s*Exec|Exec\w*Plugin)',
+                             content, re.IGNORECASE):
+                return set()
+            return {content[:m.start()].count("\n") + 1 for m in re.finditer(
+                r'json\.Marshal\s*\(\s*(?:req|body|payload|param)[a-zA-Z0-9_]*\s*\)',
+                content, re.IGNORECASE)}
+        return set()
 
     # ─── 参数透传失效检测（AGENT-SEC-27） ───
     # 检测「函数签名声明了参数 X，但函数体从未使用 X，而是从 config/cred/settings
