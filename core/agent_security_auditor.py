@@ -988,8 +988,9 @@ class AgentSecurityAuditor:
             for m in re.finditer(r'([A-Za-z_][\w]*)\s*:?=\s*time\.NewTicker\s*\(', content, re.IGNORECASE):
                 var = m.group(1)
                 line_no = content[:m.start()].count("\n") + 1
-                # Stop() 必须绑定到同一个 ticker 变量（ticker.Stop），而非文件任意 .Stop 即判不漏。
-                if not re.search(r'\b' + re.escape(var) + r'\.(?:Stop|Reset)\s*\(', content, re.IGNORECASE):
+                # Stop() 必须绑定到同一个 ticker 变量（ticker.Stop），单凭 .Reset( 出现
+                # 不足以证明该 ticker 被 Stop，不视为已清理。
+                if not re.search(r'\b' + re.escape(var) + r'\.Stop\s*\(', content, re.IGNORECASE):
                     result.add(line_no)
             return result
         if risk_id == "AGENT-SEC-52":
@@ -1020,7 +1021,9 @@ class AgentSecurityAuditor:
                     r'json\.Marshal\s*\(\s*(?:req|body|payload|param)[a-zA-Z0-9_]*\s*\)',
                     content, re.IGNORECASE):
                 func_area = content[:m.start()]
-                fm = list(re.finditer(r'\bfunc\s+[A-Za-z_][\w]*\s*\(', func_area, re.IGNORECASE))
+                # 定位 json.Marshal 所在函数：普通 Go 函数 func Name( 与 receiver
+                # 方法 func (s *Server) Name( 均匹配，receiver 段不包含嵌套括号。
+                fm = list(re.finditer(r'\bfunc\s+(?:\([^)]*\)\s*)?[A-Za-z_][\w]*\s*\(', func_area, re.IGNORECASE))
                 if not fm:
                     continue
                 # 定位 json.Marshal 所在函数并配平到函数体结束，插件执行证据须与其绑定。
@@ -1409,6 +1412,7 @@ class AgentSecurityAuditor:
             "param_shadow": "参数透传失效",
             "knowledge": "知识投毒",
             "resilience_gap": "防御层级韧性缺口",
+            "deserialization": "反序列化",
         }
 
         lines = [
@@ -1447,9 +1451,10 @@ class AgentSecurityAuditor:
             "param_shadow": "函数参数被配置读取静默覆盖，调用方传入的实参不生效",
             "knowledge": "知识库/向量数据库可能被投毒",
             "resilience_gap": "缺失的防御层级，如重试退避、模型回退、可观测性等",
+            "deserialization": "从文件/不可信输入反序列化，可能触发任意代码执行或知识图谱文件投毒",
         }
 
-        for cat_key in ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "param_shadow", "resilience_gap"]:
+        for cat_key in ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "param_shadow", "resilience_gap", "deserialization"]:
             cat_risks = by_category.get(cat_key, [])
             if not cat_risks:
                 continue
@@ -1463,7 +1468,7 @@ class AgentSecurityAuditor:
         lines.append("## 详细风险列表")
         lines.append("")
 
-        for cat_key in ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "param_shadow", "resilience_gap"]:
+        for cat_key in ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "param_shadow", "resilience_gap", "deserialization"]:
             cat_risks = by_category.get(cat_key, [])
             if not cat_risks:
                 continue
