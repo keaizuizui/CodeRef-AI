@@ -459,10 +459,12 @@ def cross_lang_contract_scan(project_path: str) -> List[dict]:
     """
     if not project_path or not os.path.isdir(project_path):
         return []
-    # 1) PHP 插件实现目录：任意名为 plugins 的目录（走 php/plugins/<name>/）
+    # 1) PHP 插件实现目录：仅限 PHP 插件约定根目录 php/plugins/<name>/
+    #    （排除 components/vendor 等任意名为 plugins 的无关路径，避免误补缺失实现）
     php_plugins: Set[str] = set()
     for root, dirs, _ in os.walk(project_path):
-        if os.path.basename(root) == "plugins":
+        parts = os.path.relpath(root, project_path).replace("\\", "/").lower().split("/")
+        if len(parts) >= 2 and parts[-2:] == ["php", "plugins"]:
             for d in dirs:
                 php_plugins.add(d.lower())
     if not php_plugins:

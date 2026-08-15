@@ -167,7 +167,7 @@ export CODEREF_API_KEY="ollama"
 | 工具 | 功能 | 模式 | 需要 LLM |
 |------|------|------|---------|
 | `coderef_audit` | 11 审计工具一键产出 + 自动降噪 + 知识图谱构建 | 后台 | 否 |
-| `coderef_scan` | 单维度审计（11 选 1），实时安全带 | 同步 | 否 |
+| `coderef_scan` | 单维度审计（11 选 1），实时安全带；默认后台执行、立即返回 task_id，客户端用 `coderef_task_status` 查询结果 | 后台 | 否 |
 | `coderef_scan_list` | 列出 `coderef_scan` 可选的维度清单 | 同步 | 否 |
 | `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 后台 | 否 |
 | `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 后台 | 是 |
@@ -318,8 +318,8 @@ python -m core.mcp_server
 
 为避免任意 MCP 客户端（Trae / Claude Desktop / Cursor / Cherry Studio 等）对单次 `tools/call` 的**超时限制**，**重型工具默认后台执行**：调用立即返回 `{"status":"running","task_id":"xxxx"}`，由外层 AI 轮询 `coderef_task_status(task_id="xxxx")` 取最终结果，不再撞超时。
 
-- 默认后台：`coderef_audit` / `coderef_docs` / `coderef_review` / `coderef_frontend` / `coderef_report` / `coderef_audit_advisor` / `coderef_architecture` / `coderef_memory_sync` / `coderef_memory_quality` / `coderef_owasp` / `coderef_innovation` / `coderef_asset` / `coderef_innovation_review` / `coderef_change_guard` / `coderef_change_report` / `coderef_verify_findings` / `coderef_replicate` / `coderef_replicate_apply` / `coderef_asset_blueprint` / `coderef_prompt_governance` / `coderef_interpret`
-- 轻量工具（`coderef_scan` / `coderef_query` / `coderef_whitelist` / `coderef_docs_read` 等）保持同步快速返回
+- 默认后台：`coderef_audit` / `coderef_docs` / `coderef_review` / `coderef_frontend` / `coderef_report` / `coderef_audit_advisor` / `coderef_architecture` / `coderef_memory_sync` / `coderef_memory_quality` / `coderef_owasp` / `coderef_innovation` / `coderef_asset` / `coderef_innovation_review` / `coderef_change_guard` / `coderef_change_report` / `coderef_verify_findings` / `coderef_replicate` / `coderef_replicate_apply` / `coderef_asset_blueprint` / `coderef_prompt_governance` / `coderef_interpret` / `coderef_scan`
+- 轻量工具（`coderef_query` / `coderef_whitelist` / `coderef_docs_read` 等）保持同步快速返回
 - 显式控制：传 `background=False` 强制同步（小项目想立即拿结果），传 `background=True` 强制后台
 
 ### 后台任务一直没有完成
