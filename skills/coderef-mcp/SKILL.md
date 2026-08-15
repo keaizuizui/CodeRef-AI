@@ -133,7 +133,8 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 1. coderef_operation_memory_status → 看覆盖度 + 待人工确认项
 2. coderef_operation_memory_query (query_type=all) → 恢复资源/决策/约定/踩坑
 3. coderef_operation_memory_find (name=test/.env/model) → 定位具体资源
-4. coderef_memory_query (query_type=semantic) → 恢复代码语义记忆
+4. coderef_operation_memory_query (query_type=tool) → 定位开发工具位置（git/python/coderabbit 等，含 WSL 内工具）
+5. coderef_memory_query (query_type=semantic) → 恢复代码语义记忆
 ```
 
 ## 常见陷阱
@@ -142,4 +143,5 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 - **不要把诚实状态当失败**：`coderef_flow_verify` 返回 `missing`、`coderef_interpret` 提示"未审计"，都是如实反馈，要原样转述给用户。
 - **不要自己改 verify_findings 的 verdict**：它由确定性逻辑打出，你无权改变。
 - **没有 API Key 时的 LLM 工具**：`coderef_docs`(LLM 归纳部分)、`coderef_change_report`、`coderef_innovation_review`、`coderef_interpret action=wiki` 会诚实提示需配置 Key。如实告诉用户，不要伪造产物。
+- **工具定位优先查操作记忆**：需要 git/python/coderabbit 等工具位置时，先 `coderef_operation_memory_find` / `coderef_operation_memory_query (query_type=tool)` 从操作记忆取，别满 PATH 找。coderabbit 等 CLI 常装在 WSL 的 `~/.local/bin`，不在 Windows PATH——`where` / `Get-Command` 找不到不代表不存在，不代表没装。
 - **所有工具都要传 `project_path`**：这是必填参数，指向被测项目路径。

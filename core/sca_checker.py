@@ -379,6 +379,8 @@ class SCAChecker:
         """扫描项目依赖"""
         # 加载项目专属的 cache 硬编码优化（白名单）
         SharedFilter.load_cache(project_path)
+        # 重置源码收集缓存，避免同一实例跨项目/重扫复用上一次的旧源码
+        self._source_cache = None
 
         dependencies = []
         dep_files = self._find_dep_files(project_path)
@@ -912,10 +914,13 @@ class SCAChecker:
     def _collect_project_source(self, project_path: str) -> str:
         """收集项目内所有 .py/.pyi 源码文本，用于利用面判定（跳过依赖目录）。
 
-        结果按 project_path 缓存，避免多线程漏洞检查时重复遍历项目源码。
+        结果按规范化 project_path 缓存，避免多线程漏洞检查时重复遍历项目源码；
+        scan() 开始会重置，防止同一实例跨项目/重扫复用旧缓存。
         """
-        if getattr(self, "_source_cache", None) is not None:
-            return self._source_cache
+        norm = os.path.normcase(os.path.abspath(project_path))
+        cache = getattr(self, "_source_cache", None)
+        if isinstance(cache, dict) and norm in cache:
+            return cache[norm]
         parts = []
         for root, dirs, files in os.walk(project_path):
             dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
@@ -930,8 +935,12 @@ class SCAChecker:
                             parts.append(fh.read())
                     except OSError:
                         continue
-        self._source_cache = "\n".join(parts)
-        return self._source_cache
+        source = "\n".join(parts)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._source_cache = cache
+        cache[norm] = source
+        return source
 
     def _check_vulnerability(self, package: str, version: str, constraint: str = "", ecosystem: str = "PyPI") -> List[DependencyVulnerability]:
         """检查依赖的已知漏洞"""
