@@ -463,6 +463,7 @@ def cross_lang_contract_scan(project_path: str) -> List[dict]:
     #    （排除 components/vendor 等任意名为 plugins 的无关路径，避免误补缺失实现）
     php_plugins: Set[str] = set()
     php_plugins_root = os.path.join(project_path, "php", "plugins")
+    has_php_plugin_root = os.path.isdir(php_plugins_root)
     try:
         with os.scandir(php_plugins_root) as it:
             for entry in it:
@@ -470,6 +471,10 @@ def cross_lang_contract_scan(project_path: str) -> List[dict]:
                     php_plugins.add(entry.name.lower())
     except OSError:
         php_plugins = set()  # 路径不存在或不可访问 → 按无 PHP 插件处理
+    if not has_php_plugin_root:
+        # 项目根本没有 PHP 插件约定目录 → 不存在"跨语言插件契约"，不上报断链。
+        # 否则纯前端/Go 项目里任何形似插件引用（pluginName/action）都会被误报为缺失。
+        return []
     # 2) 收集前端/Go 引用插件名
     plug_re = re.compile(r'''pluginName\s*=\s*['"]([a-zA-Z][a-zA-Z0-9_\-]*)['"]''', re.I)
     action_re = re.compile(

@@ -1558,11 +1558,20 @@ class Server:
                 if elapsed > MAX_BG_TASK_SECONDS:
                     rc = t["result"]
                     prog = rc.get("progress")
-                    # 超时兜底仅在确有部分结果可交换时才返回 partial；否则（如 coderef_scan
-                    # 这类整段 run_single 完成后才一次性产出 findings，中途既无 progress 也无
-                    # 增量结果）直接返回 running + 超时说明，避免调用方把空壳 partial 当终态、
-                    # 丢弃之后才完成的完整结果。coderef_docs 等有增量产物的工具仍保留 partial。
-                    if not rc.get("result") and not prog:
+                    # 结果已完整产出（线程仅在收尾）→ 直接按完成返回，带上真实 content，
+                    # 避免把"已完成数据"错装成空壳 partial 让调用方误判未完成而丢弃。
+                    # （coderef_scan 这类整段 run_single 完成后才一次性产出 findings。）
+                    if rc.get("result"):
+                        return json.dumps({
+                            "status": "completed", "task_id": tid,
+                            "elapsed": round(elapsed, 1),
+                            "content": rc["result"],
+                        }, ensure_ascii=False)
+                    # 超时兜底仅在确有部分结果可交换时才返回 partial；否则（既无 result
+                    # 也无 progress）直接返回 running + 超时说明，避免调用方把空壳 partial
+                    # 当终态、丢弃之后才完成的完整结果。coderef_docs 等有增量产物的工具
+                    # 仍保留 partial。
+                    if not prog:
                         return json.dumps({
                             "status": "running", "task_id": tid,
                             "elapsed": round(elapsed, 1),
