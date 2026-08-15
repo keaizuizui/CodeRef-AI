@@ -417,6 +417,8 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 - **并行 SCA 漏洞查询**（`sca_checker`）：依赖漏洞核查改用 `ThreadPoolExecutor`（8 worker）并发查询 OSV，配合源码缓存，显著缩短大项目依赖扫描耗时，避免单个工具 900s 轮询超时
 - **治理/安全规则新增**（`governance_audit`）：`IRON-SEC-01` 硬编码凭据（变量名含 Key/Secret/Token 且值为长随机串）、`IRON-SEC-18` 空鉴权中间件（闭包直接 `return` 不做权限校验）、`IRON-GOV-02` 伪科学术语检测
 - **测试环境全量同步**：master 与 `coderef-src` 测试环境 `core` 目录全部文件逻辑与行尾（CRLF）完全一致，哈希逐一核对通过，消除跨环境 diff 噪音
+- **WSL 子系统工具探测**（`operation_memory`）：新增 `_locate_wsl_launcher`（先 PATH、再 `SystemRoot\System32` fallback，解决 PATH 缺 System32 时连 wsl.exe 都找不到）与 `_find_wsl_tool`（经 wsl.exe 用 `command -v` 探测、失败回退 `~/.local/bin`），可定位 WSL 内工具（如 coderabbit 在 `/root/.local/bin`）；`query(tool)` 补齐 `env_tool` 分类覆盖，避免"探测到了却查不到"。`skills/coderef-mcp/SKILL.md` 工作流 E 增加工具定位引导，避免 AI 每次满 PATH 摸索
+- **CodeRabbit 复审修复**：`governance_audit` 的 IRON-SEC-01 硬编码凭据规则支持 Go `:=` 短声明、词边界防 `publicKeyHash` 类误报、错误码排除区分大小写、共享 `CREDENTIAL_VALUE` 提取器；`sca_checker` 源码缓存改为按规范化项目路径隔离，修复同一实例跨项目/重扫复用旧缓存导致漏洞利用面误判
 
 ### v4.8.5 — 盲区缺陷修复（跨语言契约 / Agent 跨语言规则 / 原子写 / 后台超时兜底）
 

@@ -152,16 +152,21 @@ class GovernanceAuditor:
 
     # ─── 安全铁律：高危模式 ────────────────────────────────────────
 
+    # 共享的凭据字面量值提取器：从已命中的凭据声明行提取引号内字面量值。
+    # 供 HARDCODED_SECRET_PATTERNS 命中后的占位符过滤复用，保证取值逻辑唯一。
+    CREDENTIAL_VALUE = re.compile(r'[:=]\s*([`"\'])([^`"\']{8,})[`"\']')
+
     # 硬编码密钥/密码/Token（使用 \b 单词边界防止子串误匹配）
     HARDCODED_SECRET_PATTERNS = [
         # 只匹配字面值（引号内的值），不匹配变量引用/函数调用
-        (re.compile(r'\b(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)\b\s*[:=]\s*["\'][^"\']{8,}["\']', re.IGNORECASE),
+        (re.compile(r'\b(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)\b\s*(?::=|=)\s*["\'][^"\']{8,}["\']', re.IGNORECASE),
          "IRON-SEC-01", "硬编码凭据", "critical",
          "代码中直接写入了密码/Token/密钥等敏感凭据，应改用环境变量或密钥管理服务"),
-        # 自定义密钥常量：变量名含 Key/Secret/Token/Credential 等，值为 16+ 字符随机串
+        # 自定义密钥常量：变量名含 Key/Secret/Token/Credential/Passwd/Pwd 词尾，值为 16+ 字符随机串
         # （目标项目 code_run.go:5 const CodeRunKey = `QwXKBkHZRJ4StIYr06hvUOLVu9AemFa2`）
+        # 词尾后 (?!\w) 防止 publicKeyHash 类把 Key 当普通词中片段；:= 支持 Go 短声明。
         # 占位符/规则串（纯字母/纯数字/重复字符）由 _is_credential_false_positive 排除。
-        (re.compile(r'\b(?:const\s+)?[A-Za-z_]\w*(?:Key|Secret|Token|Credential|Passwd|Pwd)\w*\s*[:=]\s*[`"\']([^`"\']{16,})[`"\']', re.IGNORECASE),
+        (re.compile(r'\b(?:const\s+)?[A-Za-z_]\w*(?:Key|Secret|Token|Credential|Passwd|Pwd)(?!\w)\s*(?::=|=)\s*[`"\']([^`"\']{16,})[`"\']', re.IGNORECASE),
          "IRON-SEC-01", "硬编码凭据", "critical",
          "代码中直接写入了自定义密钥常量（变量名含 Key/Secret/Token 等，值为长随机串），应改用环境变量或密钥管理服务"),
     ]
@@ -184,10 +189,10 @@ class GovernanceAuditor:
         # 注释（Python # 或 JS //）
         re.compile(r'^\s*#', re.IGNORECASE),
         re.compile(r'^\s*//', re.IGNORECASE),
-        # 错误码常量：E1001_KEY = "E1001_KEY"
-        re.compile(r'^[A-Z_]{4,}\s*=\s*["\'][A-Z_\d]+["\']', re.IGNORECASE),
-        # 错误码/错误常量名
-        re.compile(r'MISSING_|_MISSING|ERROR_|E\d{3,}', re.IGNORECASE),
+        # 错误码常量：E1001_KEY = "E1001_KEY"（全大写约定，区分大小写避免误排小写/复合凭据名）
+        re.compile(r'^[A-Z_]{4,}\s*=\s*["\'][A-Z_\d]+["\']'),
+        # 错误码/错误常量名（全大写约定；E 前缀错误码加词边界，避免误匹配值内数字串）
+        re.compile(r'MISSING_|_MISSING|ERROR_|\bE\d{3,}'),
         # 从 localStorage/sessionStorage 获取（JS/TS）
         re.compile(r'(?:localStorage|sessionStorage)\.(?:get|getItem)', re.IGNORECASE),
         # 函数返回值赋值：token = get_xxx() 或 const token = getXxx()
@@ -648,8 +653,9 @@ class GovernanceAuditor:
         stripped = line.strip()
         if stripped.startswith('#'):
             return True
-        # 5. 如果行是类型注解或接口定义（不含实际赋值）
-        if re.match(r'^\s*\w+\s*:\s*(Optional|str|Dict|List|Tuple|Any|Union)', line):
+        # 5. 如果行是类型注解或接口定义（不含实际赋值字面量）
+        if re.match(r'^\s*\w+\s*:\s*(Optional|str|Dict|List|Tuple|Any|Union)', line) \
+                and not re.search(r'[:=]\s*[`"\']', line):
             return True
         # 6. 如果行是文档字符串的一部分
         if stripped.startswith('"""') or stripped.startswith("'''"):
@@ -664,13 +670,14 @@ class GovernanceAuditor:
         # 9. 值是对象属性访问（如 request.api_key, cfg.xxx）
         if re.search(r'\b(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)\b\s*=\s*\w+\.\w+', line, re.IGNORECASE):
             return True
-        # 10. 自定义密钥常量（变量名含 Key/Secret/Token 等）的值是占位符/示例/规则串：
-        #     排除 your_xxx/changeme/REPLACE 等占位符，以及纯字母/纯数字/重复字符等
+        # 10. 自定义密钥常量（变量名含 Key/Secret/Token/Pwd 等词尾）的值是
+        #     占位符/示例/规则串：复用 CREDENTIAL_VALUE 提取的值，排除
+        #     your_xxx/changeme/REPLACE 等占位符，以及纯字母/纯数字/重复字符等
         #     非随机串，避免把普通标识符常量误报为密钥。
         if re.search(r'\b(?:Key|Secret|Token|Credential|Passwd|Pwd)\w*\s*[:=]\s*[`"\']', line, re.IGNORECASE):
-            m = re.search(r'[`"\']([^`"\']{16,})[`"\']', line)
+            m = self.CREDENTIAL_VALUE.search(line)
             if m:
-                v = m.group(1)
+                v = m.group(2)
                 if re.search(r'(?i)(your_|your-|xxx+|changeme|replace|example|placeholder|dummy|sample|todo|fixme|<|>|demo|fake|mock|password)', v):
                     return True
                 if re.fullmatch(r'[a-z]+', v) or re.fullmatch(r'[A-Z]+', v) \

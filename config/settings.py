@@ -102,6 +102,20 @@ OMEM_ENV_TOOL_ROOTS = (
 # "python" 用于 目标工具 内嵌解释器（位于 <root>/python/python.exe）
 OMEM_ENV_TOOL_BIN_SUBDIRS = ("bin", "cmd", "mingw64/bin", "usr/bin", "Scripts", "python")
 
+# WSL 子系统内工具清单（如 coderabbit 住在 WSL 的 /root/.local/bin）。
+# Windows PATH / 便携根都扫不到这类工具，需经 wsl.exe 进入发行版用 `command -v` 探测。
+# 值 = 在 WSL 内执行 `command -v <值>` 的命令名。
+OMEM_WSL_TOOL_BINS = {
+    "coderabbit": "coderabbit",   # CodeRabbit CLI（WSL 内 /root/.local/bin）
+}
+
+# 单次 WSL 命令探测超时（秒），防止 WSL 未配置 / 启动慢时阻塞扫描
+OMEM_WSL_CMD_TIMEOUT = 20
+
+# WSL 探测重试次数（含首次）。WSL 首次冷启动可能较慢导致偶发超时/空输出，
+# 静默重试一次提升确定性，避免工具位置间歇性漏记。
+OMEM_WSL_PROBE_RETRIES = 2
+
 # 操作记忆数据目录（可配置，默认用户数据目录，避免写入项目根）。
 # 设为空串时回退到项目根下 data/operation_memory（兼容旧行为）。
 # 支持环境变量 / 直接改本文件两种方式。
