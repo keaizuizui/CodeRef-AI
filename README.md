@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.8.5** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.8.6** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -411,6 +411,12 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 | **4.0** | 通过四个引擎和四个支柱，增强工具的功能覆盖，形成逻辑闭环 |
 
 ## 更新日志
+
+### v4.8.6 — 回灌测试环境领先功能（并行 SCA / 治理新规则）
+
+- **并行 SCA 漏洞查询**（`sca_checker`）：依赖漏洞核查改用 `ThreadPoolExecutor`（8 worker）并发查询 OSV，配合源码缓存，显著缩短大项目依赖扫描耗时，避免单个工具 900s 轮询超时
+- **治理/安全规则新增**（`governance_audit`）：`IRON-SEC-01` 硬编码凭据（变量名含 Key/Secret/Token 且值为长随机串）、`IRON-SEC-18` 空鉴权中间件（闭包直接 `return` 不做权限校验）、`IRON-GOV-02` 伪科学术语检测
+- **测试环境全量同步**：master 与 `coderef-src` 测试环境 `core` 目录全部文件逻辑与行尾（CRLF）完全一致，哈希逐一核对通过，消除跨环境 diff 噪音
 
 ### v4.8.5 — 盲区缺陷修复（跨语言契约 / Agent 跨语言规则 / 原子写 / 后台超时兜底）
 
