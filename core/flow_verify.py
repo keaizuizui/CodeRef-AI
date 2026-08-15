@@ -464,7 +464,17 @@ def verify_flow(project_path: str, entry: str, steps: List[str],
                        f"请先运行 coderef_audit 或 coderef_memory_sync 构建知识图谱",
         }
     _log(f"verify_flow entry={entry} steps={steps} db={db_path}")
-    return FlowVerifier(db_path).verify(entry, list(steps), max_depth=depth)
+    result = FlowVerifier(db_path).verify(entry, list(steps), max_depth=depth)
+    # AST 静态信号扫描：补充图谱无法覆盖的流程/参数/错误处理缺陷信号
+    #（静默异常吞掉 / 未使用辅助函数 / 参数透传缺失 / 目录契约断裂）。
+    # 提示性信号，不置 ok=False，避免把"提示"误判为"流程失败"。
+    try:
+        from core.ast_signals import scan_project
+        result["static_signals"] = scan_project(project_path)
+    except Exception as e:  # pragma: no cover
+        _log(f"static_signals 扫描异常: {type(e).__name__}: {e}")
+        result["static_signals"] = []
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════

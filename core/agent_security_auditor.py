@@ -274,6 +274,20 @@ class AgentSecurityAuditor:
          "AGENT-SEC-35", "URL 拼接未编码（Go）", "medium",
          "手工拼接 query string 未做 url.QueryEscape，含 &/空格/中文会破坏参数或注入额外参数",
          "使用 url.Values.Encode() 构造查询参数，避免手工字符串拼接"),
+        # 敏感管理端点缺少鉴权：Go 路由框架（gin/echo/chi/自带 map 路由）注册
+        # manage/admin/save_ 等敏感路径，若未挂载鉴权中间件/校验可被任意调用。
+        # 命中即确证性"敏感端点"信号，后续是否真未鉴权由人工/上下文确认。
+        (re.compile(r'(?:Route|RouteGroup|router|mux|engine|group|Handle|HandleFunc|\.POST|\.GET|\.Any)\s*[\[\(][^`"\n]{0,60}[`"\']/(?:manage|admin|save|upload|config|secret|setting)[`"\']?', re.IGNORECASE),
+         "AGENT-SEC-40", "敏感路由缺少鉴权（Go）", "high",
+         "注册到敏感管理端点（manage/admin/save_ 等）的路由，若未挂载鉴权中间件/校验可被任意调用，构成未鉴权管理面",
+         "为敏感路由统一挂载鉴权中间件与权限校验，禁止无鉴权开放管理/配置端点"),
+        # 黑名单式 Python 沙箱过滤：仅字符串 Contains/ToLower 匹配黑名单关键词，
+        # 可被多空格/换行/字符串拼接等变体绕过；最终代码经 exec 拼接用 python -c
+        # 执行，进程不隔离（目标项目 gopa.go checkPythonCodeSafety）
+        (re.compile(r'checkPythonCodeSafety|strings\.Contains\s*\(\s*lowerCode|dangerousKeywords\s*=', re.IGNORECASE),
+         "AGENT-SEC-41", "沙箱绕过面（黑名单过滤）", "high",
+         "Python 沙箱仅靠字符串 Contains+ToLower 黑名单过滤，可经多空格/换行/字符串拼接等变体绕过黑名单；最终代码经 exec 拼接用 python -c 执行，进程不隔离",
+         "改用 AST 解析 + 白名单 + 进程级沙箱（seccomp/容器）隔离执行"),
     ]
 
     # Node/TS：常见于前端/服务端 JS（如 目标项目 frontend、web 端）
@@ -424,6 +438,12 @@ class AgentSecurityAuditor:
          "AGENT-SEC-LMEXEC", "SQL 注入链（SQLDatabaseChain）", "high",
          "检测到 SQLDatabaseChain 将自然语言转 SQL 并执行 LLM 生成的查询，read_only 拦截器可被注释/多语句绕过",
          "使用只读连接并校验生成的 SQL，禁止写操作"),
+        # PromQL 查询注入：LLM 生成的 PromQL 经 split('?') 解析后，query_type 直接
+        # 拼进 URL 路径并执行（requests.get），无语法/端点白名单校验，可注入任意查询
+        (re.compile(r'promql\.split\s*\(\s*["\']\?["\']', re.IGNORECASE),
+         "AGENT-SEC-42", "查询注入（PromQL）", "high",
+         "检测到 LLM 生成的 PromQL 经 split('?') 解析后直接拼进 URL 路径并执行，query_type 可被注入任意查询或端点",
+         "对 LLM 生成的 PromQL 做语法与端点白名单校验，禁止直接拼接 URL 路径"),
     ]
 
     # ─── FastAPI 路由缺失鉴权依赖检测 ───
@@ -432,6 +452,16 @@ class AgentSecurityAuditor:
          "AGENT-SEC-AUTH", "API 路由缺失鉴权", "high",
          "检测到 FastAPI/路由 new_router() 未挂载鉴权依赖（dependencies=[Depends(verify_token)]），对应接口可被任意调用",
          "为路由挂载统一鉴权依赖 dependencies=[Depends(verify_token)]，避免逐接口遗漏"),
+        # 认证绕过（空库放行）：数据库无 active API Key 时所有请求直接放行，
+        # 生产空库即鉴权全关；require_api_key_scope 对未认证同样放行
+        (re.compile(r'not\s+[^\n]*has_any_active_api_key', re.IGNORECASE),
+         "AGENT-SEC-43", "认证绕过（空库放行）", "high",
+         "检测到 has_any_active_api_key 空库放行逻辑：数据库无 active API Key 时所有请求直接通过，生产空库即鉴权全关",
+         "禁止空库放行；未配置密钥时应拒绝服务或强制初始化密钥"),
+        (re.compile(r'not\s+key_info\.get\s*\(\s*["\']authenticated["\']\s*\)', re.IGNORECASE),
+         "AGENT-SEC-43", "认证绕过（未认证放行）", "high",
+         "检测到未认证状态直接放行（require_api_key_scope 对 authenticated=False 不拦截），配合空库放行可完全绕过鉴权",
+         "未认证请求应返回 401/403，禁止静默放行"),
     ]
 
     # ─── 密钥明文落盘检测 ───
@@ -645,6 +675,47 @@ class AgentSecurityAuditor:
         self.risks = risks
         return risks
 
+    def _collect_docstring_lines(self, content: str) -> Set[int]:
+        """用 AST 收集真正的 docstring 行号（模块/类/函数 docstring）。"""
+        doc_lines: Set[int] = set()
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            return doc_lines
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                body = node.body
+                if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
+                    doc_node = body[0]
+                    for ln in range(doc_node.lineno, getattr(doc_node, "end_lineno", doc_node.lineno) + 1):
+                        doc_lines.add(ln)
+        return doc_lines
+
+    def _collect_noise_lines(self, content: str) -> Set[int]:
+        """用 AST 收集日志/打印/异常等非 prompt 上下文行号。
+
+        提示注入检测按 f-string 变量名（query/content/prompt 等）匹配，会把
+        logger.info / print / raise 中的描述性消息误判为注入。这些行由 AST
+        精确识别后排除，避免 AST docstring 修复暴露代码后引入误报。
+        """
+        noise: Set[int] = set()
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            return noise
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                    and isinstance(node.func.value, ast.Name) and node.func.value.id == "logger":
+                for ln in range(node.lineno, getattr(node, "end_lineno", node.lineno) + 1):
+                    noise.add(ln)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print":
+                for ln in range(node.lineno, getattr(node, "end_lineno", node.lineno) + 1):
+                    noise.add(ln)
+            elif isinstance(node, ast.Raise):
+                for ln in range(node.lineno, getattr(node, "end_lineno", node.lineno) + 1):
+                    noise.add(ln)
+        return noise
+
     def _scan_file(self, filepath: str, content: str, ext: str = ".py") -> List[AgentSecurityRisk]:
         """扫描单个文件（content 由调用方统一读取，避免二次 I/O）。
 
@@ -655,21 +726,16 @@ class AgentSecurityAuditor:
             return self._scan_crosslang_file(filepath, content, ext)
         risks = []
         lines = content.splitlines()
+        # 用 AST 精确识别真实 docstring 行（模块/类/函数 docstring），避免把多行
+        # 字符串赋值（如 TEMPLATE = """..."""）的结束符误判为 docstring 开始，
+        # 导致其后的真实代码被当作 docstring 整段跳过（漏检）
+        docstring_lines = self._collect_docstring_lines(content)
 
-        in_docstring = False
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
             if not stripped:
                 continue
-
-            # 跟踪多行 docstring
-            if stripped.startswith('"""') or stripped.startswith("'''"):
-                q = stripped[:3]
-                # 单行 docstring（如 """text"""）不切换状态
-                if not (len(stripped) > 5 and stripped.endswith(q)):
-                    in_docstring = not in_docstring
-                continue
-            if in_docstring:
+            if i in docstring_lines:
                 continue
 
             # 跳过注释
@@ -691,6 +757,10 @@ class AgentSecurityAuditor:
             is_error_msg = bool(
                 re.search(r'["\'](?:error|message)["\']\s*:\s*f?["\']', stripped)
                 and not re.search(r'role\s*[:=]', stripped)
+            )
+            # 判断是否为 URL 路径拼接（f"{host}/api/v1/{var}"），构造网络请求而非 prompt
+            is_url_concat = bool(
+                re.search(r'f["\'].*(?:https?://|/)\{', stripped, re.IGNORECASE)
             )
 
             # 检测所有维度
@@ -737,6 +807,9 @@ class AgentSecurityAuditor:
                             continue
                         # 提示注入：若是错误/诊断消息返回（结构化数据，非 prompt），跳过
                         if is_error_msg and category_key in ("prompt_injection", "context_manipulation"):
+                            continue
+                        # 提示注入：若是 URL 路径拼接（构造网络请求），非 prompt，跳过
+                        if is_url_concat and category_key == "prompt_injection":
                             continue
                         risks.append(AgentSecurityRisk(
                             risk_id=risk_id,
