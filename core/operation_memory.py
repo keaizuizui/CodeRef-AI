@@ -46,6 +46,7 @@ import re
 import json
 import glob
 import shutil
+import subprocess
 import hashlib
 import tempfile
 import threading
@@ -79,6 +80,9 @@ TIMELINE_MAX = settings.OMEM_TIMELINE_MAX
 ENV_TOOL_BINS = settings.OMEM_ENV_TOOL_BINS
 ENV_TOOL_ROOTS = settings.OMEM_ENV_TOOL_ROOTS
 ENV_TOOL_BIN_SUBDIRS = settings.OMEM_ENV_TOOL_BIN_SUBDIRS
+WSL_TOOL_BINS = settings.OMEM_WSL_TOOL_BINS
+WSL_CMD_TIMEOUT = settings.OMEM_WSL_CMD_TIMEOUT
+WSL_PROBE_RETRIES = settings.OMEM_WSL_PROBE_RETRIES
 
 # 项目根目录（Coderef-Ai-master）
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -330,6 +334,8 @@ class ResourceScanner:
         self._detect_docs_reports(files, result)
         # 外部开发工具可执行文件
         self._detect_env_tools(result)
+        # WSL 子系统内工具（如 coderabbit）
+        self._detect_wsl_tools(result)
 
         # 每分类截断，防止撑爆
         for k in result:
@@ -459,6 +465,34 @@ class ResourceScanner:
                 "note": f"{desc}（可执行文件位置）",
             })
 
+    def _detect_wsl_tools(self, result: Dict[str, List[dict]]) -> None:
+        """探测 WSL 子系统内工具（如 coderabbit）。
+
+        Windows PATH / 便携根扫不到这类工具，需经 wsl.exe 进入发行版探测。
+        先记录 wsl.exe 入口本身（解决其不在 PATH 的问题），再探测清单内工具。
+        只记录位置与来源，不承载任何工具逻辑；WSL 不可用时静默跳过。
+        """
+        launcher = _locate_wsl_launcher()
+        if launcher:
+            result["env_tool"].append({
+                "name": "wsl",
+                "path": launcher,
+                "location": "env",
+                "source": "Windows 子系统 Linux 启动器（SystemRoot\\System32 fallback）",
+                "note": "进入 WSL 发行版的入口可执行文件",
+            })
+        for tool, bin_name in WSL_TOOL_BINS.items():
+            path = _find_wsl_tool(bin_name)
+            if not path:
+                continue
+            result["env_tool"].append({
+                "name": tool,
+                "path": path,
+                "location": "wsl",
+                "source": f"WSL 子系统内工具（via {launcher or 'wsl'}）",
+                "note": f"{bin_name}（WSL 内可执行文件，运行需经 wsl.exe）",
+            })
+
 
 def _find_tool_executable(tool: str, bin_name: str) -> str:
     """先在 PATH 查找，再在常见便携根探测。返回可执行文件绝对路径，找不到返回空串。"""
@@ -503,6 +537,51 @@ def _tool_location_source(path: str) -> str:
     count = len(lines)
     head = lines[0] if lines else ""
     return f"约 {count} 项依赖；首项：{head[:60]}"
+
+
+def _locate_wsl_launcher() -> str:
+    """定位 wsl.exe 启动器：先 PATH，再 SystemRoot\\System32 fallback。
+
+    本工具环境的 PowerShell PATH 常不含 System32，导致 `wsl` 直接找不到；
+    而进入 WSL 子系统执行命令必须以 wsl.exe 为入口，故需显式回退完整路径。
+    """
+    try:
+        p = shutil.which("wsl")
+        if p:
+            return os.path.abspath(p)
+    except Exception:
+        pass
+    system32 = os.path.join(os.environ.get("SystemRoot", "C:/Windows"),
+                            "System32", "wsl.exe")
+    return system32 if os.path.isfile(system32) else ""
+
+
+def _find_wsl_tool(bin_name: str) -> str:
+    """在 WSL 子系统内定位工具（如 coderabbit）。
+
+    通过 wsl.exe 进入默认发行版探测命令路径。先 `command -v`（PATH 命中），
+    失败再回退用户级 bin 目录 `$HOME/.local/bin`——WSL 内的 CLI 常用
+    `pip install --user` / 脚本安装落在此处，却不在非登录 shell 的 PATH 里。
+    WSL 首次冷启动可能较慢导致偶发超时/空输出，作有限次静默重试。
+    仅返回"能定位到"的结果；WSL 不可用 / 命令不存在时返回空串，不抛异常。
+    """
+    launcher = _locate_wsl_launcher()
+    if not launcher:
+        return ""
+    cmd = ("command -v {bin} || ls -d $HOME/.local/bin/{bin} 2>/dev/null || true"
+           .format(bin=bin_name))
+    for _ in range(WSL_PROBE_RETRIES):
+        try:
+            proc = subprocess.run(
+                [launcher, "-e", "bash", "-lc", cmd],
+                capture_output=True, text=True, timeout=WSL_CMD_TIMEOUT,
+            )
+            out = (proc.stdout or "").strip()
+            if out:
+                return out
+        except Exception:
+            pass
+    return ""
 
 
 def _fmt_size(size: float) -> str:
@@ -927,9 +1006,9 @@ class OperationMemory:
         # 资源 / 工具 / 文档 / 报告 → resources
         if category in ("all", "resource", "tool", "doc"):
             for rtype in ("git", "model", "api", "dependency",
-                          "tool", "doc", "report"):
+                          "tool", "env_tool", "doc", "report"):
                 if category == "all" or category == "resource" or \
-                        (category == "tool" and rtype == "tool") or \
+                        (category == "tool" and rtype in ("tool", "env_tool")) or \
                         (category == "doc" and rtype in ("doc", "report")):
                     for it in ledger.get("resources", {}).get(rtype, []):
                         if self._match(it, kw):
