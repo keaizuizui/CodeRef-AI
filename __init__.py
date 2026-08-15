@@ -1,3 +1,3 @@
 # CodeRef-AI - 神奇LLM代码参考助手
-__version__ = "4.8.5"
+__version__ = "4.8.6"
 __author__ = "CodeRef Team"
