@@ -171,16 +171,17 @@ def _safe_read(path: str, limit: int = 0) -> str:
 _ATOMIC_WRITE_MAX_RETRIES = 5
 _ATOMIC_WRITE_RETRY_DELAY = 0.1  # 秒
 
-# 每项目时间线锁，防止并发 sync 互相覆盖条目
-_timeline_locks: Dict[str, threading.Lock] = {}
+# 每项目发布锁，防止并发 sync 互相覆盖产物（ledger / BRAIN.md / timeline）
+# 用 RLock 以便同一 sync 流程内多次获取同一项目的锁（外层发布序列 + 内层 timeline）
+_timeline_locks: Dict[str, threading.RLock] = {}
 _timeline_locks_lock = threading.Lock()
 
 
-def _timeline_lock(project_path: str) -> threading.Lock:
-    """获取或创建项目对应的时间线锁"""
+def _timeline_lock(project_path: str) -> threading.RLock:
+    """获取或创建项目对应的发布锁（可重入）"""
     with _timeline_locks_lock:
         if project_path not in _timeline_locks:
-            _timeline_locks[project_path] = threading.Lock()
+            _timeline_locks[project_path] = threading.RLock()
         return _timeline_locks[project_path]
 
 
@@ -811,10 +812,12 @@ class OperationMemory:
         except Exception:
             ledger["snapshot"] = {}
 
-        # 6. 持久化
-        ok_ledger = _write_atomic(ledger_path, json.dumps(ledger, ensure_ascii=False, indent=2))
-        ok_brain = _write_atomic(brain_path, self._render_brain(ledger))
-        ok_timeline = self._append_timeline(project_path, ledger, timeline_path)
+        # 6. 持久化（发布序列：ledger → BRAIN.md → timeline 在同一 per-project 锁内，
+        #    避免并发 sync 交错写坏三个产物；扫描与 LLM 抽取在锁外）
+        with _timeline_lock(project_path):
+            ok_ledger = _write_atomic(ledger_path, json.dumps(ledger, ensure_ascii=False, indent=2))
+            ok_brain = _write_atomic(brain_path, self._render_brain(ledger))
+            ok_timeline = self._append_timeline(project_path, ledger, timeline_path)
         if not (ok_ledger and ok_brain and ok_timeline):
             return {
                 "status": "error",
@@ -892,6 +895,7 @@ class OperationMemory:
         """追加式时间线（保留最近 N 条，可追溯）"""
         # per-project 锁串行化"读-改-写"，避免并发 sync 读到同一旧内容、
         # 最后一次替换丢掉另一条新增条目；替换仍走 _write_atomic 保持原子性。
+        # 该锁可重入：sync 外层的发布序列已持有同一项目的锁，这里再次获取不冲突。
         with _timeline_lock(project_path):
             stamp = ledger.get("last_sync", "-")
             cc = _count_resources(ledger.get("resources", {}).items())
@@ -899,7 +903,7 @@ class OperationMemory:
             old = _safe_read(timeline_path)
             lines = old.splitlines() if old else ["# 操作记忆时间线", ""]
             # 去掉可能的旧标题行以便重建
-            lines = [l for l in lines if not l.startswith("# 操作记忆时间线")]
+            lines = [line for line in lines if not line.startswith("# 操作记忆时间线")]
             lines.insert(0, "# 操作记忆时间线")
             lines.append(entry)
             # 保留最近 N 条
