@@ -462,11 +462,14 @@ def cross_lang_contract_scan(project_path: str) -> List[dict]:
     # 1) PHP 插件实现目录：仅限 PHP 插件约定根目录 php/plugins/<name>/
     #    （排除 components/vendor 等任意名为 plugins 的无关路径，避免误补缺失实现）
     php_plugins: Set[str] = set()
-    for root, dirs, _ in os.walk(project_path):
-        parts = os.path.relpath(root, project_path).replace("\\", "/").lower().split("/")
-        if len(parts) >= 2 and parts[-2:] == ["php", "plugins"]:
-            for d in dirs:
-                php_plugins.add(d.lower())
+    php_plugins_root = os.path.join(project_path, "php", "plugins")
+    try:
+        with os.scandir(php_plugins_root) as it:
+            for entry in it:
+                if entry.is_dir():
+                    php_plugins.add(entry.name.lower())
+    except OSError:
+        php_plugins = set()  # 路径不存在或不可访问 → 按无 PHP 插件处理
     if not php_plugins:
         return []
     # 2) 收集前端/Go 引用插件名
@@ -479,6 +482,7 @@ def cross_lang_contract_scan(project_path: str) -> List[dict]:
         dirs[:] = [d for d in dirs if d not in _SKIP_CONTRACT_DIRS]
         # 排除前端 UI 插件目录（components/plugins/）、PHP 插件实现目录本身
         if os.path.basename(root) == "plugins":
+            dirs[:] = []  # 剪枝该子树，避免深入扫描被排除插件目录内的文件产生假断链信号
             continue
         for fn in files:
             if not fn.endswith((".vue", ".js", ".ts", ".go", ".php")):
