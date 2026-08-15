@@ -998,7 +998,7 @@ class Pipe:
                     r.findings.append(Finding(id=f"gov-{len(r.findings)}", tool="gov",
                         category=v.category, severity=v.severity,
                         file_path=v.file_path, line=v.line_number,
-                        title=v.rule_name, detail=det,
+                        title=f"[{v.rule_id}] {v.rule_name}", detail=det,
                         suggestion=v.suggestion, tier=Tier.MEDIUM))
             done.add("gov"); self._save(p, list(done))
         except Exception as e: r.errors.append(f"gov: {e}")
@@ -1306,11 +1306,16 @@ class Pipe:
 
     # 降噪规则库：每个 rule 检测是否为已知误报模式
     NOISE_RULES = {
-        # MD5 for project hashing, not crypto — IRON-SEC-10 in governance
+        # MD5 for project hashing, not crypto — IRON-SEC-10 in governance。
+        # 仅抑制"纯路径/文件名哈希"误报；命中代码含 sign/签名/token/密钥/认证等
+        # 安全场景词（如 目标项目 的 tool.MD5(body+timestamp+nonce+CodeRunKey) 签名）
+        # 时豁免，避免真实弱加密缺陷被误抑制。
         "md5_for_hashing": {
             "tools": {"gov"},
             "category_keywords": {"security"},
             "title_keywords": {"iron-sec-10", "弱加密", "不安全的加密"},
+            "detail_exclude_keywords": ["sign", "签名", "token", "密钥", "认证",
+                                        "密码", "nonce", "credential", "口令"],
             "action": "suppress",
             "reason": "MD5 用于项目路径哈希，非安全场景",
         },
@@ -1433,6 +1438,12 @@ class Pipe:
             if rule.get("file_keywords"):
                 if not any(kw in file_lower for kw in rule["file_keywords"]):
                     continue
+            # 详情排除关键词：detail 含任一关键词 → 不匹配该规则（真实安全场景豁免，
+            # 如 IRON-SEC-10 弱加密用于签名/密钥而非纯路径哈希）
+            if rule.get("detail_exclude_keywords"):
+                det_lower = (f.detail or "").lower()
+                if any(kw in det_lower for kw in rule["detail_exclude_keywords"]):
+                    continue
             # 目录关键词
             if rule.get("dir_keywords") and f.file_path:
                 dir_lower = os.path.dirname(f.file_path).lower()
@@ -1476,10 +1487,22 @@ class Pipe:
         聚合时保留组内**最高** tier/severity（而非无条件降级为 LOW），
         并把真实数量与全部位置写入 count/locations，避免严重度失真、
         位置丢失、数量低估（对应证据审计缺陷 1/2/3）。
+
+        分组键在 (tool, category) 之上叠加 title 中的 [risk_id]（如 agent 的
+        [AGENT-SEC-30]、gov 的 [GOV-xxx]），使不同风险类型独立成条，避免
+        高价值缺陷被同 category 的 flood 合并吞掉顶层位置（目标项目 agent
+        的 Go 风险全部归入 tool_misuse，若不细分会被 326 条 Python 噪声
+        合并成 1 条，顶层 file/line 被 clawbot 占据）。
         """
+        def _risk_key(f: Finding) -> str:
+            t = (f.title or "").lstrip()
+            if t.startswith("[") and "]" in t:
+                return t[1:t.index("]")]
+            return ""
+
         by_key = {}
         for f in findings:
-            k = (f.tool, f.category)
+            k = (f.tool, f.category, _risk_key(f))
             by_key.setdefault(k, []).append(f)
 
         result = []
@@ -1528,6 +1551,13 @@ class Pipe:
         # 不能按 1 条计，否则 len(findings) 与真实违规数严重不符（证据审计缺陷 3）。
         def _weighted(fl):
             return sum(getattr(f, "count", 1) for f in fl)
+        def _row_desc(f, max_len):
+            desc = f.title
+            if hasattr(f, "count") and f.count > 1:
+                desc += f" (共 {f.count} 条)"
+            if f.detail and "生物合成" in f.detail:
+                desc += " [含生物合成关键词]"
+            return desc[:max_len]
         h = [f for f in r.findings if f.tier == Tier.HIGH and f.kind != "advice"]
         m = [f for f in r.findings if f.tier == Tier.MEDIUM and f.kind != "advice"]
         l = [f for f in r.findings if f.tier == Tier.LOW and f.kind != "advice"]
@@ -1590,13 +1620,13 @@ class Pipe:
             lines.append("|---|---|---|---|---|")
             for f in h[:30]:
                 xv = f" ×{','.join(f.xval_by)}" if f.xval_by else ""
-                lines.append(f"|{f.tool}|{f.category}|{f.severity}|{f.line_label}|{f.title[:60]}{xv}|")
+                lines.append(f"|{f.tool}|{f.category}|{f.severity}|{f.line_label}|{_row_desc(f, 60)}{xv}|")
             lines.append("")
         if m:
             lines.append("## 🟡 MEDIUM");
             lines.append("|工具|分类|程度|位置|描述|")
             lines.append("|---|---|---|---|---|")
-            for f in m[:20]: lines.append(f"|{f.tool}|{f.category}|{f.severity}|{f.line_label}|{f.title[:80]}|")
+            for f in m[:20]: lines.append(f"|{f.tool}|{f.category}|{f.severity}|{f.line_label}|{_row_desc(f, 80)}|")
             lines.append("")
         if adv:
             lines.append("## 💡 建议（工程化改进项，非缺陷）")
