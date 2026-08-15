@@ -158,6 +158,12 @@ class GovernanceAuditor:
         (re.compile(r'\b(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)\b\s*[:=]\s*["\'][^"\']{8,}["\']', re.IGNORECASE),
          "IRON-SEC-01", "硬编码凭据", "critical",
          "代码中直接写入了密码/Token/密钥等敏感凭据，应改用环境变量或密钥管理服务"),
+        # 自定义密钥常量：变量名含 Key/Secret/Token/Credential 等，值为 16+ 字符随机串
+        # （目标项目 code_run.go:5 const CodeRunKey = `QwXKBkHZRJ4StIYr06hvUOLVu9AemFa2`）
+        # 占位符/规则串（纯字母/纯数字/重复字符）由 _is_credential_false_positive 排除。
+        (re.compile(r'\b(?:const\s+)?[A-Za-z_]\w*(?:Key|Secret|Token|Credential|Passwd|Pwd)\w*\s*[:=]\s*[`"\']([^`"\']{16,})[`"\']', re.IGNORECASE),
+         "IRON-SEC-01", "硬编码凭据", "critical",
+         "代码中直接写入了自定义密钥常量（变量名含 Key/Secret/Token 等，值为长随机串），应改用环境变量或密钥管理服务"),
     ]
 
     # 凭据检测的排除模式（匹配后仍需要二次验证）
@@ -393,6 +399,14 @@ class GovernanceAuditor:
          "文档规定'一律不输出来些风险'，隐藏了非致命但仍需记录的风险，属治理合规盲区。应保留风险日志供审计。"),
         (re.compile(r'直接跳过[^\n]*不报告'), "审查绕过(直接跳过不报告)", "high",
          "文档规定'直接跳过且不报告风险'，削弱了合规审查的可审计性，属治理合规盲区。"),
+    ]
+
+    # 文档中的违禁宣称/伪科学工艺词（与 prompt_compliance 治理词表一致，防知识包示例污染）
+    # 仅收录最明确的伪科学工艺词，排除"发酵工艺"等可作科学描述的术语，避免误报
+    DOC_CLAIM_PATTERNS = [
+        (re.compile(r'生物合成|工业生物制造|工业生物合成|DNA重组', re.IGNORECASE),
+         "IRON-GOV-02", "文档违禁宣称(伪科学工艺词)", "medium",
+         "文档/知识包示例使用了伪科学工艺词（如'生物合成'），与库内合规自禁令冲突，会示范污染下游 prompt 生成。应删除或替换为合规表述。"),
     ]
 
     # ===== 代码中密钥明文落盘（写入 .env 等凭据文件）=====
@@ -650,6 +664,18 @@ class GovernanceAuditor:
         # 9. 值是对象属性访问（如 request.api_key, cfg.xxx）
         if re.search(r'\b(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)\b\s*=\s*\w+\.\w+', line, re.IGNORECASE):
             return True
+        # 10. 自定义密钥常量（变量名含 Key/Secret/Token 等）的值是占位符/示例/规则串：
+        #     排除 your_xxx/changeme/REPLACE 等占位符，以及纯字母/纯数字/重复字符等
+        #     非随机串，避免把普通标识符常量误报为密钥。
+        if re.search(r'\b(?:Key|Secret|Token|Credential|Passwd|Pwd)\w*\s*[:=]\s*[`"\']', line, re.IGNORECASE):
+            m = re.search(r'[`"\']([^`"\']{16,})[`"\']', line)
+            if m:
+                v = m.group(1)
+                if re.search(r'(?i)(your_|your-|xxx+|changeme|replace|example|placeholder|dummy|sample|todo|fixme|<|>|demo|fake|mock|password)', v):
+                    return True
+                if re.fullmatch(r'[a-z]+', v) or re.fullmatch(r'[A-Z]+', v) \
+                        or re.fullmatch(r'\d+', v) or re.fullmatch(r'(.)\1{15,}', v):
+                    return True
         return False
 
     def _is_pattern_def_line(self, line: str) -> bool:
@@ -800,6 +826,21 @@ class GovernanceAuditor:
                         line_content=line_stripped[:120],
                         detail=detail,
                         suggestion=suggestion,
+                    ))
+
+            # 空鉴权中间件（Go）：func XxxAuth() gin.HandlerFunc { return func(...) { return } }
+            # 目标项目 permission.go:9 CasbinAuth() 返回的闭包直接 return，不校验任何权限
+            if (not is_pattern_def
+                    and re.search(r'func\s+\w*[Aa]uth\w*\s*\(\s*\)\s*\w+\.(?:HandlerFunc|MiddlewareFunc)\s*\{',
+                                  line_stripped)):
+                window = "\n".join(lines[i:i + 6])
+                if re.search(r'return\s+func\s*\([^)]*\)\s*\{\s*\n\s*return\s*\n\s*\}', window):
+                    violations.append(GovernanceViolation(
+                        rule_id="IRON-SEC-18", rule_name="空鉴权中间件", category="security",
+                        severity="critical", file_path=cf.file_path, line_number=i,
+                        line_content=line_stripped[:120],
+                        detail="鉴权中间件函数返回的闭包直接 return，不执行任何权限校验，可被任意请求绕过鉴权。",
+                        suggestion="在闭包内实现真实的权限校验（token 解析/角色检查），并挂载到受保护路由。",
                     ))
 
             # 路径遍历风险
@@ -1240,6 +1281,10 @@ class GovernanceAuditor:
                                 if pattern.search(line):
                                     violations.append(self._doc_violation(
                                         "IRON-GOV-01", rule_name, severity, detail, fpath, lineno, line))
+                            for pattern, rule_id, rule_name, severity, detail in self.DOC_CLAIM_PATTERNS:
+                                if pattern.search(line):
+                                    violations.append(self._doc_violation(
+                                        rule_id, rule_name, severity, detail, fpath, lineno, line))
                 except (OSError, IOError, UnicodeDecodeError):
                     pass
         return violations
