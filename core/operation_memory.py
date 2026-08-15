@@ -47,6 +47,7 @@ import json
 import glob
 import shutil
 import hashlib
+import tempfile
 import threading
 import time
 from datetime import datetime
@@ -170,41 +171,80 @@ def _safe_read(path: str, limit: int = 0) -> str:
 _ATOMIC_WRITE_MAX_RETRIES = 5
 _ATOMIC_WRITE_RETRY_DELAY = 0.1  # 秒
 
+# 每项目时间线锁，防止并发 sync 互相覆盖条目
+_timeline_locks: Dict[str, threading.Lock] = {}
+_timeline_locks_lock = threading.Lock()
+
+
+def _timeline_lock(project_path: str) -> threading.Lock:
+    """获取或创建项目对应的时间线锁"""
+    with _timeline_locks_lock:
+        if project_path not in _timeline_locks:
+            _timeline_locks[project_path] = threading.Lock()
+        return _timeline_locks[project_path]
+
 
 def _write_atomic(path: str, data: str) -> bool:
-    """原子写（唯一临时文件 + os.replace），避免写一半损坏或并发写串扰。
+    """原子写（独占临时文件 + os.replace），避免写一半损坏或并发写串扰。
 
-    每次写入使用进程内唯一临时文件（pid + 线程 id + 时间戳），杜绝共享
-    .tmp 路径被并发写互相覆盖；写成功后再原子替换目标文件。
+    每次写入用 tempfile.mkstemp 在目标文件同目录创建独占临时文件（原子创建，
+    杜绝共享 / 碰撞路径被截断），写成功并 fsync 后再原子替换目标文件。
 
     Windows 上 os.replace 覆盖一个正处于打开状态的目标文件会触发
     WinError 5/32（拒绝访问 / 文件被占用），因此在替换失败时按模块级
     常量做有限次重试 + 短暂退避，尽量规避并发写的不稳定。
+
+    持久性保证：仅保证"原子可见性"（读者要么看到完整旧文件、要么看到
+    完整新文件，不会看到半写内容），不保证断电持久性——未同步父目录的
+    目录项改动，掉电时可能丢失 os.replace 结果。
     """
-    # 同进程多线程也会并发写同一记忆文件，仅 pid+时间戳在微秒级可能碰撞，
-    # 加入线程 id 保证临时文件在同进程内也唯一，避免 os.replace 报源文件缺失。
-    tmp = (f"{path}.{os.getpid()}.{threading.get_ident()}."
-           f"{datetime.now().strftime('%H%M%S%f')}.tmp")
+    # mkstemp 原子创建独占临时文件，避免旧实现"pid+线程id+时间戳"碰撞时
+    # 截断已存在文件；随后的 os.replace 再原子替换目标文件。
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-    except Exception as e:
+        fd, tmp = tempfile.mkstemp(
+            dir=os.path.dirname(path) or ".",
+            prefix="." + os.path.basename(path) + ".",
+            suffix=".tmp",
+        )
+    except OSError as e:
         logger.warning(f"[OperationMemory] 写入失败 {path}: {e}")
         return False
 
-    for attempt in range(_ATOMIC_WRITE_MAX_RETRIES):
+    try:
         try:
-            os.replace(tmp, path)
-            return True
-        except OSError as e:
-            if attempt < _ATOMIC_WRITE_MAX_RETRIES - 1:
-                time.sleep(_ATOMIC_WRITE_RETRY_DELAY)
-                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+        except (OSError, UnicodeError) as e:
+            # 预期的 IO / 编码错误 → 判定为存储失败
             logger.warning(f"[OperationMemory] 写入失败 {path}: {e}")
             return False
-    return False
+
+        for attempt in range(_ATOMIC_WRITE_MAX_RETRIES):
+            try:
+                os.replace(tmp, path)
+                return True
+            except OSError as e:
+                if attempt < _ATOMIC_WRITE_MAX_RETRIES - 1:
+                    time.sleep(_ATOMIC_WRITE_RETRY_DELAY)
+                    continue
+                logger.warning(f"[OperationMemory] 写入失败 {path}: {e}")
+                return False
+        return False
+    except Exception:
+        # 非预期异常：记录完整堆栈，仍按存储失败返回，交由 finally 清理临时文件
+        logger.exception(f"[OperationMemory] 写入失败 {path}")
+        return False
+    finally:
+        # 所有失败路径都清掉临时文件，避免堆积 .tmp；replace 已成功时
+        # tmp 不存在，忽略 FileNotFoundError。
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.warning(f"[OperationMemory] 清理临时文件失败 {tmp}: {e}")
 
 
 def _compute_snapshot(files: List[str]) -> Dict[str, Dict[str, float]]:
@@ -850,19 +890,22 @@ class OperationMemory:
     def _append_timeline(self, project_path: str, ledger: dict,
                          timeline_path: str) -> bool:
         """追加式时间线（保留最近 N 条，可追溯）"""
-        stamp = ledger.get("last_sync", "-")
-        cc = _count_resources(ledger.get("resources", {}).items())
-        entry = f"- [{stamp}] 同步完成：资源 {sum(cc.values())} 项，旁目录 {len(ledger.get('side_dirs', []))} 个"
-        old = _safe_read(timeline_path)
-        lines = old.splitlines() if old else ["# 操作记忆时间线", ""]
-        # 去掉可能的旧标题行以便重建
-        lines = [l for l in lines if not l.startswith("# 操作记忆时间线")]
-        lines.insert(0, "# 操作记忆时间线")
-        lines.append(entry)
-        # 保留最近 N 条
-        if len(lines) > TIMELINE_MAX + 2:
-            lines = lines[:2] + lines[-(TIMELINE_MAX - 2):]
-        return _write_atomic(timeline_path, "\n".join(lines) + "\n")
+        # per-project 锁串行化"读-改-写"，避免并发 sync 读到同一旧内容、
+        # 最后一次替换丢掉另一条新增条目；替换仍走 _write_atomic 保持原子性。
+        with _timeline_lock(project_path):
+            stamp = ledger.get("last_sync", "-")
+            cc = _count_resources(ledger.get("resources", {}).items())
+            entry = f"- [{stamp}] 同步完成：资源 {sum(cc.values())} 项，旁目录 {len(ledger.get('side_dirs', []))} 个"
+            old = _safe_read(timeline_path)
+            lines = old.splitlines() if old else ["# 操作记忆时间线", ""]
+            # 去掉可能的旧标题行以便重建
+            lines = [l for l in lines if not l.startswith("# 操作记忆时间线")]
+            lines.insert(0, "# 操作记忆时间线")
+            lines.append(entry)
+            # 保留最近 N 条
+            if len(lines) > TIMELINE_MAX + 2:
+                lines = lines[:2] + lines[-(TIMELINE_MAX - 2):]
+            return _write_atomic(timeline_path, "\n".join(lines) + "\n")
 
     def query(self, project_path: str, query_type: str = "all",
               keyword: str = "", limit: int = 10) -> dict:

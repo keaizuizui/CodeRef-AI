@@ -1558,6 +1558,20 @@ class Server:
                 if elapsed > MAX_BG_TASK_SECONDS:
                     rc = t["result"]
                     prog = rc.get("progress")
+                    # 超时兜底仅在确有部分结果可交换时才返回 partial；否则（如 coderef_scan
+                    # 这类整段 run_single 完成后才一次性产出 findings，中途既无 progress 也无
+                    # 增量结果）直接返回 running + 超时说明，避免调用方把空壳 partial 当终态、
+                    # 丢弃之后才完成的完整结果。coderef_docs 等有增量产物的工具仍保留 partial。
+                    if not rc.get("result") and not prog:
+                        return json.dumps({
+                            "status": "running", "task_id": tid,
+                            "elapsed": round(elapsed, 1),
+                            "message": (
+                                f"任务已运行 {round(elapsed,1)}s，超过后台兜底阈值 "
+                                f"({MAX_BG_TASK_SECONDS}s)，仍在后台继续执行，可稍后重查；"
+                                "当前尚无部分结果可先行使用。"
+                            ),
+                        }, ensure_ascii=False)
                     partial = {
                         "status": "partial",
                         "task_id": tid,
@@ -1577,8 +1591,8 @@ class Server:
                         )
                     if elapsed > BG_PARTIAL_SUGGEST_SECONDS:
                         partial["suggestion"] = (
-                            "超大项目建议改用分片/增量方式：coderef_audit 用 incr 策略、"
-                            "coderef_docs 用 resume=true 续跑，或对子项目/维度逐个扫描，"
+                            "超大项目建议改用分片/增量方式：coderef_audit 用 incr 策略，"
+                            "或对子项目/维度逐个扫描，"
                             "避免单次全量超时。已生成的产物（文档/报告）已按模块落盘，可先行使用。"
                         )
                     return json.dumps(partial, ensure_ascii=False)
