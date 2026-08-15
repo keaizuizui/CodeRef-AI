@@ -47,6 +47,8 @@ import json
 import glob
 import shutil
 import hashlib
+import threading
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
@@ -164,21 +166,45 @@ def _safe_read(path: str, limit: int = 0) -> str:
         return ""
 
 
+# 原子写并发重试的常量（集中管理，不散落 magic number）
+_ATOMIC_WRITE_MAX_RETRIES = 5
+_ATOMIC_WRITE_RETRY_DELAY = 0.1  # 秒
+
+
 def _write_atomic(path: str, data: str) -> bool:
     """原子写（唯一临时文件 + os.replace），避免写一半损坏或并发写串扰。
 
-    每次写入使用进程内唯一临时文件（pid + 时间戳），杜绝共享 .tmp 路径
-    被并发写互相覆盖；写成功后再原子替换目标文件。
+    每次写入使用进程内唯一临时文件（pid + 线程 id + 时间戳），杜绝共享
+    .tmp 路径被并发写互相覆盖；写成功后再原子替换目标文件。
+
+    Windows 上 os.replace 覆盖一个正处于打开状态的目标文件会触发
+    WinError 5/32（拒绝访问 / 文件被占用），因此在替换失败时按模块级
+    常量做有限次重试 + 短暂退避，尽量规避并发写的不稳定。
     """
+    # 同进程多线程也会并发写同一记忆文件，仅 pid+时间戳在微秒级可能碰撞，
+    # 加入线程 id 保证临时文件在同进程内也唯一，避免 os.replace 报源文件缺失。
+    tmp = (f"{path}.{os.getpid()}.{threading.get_ident()}."
+           f"{datetime.now().strftime('%H%M%S%f')}.tmp")
     try:
-        tmp = f"{path}.{os.getpid()}.{datetime.now().strftime('%H%M%S%f')}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(data)
-        os.replace(tmp, path)
-        return True
+            f.flush()
+            os.fsync(f.fileno())
     except Exception as e:
         logger.warning(f"[OperationMemory] 写入失败 {path}: {e}")
         return False
+
+    for attempt in range(_ATOMIC_WRITE_MAX_RETRIES):
+        try:
+            os.replace(tmp, path)
+            return True
+        except OSError as e:
+            if attempt < _ATOMIC_WRITE_MAX_RETRIES - 1:
+                time.sleep(_ATOMIC_WRITE_RETRY_DELAY)
+                continue
+            logger.warning(f"[OperationMemory] 写入失败 {path}: {e}")
+            return False
+    return False
 
 
 def _compute_snapshot(files: List[str]) -> Dict[str, Dict[str, float]]:
