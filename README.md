@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.9.0** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.8.5** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -412,7 +412,7 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 
 ## 更新日志
 
-### v4.9.0 — 盲区缺陷修复（跨语言契约 / Agent 跨语言规则 / 原子写 / 后台超时兜底）
+### v4.8.5 — 盲区缺陷修复（跨语言契约 / Agent 跨语言规则 / 原子写 / 后台超时兜底）
 
 - **跨语言插件契约断链检测（`flow_verify` 新增 `cross_lang_contract_scan`）**：前端 Vue/JS 的 `pluginName` 与 Go 的 `action` 引用同名业务插件，但 PHP `plugins/` 目录无对应实现即报断链，检出`php/worker.php` 动态插件加载失败/静默降级。插件发现限定 `php/plugins` 根目录（`os.scandir`），扫描时剪枝 `php/plugins` 与 `components/plugins` 子树避免自引用；`php_plugins` 为空时不再提前返回，缺失插件照常上报。`_cross_lang_nodes` 收敛为只输出结构化节点元信息（name/type/file/line），不再 dump docstring，消除文本子串误命中
 - **Agent 跨语言规则补盲（11 条，AGENT-SEC-44~55）**：`agent_security_auditor` 新增 PHP 生产调试开关、动态类名注入、任意 action 调用、跨语言 RPC 日志泄漏、SSRF 转发、密钥泄漏，及 Go 的 ticker 泄漏、并发写、未过滤输入、RAG 图谱投毒、跨语言插件类名注入（Go→PHP 执行面）等规则，修复 chatwiki PHP/Go 跨语言缺陷漏报（agent 命中 0/9→6/9）。规则含文件级确证防误报：SSRF sink 确证、证据绑定到具体参数、同变量真值/同函数确证
