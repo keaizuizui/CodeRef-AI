@@ -888,10 +888,15 @@ class AgentSecurityAuditor:
                         # 提示注入：若是 URL 路径拼接（构造网络请求），非 prompt，跳过
                         if is_url_concat and category_key == "prompt_injection":
                             continue
-                        # 知识图谱投毒：仅当整文件确实加载 knowledge_graph 相关路径文件才报警，
-                        # 避免把任意 json.load 误判为图谱加载
-                        if risk_id == "AGENT-SEC-54" and "knowledge_graph" not in content:
-                            continue
+                        # 知识图谱投毒：确证 json/pickle 加载的输入参数本身解析为
+                        # knowledge_graph 相关路径（如 json.load(open(GRAPH_PATH))），而非
+                        # 仅整文件出现 knowledge_graph 字样，避免把任意加载误判为图谱加载。
+                        if risk_id == "AGENT-SEC-54":
+                            load_args = self._collect_call_args(lines, i - 1, stripped, m.start())
+                            if not re.search(
+                                    r'(?:knowledge_graph|knowledge-graph|graph_path|graph_file|kg_path|graph)\w*',
+                                    load_args, re.IGNORECASE):
+                                continue
                         risks.append(AgentSecurityRisk(
                             risk_id=risk_id,
                             risk_name=risk_name,
@@ -951,42 +956,114 @@ class AgentSecurityAuditor:
         return risks
 
     # 需要整文件上下文确证（而非单行命中即报警）的跨语言规则
-    _CROSSLANG_FILE_LEVEL_RULES = frozenset({"AGENT-SEC-51", "AGENT-SEC-52", "AGENT-SEC-53", "AGENT-SEC-55"})
+    _CROSSLANG_FILE_LEVEL_RULES = frozenset(
+        {"AGENT-SEC-48", "AGENT-SEC-50", "AGENT-SEC-51", "AGENT-SEC-52", "AGENT-SEC-53", "AGENT-SEC-55"}
+    )
 
     def _crosslang_file_signal_lines(self, risk_id: str, content: str) -> set:
         """返回跨语言文件级规则应报警的行号集合（1-based）；无风险返回空集。
 
         这些规则仅凭单行会误报（NewTicker 往往伴随 Stop、goroutine 内未必写文件、
-        写文件参数未必来自请求体），须结合整文件判定确证：
-          - AGENT-SEC-51 ticker 泄漏：存在 NewTicker 且整文件无任何 .Stop( 调用
-          - AGENT-SEC-52 并发写：goroutine 块内确实存在文件写入调用
+        写文件参数未必来自请求体、URL 拼接/getenv 未必到达出站请求），须结合整文件
+        判定确证：
+          - AGENT-SEC-48 SSRF 转发面：URL 拼接行之后存在出站 HTTP 客户端 sink 调用
+          - AGENT-SEC-50 SSRF 诱饵可达性：getenv host 读取行之后存在出站 HTTP 客户端 sink 调用
+          - AGENT-SEC-51 ticker 泄漏：同一 ticker 变量从未配对 Stop() 调用
+          - AGENT-SEC-52 并发写：goroutine 体（配平花括号）内确实存在文件写入调用
           - AGENT-SEC-53 未过滤输入：写文件调用参数里确实出现请求/RPC 字段
+          - AGENT-SEC-55 跨语言插件执行：插件执行面出现在同一 json.Marshal 所在函数内
         """
+        if risk_id == "AGENT-SEC-48":
+            # SSRF 转发面确证：仅当 URL 拼接行的后续窗口内存在出站 HTTP 客户端 sink
+            # （curl_exec/curl_init/file_get_contents/Guzzle Client/->request( 等）才上报，
+            # 避免孤立 URL 构造被误判，且不向 OWASP/pipeline 上游传播无 sink 支撑的命中。
+            return self._crosslang_ssrf_signal_lines(
+                content, re.compile(r'\$fullUrl\s*=\s*\$[a-z_][\w]*\s*\.\s*\$', re.IGNORECASE))
+        if risk_id == "AGENT-SEC-50":
+            # SSRF 诱饵确证：getenv 读取 host 后须确实交给 HTTP 客户端发起请求才上报。
+            return self._crosslang_ssrf_signal_lines(
+                content, re.compile(r'getenv\s*\(\s*[\'"]\w+_(?:HOST|URL)[\'"]\s*\)', re.IGNORECASE))
         if risk_id == "AGENT-SEC-51":
-            if re.search(r'\.Stop\s*\(', content, re.IGNORECASE):
-                return set()
-            return {content[:m.start()].count("\n") + 1
-                    for m in re.finditer(r'time\.NewTicker\s*\(', content, re.IGNORECASE)}
+            result = set()
+            for m in re.finditer(r'([A-Za-z_][\w]*)\s*:?=\s*time\.NewTicker\s*\(', content, re.IGNORECASE):
+                var = m.group(1)
+                line_no = content[:m.start()].count("\n") + 1
+                # Stop() 必须绑定到同一个 ticker 变量（ticker.Stop），而非文件任意 .Stop 即判不漏。
+                if not re.search(r'\b' + re.escape(var) + r'\.(?:Stop|Reset)\s*\(', content, re.IGNORECASE):
+                    result.add(line_no)
+            return result
         if risk_id == "AGENT-SEC-52":
-            lines = set()
-            for m in re.finditer(r'go\s+func\s*\([^)]*\)\s*\{(.{0,2000}?)(?=\n\s*\})', content, re.DOTALL):
-                if re.search(r'(?:WriteFile|WriteFileByString|WriteFileByBytes|WriteAt|os\.Create|os\.OpenFile)', m.group(1)):
-                    lines.add(content[:m.start()].count("\n") + 1)
-            return lines
+            result = set()
+            for gm in re.finditer(r'go\s+func\s*\([^)]*\)\s*\{', content, re.IGNORECASE):
+                # 用配平花括号解析 goroutine 函数体，避免非贪婪到首个 '}' 提前截断。
+                depth = 0
+                idx = gm.end() - 1  # 指向 goroutine 体起始 '{'
+                while idx < len(content):
+                    if content[idx] == '{':
+                        depth += 1
+                    elif content[idx] == '}':
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    idx += 1
+                body = content[gm.start():idx]
+                if re.search(r'(?:WriteFile|WriteFileByString|WriteFileByBytes|WriteAt|os\.Create|os\.OpenFile)', body):
+                    result.add(content[:gm.start()].count("\n") + 1)
+            return result
         if risk_id == "AGENT-SEC-53":
             return {content[:m.start()].count("\n") + 1 for m in re.finditer(
                 r'(?:WriteFile|WriteFileByString|WriteFileByBytes|os\.WriteFile|os\.Create|os\.OpenFile|WriteAt)'
                 r'\s*\([^)]*\b(?:req|body)\.[A-Za-z_]+', content, re.IGNORECASE)}
         if risk_id == "AGENT-SEC-55":
-            # 确证 Go→PHP 插件执行面：函数名/标识含 Exec 与 Plugin（ExecLambdaPhpPlugin）
-            # 或存在 LambdaPool.Exec 调用，判定请求体序列化确用于插件执行而非普通 JSON 编码。
-            if not re.search(r'(?:ExecLambdaPhpPlugin|LambdaPool\s*\.\s*Exec|Exec\w*Plugin)',
-                             content, re.IGNORECASE):
-                return set()
-            return {content[:m.start()].count("\n") + 1 for m in re.finditer(
-                r'json\.Marshal\s*\(\s*(?:req|body|payload|param)[a-zA-Z0-9_]*\s*\)',
-                content, re.IGNORECASE)}
+            result = set()
+            for m in re.finditer(
+                    r'json\.Marshal\s*\(\s*(?:req|body|payload|param)[a-zA-Z0-9_]*\s*\)',
+                    content, re.IGNORECASE):
+                func_area = content[:m.start()]
+                fm = list(re.finditer(r'\bfunc\s+[A-Za-z_][\w]*\s*\(', func_area, re.IGNORECASE))
+                if not fm:
+                    continue
+                # 定位 json.Marshal 所在函数并配平到函数体结束，插件执行证据须与其绑定。
+                last_func = fm[-1]
+                open_idx = func_area.find('{', last_func.start())
+                if open_idx == -1:
+                    continue
+                depth = 0
+                idx = open_idx
+                while idx < len(content):
+                    if content[idx] == '{':
+                        depth += 1
+                    elif content[idx] == '}':
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    idx += 1
+                func_body = content[last_func.start():idx]
+                # 确证同一函数内含 Go→PHP 插件执行面（ExecLambdaPhpPlugin / LambdaPool.Exec），
+                # 而非文件任意处存在执行标识即认为所有 json.Marshal 都触发了插件执行。
+                if re.search(r'(?:ExecLambdaPhpPlugin|LambdaPool\s*\.\s*Exec|Exec\w*Plugin)',
+                             func_body, re.IGNORECASE):
+                    result.add(content[:m.start()].count("\n") + 1)
+            return result
         return set()
+
+    def _crosslang_ssrf_signal_lines(self, content: str, hit_re: re.Pattern) -> set:
+        """返回命中行号（1-based），仅当命中 URL 构造/getenv 的行后一段窗口内（同一
+        调用链/同函数附近）确实存在出站 HTTP 客户端 sink 调用。无 sink 的孤立 URL 拼接
+        或配置读取不构成 SSRF，不返回该行，避免向 OWASP/pipeline 上游传播误报。
+        """
+        sink_re = re.compile(
+            r'(?:curl_exec|curl_init|file_get_contents|new\s+Client\b|->\s*request\s*\(|'
+            r'->\s*send\s*\(|Http\s*Client|GuzzleHttp)',
+            re.IGNORECASE)
+        lines = content.splitlines()
+        result = set()
+        for m in hit_re.finditer(content):
+            line_no = content[:m.start()].count("\n") + 1
+            window = "\n".join(lines[line_no: line_no + 60])
+            if sink_re.search(window):
+                result.add(line_no)
+        return result
 
     # ─── 参数透传失效检测（AGENT-SEC-27） ───
     # 检测「函数签名声明了参数 X，但函数体从未使用 X，而是从 config/cred/settings
