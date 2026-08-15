@@ -15,6 +15,7 @@ import hashlib
 import logging
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -410,14 +411,21 @@ class SCAChecker:
                 seen[key] = dep
                 unique_deps.append(dep)
 
-        # 检查漏洞
-        for dep in unique_deps:
+        # 检查漏洞：并行查 OSV（每个依赖独立网络请求，串行在依赖多时总耗时爆炸，
+        # 如 目标项目 go.mod 数十个依赖 × 5s 超时远超 300s 上限）
+        def _check_one(dep):
             vulns = self._check_vulnerability(dep.package, dep.version, dep.constraint, dep.ecosystem)
             # 过滤 cache 白名单中的 CVE 误报
             vulns = [v for v in vulns if not SharedFilter.is_security_whitelisted(v.cve_id, dep.source_file, dep.source_line)]
             # 组件级利用面过滤：未实际使用受影响子组件的 CVE 降级为潜在风险
             vulns = self._apply_exploitability_gates(project_path, vulns)
-            dep.vulnerabilities = vulns
+            return dep, vulns
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futures = [ex.submit(_check_one, dep) for dep in unique_deps]
+            for fut in as_completed(futures):
+                dep, vulns = fut.result()
+                dep.vulnerabilities = vulns
 
         # 统计
         vulnerable = [d for d in unique_deps if d.has_vuln]
@@ -902,7 +910,12 @@ class SCAChecker:
         return out
 
     def _collect_project_source(self, project_path: str) -> str:
-        """收集项目内所有 .py/.pyi 源码文本，用于利用面判定（跳过依赖目录）。"""
+        """收集项目内所有 .py/.pyi 源码文本，用于利用面判定（跳过依赖目录）。
+
+        结果按 project_path 缓存，避免多线程漏洞检查时重复遍历项目源码。
+        """
+        if getattr(self, "_source_cache", None) is not None:
+            return self._source_cache
         parts = []
         for root, dirs, files in os.walk(project_path):
             dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
@@ -917,7 +930,8 @@ class SCAChecker:
                             parts.append(fh.read())
                     except OSError:
                         continue
-        return "\n".join(parts)
+        self._source_cache = "\n".join(parts)
+        return self._source_cache
 
     def _check_vulnerability(self, package: str, version: str, constraint: str = "", ecosystem: str = "PyPI") -> List[DependencyVulnerability]:
         """检查依赖的已知漏洞"""
