@@ -816,6 +816,9 @@ class AgentSecurityAuditor:
 
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
+            # 前导缩进长度：m.start() 是相对 stripped（去缩进后）的列，
+            # _collect_call_args 起始行用原始行 lines[]，需偏移回原始行列号。
+            indent_len = len(line) - len(line.lstrip())
             if not stripped:
                 continue
             if i in docstring_lines:
@@ -882,7 +885,7 @@ class AgentSecurityAuditor:
                         # 提取完整调用参数（平衡括号，支持跨行/嵌套），避免单行匹配误报：
                         # AGENT-SEC-25 无 timeout；AGENT-SEC-AUTH 多行 router 调用挂载了 dependencies
                         if risk_id in ("AGENT-SEC-25", "AGENT-SEC-AUTH"):
-                            args = self._collect_call_args(lines, i - 1, stripped, m.start())
+                            args = self._collect_call_args(lines, i - 1, stripped, m.start() + indent_len)
                             if risk_id == "AGENT-SEC-25" and re.search(r'timeout\s*=', args, re.IGNORECASE):
                                 continue
                             if risk_id == "AGENT-SEC-AUTH" and re.search(r'dependencies\s*=', args, re.IGNORECASE):
@@ -900,7 +903,7 @@ class AgentSecurityAuditor:
                         # knowledge_graph 相关路径（如 json.load(open(GRAPH_PATH))），而非
                         # 仅整文件出现 knowledge_graph 字样，避免把任意加载误判为图谱加载。
                         if risk_id == "AGENT-SEC-54":
-                            load_args = self._collect_call_args(lines, i - 1, stripped, m.start())
+                            load_args = self._collect_call_args(lines, i - 1, stripped, m.start() + indent_len)
                             if not re.search(
                                     r'(?:knowledge_graph|knowledge-graph|graph_path|graph_file|kg_path|graph)\w*',
                                     load_args, re.IGNORECASE):
