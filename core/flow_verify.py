@@ -470,8 +470,6 @@ def cross_lang_contract_scan(project_path: str) -> List[dict]:
                     php_plugins.add(entry.name.lower())
     except OSError:
         php_plugins = set()  # 路径不存在或不可访问 → 按无 PHP 插件处理
-    if not php_plugins:
-        return []
     # 2) 收集前端/Go 引用插件名
     plug_re = re.compile(r'''pluginName\s*=\s*['"]([a-zA-Z][a-zA-Z0-9_\-]*)['"]''', re.I)
     action_re = re.compile(
@@ -480,8 +478,11 @@ def cross_lang_contract_scan(project_path: str) -> List[dict]:
     refs: Dict[str, List[tuple]] = {}
     for root, dirs, files in os.walk(project_path):
         dirs[:] = [d for d in dirs if d not in _SKIP_CONTRACT_DIRS]
-        # 排除前端 UI 插件目录（components/plugins/）、PHP 插件实现目录本身
-        if os.path.basename(root) == "plugins":
+        # 排除前端 UI 插件目录（components/plugins/）、PHP 插件实现目录本身：
+        # 仅当路径以 php/plugins 或 components/plugins 结尾时才剪枝，其余恰好叫
+        # plugins 的业务目录照常扫描，避免漏掉缺失实现
+        rel = os.path.relpath(root, project_path).replace("\\", "/")
+        if rel.endswith("php/plugins") or rel.endswith("components/plugins"):
             dirs[:] = []  # 剪枝该子树，避免深入扫描被排除插件目录内的文件产生假断链信号
             continue
         for fn in files:
