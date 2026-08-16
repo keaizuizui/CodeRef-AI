@@ -1134,6 +1134,8 @@ class OperationMemory:
             return {"status": "error",
                     "message": "操作记忆尚未同步，请先调用 coderef_operation_memory_sync",
                     "tool": "recover"}
+        if limit < 1:
+            return {"status": "error", "message": "limit 必须大于 0", "tool": "recover"}
 
         # 关键工具位置（git / python / wsl / coderabbit 等，含 WSL 旁目录）
         env_tools: List[dict] = []
@@ -1145,13 +1147,16 @@ class OperationMemory:
                 "note": it.get("note"),
             })
 
-        # 隐性知识：非 pending（已确认）优先取前 limit 条；pending 归入待确认项
+        # 隐性知识：非 pending（已确认）优先取前 limit 条；pending 也按 limit 截断
         brief: Dict[str, List[dict]] = {"decision": [], "convention": [], "pitfall": []}
         pending_items: List[dict] = []
+        pending_counts = {"decision": 0, "convention": 0, "pitfall": 0}
         for k in ("decision", "convention", "pitfall"):
             for it in ledger.get("knowledge", {}).get(k, []):
                 if it.get("pending"):
-                    pending_items.append({"category": k, "summary": it.get("summary")})
+                    pending_counts[k] += 1
+                    if pending_counts[k] <= limit:
+                        pending_items.append({"category": k, "summary": it.get("summary")})
                 elif len(brief[k]) < limit:
                     brief[k].append({"summary": it.get("summary"),
                                      "source": it.get("source")})
@@ -1167,6 +1172,7 @@ class OperationMemory:
             "conventions": brief["convention"],
             "pitfalls": brief["pitfall"],
             "pending_items": pending_items,
+            "pending_counts": pending_counts,
             "hint": ("涉及 git / push / CodeRabbit / Release 等工具或约定类操作时，"
                      "请优先采用本结果中的 env_tools 工具定位与 conventions / pitfalls 约定，"
                      "勿满 PATH 找工具，也勿在未查询操作记忆前直接抓取外部连接器。"),
