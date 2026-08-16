@@ -18,6 +18,19 @@ from collections import defaultdict
 from loguru import logger
 from core.shared_filter import SharedFilter
 from core.code_models import CodeFile, CodeFunction, CodeClass
+from config import settings
+
+
+# 分析缓存目录：优先环境变量 / settings 配置的独立目录，空则回退项目根
+# data/analysis_cache（兼容旧行为），供测试/CI 隔离缓存避免跨项目污染。
+def _resolve_cache_dir() -> str:
+    cfg = os.environ.get("CODEREF_ANALYSIS_CACHE", "") or (settings.CODEREF_ANALYSIS_CACHE or "")
+    if cfg:
+        return os.path.abspath(os.path.expanduser(cfg))
+    return os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "data", "analysis_cache"
+    )
 
 
 @dataclass
@@ -128,11 +141,8 @@ class CodeAnalyzer:
         self.MAX_PARSE_FILE_SIZE = 500 * 1024  # 超过500KB的文件不做详细解析
         self._parse_count = 0  # 统计解析过的文件数
         
-        # 缓存目录
-        self._cache_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "data", "analysis_cache"
-        )
+        # 缓存目录（支持环境变量 / settings 配置覆盖，见 _resolve_cache_dir）
+        self._cache_dir = _resolve_cache_dir()
         os.makedirs(self._cache_dir, exist_ok=True)
         
         # GitNexus 增强通道（可用时自动启用）

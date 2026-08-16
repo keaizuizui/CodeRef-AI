@@ -956,6 +956,14 @@ class Server:
         """
         from core.pipeline_runner import Pipe
         tool = a.get("tool", "")
+        # P2-2：工具维度名严格白名单校验（大小写敏感）。schema enum 为精确匹配，
+        # 运行时不再借 run_single 的 .lower() 容错，避免 "Gov" 等大小写混写被静默
+        # 放行执行；非法维度返回结构化错误而非空成功。
+        valid = {k for k, _ in self._SINGLE_TOOL_LABELS}
+        if tool not in valid:
+            raise ValueError(
+                f"coderef_scan: 未知工具维度 '{tool}'，支持(大小写敏感): "
+                f"{', '.join(sorted(valid))}")
         pp = a["project_path"]
         r = Pipe().run_single(pp, tool)
         return json.dumps({
@@ -1364,13 +1372,48 @@ class Server:
             r["report_text"] = render_report(r)
         return json.dumps(r, ensure_ascii=False)
 
+    @staticmethod
+    def _validate_project_path(tool: str, p: str) -> str:
+        """校验并规范化 project_path。
+
+        规则：
+        1. 空串/纯空白/缺省 → 结构化错误（此前缺省键 audit 仍完成并生成报告，属假阴性）
+        2. 相对路径（含 .. / . / 纯文件名）→ 拒绝，要求绝对路径，
+           避免 ".." 越权扫描上级目录、空串被当作 cwd 扫描被测源码自身
+        3. 绝对路径但目录不存在/不是目录 → 结构化错误（此前静默返回空成功）
+        返回规范化后的绝对路径（realpath）。
+        """
+        if not p or not p.strip():
+            raise ValueError(
+                f"{tool}: project_path 不能为空或缺失，请传入目标项目的绝对路径")
+        p = p.strip()
+        if not os.path.isabs(p):
+            raise ValueError(
+                f"{tool}: project_path 必须是绝对路径（收到相对路径 '{p}'）。"
+                f"相对路径（如 .. / 空串）会被解析到非预期目录，已拒绝以防越权扫描")
+        real = os.path.realpath(p)
+        if not os.path.isdir(real):
+            raise ValueError(f"{tool}: project_path 目录不存在: {p}")
+        return real
+
     def _run(self, n, a, progress_cb=None) -> str:
         from core.pipeline_runner import Pipe
         # 部分工具（如 coderef_scan_list）不依赖 project_path，用容错读取避免误抛 KeyError
         p, o = a.get("project_path", ""), a.get("output_dir")
+        # P1高-3：project_path 校验与规范化（coderef_scan_list 不依赖路径，跳过）。
+        # 无效路径返回结构化错误而非空成功；相对路径（../空串）拒绝，禁止越权扫描。
+        if n != "coderef_scan_list":
+            p = self._validate_project_path(n, p)
+            a["project_path"] = p
         logger.info(f"[{n}] {p}")
         if n == "coderef_audit":
             strat = a.get("strategy", "auto")
+            # P2-2：审计策略严格枚举校验（大小写敏感）。非法策略此前静默按默认
+            # (full) 执行，调用方无法区分显式传错与未指定；现改为结构化错误。
+            if strat not in ("auto", "full", "incr", "no_change"):
+                raise ValueError(
+                    f"coderef_audit: 未知审计策略 '{strat}'，支持(大小写敏感): "
+                    f"auto/full/incr/no_change")
             strat = None if strat == "auto" else strat
             r = Pipe().audit(p, output_dir=o, progress_cb=progress_cb,
                              strategy=strat)

@@ -145,15 +145,23 @@ def _omem_dir(project_path: str) -> str:
 
 def _ensure_dirs(project_path: str):
     """创建项目对应的操作记忆目录。目录创建 / 可写校验失败时抛错，
-    由调用方 sync() 捕获并返回结构化 error，不让异常逃逸。"""
+    由调用方 sync() 捕获并返回结构化 error，不让异常逃逸。
+
+    可写校验用唯一临时文件名（pid+线程id）并在项目锁内执行：
+    旧实现对同一 .write_probe 文件 open+remove，并发 sync 会互相占用
+    触发 WinError 32（文件被占用），导致并发失败率 68.75%。
+    """
     d = _omem_dir(project_path)
     try:
         os.makedirs(d, exist_ok=True)
-        # 可写校验：确保目录可写，避免后续写入静默失败
-        probe = os.path.join(d, ".write_probe")
-        with open(probe, "w", encoding="utf-8") as f:
-            f.write("probe")
-        os.remove(probe)
+        # 可写校验：确保目录可写，避免后续写入静默失败。
+        # 唯一临时文件名 + 项目锁：并发 sync 各写各的探测文件，互不占用。
+        probe = os.path.join(
+            d, f".write_probe_{os.getpid()}_{threading.get_ident()}")
+        with _timeline_lock(project_path):
+            with open(probe, "w", encoding="utf-8") as f:
+                f.write("probe")
+            os.remove(probe)
     except Exception as e:
         raise OSError(f"操作记忆目录不可写: {d} ({e})") from e
     return d

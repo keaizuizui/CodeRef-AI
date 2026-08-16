@@ -140,10 +140,13 @@ class AgentSecurityAuditor:
          "AGENT-SEC-08", "无确认写入操作", "high",
          "检测到 Agent 可执行数据库写入/文件保存操作，未经人工确认",
          "添加写入前确认机制，或实现 dry-run 模式先预览变更"),
-        # 网络请求（可能被 SSRF 利用）
-        (re.compile(r'(?:requests\.(?:get|post|put|delete)|httpx\.(?:get|post)|urllib\.request)', re.IGNORECASE),
+        # 网络请求（可能被 SSRF 利用）—— 覆盖 Python/Go/PHP 跨语言签名
+        (re.compile(r'(?:requests\.(?:get|post|put|delete)|httpx\.(?:get|post)|urllib\.request|'
+                    r'http\.(?:Get|Post|NewRequest|Head|Do)\s*\(|\.Do\s*\(|'          # Go net/http
+                    r'curl_(?:init|exec|setopt)\s*\(|GuzzleHttp|->request\s*\(|sendRequest\s*\(|'  # PHP
+                    r'file_get_contents\s*\(https?)', re.IGNORECASE),
          "AGENT-SEC-09", "不受控网络请求", "medium",
-         "检测到 Agent 可发起网络请求，可能被用于 SSRF 或数据外传",
+         "检测到 Agent 可发起网络请求（Python/Go/PHP），可能被用于 SSRF 或数据外传",
          "限制网络请求的目标域名白名单，或使用代理层过滤"),
     ]
 
@@ -323,6 +326,14 @@ class AgentSecurityAuditor:
          "AGENT-SEC-55", "跨语言插件类名注入（Go→PHP 执行面）", "high",
          "检测到 Go 端将外部请求字段（req/body/payload/param）经 json.Marshal 序列化后执行 PHP 插件，插件类名/动作名来自外部输入且未做白名单校验，可跨语言注入任意 PHP 插件执行逻辑",
          "对插件类名/动作名做白名单校验，禁止直接采用外部输入作为插件标识"),
+        # SSRF 网络请求面：Go net/http 出站请求直接使用外部/不可信 URL
+        # （目标项目 internal/.../html.go:68 http.Get(src)、process_page.go:670
+        #  http.NewRequest + client.Do 盲区）。http.Get/NewRequest/Do 本身就是出站
+        # 请求，单行命中即确证性信号，无需整文件 sink 确证。
+        (re.compile(r'http\.(?:Get|Post|Head)\s*\(|http\.NewRequest\s*\(|\.Do\s*\(', re.IGNORECASE),
+         "AGENT-SEC-56", "SSRF 网络请求面（Go）", "high",
+         "检测到 Go net/http 出站请求（http.Get/NewRequest/client.Do 等）直接使用外部/不可信 URL，无 scheme/host 白名单，可注入内网地址触发 SSRF",
+         "为 Go 网络请求目标添加 scheme/host 白名单，禁止访问内网/保留地址段"),
     ]
 
     # Node/TS：常见于前端/服务端 JS（如 目标项目 frontend、web 端）
@@ -337,6 +348,31 @@ class AgentSecurityAuditor:
          "AGENT-SEC-37", "动态代码执行（eval）", "high",
          "检测到 eval/Function 动态执行代码，外部可控会导致任意代码执行",
          "避免 eval，使用 JSON.parse 等安全解析代替"),
+        # Vue 模板注入：v-html 直接渲染用户/外部可控内容（未净化）。
+        # 需整文件确证：绑定表达式含用户数据字段（props./item./msg./content/instructions 等）
+        # 且未经过 escapeHTML/sanitize/DOMPurify 净化，见 _crosslang_file_signal_lines。
+        # （目标项目 subsection-box.vue / templates/detail.vue / message-item.vue 盲区）
+        (re.compile(r'v-html\s*=', re.IGNORECASE),
+         "AGENT-SEC-66", "Vue 模板注入（v-html DOM XSS）", "high",
+         "检测到 Vue 模板 v-html 指令直接渲染用户/外部可控内容（未净化），可注入任意 HTML/脚本触发 DOM XSS",
+         "改用 {{ }} 插值自动转义，或对 HTML 内容经 DOMPurify.sanitize 白名单净化后再渲染"),
+        # 前端敏感信息外传：token 拼进 URL 并交给浏览器导航/发送。
+        # 需整文件确证：token 插值拼 URL 且文件内存在 window.open/location 发送动作，
+        # 且拼接目标为变量（非同源硬编码路径），见 _crosslang_file_signal_lines。
+        # （目标项目 useOpenUrlWithToken.js:36 盲区）
+        (re.compile(r'token\s*=\s*\$\{|[?&]token=\$\{', re.IGNORECASE),
+         "AGENT-SEC-67", "前端敏感信息外传（token 拼 URL）", "high",
+         "检测到把鉴权 token 拼进 URL 后交给 window.open/location 导航，token 会经浏览器历史、日志、Referer 泄露给目标站点（尤其外部/用户可控 URL）",
+         "token 经 Authorization 请求头传递，禁止拼进 URL 查询参数"),
+        # Node HTTP 服务端敏感接口无鉴权：/api/messages、/api/agent、/api/config、
+        # /api/uploads 等敏感路由直接处理请求，无 token/authorization 鉴权校验。
+        # 需整文件确证：文件含 HTTP 服务端 + 敏感 API 路由 + 无鉴权校验，
+        # 见 _crosslang_file_signal_lines。
+        # （vimax web/server.mjs:96 盲区）
+        (re.compile(r"url\.pathname\s*===?\s*['\"]/api/(?:messages|agent|config|uploads|admin|user|users|delete|stop|start|exec|shell|file|files)", re.IGNORECASE),
+         "AGENT-SEC-68", "Node HTTP 服务端敏感接口无鉴权", "high",
+         "检测到 Node HTTP 服务端暴露敏感 API 接口（/api/messages、/api/agent、/api/config、/api/uploads 等）但无 token/authorization 鉴权校验，可被任意匿名调用执行敏感操作",
+         "为敏感接口添加 token/authorization 鉴权中间件，禁止无鉴权开放管理/执行端点"),
     ]
 
     # PHP：常见于遗留服务端（如 目标项目 php/worker.php）
@@ -391,6 +427,50 @@ class AgentSecurityAuditor:
          "AGENT-SEC-50", "SSRF 诱饵可达性", "medium",
          "检测到 HTTP 请求目标 host 直接取自外部配置（环境变量等），无协议/host 白名单，成为可被诱导的 SSRF 诱饵向量",
          "对配置来源的 host 做协议与内网地址校验后再发起请求"),
+        # SSRF 出站请求面：PHP curl / file_get_contents URL / Yii sendRequest 直接发起请求
+        # （目标项目 php/plugins/official_article/controllers/DefaultController.php:251 盲区）。
+        # curl_init/curl_exec、file_get_contents(http://)、sendRequest 本身就是出站请求，
+        # 单行命中即确证性信号，无需整文件 sink 确证。
+        (re.compile(r'curl_(?:init|exec)\s*\(|file_get_contents\s*\(https?|sendRequest\s*\(', re.IGNORECASE),
+         "AGENT-SEC-57", "SSRF 网络请求面（PHP）", "high",
+         "检测到 PHP 出站请求（curl_init/curl_exec、file_get_contents URL、Yii sendRequest 等）直接使用外部/不可信 URL，无 scheme/host 白名单，可注入内网地址触发 SSRF",
+         "为 PHP 网络请求目标添加 scheme/host 白名单，禁止访问内网/保留地址段"),
+    ]
+
+    # Java：常见于 Spring 服务端（如 java_target 缺陷样本 J1-J6）
+    JAVA_PATTERNS = [
+        # SQL 注入：SQL 语句字符串与外部变量直接拼接（未参数化）
+        (re.compile(r'(?:SELECT|INSERT|UPDATE|DELETE)\s+[^"\';\n]*["\'][^"\';\n]*["\']\s*\+', re.IGNORECASE),
+         "AGENT-SEC-60", "SQL 注入（Java 字符串拼接）", "high",
+         "检测到 SQL 语句字符串与变量直接拼接（prepareStatement 前），用户可控输入未参数化可注入 SQL",
+         "使用 PreparedStatement 占位符 ? + setString 参数化查询"),
+        # Spring 未鉴权：@GetMapping/@PostMapping 敏感路径无鉴权注解。需整文件确认
+        # 文件含 @RestController/@Controller 且无 @PreAuthorize/@Secured 等鉴权注解，
+        # 见 _crosslang_file_signal_lines。
+        (re.compile(r'@(?:Get|Post|Put|Delete|Request)Mapping\s*\(', re.IGNORECASE),
+         "AGENT-SEC-61", "Spring 接口未鉴权（敏感路径）", "high",
+         "检测到 Spring 控制器敏感路径（admin/delete/upload/export 等）未声明鉴权注解（@PreAuthorize/@Secured/@AuthenticationPrincipal），可被任意匿名调用",
+         "为敏感接口添加 @PreAuthorize 或统一鉴权过滤器，禁止无鉴权开放管理端点"),
+        # 不安全反序列化：ObjectInputStream.readObject 直接反序列化不可信输入
+        (re.compile(r'ObjectInputStream|readObject\s*\(', re.IGNORECASE),
+         "AGENT-SEC-62", "不安全反序列化（Java readObject）", "blocker",
+         "检测到 ObjectInputStream.readObject() 直接反序列化输入，未做来源校验与类型白名单，可触发任意代码执行（RCE）",
+         "使用安全反序列化方案（JSON + 类型白名单），校验字节流来源与签名"),
+        # 路径穿越：目录字符串与外部变量拼接后 Paths.get/Files 读写（未规范化 ../）
+        (re.compile(r'["\'][^"\']*/(?:uploads?|data|tmp|var|home|files?)[^"\']*["\']\s*\+|Paths\.get\s*\([^)]*\+', re.IGNORECASE),
+         "AGENT-SEC-63", "路径穿越（Java 路径拼接）", "high",
+         "检测到目录字符串与外部变量拼接后经 Paths.get/Files 读写，文件名未校验 ../ 可越界读写任意文件",
+         "使用 Path.normalize() 并校验绝对路径位于允许根目录内"),
+        # SSRF：Java HttpClient 出站请求直接使用外部/不可信 URL
+        (re.compile(r'HttpClient|client\.send\s*\(|HttpRequest\.newBuilder\s*\([^)]*URI\s*\(', re.IGNORECASE),
+         "AGENT-SEC-64", "SSRF 网络请求面（Java HttpClient）", "high",
+         "检测到 Java HttpClient 出站请求（HttpRequest.newBuilder(URI(targetUrl))/client.send）直接使用外部/不可信 URL，无 scheme/host 白名单，可注入内网地址触发 SSRF",
+         "为 Java 网络请求目标添加 scheme/host 白名单，禁止访问内网/保留地址段"),
+        # 硬编码密钥：模型 API Key/口令/密钥字面量直接写在源码
+        (re.compile(r'sk-[A-Za-z0-9]{8,}|(?:API_KEY|PASSWORD|SECRET|TOKEN|PASSWD)\s*=\s*["\'][^"\']{6,}', re.IGNORECASE),
+         "AGENT-SEC-65", "硬编码密钥（Java 源码）", "high",
+         "检测到模型 API Key/数据库口令/密钥以字面量硬编码在源码，提交仓库后即可被提取盗用",
+         "改为环境变量/密钥管理服务注入，禁止源码硬编码"),
     ]
 
     # 文件扩展名 → 跨语言模式组
@@ -400,8 +480,11 @@ class AgentSecurityAuditor:
         ".tsx": ("node", NODE_PATTERNS),
         ".js": ("node", NODE_PATTERNS),
         ".jsx": ("node", NODE_PATTERNS),
+        ".mjs": ("node", NODE_PATTERNS),
+        ".cjs": ("node", NODE_PATTERNS),
         ".vue": ("node", NODE_PATTERNS),
         ".php": ("php", PHP_PATTERNS),
+        ".java": ("java", JAVA_PATTERNS),
     }
 
     # ─── 自主行为检测 ───
@@ -449,6 +532,16 @@ class AgentSecurityAuditor:
          "AGENT-SEC-SSRF", "SSRF 面（引用图转发）", "high",
          "检测到引用图 URL 转换函数（_image_uri 等）对 http/https/data 开头的 URL 不校验直接转发透传，用户/LLM 可控 URL 形成 SSRF 诱饵向量",
          "对透传的上游 URL 做 scheme/host 白名单校验，禁止内网地址"),
+        # Go net/http 出站请求（http.Get / http.NewRequest / client.Do）
+        (re.compile(r'http\.(?:Get|Post|NewRequest|Head)\s*\(|\.Do\s*\(', re.IGNORECASE),
+         "AGENT-SEC-SSRF", "SSRF 面（Go 网络请求）", "high",
+         "检测到 Go net/http 出站请求（http.Get/NewRequest/client.Do 等）直接使用外部/不可信 URL，无 scheme/host 白名单，可注入内网地址触发 SSRF",
+         "为 Go 网络请求目标添加 scheme/host 白名单，禁止访问内网/保留地址段"),
+        # PHP 出站请求（curl / file_get_contents URL / Yii sendRequest）
+        (re.compile(r'curl_(?:init|exec)\s*\(|file_get_contents\s*\(https?|sendRequest\s*\(', re.IGNORECASE),
+         "AGENT-SEC-SSRF", "SSRF 面（PHP 网络请求）", "high",
+         "检测到 PHP 出站请求（curl_init/curl_exec、file_get_contents URL、Yii sendRequest 等）直接使用外部/不可信 URL，无 scheme/host 白名单，可注入内网地址触发 SSRF",
+         "为 PHP 网络请求目标添加 scheme/host 白名单，禁止访问内网/保留地址段"),
     ]
 
     # ─── 路径穿越检测 ───
@@ -483,6 +576,24 @@ class AgentSecurityAuditor:
          "AGENT-SEC-54", "知识图谱文件加载未校验来源", "medium",
          "检测到对 knowledge_graph 相关路径文件执行 json/pickle 加载，未校验文件来源是否可信目录或是否被外部可写，知识图谱文件可被投毒污染检索结果",
          "校验图谱文件位于可信目录且仅由受信进程可写，加载前做来源与完整性校验"),
+        # RAG 数据投毒·加载面：外部持久化数据文件（JSON/YAML/CSV/Excel/pickle）被
+        # 加载后直接作为可信输入喂给图谱/检索/LLM 下游。AGENT-SEC-54 要求 json.load
+        # 单行参数含 knowledge_graph 字样，但 目标项目 retrieval.py:47 是
+        # json.load(f)（参数仅文件句柄），单行参数确认漏检；此处改为整文件级确认：
+        # 文件内存在图谱/检索消费信号（from_dict/kg_search/load_knowledge_graph/
+        # add_triple/hybrid_search 等）即判定，见 _scan_file。
+        (re.compile(r'(?:json\.load|yaml\.load|yaml\.safe_load|pickle\.load|pd\.read_csv|pd\.read_excel|pd\.read_json)\s*\(', re.IGNORECASE),
+         "AGENT-SEC-58", "RAG 数据投毒（外部数据加载）", "high",
+         "检测到外部持久化数据文件（JSON/YAML/CSV/Excel/pickle）被加载后直接作为可信输入喂给图谱/检索/LLM 下游，文件可被投毒污染检索与生成结果",
+         "对外部数据文件做格式校验、内容过滤与来源可信度评估，加载后标记不可信并做消毒"),
+        # RAG 数据投毒·消费面：图谱数据反序列化/检索消费（from_dict / data.get("triples") /
+        # kg_search）直接消费外部加载的数据，无内容可信度校验。整文件级确认：文件内存在
+        # 数据加载/序列化信号（json.load/json.loads/yaml.load/pickle.load/json.dump），
+        # 见 _scan_file。
+        (re.compile(r'(?:from_dict\s*\(|data\.get\s*\(\s*["\']triples|kg_search\s*\()', re.IGNORECASE),
+         "AGENT-SEC-59", "RAG 数据投毒（图谱数据消费）", "high",
+         "检测到图谱数据反序列化/检索消费（from_dict/data.get(\"triples\")/kg_search）直接消费外部加载的数据，无内容可信度校验，投毒数据可污染检索结果",
+         "对图谱数据做来源校验与内容过滤，消费前验证数据完整性"),
     ]
 
     # ─── 浏览器沙箱禁用检测 ───
@@ -563,6 +674,26 @@ class AgentSecurityAuditor:
          "使用密钥管理服务存储密钥，禁止明文落盘"),
     ]
 
+    # 资源/逻辑缺陷（Python）：PIL 批量句柄泄漏、外部长任务轮询无超时。
+    # 轮询无超时需整文件确认无 timeout/deadline 防护，见 _scan_file 内 AGENT-SEC-70 判断。
+    RESOURCE_LEAK_PATTERNS = [
+        # PIL 列表推导式批量打开未 close（vimax image_generator_nanobanana_google_api.py:49
+        #  `[Image.open(path) for path in reference_image_paths]` 盲区）。列表推导式内
+        # 批量可迭代打开且未赋给 with 管理，句柄全部泄漏，单行命中即确证性信号。
+        (re.compile(r'\[[^\n]*Image\.open\s*\([^)]*\)\s*for\s+', re.IGNORECASE),
+         "AGENT-SEC-69", "PIL 批量句柄泄漏（列表推导式 Image.open）", "medium",
+         "列表推导式内批量调用 Image.open(path) 打开图像但全部句柄未释放，文件描述符随调用次数累积泄漏，长时间运行将耗尽",
+         "为每个打开句柄使用 with 上下文管理器，或在 finally 中遍历 close"),
+        # 外部长任务轮询无超时上限（vimax video_generator_veo_google_api.py:100
+        #  `while not operation.done` 无限轮询盲区）。while not <op>.done 轮询第三方
+        # 异步任务，若无超时/放弃路径，第三方挂起时调用永久阻塞。需整文件确证无
+        # timeout/deadline/max_wait/give_up 防护（见 _scan_file AGENT-SEC-70 判断）。
+        (re.compile(r'while\s+not\s+\w+\.(?:done|status|ready|complete|finished)\s*:', re.IGNORECASE),
+         "AGENT-SEC-70", "外部长任务轮询无超时上限", "high",
+         "while not <外部操作>.done 无限轮询第三方长任务（视频/异步生成），无超时上限或放弃路径，第三方服务挂起时调用永久阻塞",
+         "为轮询循环添加超时上限与放弃/降级路径（最大等待秒数、max_attempts、超时后抛错或返回降级结果）"),
+    ]
+
     # 排除模式（工具定义中的注释/文档字符串）
     EXCLUDE_PATTERNS = [
         re.compile(r'^\s*#', re.IGNORECASE),
@@ -581,6 +712,21 @@ class AgentSecurityAuditor:
         "cache", "coderef-report", "logs", "build", "dist",
         "tests", "test", "e2e",
     }
+
+    def _is_excluded_dir(self, parent: str, name: str) -> bool:
+        """路径感知的目录排除：排除 EXCLUDE_DIRS 中的目录，但 Java 生产包例外。
+
+        Java 包结构常用 test 作包名（如 src/main/java/com/foo/test/），属生产代码；
+        仅 src/test / src/test/java 等测试目录才应排除，避免把生产 Java 包误排除。
+        """
+        if name.startswith("."):
+            return True
+        if name not in self.EXCLUDE_DIRS:
+            return False
+        if name in ("test", "tests") and re.search(
+                r'(?:src[\\/]main|main[\\/]java)', parent, re.IGNORECASE):
+            return False
+        return True
 
     # ─── 防御层级韧性检测（检查"缺失"的防御模式，而非"存在"的风险） ───
     RESILIENCE_GAP_CHECKS = [
@@ -721,10 +867,10 @@ class AgentSecurityAuditor:
 
         # 收集所有受支持语言的文件（单一遍历，正则扫描与 AST 扫描复用同一份内容，避免二次 I/O）
         # 只排除当前目录名，不影响路径中包含该词的项目。
-        # Python 走完整 8 维 + 参数透传 AST 扫描；Go/Node/PHP 走各自跨语言安全模式组。
+        # Python 走完整 8 维 + 参数透传 AST 扫描；Go/Node/PHP/Java 走各自跨语言安全模式组。
         scan_files: List[str] = []
         for root, dirs, files in os.walk(project_path):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in self.EXCLUDE_DIRS]
+            dirs[:] = [d for d in dirs if not self._is_excluded_dir(root, d)]
             for f in files:
                 ext = os.path.splitext(f)[1].lower()
                 if ext == ".py" or ext in self.CROSSLANG_GROUPS:
@@ -813,6 +959,23 @@ class AgentSecurityAuditor:
         # 字符串赋值（如 TEMPLATE = """..."""）的结束符误判为 docstring 开始，
         # 导致其后的真实代码被当作 docstring 整段跳过（漏检）
         docstring_lines = self._collect_docstring_lines(content)
+        # RAG 数据投毒整文件级信号（AGENT-SEC-58/59）：加载面需文件内存在图谱/检索
+        # 消费信号，消费面需文件内同时存在数据加载/序列化信号与图谱专用消费信号，
+        # 避免把任意 json.load 或 Pydantic 通用 from_dict（如 platform_tools/schema.py）
+        # 误判为投毒链。
+        file_has_graph_consume = bool(re.search(
+            r'(?:kg_search|load_knowledge_graph|knowledge_graph|add_triple|data\.get\s*\(\s*["\']triples|self\.triples)',
+            content, re.IGNORECASE))
+        file_has_data_load = bool(re.search(
+            r'(?:json\.load|json\.loads|yaml\.load|pickle\.load|pd\.read_|json\.dump)',
+            content, re.IGNORECASE))
+
+        # 外部长任务轮询无超时（AGENT-SEC-70）整文件确证：文件存在 while not <op>.done
+        # 轮询，但全文无 timeout/deadline/max_wait/give_up 等超时防护词才上报。
+        # max_retries/retry_delay（429 重试）不算轮询超时防护，避免误放行无超时轮询。
+        file_has_poll_timeout = bool(re.search(
+            r'\b(?:timeout|deadline|max_wait_seconds?|give_up)\b|while\s+.*\b(?:timeout|deadline)\b',
+            content, re.IGNORECASE))
 
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
@@ -869,6 +1032,7 @@ class AgentSecurityAuditor:
                 (self.LLM_EXEC_PATTERNS, "tool_misuse"),
                 (self.AUTH_MISSING_PATTERNS, "security_config"),
                 (self.SECRET_WRITE_PATTERNS, "security_config"),
+                (self.RESOURCE_LEAK_PATTERNS, "resource_leak"),
             ]:
                 # PII 检测需要检查 logger 行，其他检测跳过 logger 行
                 if category_key != "pii_leak" and is_logger:
@@ -908,6 +1072,18 @@ class AgentSecurityAuditor:
                                     r'(?:knowledge_graph|knowledge-graph|graph_path|graph_file|kg_path|graph)\w*',
                                     load_args, re.IGNORECASE):
                                 continue
+                        # RAG 数据投毒·加载面：整文件内存在图谱/检索消费信号才判定，
+                        # 避免把任意 json.load/yaml.load 误判为投毒链加载。
+                        if risk_id == "AGENT-SEC-58" and not file_has_graph_consume:
+                            continue
+                        # RAG 数据投毒·消费面：整文件内同时存在数据加载/序列化信号与
+                        # 图谱专用消费信号才判定，避免把孤立 from_dict/kg_search 或
+                        # Pydantic 通用反序列化误判为投毒链消费。
+                        if risk_id == "AGENT-SEC-59" and not (file_has_data_load and file_has_graph_consume):
+                            continue
+                        # 外部长任务轮询无超时：整文件存在 timeout/deadline 防护则跳过
+                        if risk_id == "AGENT-SEC-70" and file_has_poll_timeout:
+                            continue
                         risks.append(AgentSecurityRisk(
                             risk_id=risk_id,
                             risk_name=risk_name,
@@ -968,7 +1144,8 @@ class AgentSecurityAuditor:
 
     # 需要整文件上下文确证（而非单行命中即报警）的跨语言规则
     _CROSSLANG_FILE_LEVEL_RULES = frozenset(
-        {"AGENT-SEC-48", "AGENT-SEC-50", "AGENT-SEC-51", "AGENT-SEC-52", "AGENT-SEC-53", "AGENT-SEC-55"}
+        {"AGENT-SEC-48", "AGENT-SEC-50", "AGENT-SEC-51", "AGENT-SEC-52", "AGENT-SEC-53", "AGENT-SEC-55", "AGENT-SEC-61",
+         "AGENT-SEC-66", "AGENT-SEC-67", "AGENT-SEC-68"}
     )
 
     def _crosslang_file_signal_lines(self, risk_id: str, content: str) -> set:
@@ -1057,6 +1234,71 @@ class AgentSecurityAuditor:
                              func_body, re.IGNORECASE):
                     result.add(content[:m.start()].count("\n") + 1)
             return result
+        if risk_id == "AGENT-SEC-61":
+            # Spring 未鉴权确证：文件须为控制器（@RestController/@Controller），且
+            # 无 @PreAuthorize/@Secured/@AuthenticationPrincipal 等鉴权注解，敏感路径
+            # 映射（admin/delete/upload/export 等）才上报，避免把已鉴权控制器误判。
+            # 先剥离 Java 注释（// 与 /* */），避免注释中提及的鉴权注解干扰判断。
+            code = re.sub(r'//[^\n]*|/\*.*?\*/', '', content, flags=re.DOTALL)
+            if not re.search(r'@(?:RestController|Controller)\b', code, re.IGNORECASE):
+                return set()
+            if re.search(
+                    r'@(?:PreAuthorize|Secured|AuthenticationPrincipal|EnableGlobalMethodSecurity|RequiresPermissions|RequiresAuthentication)\b',
+                    code, re.IGNORECASE):
+                return set()
+            return {content[:m.start()].count("\n") + 1
+                    for m in re.finditer(
+                        r'@(?:Get|Post|Put|Delete|Request)Mapping\s*\([^)]*/(?:admin|manage|delete|upload|export|config|secret|user|api)',
+                        content, re.IGNORECASE)}
+        if risk_id == "AGENT-SEC-66":
+            # Vue v-html 注入确证：绑定表达式含用户数据字段（props./item./msg./record./
+            # tplInfo./rc./content/description/instructions/answer/question/html 等）且
+            # 未经过 escapeHTML/sanitize/DOMPurify 净化才上报；静态文本（t('...')）与
+            # 已净化渲染不报，避免把 230 处 v-html 全量误报。
+            result = set()
+            for m in re.finditer(r'v-html\s*=\s*"([^"]*)"', content, re.IGNORECASE):
+                expr = m.group(1)
+                if re.search(r'escapeHTML|sanitize|DOMPurify|xss|purify', expr, re.IGNORECASE):
+                    continue
+                if re.search(
+                        r'(?:props|item|record|msg|tplInfo|rc|row|data)\.'
+                        r'|(?:content|description|instructions|answer|question|html|text)\b',
+                        expr, re.IGNORECASE):
+                    result.add(content[:m.start()].count("\n") + 1)
+            return result
+        if risk_id == "AGENT-SEC-67":
+            # token 拼 URL 确证：token 插值拼 URL 且文件内存在 window.open/location 发送
+            # 动作才上报；排除同源硬编码路径（模板以 / 开头，如 /manage/...?token=${}，
+            # 属常规下载鉴权），避免把 13 处同源下载 URL 全量误报。
+            if not re.search(r'window\.open\s*\(|location\.(?:href|assign)|window\.location',
+                             content, re.IGNORECASE):
+                return set()
+            result = set()
+            for i, line in enumerate(content.splitlines(), 1):
+                if not re.search(r'token\s*=\s*\$\{|[?&]token=\$\{', line, re.IGNORECASE):
+                    continue
+                if re.search(r'`\s*/', line):
+                    continue
+                result.add(i)
+            return result
+        if risk_id == "AGENT-SEC-68":
+            # Node HTTP 服务端无鉴权确证：文件含 HTTP 服务端（createServer/express 等）+
+            # 敏感 API 路由 + 无鉴权校验（401/authorization/bearer/jwt/apiKey 等）才上报。
+            # 仅出现 session 参数名不算鉴权（session 可能只是会话 ID 查询参数）。
+            # 先剥离注释，避免注释中提及鉴权词干扰判断。
+            if not re.search(r'createServer\s*\(|express\s*\(|http\.createServer',
+                             content, re.IGNORECASE):
+                return set()
+            code = re.sub(r'//[^\n]*|/\*.*?\*/', '', content, flags=re.DOTALL)
+            if re.search(
+                    r'\b401\b|authorization|api[_-]?key|bearer\s|jwt|verifyToken|checkAuth|'
+                    r'requireAuth|isAuthenticated|authMiddleware',
+                    code, re.IGNORECASE):
+                return set()
+            return {content[:m.start()].count("\n") + 1
+                    for m in re.finditer(
+                        r"url\.pathname\s*===?\s*['\"]/api/(?:messages|agent|config|uploads|admin|user|users|delete|stop|start|exec|shell|file|files)",
+                        content, re.IGNORECASE)}
         return set()
 
     def _crosslang_ssrf_signal_lines(self, content: str, hit_re: re.Pattern) -> set:
