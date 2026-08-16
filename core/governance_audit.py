@@ -1322,7 +1322,7 @@ class GovernanceAuditor:
         for root, dirs, files in os.walk(project_path):
             dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
                 "__pycache__", "node_modules", ".git", "venv", ".venv", "data",
-                "third_party", ".gitnexus", "docs", "reports",
+                "third_party", ".gitnexus", "reports",
             )]
             for f in files:
                 if os.path.splitext(f)[1].lower() in self.DOC_EXTENSIONS:
@@ -1336,7 +1336,17 @@ class GovernanceAuditor:
                 with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
                     for lineno, line in enumerate(fh, 1):
                         if re.search(r'被视为他国|标注.{0,8}为主体|视为独立.{0,6}(主权|国家)|独立主权', line):
-                            sovereignty_claims.append((fpath, lineno, line.strip()))
+                            # 排除禁止/否定/示例/假设语境：如"禁止标注台湾为主体""不得将其视为
+                            # 他国""例如标注台湾为主体"，这些是合规红线/政策举例，并非本文件实际
+                            # 主张的独立主体立场；误归入 sovereignty_claims 会与同文件红线自相
+                            # 矛盾，对同一合规文档产生 IRON-GOV-03 误报。
+                            banned = re.search(
+                                r'(禁止|严禁|不得|不应|不能|避免|切勿|诸如|例如|比如|示例|举例|'
+                                r'假设|假如|若|如果|不应.{0,6}认为|不可).{0,16}'
+                                r'(被视为他国|标注.{0,8}为主体|视为独立.{0,6}(主权|国家)|独立主权)',
+                                line)
+                            if not banned:
+                                sovereignty_claims.append((fpath, lineno, line.strip()))
                         if re.search(r'禁止涉及领土主权|领土主权.{0,8}(红线|争议)|不得.{0,8}主权|主权.{0,4}红线', line):
                             sovereignty_redlines.append((fpath, lineno, line.strip()))
             except (OSError, IOError, UnicodeDecodeError):
@@ -1357,9 +1367,16 @@ class GovernanceAuditor:
                 ))
 
         # 2. 版本差异污染（单文件多套统计并存）
+        # 仅当并存的多套统计均缺乏来源/范围/版本标注时才报违规。年度趋势报告常含多个年份，
+        # 但每个年份通常带明确来源（"数据来源：XX"）、范围（"互联网领域"）与时间/版本标签
+        # （"2022年全年""截至2023年底"），属合规文档而非版本污染；裸统计（无任何元数据）
+        # 并存才构成污染，避免对合规趋势报告产生 IRON-GOV-04 误报。
         stat_re = re.compile(
             r'20\d{2}年(?:前[一二三]季度|全年|上半年|下半年)?[^。\n]{0,40}?'
             r'(\d+(?:\.\d+)?万?件)')
+        stat_meta_re = re.compile(
+            r'(数据来源|来源|据\S*|统计|报告|公报|发布|口径|范围|领域|行业|'
+            r'全年|季度|上半年|下半年|截至|同比|环比|年均|全国|全区|全网|年度)')
         for fpath in doc_files:
             try:
                 with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
@@ -1371,6 +1388,11 @@ class GovernanceAuditor:
                 continue
             years = {m.group(0)[:4] for m in matches}
             if len(years) < 2:
+                continue
+            # 检测并存统计是否带来源/范围/版本标注：任一匹配附近（前后 40 字符窗口）含
+            # 元数据词，即视为有明确来源口径的合规趋势数据，跳过不报违规。
+            if any(stat_meta_re.search(content[max(0, m.start() - 40):m.end() + 40])
+                   for m in matches):
                 continue
             first_line = content[:matches[0].start()].count("\n") + 1
             stats_desc = "; ".join(
