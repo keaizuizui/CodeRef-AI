@@ -590,6 +590,21 @@ class Server:
                 "project_path": {"type": "string", "description": "目标项目路径"},
             }, "required": ["project_path"]},
         })
+        self._tools.append({
+            "name": "coderef_operation_memory_recover",
+            "description": (
+                "上下文丢失后『一次调用』恢复关键记忆：返回关键工具位置（env_tool，含 git / "
+                "python / wsl / coderabbit 等）+ 已确认的约定 / 踩坑 / 决策摘要 + 待人工确认项。"
+                "供 AI 在上下文被压缩后最小成本拿回『东西在哪儿、过去的规范是什么』。"
+                "涉及 git / push / CodeRabbit / Release 等工具或约定类操作时，先调用本工具，"
+                "勿满 PATH 找工具，也勿在未查询操作记忆前直接抓取外部连接器。"
+            ),
+            "inputSchema": {"type": "object", "properties": {
+                "project_path": {"type": "string", "description": "目标项目路径"},
+                "limit": {"type": "integer", "default": 8,
+                          "description": "每类隐性知识（决策/约定/踩坑）最多返回条数"},
+            }, "required": ["project_path"]},
+        })
         # 引擎 · Prompt 治理（4.6 合并收敛：原 coderef_prompt_mgmt / coderef_prompt_audit
         # 已并入 coderef_prompt_governance 唯一入口，见下方 governance 工具定义）
         # ── 引擎三 · OWASP LLM 合规（M4）────────────────────────────
@@ -802,6 +817,7 @@ class Server:
             "coderef_operation_memory_query": self._operation_memory_query,
             "coderef_operation_memory_find": self._operation_memory_find,
             "coderef_operation_memory_status": self._operation_memory_status,
+            "coderef_operation_memory_recover": self._operation_memory_recover,
             # 4.6 兼容层：coderef_prompt_mgmt / coderef_prompt_audit 已从 tools/list 移除
             #（收敛到 coderef_prompt_governance 唯一入口），此处保留 handler 供旧调用向后兼容转发。
             "coderef_prompt_mgmt": self._prompt_mgmt,
@@ -1120,6 +1136,16 @@ class Server:
         pp = a["project_path"]
         r = operation_memory.status(pp)
         r["tool"] = "coderef_operation_memory_status"
+        r["project_path"] = pp
+        return json.dumps(r, ensure_ascii=False)
+
+    def _operation_memory_recover(self, a: dict) -> str:
+        """上下文丢失后一次调用恢复关键记忆（coderef_operation_memory_recover）"""
+        from core.operation_memory import operation_memory
+        pp = a["project_path"]
+        limit = int(a.get("limit", 8))
+        r = operation_memory.recover(pp, limit=limit)
+        r["tool"] = "coderef_operation_memory_recover"
         r["project_path"] = pp
         return json.dumps(r, ensure_ascii=False)
 
