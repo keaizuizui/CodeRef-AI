@@ -184,9 +184,87 @@ def _safe_read(path: str, limit: int = 0) -> str:
         return ""
 
 
-# 原子写并发重试的常量（集中管理，不散落 magic number）
-_ATOMIC_WRITE_MAX_RETRIES = 5
-_ATOMIC_WRITE_RETRY_DELAY = 0.1  # 秒
+# 原子写并发重试与跨进程锁常量（集中管理，不散落 magic number）
+_ATOMIC_WRITE_MAX_RETRIES = settings.OMEM_ATOMIC_MAX_RETRIES
+_ATOMIC_WRITE_RETRY_DELAY = settings.OMEM_ATOMIC_RETRY_DELAY   # 秒
+_ATOMIC_RETRY_BACKOFF = settings.OMEM_ATOMIC_RETRY_BACKOFF
+_PER_FILE_LOCK = settings.OMEM_PER_FILE_LOCK
+
+# 跨进程锁能力探测：Windows 用 msvcrt.locking，Unix 用 fcntl.flock
+try:
+    import msvcrt as _msvcrt  # type: ignore
+except ImportError:  # pragma: no cover
+    _msvcrt = None
+try:
+    import fcntl as _fcntl  # type: ignore
+except ImportError:  # pragma: no cover
+    _fcntl = None
+
+# 占用类错误（值得重试，其余永久性错误直接失败）：
+# Windows WinError 5(拒绝访问)/32(被其他进程占用)；POSIX EAGAIN/EBUSY/ETXTBSY
+_LOCK_CONTENDED_WINERR = {5, 32}
+
+
+class _InterProcessLock:
+    """对 <目标路径>.lock 加跨进程排他锁，串行化不同进程对同一产物的并发替换。
+
+    仅当目标系统提供 flock/msvcrt 且配置开启时生效；否则退化为空锁（no-op），
+    由 _write_atomic 的重试机制兜底。锁文件保持存在（残留 .lock），不清理，
+    避免"反复创建/删除锁文件"本身引入新的并发竞态。
+    """
+
+    def __init__(self, target_path: str):
+        self._lock_path = target_path + ".lock"
+
+    def __enter__(self):
+        try:
+            self._fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+        except OSError:
+            self._fd = None
+            return self
+        try:
+            if _msvcrt is not None:
+                # msvcrt.locking 要求文件非空，先补一个字节
+                if os.fstat(self._fd).st_size == 0:
+                    os.write(self._fd, b"\x00")
+                os.lseek(self._fd, 0, os.SEEK_SET)
+                # LK_LOCK 阻塞式获取，专用于跨进程互斥
+                _msvcrt.locking(self._fd, _msvcrt.LK_LOCK, 1)
+            elif _fcntl is not None:
+                _fcntl.flock(self._fd, _fcntl.LOCK_EX)
+            self._locked = True
+        except OSError:
+            self._locked = False
+        return self
+
+    def __exit__(self, *exc):
+        if self._fd is None:
+            return
+        try:
+            if self._locked:
+                if _msvcrt is not None:
+                    os.lseek(self._fd, 0, os.SEEK_SET)
+                    _msvcrt.locking(self._fd, _msvcrt.LK_UNLCK, 1)
+                elif _fcntl is not None:
+                    _fcntl.flock(self._fd, _fcntl.LOCK_UN)
+        except OSError:
+            pass
+        finally:
+            os.close(self._fd)
+
+
+def _is_lock_contended_err(e: BaseException) -> bool:
+    """是否属于"文件被占用/资源暂不可用"类错误（重试有价值）。"""
+    if not isinstance(e, OSError):
+        return False
+    if getattr(e, "winerror", None) in _LOCK_CONTENDED_WINERR:
+        return True
+    if getattr(e, "errno", None) not in (None, 0):
+        import errno as _errno
+        if e.errno in (_errno.EAGAIN, _errno.EBUSY, _errno.ETXTBSY):
+            return True
+    return False
+
 
 # 每项目发布锁，防止并发 sync 互相覆盖产物（ledger / BRAIN.md / timeline）
 # 用 RLock 以便同一 sync 流程内多次获取同一项目的锁（外层发布序列 + 内层 timeline）
@@ -208,9 +286,13 @@ def _write_atomic(path: str, data: str) -> bool:
     每次写入用 tempfile.mkstemp 在目标文件同目录创建独占临时文件（原子创建，
     杜绝共享 / 碰撞路径被截断），写成功并 fsync 后再原子替换目标文件。
 
-    Windows 上 os.replace 覆盖一个正处于打开状态的目标文件会触发
-    WinError 5/32（拒绝访问 / 文件被占用），因此在替换失败时按模块级
-    常量做有限次重试 + 短暂退避，尽量规避并发写的不稳定。
+    并发写稳定性（对外根除 WinError 5/32 的重试兜底）：
+    - 跨进程互斥（_PER_FILE_LOCK 开启且系统支持 flock/msvcrt 时）：替换前对
+      <目标>.lock 加跨进程排他锁，串行化不同进程对同一产物的替换，从根上避免
+      Windows 覆盖正被打开的目标文件时报 WinError 5/32。
+    - 精确化重试：无论是否开启文件锁，替换失败时只对「占用类」错误
+      （WinError 5/32、POSIX EAGAIN/EBUSY/ETXTBSY）按指数退避重试有限次，
+      其余永久性错误直接失败，不做无谓重试。
 
     持久性保证：仅保证"原子可见性"（读者要么看到完整旧文件、要么看到
     完整新文件，不会看到半写内容），不保证断电持久性——未同步父目录的
@@ -241,11 +323,18 @@ def _write_atomic(path: str, data: str) -> bool:
 
         for attempt in range(_ATOMIC_WRITE_MAX_RETRIES):
             try:
-                os.replace(tmp, path)
+                # 跨进程互斥：同一目标文件的并发替换只在持锁进程内进行。
+                # 开启文件锁时可彻底避免 WinError 5/32；未开启锁时重试仍兜底。
+                if _PER_FILE_LOCK:
+                    with _InterProcessLock(path):
+                        os.replace(tmp, path)
+                else:
+                    os.replace(tmp, path)
                 return True
             except OSError as e:
-                if attempt < _ATOMIC_WRITE_MAX_RETRIES - 1:
-                    time.sleep(_ATOMIC_WRITE_RETRY_DELAY)
+                if _is_lock_contended_err(e) and attempt < _ATOMIC_WRITE_MAX_RETRIES - 1:
+                    # 仅占用类错误重试，并按指数退避拉长等待窗
+                    time.sleep(_ATOMIC_WRITE_RETRY_DELAY * (_ATOMIC_RETRY_BACKOFF ** attempt))
                     continue
                 logger.warning(f"[OperationMemory] 写入失败 {path}: {e}")
                 return False
