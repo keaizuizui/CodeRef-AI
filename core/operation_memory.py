@@ -32,6 +32,11 @@ CoreRef 的差异点：额外处理旁目录（WSL / 家目录 / 数据目录)�
 4. status(project_path)
    - 操作记忆健康状态：已覆盖分类、各分类条目数、旁目录探测、LLM 可用性。
 
+5. recover(project_path, limit)
+   - 上下文丢失后『一次调用』恢复关键记忆：关键工具位置 + 已确认的约定 / 踩坑 / 决策
+     摘要 + 待人工确认项。供 AI 最小成本拿回『东西在哪儿、过去的规范是什么』，
+     避免绕过记忆层去满 PATH 找或抓外部连接器。
+
 工程约定：
 - 纯标准库 + 复用底座（不修改任何底座文件）。
 - 所有用户可读文本使用中文。
@@ -1114,6 +1119,57 @@ class OperationMemory:
             "side_dirs": len(ledger.get("side_dirs", [])),
             "pending_human": len(pending),
             "brain_page": os.path.join(_omem_dir(project_path), "BRAIN.md"),
+        }
+
+    def recover(self, project_path: str, limit: int = 8) -> dict:
+        """上下文丢失后『一次调用』恢复关键记忆。
+
+        一次返回：关键工具位置（env_tool）+ 已确认的约定 / 踩坑 / 决策摘要 + 待人工确认项。
+        供 AI 在上下文被压缩后最小成本拿回『东西在哪儿、过去的规范是什么』，
+        避免多次 query/find 的截断丢失，也避免绕过记忆层去满 PATH 找或抓外部连接器。
+        """
+        project_path = os.path.abspath(project_path)
+        ledger = self._load_ledger(project_path)
+        if not ledger:
+            return {"status": "error",
+                    "message": "操作记忆尚未同步，请先调用 coderef_operation_memory_sync",
+                    "tool": "recover"}
+
+        # 关键工具位置（git / python / wsl / coderabbit 等，含 WSL 旁目录）
+        env_tools: List[dict] = []
+        for it in ledger.get("resources", {}).get("env_tool", []):
+            env_tools.append({
+                "name": it.get("name"),
+                "path": it.get("path"),
+                "location": it.get("location"),
+                "note": it.get("note"),
+            })
+
+        # 隐性知识：非 pending（已确认）优先取前 limit 条；pending 归入待确认项
+        brief: Dict[str, List[dict]] = {"decision": [], "convention": [], "pitfall": []}
+        pending_items: List[dict] = []
+        for k in ("decision", "convention", "pitfall"):
+            for it in ledger.get("knowledge", {}).get(k, []):
+                if it.get("pending"):
+                    pending_items.append({"category": k, "summary": it.get("summary")})
+                elif len(brief[k]) < limit:
+                    brief[k].append({"summary": it.get("summary"),
+                                     "source": it.get("source")})
+
+        return {
+            "status": "ok",
+            "tool": "recover",
+            "project_path": project_path,
+            "last_sync": ledger.get("last_sync", "-"),
+            "llm_available": ledger.get("llm_available", False),
+            "env_tools": env_tools,
+            "decisions": brief["decision"],
+            "conventions": brief["convention"],
+            "pitfalls": brief["pitfall"],
+            "pending_items": pending_items,
+            "hint": ("涉及 git / push / CodeRabbit / Release 等工具或约定类操作时，"
+                     "请优先采用本结果中的 env_tools 工具定位与 conventions / pitfalls 约定，"
+                     "勿满 PATH 找工具，也勿在未查询操作记忆前直接抓取外部连接器。"),
         }
 
     def _match(self, item: dict, kw: str) -> bool:
