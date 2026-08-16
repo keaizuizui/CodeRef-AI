@@ -140,3 +140,52 @@ OMEM_PER_FILE_LOCK = True        # 是否启用跨进程文件锁（置 False �
 # 可通过环境变量 CODEREF_ANALYSIS_CACHE 或直接改本文件，将缓存隔离到独立目录，
 # 避免多项目 / 多进程并发污染同一缓存。
 CODEREF_ANALYSIS_CACHE = ""
+
+# ═══════════════════════════════════════════════════════════════════
+# Wiki 生成器（wiki_generator.py / wiki_ir.py / wiki_compare.py）
+# ═══════════════════════════════════════════════════════════════════
+
+# 增量同步（R1）：记录上次已文档化 gitHead 的状态文件名（位于 wiki 输出目录）
+WIKI_LAST_UPDATE_FILE = ".last-update.json"
+
+# 增量同步：判定"页面失真需重写"的变更文件数阈值（git log 变更文件数超过即全量重建）
+WIKI_INCREMENTAL_MAX_CHANGED_FILES = 50
+
+# front matter / confidence（R2）：交叉验证徽章 → confidence 字段映射
+WIKI_CONFIDENCE_MAP = {
+    "confirmed": "high",
+    "partial": "medium",
+    "unverified": "low",
+    "missing": "none",
+}
+
+# 证据锚定（R3）：wiki 文档中证据锚定标记前缀（Git 文件+行号+commit）
+WIKI_SRC_MARK_PREFIX = "SRC"
+
+# Last-good 门控（R3）：上次全校验通过的产物备份目录名（位于 wiki 输出目录）
+WIKI_LAST_GOOD_DIR = ".last-good"
+
+# 用户授权层（R6）：只读不重写的用户 brief 文件名（位于项目根）
+WIKI_INSTRUCTIONS_FILE = "INSTRUCTIONS.md"
+
+# Agent 指针集成（R7）：写入 AGENTS.md / CLAUDE.md 的指针区块标记
+WIKI_AGENT_POINTER_START = "<!--CODEREFF:START-->"
+WIKI_AGENT_POINTER_END = "<!--CODEREFF:END-->"
+
+# JSON-IR 分离（R4）：IR schema 版本
+WIKI_IR_SCHEMA_VERSION = 1
+
+# 架构图可视化（R5）：Mermaid 图嵌入的最小节点数（低于则不生成图，避免噪音）
+WIKI_MERMAID_MIN_NODES = 3
+
+# Mermaid 自愈（R9）：失败降级为 text fence 的注释标记
+WIKI_MERMAID_FALLBACK_MARK = "<!-- mermaid-fallback -->"
+
+# Compare diff（R8）：架构快照文件名
+WIKI_SNAPSHOT_FILE = ".arch-snapshot.json"
+
+# 成本/输出封顶（R10）：单文档 LLM 输出最大字符数（超限截断并标记）
+WIKI_LLM_OUTPUT_CAP_CHARS = 12000
+
+# 成本/输出封顶（R10）：单次 wiki 生成的 LLM 调用次数上限（超限停止并提示）
+WIKI_LLM_CALL_BUDGET = 200

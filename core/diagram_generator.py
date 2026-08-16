@@ -10,6 +10,8 @@ V1: 动态架构图生成器 —— 从子图数据生成Mermaid/Structurizr图�
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 
+from config.settings import WIKI_MERMAID_MIN_NODES
+
 # 启发式分层顺序（按路径名称关键词匹配）
 LAYER_ORDER = [
     "entry", "controller", "gateway", "api", "presentation",
@@ -286,4 +288,49 @@ def generate_report_markdown(
             lines.append(f"- `{d}`")
         lines.append("")
     
+    return "\n".join(lines)
+
+
+def generate_mermaid_embed(
+    nodes: List[Dict],
+    edges: List[Dict],
+    entry_point: str = "",
+    title: str = "Architecture Overview",
+) -> str:
+    """生成可直接嵌入 wiki 文档的 Mermaid 代码块（含 ```mermaid fence）。
+
+    节点数低于 WIKI_MERMAID_MIN_NODES 时返回空串（避免噪音图）。
+    """
+    if len(nodes) < WIKI_MERMAID_MIN_NODES:
+        return ""
+    code = generate_mermaid(nodes, edges, entry_point=entry_point, title=title)
+    return f"```mermaid\n{code}\n```"
+
+
+def generate_arch_markdown(
+    nodes: List[Dict],
+    edges: List[Dict],
+    entry_point: str = "",
+    title: str = "Architecture Overview",
+) -> str:
+    """生成含架构图的完整 Markdown 段落（标题 + Mermaid 图 + 节点表）。
+
+    供 ARCHITECTURE.md 等文档嵌入：图 + 节点清单一次生成。
+    节点数低于阈值时自动省略 Mermaid 图，仅保留标题与节点表。
+    """
+    lines = []
+    lines.append(f"## {title}")
+    lines.append("")
+    embed = generate_mermaid_embed(nodes, edges, entry_point=entry_point, title=title)
+    if embed:
+        lines.append(embed)
+        lines.append("")
+    lines.append("### 节点清单")
+    lines.append("| 节点 | 文件路径 |")
+    lines.append("|------|----------|")
+    for node in nodes:
+        name = node.get("name", "")
+        fp = node.get("filePath", node.get("file_path", ""))
+        lines.append(f"| `{name}` | `{fp}` |")
+    lines.append("")
     return "\n".join(lines)

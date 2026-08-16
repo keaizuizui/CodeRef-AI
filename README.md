@@ -304,8 +304,10 @@ coderef-ai/
 │   ├── code_knowledge_graph.py       # 知识图谱引擎（SQLite 持久化）
 │   ├── code_knowledge_base.py        # 代码知识库
 │   ├── health_dashboard.py           # 项目健康仪表盘（零外部依赖 HTML）
-│   ├── wiki_generator.py             # Wiki 生成器（三级管线）
-│   ├── wiki_cross_verify.py          # Wiki 模块级交叉验证（确证徽章）
+│   ├── wiki_generator.py             # Wiki 生成器（三级管线 + 增量同步 + 证据锚定）
+│   ├── wiki_ir.py                    # Wiki 架构事实中间表示（JSON-IR 分离，schema 校验）
+│   ├── wiki_compare.py               # Wiki 架构快照比对（Before/Delta/After 变更收据）
+│   ├── wiki_cross_verify.py          # Wiki 模块级交叉验证（确证徽章 + Mermaid 自愈）
 │   ├── flow_verify.py                # 流程合规验证（步骤级，coderef_flow_verify）
 │   ├── arch_audit.py                 # 架构腐化诊断（循环依赖/上帝模块/分层违例）
 │   ├── graph_closure.py              # 调用闭包计算（flow_verify 与 wiki_cross_verify 共用）
@@ -419,6 +421,19 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 | **4.0** | 通过四个引擎和四个支柱，增强工具的功能覆盖，形成逻辑闭环 |
 
 ## 更新日志
+
+### v4.8.10 — Wiki 工具十项增强（增量同步 / JSON-IR / 证据锚定 / 成本封顶）
+
+- **增量同步（R1）**（`wiki_generator`）：以 `.last-update.json` 记录上次已文档化 gitHead，git 可用时对比变更文件，仅重新生成受影响模块文档；变更文件数超过阈值（50）自动降级全量重建；无 git 环境优雅降级
+- **front matter 标准化（R2）**：每篇文档自动注入 YAML 头（type/title/description/tags/source/confidence/generated_at），confidence 与交叉验证徽章映射（confirmed→high / partial→medium / unverified→low / missing→none）
+- **证据锚定（R3）**：模块文档附「证据锚定」区块，链接到 Git 文件+行号+commit，让非技术人员能追溯每段描述的确证来源；Last-good 门控把全校验通过的产物备份到 `.last-good/`，生成失败时保留上次可用版本
+- **JSON-IR 分离（R4）**（新增 `wiki_ir`）：LLM 先输出结构化架构事实 JSON → schema 校验（节点 id 唯一、边/入口引用完整）→ 再渲染 Mermaid/Markdown；LLM 不可用时从知识图谱确定性提取 IR 兜底；容错解析修复 LLM 截断的 JSON（引号/裸 token/未闭合括号）
+- **架构图可视化（R5）**（`diagram_generator`）：`generate_mermaid_embed` / `generate_arch_markdown` 生成可嵌入 wiki 的 Mermaid 图 + 节点清单表，节点数不足阈值时自动省略避免噪音
+- **用户授权层（R6）**：项目根 `INSTRUCTIONS.md` 只读解析（`## 章节` → 内容），注入 LLM system prompt 约束文档 scope/优先级；生成器绝不覆盖该文件
+- **Agent 指针集成（R7）**：`enable_agent_pointer` 在项目根维护 `AGENTS.md` 的 `<!--CODEREFF:START/END-->` 区块指向 wiki 入口，区块外正文原样保留
+- **架构快照比对（R8）**（新增 `wiki_compare`）：`.arch-snapshot.json` 原子快照 + `compare_snapshots` 五类变更收据（added/removed/changed/moved/rerouted），输出 Markdown/JSON 变更报告（viewer-only，不做风险推断）
+- **Mermaid 自愈（R9）**（`wiki_cross_verify`）：`verify_mermaid` 校验 fence/节点 id/括号配对，失败时 `fallback_mermaid` 降级为 text fence 并附 `<!-- mermaid-fallback -->` 标记
+- **成本/输出封顶（R10）**（`llm_integration`）：单次生成 LLM 调用预算（200 次）用尽即拒绝并提示 `reset_budget()`；单文档输出字符上限（12000）超限截断并附加标记
 
 ### v4.8.9 — 操作记忆「一次恢复」与上下文丢失强制 gate
 

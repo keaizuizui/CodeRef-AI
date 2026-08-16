@@ -15,6 +15,8 @@ from enum import Enum
 from loguru import logger
 from openai import OpenAI
 
+from config import settings
+
 
 class LLMProvider(Enum):
     """LLM服务提供商"""
@@ -79,6 +81,13 @@ class LLMIntegration:
         self.config = config
         self.client = None
         self._init_client()
+        # ── 成本/输出封顶（R10，规避 OpenWiki #44/#51 坑）──
+        # 单次 wiki 生成的 LLM 调用次数上限与单文档输出字符上限，
+        # 超限时返回结构化错误/截断标记，而非无界消耗 token 或产出超长文本。
+        self.output_cap_chars: int = settings.WIKI_LLM_OUTPUT_CAP_CHARS
+        self.call_budget: int = settings.WIKI_LLM_CALL_BUDGET
+        self._call_count: int = 0          # 实例级已用调用次数
+        self._last_truncated: bool = False  # 上一次调用是否因超长被截断
     
     @staticmethod
     def _load_config_from_settings() -> LLMConfig:
@@ -474,6 +483,36 @@ class LLMIntegration:
         api_key = getattr(self.config, "api_key", "") if self.config is not None else ""
         return bool(api_key)
 
+    # ── 成本/输出封顶（R10）──
+
+    def reset_budget(self) -> None:
+        """重置本次调用预算计数（_call_count 归零）。
+
+        单次 wiki 生成结束 / 开始新一轮生成时调用，重新获得完整调用额度。
+        """
+        self._call_count = 0
+
+    def budget_remaining(self) -> int:
+        """返回剩余调用额度（call_budget - 已用次数，下限 0）。"""
+        return max(0, self.call_budget - self._call_count)
+
+    def last_output_truncated(self) -> bool:
+        """返回上一次 LLM 调用是否因超过输出字符上限而被截断。"""
+        return self._last_truncated
+
+    def _cap_output(self, text: str) -> str:
+        """对 LLM 返回文本做输出封顶：超限截断并附加标记。
+
+        保持返回类型为 str（不破坏现有调用方签名）；截断状态记录在
+        self._last_truncated，供调用方通过 last_output_truncated() 查询。
+        """
+        self._last_truncated = False
+        if not text or len(text) <= self.output_cap_chars:
+            return text
+        self._last_truncated = True
+        return (text[:self.output_cap_chars]
+                + f"\n\n<!-- truncated: 输出超过 {self.output_cap_chars} 字符上限 -->")
+
     def chat_completion(self, messages: List[Dict[str, str]], **kwargs) -> str:
         """执行聊天补全（含有限重试与降级回退）
 
@@ -482,6 +521,12 @@ class LLMIntegration:
         1. 支持通过 extra_body 传 thinking 参数（如 {"thinking": {"type": "enabled"}}）；
         2. 当 message.content 为空时，回退读取 reasoning_content，避免误判为"空响应"。
         """
+        # 成本封顶（R10）：调用次数预算用尽则拒绝本次调用（返回结构化错误，不抛异常）
+        if self._call_count >= self.call_budget:
+            logger.warning(f"LLM调用预算已用尽（{self._call_count}/{self.call_budget}），本次调用被拒绝")
+            return (f"LLM调用错误: 已达本次调用预算上限（{self._call_count}/{self.call_budget}），"
+                    f"请调用 reset_budget() 重置或分批处理")
+
         if not self.client:
             if not self.config.api_key:
                 logger.warning("LLM不可用：未设置API Key。请在配置面板中填写API Key。")
@@ -514,7 +559,9 @@ class LLMIntegration:
                 # DeepSeek V4 空 content 回退：推理内容在 reasoning_content
                 if not content:
                     content = getattr(message, "reasoning_content", None) or ""
-                return content
+                # 成本/输出封顶（R10）：成功调用计数 + 输出超长截断并附加标记
+                self._call_count += 1
+                return self._cap_output(content)
             except Exception as e:
                 last_error = e
                 # 永久性错误（认证失败、API Key 缺失、参数错误等）不重试
