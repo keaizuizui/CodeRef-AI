@@ -110,8 +110,19 @@ def _compute_score(findings: List[Dict]) -> int:
 
 
 def _load_audit_findings(project_path: str) -> Optional[Dict]:
-    """读取已落盘的审计 findings（确定性；无则返回 None，由调用方诚实提示）。"""
+    """读取已落盘的审计 findings（确定性；无则返回 None，由调用方诚实提示）。
+
+    优先按项目哈希隔离的文件名（v4.8.7+），避免共享 coderef-report 下跨项目串扰；
+    旧版全局单文件 audit_findings.json 仅作向后兼容兜底。
+    """
+    import hashlib
+    phash = hashlib.md5(project_path.encode()).hexdigest()[:12]
     candidates = [
+        os.path.join(project_path, "coderef-report",
+                     f"audit_findings_{phash}.json"),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "coderef-report", f"audit_findings_{phash}.json"),
+        # 向后兼容：旧版全局单文件（无项目标识）
         os.path.join(project_path, "coderef-report", AUDIT_FINDINGS_FILE),
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                      "coderef-report", AUDIT_FINDINGS_FILE),

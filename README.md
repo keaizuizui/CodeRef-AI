@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.8.6** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.8.7** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -411,6 +411,15 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 | **4.0** | 通过四个引擎和四个支柱，增强工具的功能覆盖，形成逻辑闭环 |
 
 ## 更新日志
+
+### v4.8.7 — 盲区缺陷全量修复与健壮性加固（P0/P1/P2）
+
+- **审计结果跨项目隔离**（`pipeline_runner`）：`audit_findings.json` 与报告文件名按项目哈希命名，`_latest_report` 按项目过滤，修复 `strategy=no_change` 复用时返回他项目报告的串扰
+- **治理跨地区冲突检测**（`governance_audit` 新增 `_scan_crossregion_conflicts`）：递归索引 `rules/` 子目录 md，检出 `IRON-GOV-03` 领土主权表述冲突与 `IRON-GOV-04` 统计版本差异污染，纯文档合规项目不再系统性漏检
+- **project_path 严格校验**（`mcp_server` 新增 `_validate_project_path`）：拒绝空串/相对路径（`..` 越权扫描上级目录），目录不存在返回结构化错误而非空成功，调用方可区分「路径写错」与「项目无缺陷」
+- **Agent 跨语言/资源规则补盲**（`agent_security_auditor`）：新增 Java 规则（`AGENT-SEC-60~65`：SQL 注入/Spring 未鉴权/反序列化/路径穿越/SSRF/硬编码密钥）、前端安全（`AGENT-SEC-66~68`：Vue `v-html` XSS/token 拼 URL/Node 无鉴权）、资源泄漏（`AGENT-SEC-69` PIL 批量句柄泄漏、`AGENT-SEC-70` 外部长任务轮询无超时）
+- **analysis_cache 可配置**（`code_analyzer`）：新增 `_resolve_cache_dir`，支持环境变量 `CODEREF_ANALYSIS_CACHE` 或 `settings.CODEREF_ANALYSIS_CACHE` 覆盖默认缓存目录，供测试/CI 隔离、避免跨项目污染
+- **tool/strategy 枚举严格校验**（`mcp_server`）：`coderef_scan` 的 `tool` 维度与 `coderef_audit` 的 `strategy`（`auto`/`full`/`incr`/`no_change`）改为大小写敏感白名单校验，非法值返回结构化错误，不再静默放行（此前 `Gov`/`bogus_strategy` 被按默认执行）
 
 ### v4.8.6 — 回灌测试环境领先功能（并行 SCA / 治理新规则）
 

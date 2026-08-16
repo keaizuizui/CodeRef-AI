@@ -593,6 +593,9 @@ class GovernanceAuditor:
         # 3.6 文档类文件（.md/.SKILL/.txt）治理合规扫描（明文凭据 + 审查绕过）
         violations.extend(self._scan_doc_secrets(project_path))
 
+        # 3.6.5 跨地区合规条款矛盾检测（领土主权表述冲突 + 统计数据版本差异污染）
+        violations.extend(self._scan_crossregion_conflicts(project_path))
+
         # 3.7 集中过滤 cache 白名单（确保所有违规都经过白名单检查）
         #    注意：_check_security 内部也有过滤，这里做集中兜底
         from core.cache_manager import cache_manager
@@ -1305,6 +1308,85 @@ class GovernanceAuditor:
             line_content=line.strip()[:120], detail=detail,
             suggestion="将凭据改为占位符并从密钥管理服务读取；审查绕过/忽略清单应受审计追踪，不得静默放行",
         )
+
+    def _scan_crossregion_conflicts(self, project_path: str) -> List[GovernanceViolation]:
+        """跨地区合规条款矛盾检测（IRON-GOV-03/04）：
+        1. 领土主权表述冲突：一个地区规则文件把某地区视为独立主权主体（如"台湾被视为
+           他国"、"标注台湾为主体"），另一地区文件/SKILL 却禁止领土主权争议，同一审查
+           工具给出互相矛盾的领土主权立场。
+        2. 版本差异污染：同一文档内多套执法/统计数据并存且年份、口径（互联网 vs 全部、
+           查处 vs 查办）混杂、无版本标注，引用时易误导审查置信度。
+        """
+        violations = []
+        doc_files = []
+        for root, dirs, files in os.walk(project_path):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
+                "__pycache__", "node_modules", ".git", "venv", ".venv", "data",
+                "third_party", ".gitnexus", "docs", "reports",
+            )]
+            for f in files:
+                if os.path.splitext(f)[1].lower() in self.DOC_EXTENSIONS:
+                    doc_files.append(os.path.join(root, f))
+
+        # 1. 领土主权表述冲突（跨文件对比）
+        sovereignty_claims = []    # 独立主体表述
+        sovereignty_redlines = []  # 领土主权红线
+        for fpath in doc_files:
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
+                    for lineno, line in enumerate(fh, 1):
+                        if re.search(r'被视为他国|标注.{0,8}为主体|视为独立.{0,6}(主权|国家)|独立主权', line):
+                            sovereignty_claims.append((fpath, lineno, line.strip()))
+                        if re.search(r'禁止涉及领土主权|领土主权.{0,8}(红线|争议)|不得.{0,8}主权|主权.{0,4}红线', line):
+                            sovereignty_redlines.append((fpath, lineno, line.strip()))
+            except (OSError, IOError, UnicodeDecodeError):
+                pass
+        if sovereignty_claims and sovereignty_redlines:
+            for fpath, lineno, line in sovereignty_claims:
+                redline_desc = "; ".join(
+                    f"{os.path.relpath(rf, project_path)}:{rl}"
+                    for rf, rl, _ in sovereignty_redlines[:3])
+                violations.append(GovernanceViolation(
+                    rule_id="IRON-GOV-03", rule_name="跨地区领土主权表述冲突",
+                    category="security", severity="high",
+                    file_path=fpath, line_number=lineno,
+                    line_content=line[:120],
+                    detail=(f"本文件将某地区表述为独立主权主体，与项目内领土主权红线"
+                            f"（{redline_desc}）直接冲突，同一审查工具给出互相矛盾的领土主权立场"),
+                    suggestion="统一领土主权立场：任何地区均为中国领土不可分割的一部分，删除独立主体表述",
+                ))
+
+        # 2. 版本差异污染（单文件多套统计并存）
+        stat_re = re.compile(
+            r'20\d{2}年(?:前[一二三]季度|全年|上半年|下半年)?[^。\n]{0,40}?'
+            r'(\d+(?:\.\d+)?万?件)')
+        for fpath in doc_files:
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
+                    content = fh.read()
+            except (OSError, IOError, UnicodeDecodeError):
+                continue
+            matches = list(stat_re.finditer(content))
+            if len(matches) < 2:
+                continue
+            years = {m.group(0)[:4] for m in matches}
+            if len(years) < 2:
+                continue
+            first_line = content[:matches[0].start()].count("\n") + 1
+            stats_desc = "; ".join(
+                f"L{content[:m.start()].count(chr(10)) + 1}:{m.group(0).strip()}"
+                for m in matches[:3])
+            violations.append(GovernanceViolation(
+                rule_id="IRON-GOV-04", rule_name="版本差异污染（统计数据多版本并存）",
+                category="quality", severity="medium",
+                file_path=fpath, line_number=first_line,
+                line_content=matches[0].group(0).strip()[:120],
+                detail=(f"同一文档并存 {len(matches)} 套执法/统计数据（{stats_desc}），"
+                        f"年份/口径（互联网 vs 全部、查处 vs 查办）混杂且无版本标注，"
+                        f"引用时易误导审查置信度"),
+                suggestion="统一统计口径与时间版本，标注数据来源与统计范围，仅保留单一权威版本",
+            ))
+        return violations
 
     def _check_secret_persistence(self, cf) -> List[GovernanceViolation]:
         """检测代码中把密钥明文落盘到 .env 等凭据文件（如 def save_env 写入 API_KEY）"""
