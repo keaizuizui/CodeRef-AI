@@ -121,6 +121,16 @@ OMEM_WSL_PROBE_RETRIES = 2
 # 支持环境变量 / 直接改本文件两种方式。
 OMEM_DATA_DIR = ""
 
+# ═══ 操作记忆原子写并发稳定性（operation_memory.py） ═══
+# 跨进程互斥写：同一目标文件在多个进程并发替换时，Windows 上 os.replace 覆盖
+# 正在被其他进程打开/读写的目标可能触发 WinError 5/32（拒绝访问/文件被占用）。
+# 为根除该竞态，对每个目标写入前先对 <path>.lock 加跨进程排他锁（Unix flock /
+# Windows msvcrt.locking），串行化不同进程对同一产物的替换。下列为可调参数。
+OMEM_ATOMIC_MAX_RETRIES = 8      # 单个目标替换失败的最大重试次数
+OMEM_ATOMIC_RETRY_DELAY = 0.05   # 重试初始退避（秒）
+OMEM_ATOMIC_RETRY_BACKOFF = 2.0  # 退避倍率（指数退避，重试间隔逐次翻倍）
+OMEM_PER_FILE_LOCK = True        # 是否启用跨进程文件锁（置 False 可退化回仅重试）
+
 # ═══════════════════════════════════════════════════════════════════
 # 分析缓存目录（code_analyzer.py）
 # ═══════════════════════════════════════════════════════════════════
