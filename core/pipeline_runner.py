@@ -516,7 +516,8 @@ class Pipe:
             _prog("生成报告", total_stages - 1, total_stages)
 
             os.makedirs(out, exist_ok=True)
-            fn = f"coderef_audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+            fn = (f"coderef_audit_{self._phash(project_path)}_"
+                  f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.md")
             r.report_path = os.path.join(out, fn)
             with open(r.report_path, "w", encoding="utf-8") as f:
                 f.write(r.report)
@@ -915,12 +916,16 @@ class Pipe:
 
     @staticmethod
     def _findings_json_path(project_path: str, out: Optional[str] = None) -> str:
-        """审计 findings JSON 的固定落盘路径（优先调用方 out，其次标准 coderef-report）。"""
+        """审计 findings JSON 的固定落盘路径（优先调用方 out，其次标准 coderef-report）。
+
+        文件名带项目哈希前缀，避免共享输出目录下多项目互相覆盖（跨项目串扰）。
+        """
+        fname = f"audit_findings_{Pipe._phash(project_path)}.json"
         if out:
-            return os.path.join(out, "audit_findings.json")
+            return os.path.join(out, fname)
         return os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "coderef-report", "audit_findings.json")
+            "coderef-report", fname)
 
     def _dump_findings_json(self, r: PipeResult, out: str) -> None:
         """把 audit 的 findings 与统计序列化落盘，供 coderef_report 重渲染复用。"""
@@ -949,6 +954,9 @@ class Pipe:
         candidates = [
             self._findings_json_path(project_path, out),
             self._findings_json_path(project_path),
+            os.path.join(project_path, "coderef-report",
+                         f"audit_findings_{Pipe._phash(project_path)}.json"),
+            # 向后兼容：旧版全局单文件（无项目标识）
             os.path.join(project_path, "coderef-report", "audit_findings.json"),
         ]
         for fp in candidates:
@@ -1234,13 +1242,19 @@ class Pipe:
             r.errors.append(f"wiki: {e}")
 
     @staticmethod
-    def _latest_report(out: str) -> Optional[str]:
-        """返回输出目录下最近一份审计报告（coderef_audit_*.md），无则 None。"""
+    def _latest_report(out: str, project_path: str = "") -> Optional[str]:
+        """返回输出目录下最近一份审计报告（coderef_audit_*.md），无则 None。
+
+        project_path 非空时按项目哈希前缀过滤，避免共享输出目录下跨项目串扰
+        （旧版仅按 mtime 取最新，会把其他项目的报告误当成本项目结论）。
+        """
         try:
             if not os.path.isdir(out):
                 return None
+            prefix = (f"coderef_audit_{Pipe._phash(project_path)}_"
+                      if project_path else "coderef_audit_")
             cands = [os.path.join(out, f) for f in os.listdir(out)
-                     if f.startswith("coderef_audit_") and f.endswith(".md")]
+                     if f.startswith(prefix) and f.endswith(".md")]
             if not cands:
                 return None
             return max(cands, key=os.path.getmtime)
@@ -1263,7 +1277,7 @@ class Pipe:
             r.kg_built_at = str(stats.get("built_at", ""))
             r.audit_strategy = "no_change"
             # 复用最近一份审计报告 markdown（若存在），否则生成"复用结论"说明文案
-            report_path = self._latest_report(out)
+            report_path = self._latest_report(out, project_path)
             if report_path:
                 try:
                     with open(report_path, "r", encoding="utf-8") as f:
