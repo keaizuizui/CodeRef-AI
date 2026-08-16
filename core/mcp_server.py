@@ -1336,10 +1336,24 @@ class Server:
         """流程合规验证（coderef_flow_verify）"""
         from core.flow_verify import verify_flow
         pp = a["project_path"]
-        steps = a.get("steps") or []
-        if isinstance(steps, str):
-            # 兼容逗号分隔字符串
-            steps = [s.strip() for s in steps.split(",") if s.strip()]
+        # steps 校验：只在调用方显式提供 steps 键时做非空/类型校验。
+        # cross_lang 等内部维度复用本工具时只传 project_path+entry（不传 steps 键），
+        # 仅取 cross_lang_contract 等不依赖流程步骤的结果 → 放行为空。
+        # 而显式传 steps=[]/0/None/空串 属契约非法，返回结构化错误而非假成功。
+        if "steps" in a:
+            steps = a["steps"]
+            if isinstance(steps, str):
+                # 兼容逗号分隔字符串
+                steps = [s.strip() for s in steps.split(",") if s.strip()]
+            elif not isinstance(steps, (list, tuple)):
+                # 非数组/非字符串（如数字 0、负数、None）→ 结构化错误
+                raise ValueError(
+                    f"coderef_flow_verify: steps 必须是数组或逗号分隔字符串，收到 {type(steps).__name__}")
+            if not steps:
+                # 空数组/0/空串清空后 → 无待验证步骤，契约非法
+                raise ValueError("coderef_flow_verify: steps 不能为空，请传入待验证的流程步骤")
+        else:
+            steps = []
         r = verify_flow(pp, a["entry"], list(steps), depth=a.get("depth"))
         r["tool"] = "coderef_flow_verify"
         r["project_path"] = pp
