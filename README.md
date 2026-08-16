@@ -420,6 +420,7 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 - **Agent 跨语言/资源规则补盲**（`agent_security_auditor`）：新增 Java 规则（`AGENT-SEC-60~65`：SQL 注入/Spring 未鉴权/反序列化/路径穿越/SSRF/硬编码密钥）、前端安全（`AGENT-SEC-66~68`：Vue `v-html` XSS/token 拼 URL/Node 无鉴权）、资源泄漏（`AGENT-SEC-69` PIL 批量句柄泄漏、`AGENT-SEC-70` 外部长任务轮询无超时）
 - **analysis_cache 可配置**（`code_analyzer`）：新增 `_resolve_cache_dir`，支持环境变量 `CODEREF_ANALYSIS_CACHE` 或 `settings.CODEREF_ANALYSIS_CACHE` 覆盖默认缓存目录，供测试/CI 隔离、避免跨项目污染
 - **tool/strategy 枚举严格校验**（`mcp_server`）：`coderef_scan` 的 `tool` 维度与 `coderef_audit` 的 `strategy`（`auto`/`full`/`incr`/`no_change`）改为大小写敏感白名单校验，非法值返回结构化错误，不再静默放行（此前 `Gov`/`bogus_strategy` 被按默认执行）
+- **跨地区检测 CodeRabbit 复审修复**（`governance_audit` `_scan_crossregion_conflicts`）：按 CodeRabbit 复审结论消除误报——`IRON-GOV-04` 仅当并存统计均缺乏来源/范围/版本标注时报违规（带 `数据来源`/`2022年全年` 等标注的合规趋势报告不再误报）；扫描目录排除列表移除 `docs`（现可检出 `docs/*.md` 跨区域冲突）；主权独立主体表述排除「禁止/不得/例如/假设」等否定与政策举例语境（合规红线举例不再误判为实际独立主张）
 
 ### v4.8.6 — 回灌测试环境领先功能（并行 SCA / 治理新规则）
 
