@@ -32,11 +32,51 @@ import os
 import re
 import ast
 import json
+import shutil
+import subprocess
 import hashlib
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from collections import defaultdict
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 共享配置常量（R1/R2/R3/R6/R7）
+# 优先从 config.settings 读取（主 agent 已添加），缺失时用内置默认值兜底，
+# 保证本模块在独立导入（不在项目根）时也能正常工作。
+# ═══════════════════════════════════════════════════════════════════
+try:
+    from config import settings as _settings
+except Exception:
+    _settings = None
+
+
+def _cfg(name: str, default):
+    """从 config.settings 读取常量；settings 缺失或常量缺失时返回默认值。"""
+    return getattr(_settings, name, default) if _settings is not None else default
+
+
+# R1 增量同步：状态文件名（位于 wiki 输出目录）
+WIKI_LAST_UPDATE_FILE = _cfg("WIKI_LAST_UPDATE_FILE", ".last-update.json")
+# R1 增量同步：变更文件数超此阈值则全量重建
+WIKI_INCREMENTAL_MAX_CHANGED_FILES = _cfg("WIKI_INCREMENTAL_MAX_CHANGED_FILES", 50)
+# R2 front matter：交叉验证徽章 → confidence 映射
+WIKI_CONFIDENCE_MAP = _cfg("WIKI_CONFIDENCE_MAP", {
+    "confirmed": "high",
+    "partial": "medium",
+    "unverified": "low",
+    "missing": "none",
+})
+# R3 证据锚定：锚定标记前缀（Git 文件+行号+commit）
+WIKI_SRC_MARK_PREFIX = _cfg("WIKI_SRC_MARK_PREFIX", "SRC")
+# R3 Last-good 门控：上次全校验通过的产物备份目录名
+WIKI_LAST_GOOD_DIR = _cfg("WIKI_LAST_GOOD_DIR", ".last-good")
+# R6 用户授权层：只读不重写的用户 brief 文件名（位于项目根）
+WIKI_INSTRUCTIONS_FILE = _cfg("WIKI_INSTRUCTIONS_FILE", "INSTRUCTIONS.md")
+# R7 Agent 指针：写入 AGENTS.md 的指针区块标记
+WIKI_AGENT_POINTER_START = _cfg("WIKI_AGENT_POINTER_START", "<!--CODEREFF:START-->")
+WIKI_AGENT_POINTER_END = _cfg("WIKI_AGENT_POINTER_END", "<!--CODEREFF:END-->")
 
 
 # 交叉验证徽章渲染（可选导入：wiki_cross_verify 缺失时降级为空渲染，不阻断生成）
@@ -238,6 +278,8 @@ class WikiGenerator:
         # 让外层能感知"部分文档生成失败"，避免失败被静默吞掉却标记任务 completed。
         self._failed_docs: List[str] = []
         self._last_llm_error: str = ""
+        # R6 用户授权层：项目根 INSTRUCTIONS.md 解析结果（generate() 时加载）
+        self._instructions: Dict[str, str] = {}
 
     @property
     def llm(self):
@@ -254,9 +296,10 @@ class WikiGenerator:
                  wiki_style: str = "comprehensive",
                  include_subprojects: bool = False,
                  cross_verify: bool = True,
-                 cross_entry_spec: str = "class:pipeline_runner:Pipe") -> WikiResult:
+                 cross_entry_spec: str = "class:pipeline_runner:Pipe",
+                 enable_agent_pointer: bool = False) -> WikiResult:
         """生成项目 Wiki
-        
+
         Args:
             project_path: 项目根目录
             output_dir: 输出目录，默认 {project_path}/docs/wiki/
@@ -265,7 +308,8 @@ class WikiGenerator:
             include_subprojects: 是否同时为子项目生成独立 Wiki
             cross_verify: 是否对模块描述做静态交叉验证（给每篇模块文档打确证徽章）
             cross_entry_spec: 交叉验证的入口（入口调用闭包为确证依据）
-        
+            enable_agent_pointer: 是否在项目根维护 AGENTS.md 的 CodeRef Wiki 指针区块（R7）
+
         Returns:
             WikiResult: 生成结果
         """
@@ -303,99 +347,140 @@ class WikiGenerator:
             )
             return result
 
-        # 0. 发现子项目
-        if include_subprojects:
-            subprojects = self._discover_subprojects(project_path)
-            result.subprojects = subprojects
+        # R6: 用户授权层（INSTRUCTIONS.md，只读不重写，内容注入 LLM system prompt）
+        self._instructions = self._load_instructions(project_path)
 
-        # 1. 发现模块
-        modules = self._discover_modules(project_path)
-        result.total_files = sum(m.file_count for m in modules)
+        # R1: 增量同步判定（存在上次状态 + git 可用 + 变更文件数在阈值内 → 增量）
+        # 无 git 环境 / 无上次状态 / 变更过多时优雅降级为全量生成，不抛异常。
+        incremental_mode = False
+        changed_files: List[str] = []
+        git_bin = self._git_bin()
+        if git_bin:
+            last_state = self._load_last_update(output_dir)
+            if last_state and last_state.get("gitHead"):
+                changed = self._git_changed_files(git_bin, project_path, last_state["gitHead"])
+                if changed is None:
+                    result.warnings.append("无法读取 git 变更记录，本次采用全量生成。")
+                elif len(changed) <= WIKI_INCREMENTAL_MAX_CHANGED_FILES:
+                    incremental_mode = True
+                    changed_files = changed
+                else:
+                    result.warnings.append(
+                        f"变更文件数 {len(changed)} 超过增量阈值 "
+                        f"{WIKI_INCREMENTAL_MAX_CHANGED_FILES}，本次采用全量重建。")
+        else:
+            result.warnings.append("未检测到 git 环境，增量同步不可用，本次采用全量生成。")
 
-        if not modules:
-            result.errors.append("未发现任何 Python 模块")
-            return result
+        if incremental_mode:
+            # ─── 增量路径（R1）：只重新生成受影响模块的文档，全局文档按需重建 ───
+            if include_subprojects:
+                result.warnings.append(
+                    "增量同步模式暂不处理子项目，如需更新子项目请使用全量生成。")
+            docs = self._incremental_update(
+                project_path, output_dir, changed_files, wiki_style,
+                cross_verify, cross_entry_spec, result,
+            )
+            result.documents = docs
+        else:
+            # ─── 全量路径 ───
 
-        # 2. 判断大仓库模式（旧采样保留用于模块发现，元数据不采样）
-        if result.total_files > self.LARGE_REPO_THRESHOLD:
-            result.large_repo = True
-            modules = self._sample_large_repo(modules)
+            # 0. 发现子项目
+            if include_subprojects:
+                subprojects = self._discover_subprojects(project_path)
+                result.subprojects = subprojects
 
-        # ─── 三级管线 ───
+            # 1. 发现模块
+            modules = self._discover_modules(project_path)
+            result.total_files = sum(m.file_count for m in modules)
 
-        # Stage 1: 全量代码元数据提取（AST，无 LLM）
-        code_metadata = self._build_code_metadata(modules, project_path)
+            if not modules:
+                result.errors.append("未发现任何 Python 模块")
+                return result
 
-        # 超大仓库时对元数据采样降级（但仍比原始代码采样损失小得多）
-        if result.large_repo:
-            code_metadata = self._sample_metadata(code_metadata)
+            # 2. 判断大仓库模式（旧采样保留用于模块发现，元数据不采样）
+            if result.total_files > self.LARGE_REPO_THRESHOLD:
+                result.large_repo = True
+                modules = self._sample_large_repo(modules)
 
-        # Stage 2: LLM 逐模块归纳描述（从全量元数据写，不丢失信息）
-        module_descriptions = self._generate_module_descriptions(code_metadata, wiki_style)
+            # ─── 三级管线 ───
 
-        # Stage 2.5: 静态交叉验证（可选，熔断降级）
-        # 给每篇模块文档打"确证徽章"，让非技术人员能区分"确被调用"与"LLM 推测"。
-        # 纯静态、确定性，不依赖 LLM；图谱缺失/入口未命中时静默跳过，不阻断生成。
-        cross_badges = {}
-        if cross_verify:
-            cross_badges = self._cross_verify_modules(
-                project_path, modules, cross_entry_spec)
+            # Stage 1: 全量代码元数据提取（AST，无 LLM）
+            code_metadata = self._build_code_metadata(modules, project_path)
 
-        # Stage 3: LLM 生成各文档（用 Stage 2 的输出，而非原始代码摘要）
-        docs = self._generate_all_documents(
-            project_name, modules, code_metadata, module_descriptions,
-            output_dir, result, cross_badges,
-        )
-        result.documents = docs
+            # 超大仓库时对元数据采样降级（但仍比原始代码采样损失小得多）
+            if result.large_repo:
+                code_metadata = self._sample_metadata(code_metadata)
 
-        # 5. 子项目 Wiki（同样使用三级管线）
-        if include_subprojects and subprojects:
-            for sub_path in subprojects:
-                sub_name = os.path.basename(sub_path)
-                sub_output = os.path.join(output_dir, "subprojects", sub_name)
-                os.makedirs(sub_output, exist_ok=True)
-                os.makedirs(os.path.join(sub_output, "MODULES"), exist_ok=True)
+            # Stage 2: LLM 逐模块归纳描述（从全量元数据写，不丢失信息）
+            module_descriptions = self._generate_module_descriptions(code_metadata, wiki_style)
 
-                sub_result = WikiResult(
-                    project_path=sub_path,
-                    project_name=sub_name,
-                    output_dir=sub_output,
-                    wiki_style=wiki_style,
-                )
+            # Stage 2.5: 静态交叉验证（可选，熔断降级）
+            # 给每篇模块文档打"确证徽章"，让非技术人员能区分"确被调用"与"LLM 推测"。
+            # 纯静态、确定性，不依赖 LLM；图谱缺失/入口未命中时静默跳过，不阻断生成。
+            cross_badges = {}
+            if cross_verify:
+                cross_badges = self._cross_verify_modules(
+                    project_path, modules, cross_entry_spec)
 
-                sub_modules = self._discover_modules(sub_path)
-                sub_result.total_files = sum(m.file_count for m in sub_modules)
+            # Stage 3: LLM 生成各文档（用 Stage 2 的输出，而非原始代码摘要）
+            docs = self._generate_all_documents(
+                project_name, modules, code_metadata, module_descriptions,
+                output_dir, result, cross_badges,
+            )
+            result.documents = docs
 
-                if sub_modules:
-                    if sub_result.total_files > self.LARGE_REPO_THRESHOLD:
-                        sub_result.large_repo = True
-                        sub_modules = self._sample_large_repo(sub_modules)
+            # 5. 子项目 Wiki（同样使用三级管线）
+            if include_subprojects and subprojects:
+                for sub_path in subprojects:
+                    sub_name = os.path.basename(sub_path)
+                    sub_output = os.path.join(output_dir, "subprojects", sub_name)
+                    os.makedirs(sub_output, exist_ok=True)
+                    os.makedirs(os.path.join(sub_output, "MODULES"), exist_ok=True)
 
-                    # Stage 1
-                    sub_meta = self._build_code_metadata(sub_modules, sub_path)
-                    if sub_result.large_repo:
-                        sub_meta = self._sample_metadata(sub_meta)
-                    # Stage 2
-                    sub_descriptions = self._generate_module_descriptions(sub_meta, wiki_style)
-                    # Stage 3
-                    sub_docs = self._generate_all_documents(
-                        sub_name, sub_modules, sub_meta, sub_descriptions,
-                        sub_output, sub_result,
+                    sub_result = WikiResult(
+                        project_path=sub_path,
+                        project_name=sub_name,
+                        output_dir=sub_output,
+                        wiki_style=wiki_style,
                     )
-                    sub_result.documents = sub_docs
-                    sub_result.module_count = sum(1 for d in sub_docs if "MODULES" in d)
 
-                result.subproject_results.append({
-                    "name": sub_name,
-                    "path": sub_path,
-                    "documents": len(sub_result.documents),
-                    "total_files": sub_result.total_files,
-                    "large_repo": sub_result.large_repo,
-                })
+                    sub_modules = self._discover_modules(sub_path)
+                    sub_result.total_files = sum(m.file_count for m in sub_modules)
+
+                    if sub_modules:
+                        if sub_result.total_files > self.LARGE_REPO_THRESHOLD:
+                            sub_result.large_repo = True
+                            sub_modules = self._sample_large_repo(sub_modules)
+
+                        # Stage 1
+                        sub_meta = self._build_code_metadata(sub_modules, sub_path)
+                        if sub_result.large_repo:
+                            sub_meta = self._sample_metadata(sub_meta)
+                        # Stage 2
+                        sub_descriptions = self._generate_module_descriptions(sub_meta, wiki_style)
+                        # Stage 3
+                        sub_docs = self._generate_all_documents(
+                            sub_name, sub_modules, sub_meta, sub_descriptions,
+                            sub_output, sub_result,
+                        )
+                        sub_result.documents = sub_docs
+                        sub_result.module_count = sum(1 for d in sub_docs if "MODULES" in d)
+
+                    result.subproject_results.append({
+                        "name": sub_name,
+                        "path": sub_path,
+                        "documents": len(sub_result.documents),
+                        "total_files": sub_result.total_files,
+                        "large_repo": sub_result.large_repo,
+                    })
 
         # 6. Git hook 配置
         if enable_git_hook:
             self._setup_git_hook(project_path, output_dir)
+
+        # R7: Agent 指针集成（在项目根维护 AGENTS.md 的 CodeRef Wiki 指针区块）
+        if enable_agent_pointer:
+            self._write_agent_pointer(project_path, output_dir)
 
         # 汇总本次生成失败（主项目 + 子项目），让调用方感知"部分文档生成失败"
         if self._failed_docs:
@@ -407,7 +492,192 @@ class WikiGenerator:
         if self._last_llm_error:
             result.errors.append(f"LLM 调用异常: {self._last_llm_error}")
 
+        # R1: 生成结束后更新增量同步状态文件（写当前 HEAD；仅无错误时更新，
+        # 避免把"生成失败"误记为"已同步到 HEAD"导致下次增量漏更）。
+        # 无 git 环境时 gitHead 记为 null，状态文件仍生成（记录更新时间/文档数）。
+        if not result.errors:
+            head = self._git_head(git_bin, project_path) if git_bin else None
+            self._save_last_update(output_dir, head, len(result.documents))
+
+        # R3: Last-good 门控（本次无错误则备份当前产物；有错误保留上次可用版本）
+        if not result.errors:
+            self._save_last_good(output_dir)
+        else:
+            result.warnings.append("本次生成未通过校验，已保留上次可用版本（.last-good）。")
+
         return result
+
+    # ─── 增量同步（R1）───
+
+    def _git_bin(self) -> Optional[str]:
+        """探测 git 可执行文件路径（参考 operation_memory 的做法）。
+
+        先在 PATH 中查找；找不到再在常见便携根探测（PortableGit 等不在 PATH 的
+        便携包，Windows 上很常见）。仍找不到返回 None，调用方据此降级为全量生成。
+        """
+        try:
+            p = shutil.which("git")
+            if p:
+                return os.path.abspath(p)
+        except Exception:
+            pass
+        # 便携根探测：复用 operation_memory 的便携根 / bin 子目录配置
+        try:
+            import glob
+            roots = getattr(_settings, "OMEM_ENV_TOOL_ROOTS", ()) if _settings else ()
+            subdirs = getattr(_settings, "OMEM_ENV_TOOL_BIN_SUBDIRS",
+                              ("bin", "cmd", "mingw64/bin", "usr/bin")) if _settings else ("bin", "cmd")
+            for root_pat in roots:
+                try:
+                    matches = glob.glob(os.path.expanduser(root_pat))
+                except Exception:
+                    continue
+                for root in matches:
+                    if not os.path.isdir(root):
+                        continue
+                    for sub in subdirs:
+                        cand = os.path.join(root, sub.replace("/", os.sep), "git.exe")
+                        if os.path.isfile(cand):
+                            return os.path.abspath(cand)
+        except Exception:
+            pass
+        return None
+
+    def _git_head(self, git_bin: str, project_path: str) -> Optional[str]:
+        """返回当前 HEAD 短哈希；非 git 仓库或命令失败返回 None。"""
+        try:
+            out = subprocess.run(
+                [git_bin, "rev-parse", "--short", "HEAD"],
+                cwd=project_path, capture_output=True, text=True, timeout=15,
+            )
+            if out.returncode == 0:
+                return out.stdout.strip() or None
+        except Exception:
+            pass
+        return None
+
+    def _git_last_commit(self, git_bin: str, project_path: str, file_path: str) -> str:
+        """返回某文件最近一次提交的短哈希；失败返回空串（调用方据此降级）。"""
+        try:
+            out = subprocess.run(
+                [git_bin, "log", "-1", "--format=%h", "--", file_path],
+                cwd=project_path, capture_output=True, text=True, timeout=15,
+            )
+            if out.returncode == 0:
+                return out.stdout.strip() or ""
+        except Exception:
+            pass
+        return ""
+
+    def _git_changed_files(self, git_bin: str, project_path: str,
+                           last_head: str) -> Optional[List[str]]:
+        """返回 last_head..HEAD 之间的变更文件相对路径列表。
+
+        非 git 仓库 / last_head 无效 / 命令失败返回 None（调用方降级全量）。
+        """
+        try:
+            out = subprocess.run(
+                [git_bin, "log", f"{last_head}..HEAD", "--name-only", "--pretty=format:"],
+                cwd=project_path, capture_output=True, text=True, timeout=30,
+            )
+            if out.returncode != 0:
+                return None
+            files = []
+            for line in out.stdout.splitlines():
+                line = line.strip()
+                if line and line not in files:
+                    files.append(line)
+            return files
+        except Exception:
+            return None
+
+    def _load_last_update(self, output_dir: str) -> Optional[dict]:
+        """读取增量同步状态文件 .last-update.json；不存在或损坏返回 None。"""
+        path = os.path.join(output_dir, WIKI_LAST_UPDATE_FILE)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    def _save_last_update(self, output_dir: str, git_head: Optional[str],
+                          doc_count: int) -> None:
+        """写增量同步状态文件（当前 HEAD、更新时间、文档数）；失败静默。"""
+        path = os.path.join(output_dir, WIKI_LAST_UPDATE_FILE)
+        data = {
+            "gitHead": git_head,
+            "updatedAt": datetime.now().isoformat(timespec="seconds"),
+            "docCount": doc_count,
+        }
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _incremental_update(self, project_path: str, output_dir: str,
+                            changed_files: List[str], wiki_style: str,
+                            cross_verify: bool, cross_entry_spec: str,
+                            result: WikiResult) -> List[str]:
+        """R1 增量同步：只重新生成受影响模块的 MODULES 文档，全局文档按需重建。
+
+        调用方已判定变更文件数在阈值内；本方法对比变更文件所属模块，
+        仅对受影响模块重新生成模块文档；全局文档（README/ARCHITECTURE 等）
+        在存在代码变更时重新生成。无 git 环境时调用方已降级为全量，不会进入本方法。
+        """
+        project_name = os.path.basename(project_path)
+        modules = self._discover_modules(project_path)
+        result.total_files = sum(m.file_count for m in modules)
+        if not modules:
+            result.errors.append("未发现任何 Python 模块")
+            return []
+        if result.total_files > self.LARGE_REPO_THRESHOLD:
+            result.large_repo = True
+            modules = self._sample_large_repo(modules)
+
+        # 计算受影响模块：变更文件（相对路径）所属的模块
+        changed_set = {os.path.normpath(c) for c in changed_files}
+        affected = set()
+        for mod in modules:
+            for f in mod.py_files:
+                rel = os.path.normpath(os.path.relpath(f, project_path))
+                if rel in changed_set:
+                    affected.add(mod.name)
+
+        # Stage 1: 全量 AST 元数据（无 LLM，成本低）
+        code_metadata = self._build_code_metadata(modules, project_path)
+        if result.large_repo:
+            code_metadata = self._sample_metadata(code_metadata)
+
+        # Stage 2: 模块描述（走缓存，未命中则全量归纳）
+        module_descriptions = self._generate_module_descriptions(code_metadata, wiki_style)
+
+        # Stage 2.5: 静态交叉验证（可选，熔断降级）
+        cross_badges = {}
+        if cross_verify:
+            cross_badges = self._cross_verify_modules(
+                project_path, modules, cross_entry_spec)
+
+        # 只重新生成受影响模块的 MODULES 文档（跳过全局文档）
+        docs = self._generate_all_documents(
+            project_name, modules, code_metadata, module_descriptions,
+            output_dir, result, cross_badges,
+            affected_modules=sorted(affected),
+            skip_global=True,
+        )
+
+        # 全局文档：存在代码变更时重建（README/ARCHITECTURE 等描述可能过时）
+        if changed_files:
+            cite_warnings: List[str] = []
+            global_docs = self._generate_global_docs(
+                project_name, modules, code_metadata, module_descriptions,
+                output_dir, result, cite_warnings,
+            )
+            docs.extend(global_docs)
+            if cite_warnings:
+                result.errors.extend(cite_warnings)
+
+        return docs
 
     # ─── 模块发现 ───
 
@@ -1003,23 +1273,30 @@ class WikiGenerator:
                                  descriptions: Dict[str, str],
                                  output_dir: str,
                                  result: WikiResult,
-                                 cross_badges: Dict[str, dict] = None) -> List[str]:
+                                 cross_badges: Dict[str, dict] = None,
+                                 affected_modules: Optional[List[str]] = None,
+                                 skip_global: bool = False) -> List[str]:
         """生成所有 Wiki 文档
 
         顺序优化：先逐模块 → 再合并产出跨模块文档
         每篇文档生成后执行 cite-verify，未通过的再由 LLM 修复
+
+        Args:
+            affected_modules: 非空时只生成这些模块的 MODULES 文档（R1 增量同步用）
+            skip_global: True 时跳过全局文档（README/ARCHITECTURE 等），
+                         由调用方单独调用 _generate_global_docs（R1 增量路径）
         """
         docs = []
         style = result.wiki_style
         cite_warnings: List[str] = []
         cross_badges = cross_badges or {}
 
-        project_summary = self._build_project_summary(project_name, modules, descriptions)
-
         # =============================================================
         # 第一轮：逐模块文档（MODULES/*.md）
         # =============================================================
-        module_docs = self._generate_module_docs(modules, descriptions, output_dir, style, meta, cross_badges)
+        module_docs = self._generate_module_docs(modules, descriptions, output_dir,
+                                                 style, meta, cross_badges,
+                                                 affected_modules=affected_modules)
         docs.extend(module_docs)
         result.module_count = len(module_docs)
 
@@ -1041,6 +1318,31 @@ class WikiGenerator:
         # =============================================================
         # 第二轮：跨模块文档（README、ARCHITECTURE 等）
         # =============================================================
+        if not skip_global:
+            docs.extend(self._generate_global_docs(
+                project_name, modules, meta, descriptions, output_dir, result,
+                cite_warnings))
+
+        # 记录编校警告到 result
+        if cite_warnings:
+            result.errors.extend(cite_warnings)
+
+        return docs
+
+    def _generate_global_docs(self, project_name: str, modules: List[WikiModule],
+                              meta: ProjectCodeMetadata,
+                              descriptions: Dict[str, str],
+                              output_dir: str, result: WikiResult,
+                              cite_warnings: List[str] = None) -> List[str]:
+        """生成跨模块全局文档（README/OVERVIEW/ARCHITECTURE/INSTALLATION/USAGE/API/WIKI_INDEX 等）。
+
+        从 _generate_all_documents 的第二轮提取，供 R1 增量同步单独调用全局文档重建。
+        cite_warnings 为共享列表（引用传递），编校警告统一由调用方汇总。
+        """
+        docs = []
+        style = result.wiki_style
+        cite_warnings = cite_warnings if cite_warnings is not None else []
+        project_summary = self._build_project_summary(project_name, modules, descriptions)
 
         # 1. README.md（元数据作为事实源，描述作为风格参考）
         readme = self._generate_readme(project_name, project_summary, modules, style,
@@ -1150,10 +1452,6 @@ class WikiGenerator:
         index = self._build_wiki_index(project_name, modules, docs, result)
         self._emit(docs, output_dir, "WIKI_INDEX.md", index)
 
-        # 记录编校警告到 result
-        if cite_warnings:
-            result.errors.extend(cite_warnings)
-
         return docs
 
     def _cross_verify_modules(self, project_path: str,
@@ -1211,13 +1509,57 @@ class WikiGenerator:
 
         return "\n".join(lines)
 
+    def _load_instructions(self, project_path: str) -> dict:
+        """R6 读取项目根 INSTRUCTIONS.md，解析 scope/priority 等章节。
+
+        简单解析：按行读取，识别 `## 章节名` 标题，把其下的非空行归入该章节；
+        返回 {章节名(小写): 章节内容文本}。文件不存在 / 解析失败返回空 dict。
+        """
+        path = os.path.join(project_path, WIKI_INSTRUCTIONS_FILE)
+        if not os.path.isfile(path):
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except Exception:
+            return {}
+        instructions: Dict[str, List[str]] = {}
+        current = None
+        for line in lines:
+            stripped = line.strip()
+            m = re.match(r"^##\s+(.+)$", stripped)
+            if m:
+                current = m.group(1).strip().lower()
+                instructions.setdefault(current, [])
+                continue
+            if current and stripped:
+                instructions[current].append(stripped)
+        return {k: "\n".join(v) for k, v in instructions.items() if v}
+
+    def _instructions_text(self) -> str:
+        """把解析出的 INSTRUCTIONS.md 内容转成注入 system prompt 的文本；无内容返回空串。"""
+        instructions = getattr(self, "_instructions", None) or {}
+        if not instructions:
+            return ""
+        parts = ["=== 用户授权指令（INSTRUCTIONS.md，必须遵守）==="]
+        for key, val in instructions.items():
+            parts.append(f"## {key}\n{val}")
+        return "\n\n".join(parts)
+
     def _llm_ask(self, system_prompt: str, user_prompt: str) -> str:
         """调用 LLM 生成内容。
 
         失败时返回空串并记录错误：空内容统一由 _write_doc 跳过落盘并计入失败统计，
         避免把"(LLM 生成失败: ...)"这类占位符当成正常文档写入，产生"看似成功实为错误"的假象。
+
+        R6：若存在 INSTRUCTIONS.md，其内容会拼接在 system prompt 之后，
+        让所有文档生成都遵循用户的 scope/优先级指令。
         """
         try:
+            # R6: 注入用户授权指令（INSTRUCTIONS.md，只读不重写）
+            instr = self._instructions_text()
+            if instr:
+                system_prompt = system_prompt.rstrip() + "\n\n" + instr
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -1455,13 +1797,20 @@ class WikiGenerator:
                                descriptions: Dict[str, str],
                                output_dir: str, style: str = "comprehensive",
                                meta: ProjectCodeMetadata = None,
-                               cross_badges: Dict[str, dict] = None) -> List[str]:
-        """生成 MODULES/ 目录下的模块文档"""
+                               cross_badges: Dict[str, dict] = None,
+                               affected_modules: Optional[List[str]] = None) -> List[str]:
+        """生成 MODULES/ 目录下的模块文档
+
+        Args:
+            affected_modules: 非空时只生成这些模块的文档（R1 增量同步用）；
+                              None 表示全量生成所有核心模块文档。
+        """
         docs = []
         modules_dir = os.path.join(output_dir, "MODULES")
         guidelines = self._style_guidelines(style)
         constraint = self._make_fact_constraint()
         cross_badges = cross_badges or {}
+        affected_set = set(affected_modules) if affected_modules is not None else None
 
         index = self._build_module_index(modules, cross_badges)
         self._emit(docs, modules_dir, "_index.md", index)
@@ -1469,6 +1818,9 @@ class WikiGenerator:
         # 为每个核心模块生成详细文档
         for mod in modules:
             if not mod.is_core:
+                continue
+            # R1 增量：只处理受影响模块
+            if affected_set is not None and mod.name not in affected_set:
                 continue
             desc = descriptions.get(mod.name, "")
             if not desc:
@@ -1482,6 +1834,36 @@ class WikiGenerator:
                     badge_md = module_badge_md(mod_badge.get("status", ""))
                 except Exception:
                     badge_md = ""
+
+            # R3 证据锚定：confirmed/partial 的符号锚定到 Git 文件+行号+commit
+            anchor_md = ""
+            if mod_badge and mod_badge.get("status") in ("confirmed", "partial"):
+                confirmed = mod_badge.get("confirmed") or []
+                if confirmed:
+                    project_path = getattr(meta, "project_path", "") if meta else ""
+                    anchors = self._anchor_evidence(confirmed, project_path, self._git_bin())
+                    if anchors:
+                        anchor_md = (
+                            "> **证据锚定**（Git 文件+行号+commit，来自知识图谱调用闭包）：\n>\n"
+                            + "\n".join(f"> - {a}" for a in anchors)
+                            + "\n"
+                        )
+
+            # R2 front matter：模块文档带 source（相对项目根）与 confidence（徽章映射）
+            conf = "high"
+            if mod_badge:
+                conf = WIKI_CONFIDENCE_MAP.get(mod_badge.get("status"), "high")
+            source = ""
+            if meta:
+                try:
+                    source = os.path.relpath(mod.path, meta.project_path).replace("\\", "/")
+                except Exception:
+                    source = mod.path
+            front_matter = self._build_front_matter(
+                "module", title=mod.name,
+                description=(mod_badge.get("reason", "") if mod_badge else ""),
+                source=source, confidence=conf,
+            )
 
             # 从 meta 提取该模块的事实数据
             mod_meta_text = ""
@@ -1510,10 +1892,13 @@ class WikiGenerator:
                 f"=== 模块描述（风格参考）===\n{desc[:10000]}"
             )
             content = self._llm_ask(system_prompt, user_prompt)
-            # 在 LLM 生成内容前注入徽章（徽章是铁证，不经过 LLM 幻觉）
+            # 在 LLM 生成内容前注入徽章与证据锚定（均为铁证，不经过 LLM 幻觉）
             if badge_md and content:
                 content = badge_md + "\n" + content
-            self._emit(docs, modules_dir, f"{mod.name}.md", content)
+            if anchor_md and content:
+                content = anchor_md + "\n" + content
+            self._emit(docs, modules_dir, f"{mod.name}.md", content,
+                       front_matter=front_matter)
 
         return docs
 
@@ -2014,9 +2399,116 @@ class WikiGenerator:
             return "\n".join(deps[:5])
         return "未找到明确的依赖信息"
 
-    def _emit(self, docs: List[str], output_dir: str, name: str, content: str) -> None:
-        """安全写入文档并追加到 docs 列表（_write_doc 返回空串时不追加）。"""
-        fp = self._write_doc(output_dir, name, content)
+    def _build_front_matter(self, doc_type: str, title: str = "",
+                            description: str = "", tags: List[str] = None,
+                            source: str = "", confidence: str = "high") -> str:
+        """R2 生成 YAML front matter 字符串（含 type/title/description/tags/source/confidence/generated_at）。
+
+        对 title/description/source 做 YAML 安全处理（去换行、冒号后空格转全角），
+        避免破坏 front matter 解析。
+        """
+        def _yaml_safe(s: str) -> str:
+            s = str(s or "").replace("\n", " ").replace("\r", " ")
+            s = re.sub(r":\s+", "：", s)
+            return s.strip()
+
+        tags = tags or ["comprehensive"]
+        now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        lines = [
+            "---",
+            f"type: {_yaml_safe(doc_type)}",
+            f"title: {_yaml_safe(title)}",
+            f"description: {_yaml_safe(description)}",
+            f"tags: [{', '.join(tags)}]",
+            f"source: {_yaml_safe(source)}",
+            f"confidence: {_yaml_safe(confidence)}",
+            f"generated_at: {now}",
+            "---",
+            "",
+        ]
+        return "\n".join(lines)
+
+    def _auto_front_matter(self, name: str) -> str:
+        """R2 根据文件名推断默认 front matter（全局文档 / 索引使用）。
+
+        模块文档由 _generate_module_docs 显式传入带 source/confidence 的 front matter。
+        """
+        base = os.path.basename(name)
+        low = base.lower()
+        norm = name.replace("\\", "/")
+        norm_lower = norm.lower()
+        if low == "readme.md":
+            doc_type, title = "readme", "README"
+        elif low == "overview.md":
+            doc_type, title = "overview", "业务概览"
+        elif low == "architecture.md":
+            doc_type, title = "architecture", "架构设计"
+        elif low == "installation.md":
+            doc_type, title = "installation", "安装指南"
+        elif low == "usage.md":
+            doc_type, title = "usage", "使用指南"
+        elif low == "api.md":
+            doc_type, title = "api", "API 文档"
+        elif low == "wiki_index.md":
+            doc_type, title = "index", "Wiki 导航"
+        elif low == "_index.md":
+            doc_type, title = "index", "模块索引"
+        elif "entries/" in norm_lower:
+            doc_type, title = "entry", base
+        elif "flows/" in norm_lower:
+            doc_type, title = "flow", base
+        else:
+            doc_type, title = "module", base
+        return self._build_front_matter(doc_type, title=title)
+
+    def _anchor_evidence(self, confirmed: List[str], project_path: str,
+                         git_bin: Optional[str] = None) -> List[str]:
+        """R3 证据锚定：把交叉验证 confirmed 符号锚定到 Git 文件+行号+commit。
+
+        输入格式（来自 _cross_verify_modules）：`func@file.py:line`；
+        输出格式：`SRC n: file.py:line (commit)`（n 为序号）。
+        无 git 时降级为 `file.py:line` 不带 commit。
+        """
+        git_bin = git_bin or self._git_bin()
+        anchors = []
+        for i, item in enumerate(confirmed or [], 1):
+            m = re.match(r"^(.*)@(.+):(\d+)$", item.strip())
+            if not m:
+                continue
+            file_path, line = m.group(2), m.group(3)
+            commit = ""
+            if git_bin and project_path:
+                commit = self._git_last_commit(git_bin, project_path, file_path)
+            if commit:
+                anchors.append(
+                    f"{WIKI_SRC_MARK_PREFIX} {i}: {file_path}:{line} ({commit})")
+            else:
+                anchors.append(f"{WIKI_SRC_MARK_PREFIX} {i}: {file_path}:{line}")
+        return anchors
+
+    def _save_last_good(self, output_dir: str) -> None:
+        """R3 Last-good 门控：把当前 wiki 输出目录整体复制到 .last-good/。
+
+        先删旧备份再复制，避免残留旧文件；失败静默（备份是增强项，不阻断主流程）。
+        """
+        dst = os.path.join(output_dir, WIKI_LAST_GOOD_DIR)
+        try:
+            if os.path.exists(dst):
+                shutil.rmtree(dst)
+            shutil.copytree(output_dir, dst)
+        except Exception:
+            pass
+
+    def _emit(self, docs: List[str], output_dir: str, name: str, content: str,
+              front_matter: Optional[str] = None) -> None:
+        """安全写入文档并追加到 docs 列表（_write_doc 返回空串时不追加）。
+
+        R2：默认在文档顶部注入 front matter（可按文档类型显式传入覆盖）。
+        """
+        if front_matter is None:
+            front_matter = self._auto_front_matter(name)
+        full = (front_matter + content) if front_matter else content
+        fp = self._write_doc(output_dir, name, full)
         if fp:
             docs.append(fp)
 
@@ -2027,10 +2519,15 @@ class WikiGenerator:
         空文件对外表现为"文档已生成"的假象，且无法再触发重试/告警。
         同时记录失败文档名，供 generate() 末尾汇总进 result.errors，让外层感知部分失败。
         返回实际写入的文件路径；内容为空时返回空串。
+
+        R6：禁止写入用户授权文件 INSTRUCTIONS.md（项目根只读不重写）。
         """
         if not content or not content.strip():
             if filename not in self._failed_docs:
                 self._failed_docs.append(filename)
+            return ""
+        # R6: 确保生成器不覆盖用户授权文件 INSTRUCTIONS.md
+        if os.path.basename(filename) == WIKI_INSTRUCTIONS_FILE:
             return ""
         filepath = os.path.join(output_dir, filename)
         with open(filepath, "w", encoding="utf-8") as f:
@@ -2073,6 +2570,48 @@ echo "[CodeRef] Wiki 已更新"
             os.chmod(hook_path, 0o755)
         except (OSError, IOError):
             pass  # 非阻塞，失败了不影响主流程
+
+    # ─── Agent 指针集成（R7）───
+
+    def _write_agent_pointer(self, project_path: str, output_dir: str) -> None:
+        """R7 在项目根维护 AGENTS.md 的 CodeRef Wiki 指针区块。
+
+        若 AGENTS.md 已存在，只重写 `<!--CODEREFF:START-->...<!--CODEREFF:END-->`
+        区块，其余内容原样保留；不存在则创建含该区块的文件。
+        区块内容指向 wiki 入口（WIKI_INDEX.md 相对项目根的路径）。
+        失败静默（指针是增强项，不阻断主流程）。
+        """
+        agent_file = os.path.join(project_path, "AGENTS.md")
+        wiki_entry = os.path.join(output_dir, "WIKI_INDEX.md")
+        try:
+            rel = os.path.relpath(wiki_entry, project_path).replace("\\", "/")
+        except Exception:
+            rel = "docs/wiki/WIKI_INDEX.md"
+        block = (
+            f"{WIKI_AGENT_POINTER_START}\n"
+            f"## CodeRef Wiki\n"
+            f"本项目的 Wiki 文档由 CodeRef-AI 自动生成，入口见 [WIKI_INDEX]({rel})。\n"
+            f"修改代码后请重新生成 Wiki 以保持同步。\n"
+            f"{WIKI_AGENT_POINTER_END}"
+        )
+        try:
+            if os.path.isfile(agent_file):
+                with open(agent_file, "r", encoding="utf-8") as f:
+                    content = f.read()
+                pattern = re.compile(
+                    re.escape(WIKI_AGENT_POINTER_START) + r".*?" + re.escape(WIKI_AGENT_POINTER_END),
+                    re.DOTALL,
+                )
+                if pattern.search(content):
+                    content = pattern.sub(block, content)
+                else:
+                    content = content.rstrip() + "\n\n" + block + "\n"
+            else:
+                content = block + "\n"
+            with open(agent_file, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception:
+            pass
 
     # ─── 报告生成 ───
 
