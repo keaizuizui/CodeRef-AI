@@ -382,10 +382,10 @@ class Server:
             "inputSchema": {"type": "object", "properties": {
                 "project_path": {"type": "string", "description": "目标项目路径"},
                 "entry": {"type": "string", "description": "入口符号，支持 模块.函数（如 pipeline_runner.audit）"},
-                "steps": {"type": "array", "items": {"type": "string"},
-                          "description": "期望步骤的符号关键词列表，如 ['analyze_project','build_knowledge_graph','render']"},
+                "steps": {"type": ["array", "string"], "items": {"type": "string"},
+                          "description": "期望步骤的符号关键词列表或逗号分隔字符串，如 ['analyze_project','build_knowledge_graph','render']。省略（可选）时仅执行跨语言契约检测与入口/图谱定位，不验证流程步骤；提供空/非法元素则报错"},
                 "depth": {"type": "integer", "description": "调用链搜索深度，默认 8"},
-            }, "required": ["project_path", "entry", "steps"]},
+            }, "required": ["project_path", "entry"]},
         })
         # ── 架构腐化诊断：非编程人员验证工程结构是否健康 ──
         self._tools.append({
@@ -1336,23 +1336,30 @@ class Server:
         """流程合规验证（coderef_flow_verify）"""
         from core.flow_verify import verify_flow
         pp = a["project_path"]
-        # steps 校验：只在调用方显式提供 steps 键时做非空/类型校验。
-        # cross_lang 等内部维度复用本工具时只传 project_path+entry（不传 steps 键），
-        # 仅取 cross_lang_contract 等不依赖流程步骤的结果 → 放行为空。
-        # 而显式传 steps=[]/0/None/空串 属契约非法，返回结构化错误而非假成功。
+        # steps 校验：schema 中 steps 为可选（optional）。省略 steps 键时仅执行
+        # cross_lang 契约检测 / 入口与图谱定位（不依赖流程步骤），供跨语言契约专项复用；
+        # 显式传 steps 但为空或含非法元素（[]/0/None/空串/非字符串元素）属契约非法，
+        # 返回结构化错误而非假成功。
         if "steps" in a:
             steps = a["steps"]
             if isinstance(steps, str):
                 # 兼容逗号分隔字符串
                 steps = [s.strip() for s in steps.split(",") if s.strip()]
-            elif not isinstance(steps, (list, tuple)):
+            elif isinstance(steps, (list, tuple)):
+                # 逐元素校验：每个 step 必须是非空字符串（拒绝 [0]/[None]/[" "]/[""]）
+                if any(not isinstance(s, str) or not s.strip() for s in steps):
+                    raise ValueError(
+                        "coderef_flow_verify: steps 的每个元素必须是非空字符串")
+                steps = [s.strip() for s in steps]
+            else:
                 # 非数组/非字符串（如数字 0、负数、None）→ 结构化错误
                 raise ValueError(
                     f"coderef_flow_verify: steps 必须是数组或逗号分隔字符串，收到 {type(steps).__name__}")
             if not steps:
-                # 空数组/0/空串清空后 → 无待验证步骤，契约非法
+                # 空数组/0/空串/全空白元素清空后 → 无待验证步骤，契约非法
                 raise ValueError("coderef_flow_verify: steps 不能为空，请传入待验证的流程步骤")
         else:
+            # 省略 steps 键：仅执行跨语言契约检测 / 入口与图谱定位，不验证流程步骤
             steps = []
         r = verify_flow(pp, a["entry"], list(steps), depth=a.get("depth"))
         r["tool"] = "coderef_flow_verify"
