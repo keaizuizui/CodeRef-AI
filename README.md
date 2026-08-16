@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.8.8** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.8.9** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -413,6 +413,11 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > **日志范围说明**：本更新日志仅记录**产品代码（Coderef-Ai）**的功能新增与缺陷修复。测试侧工程——`coderef-positive-test` 测试框架/脚本、`coderef-src` 测试环境同步、正向测试报告/handover——的改动**不并入本日志**，避免把"测试侧修复"误记为产品代码变更。测试侧最新状态见独立测试报告与 handover 文档。
+
+### v4.8.9 — 操作记忆「一次恢复」与上下文丢失强制 gate
+
+- **操作记忆一次恢复摘要**（`operation_memory` 新增 `recover`）：`coderef_operation_memory_recover` 一次调用返回关键工具位置（`env_tool`，含 git / python / wsl / coderabbit）+ 已确认的约定 / 踩坑 / 决策摘要 + 待人工确认项。AI 在上下文丢失后最小成本拿回「东西在哪儿、过去的规范是什么」，避免多次 `query`/`find` 的截断丢失
+- **上下文丢失恢复升级为强制 gate**（`SKILL.md` 工作流 E）：涉及 `git` / `push` / `CodeRabbit` / `Release` 等工具或约定类操作必须先走 `recover`；禁止在未查询操作记忆前满 PATH 找工具或直接抓外部连接器（GitHub 等）。修复「AI 上下文丢失后绕过自带确定性记忆层、盲目抓外部连接器」的失败模式
 
 ### v4.8.8 — 流程验证输入校验与跨语言动态类名注入面检测
 
