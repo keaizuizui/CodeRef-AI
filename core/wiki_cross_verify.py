@@ -23,8 +23,11 @@ WikiCrossVerify — 静态确证 ↔ 人话 wiki 的模块级交叉验证
 """
 
 import os
+import re
 from typing import List, Optional, Tuple
 from core.graph_closure import load_graph, file_base, downstream
+
+from config.settings import WIKI_MERMAID_FALLBACK_MARK
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -36,6 +39,103 @@ def locate_kg_db(project_path: str) -> Optional[str]:
     from core.code_knowledge_graph import CodeKnowledgeGraph
     db = CodeKnowledgeGraph(project_path).db_path
     return db if os.path.exists(db) else None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Mermaid 自愈（R9）
+# ═══════════════════════════════════════════════════════════════════
+
+def verify_mermaid(mermaid_code: str) -> dict:
+    """对 Mermaid 代码做基础校验。
+
+    检查项：
+    1. fence 完整性：以 ```mermaid 开头必须有闭合 ```；裸代码（无 fence）视为合法；
+    2. 节点 id 合法性：节点定义 `id[...]` / `id(...)` / `id{...}` 的 id 必须为合法标识符；
+    3. 括号配对：`[](){}` 在字符串字面量外必须配对闭合。
+
+    Returns:
+        {"ok": bool, "errors": [{"code", "message"}, ...], "fallback": bool}
+    """
+    if not mermaid_code or not mermaid_code.strip():
+        return {"ok": False,
+                "errors": [{"code": "MERMAID_EMPTY",
+                            "message": "Mermaid 代码为空"}],
+                "fallback": True}
+
+    code = mermaid_code.strip()
+    errors = []
+
+    # 1. fence 完整性
+    if code.startswith("```"):
+        if not code.endswith("```"):
+            errors.append({"code": "MERMAID_FENCE_UNCLOSED",
+                           "message": "Mermaid fence 未闭合（缺少结尾 ```）"})
+        lines = code.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        code = "\n".join(lines).strip()
+
+    # 2. 节点 id 合法性
+    for line in code.splitlines():
+        line = line.strip()
+        m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\s*[\[({]', line)
+        if m:
+            nid = m.group(1)
+            if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', nid):
+                errors.append({"code": "MERMAID_NODE_ID_INVALID",
+                               "message": f"非法节点 id: {nid}"})
+
+    # 3. 括号配对（跳过字符串字面量）
+    stack = []
+    pairs = {')': '(', ']': '[', '}': '{'}
+    in_string = False
+    escape = False
+    for ch in code:
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in '([{':
+            stack.append(ch)
+        elif ch in ')]}':
+            if not stack or stack[-1] != pairs[ch]:
+                errors.append({"code": "MERMAID_BRACKET_MISMATCH",
+                               "message": f"括号不配对: {ch}"})
+                break
+            stack.pop()
+    if stack:
+        errors.append({"code": "MERMAID_BRACKET_UNCLOSED",
+                       "message": "存在未闭合括号"})
+
+    return {"ok": not errors, "errors": errors, "fallback": bool(errors)}
+
+
+def fallback_mermaid(mermaid_code: str, reason: str) -> str:
+    """把校验失败的 Mermaid 代码降级为 text fence 并附加降级标记。
+
+    降级产物以 WIKI_MERMAID_FALLBACK_MARK 注释开头（供下一轮修复定位），
+    原内容以 ```text 包裹（渲染为纯文本，不触发 Mermaid 解析报错）。
+    """
+    code = (mermaid_code or "").strip()
+    # 若本身带 mermaid fence，剥离后以 text fence 重新包裹
+    if code.startswith("```"):
+        lines = code.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        code = "\n".join(lines).strip()
+    return (f"{WIKI_MERMAID_FALLBACK_MARK}\n"
+            f"```text\n{code}\n```\n"
+            f"<!-- mermaid 降级原因: {reason} -->")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -170,5 +270,51 @@ class ModuleCrossVerify:
             "graph_stats": {"nodes": len(self.nodes),
                             "calls_edges": sum(len(v) for v in self.adj.values())},
         }
+
+    # ─── Mermaid 增强（R9）───
+
+    def _module_mermaid(self, dir_name: str, display_name: str) -> str:
+        """生成单个目录模块的 Mermaid 图（节点=目录内符号，边=符号间 CALLS）。
+
+        无符号 / 无调用边时返回空串（由调用方决定是否渲染）。
+        """
+        from core.diagram_generator import generate_mermaid
+        syms = self._symbols_in_dir(dir_name)
+        if not syms:
+            return ""
+        nodes = [{"name": name, "filePath": file_base(self.nodes[nid])}
+                 for nid, name, _line in syms]
+        sym_ids = {nid for nid, _name, _line in syms}
+        edges = []
+        for nid, _name, _line in syms:
+            for t in self.adj.get(nid, []):
+                if t in sym_ids and t != nid:
+                    edges.append({"source": self.nodes[nid]["name"],
+                                  "target": self.nodes[t]["name"],
+                                  "relation_type": "calls"})
+        return generate_mermaid(nodes, edges, entry_point="", title=display_name)
+
+    def verify_modules_with_mermaid(self, wiki_modules: List[str],
+                                    entry_spec: str, max_depth: int = 8,
+                                    dir_aliases: Optional[dict] = None,
+                                    with_mermaid: bool = False) -> dict:
+        """在 verify_modules() 基础上，为每个模块额外生成 Mermaid 图并校验。
+
+        with_mermaid=False 时行为与 verify_modules() 完全一致（默认关闭，
+        避免为每个模块生成图拖慢主流程）。开启后，每个模块的 result 会附加
+        mermaid 字段：
+            {"code": str, "verify": {"ok": bool, "errors": [...], "fallback": bool}}
+
+        图校验失败时可用 fallback_mermaid() 降级为 text fence。
+        """
+        result = self.verify_modules(wiki_modules, entry_spec,
+                                     max_depth=max_depth, dir_aliases=dir_aliases)
+        if not with_mermaid:
+            return result
+        for mod in result.get("modules", []):
+            dir_name = (dir_aliases or {}).get(mod["module"], mod["module"])
+            code = self._module_mermaid(dir_name, mod["module"])
+            mod["mermaid"] = {"code": code, "verify": verify_mermaid(code)}
+        return result
 
 

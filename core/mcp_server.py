@@ -194,6 +194,8 @@ class Server:
                     "三级管线：AST元数据(全量)→LLM归纳→编校验证(无幻觉)。\n"
                     "wiki_style 可选 comprehensive/reference/tutorial/plain；"
                     "include_subprojects 控制是否同时为子项目生成独立 Wiki。\n"
+                    "enable_agent_pointer 控制在项目根维护 AGENTS.md 的 CodeRef Wiki 指针区块（R7）；"
+                    "cross_verify 控制是否对模块描述做静态交叉验证（确证徽章）。\n"
                     "自动发现子项目并生成独立 Wiki。\n"
                     "支持 background=True（推荐，生成耗时 3-20 分钟）。"
                 ),
@@ -202,6 +204,9 @@ class Server:
                     "output_dir": {"type": "string", "description": "输出目录（默认 txt/）"},
                     "wiki_style": {"type": "string", "enum": ["comprehensive","reference","tutorial","plain"], "default": "comprehensive"},
                     "include_subprojects": {"type": "boolean", "default": True},
+                    "enable_agent_pointer": {"type": "boolean", "default": False, "description": "在项目根维护 AGENTS.md 的 CodeRef Wiki 指针区块（R7）"},
+                    "cross_verify": {"type": "boolean", "default": True, "description": "对模块描述做静态交叉验证（确证徽章）"},
+                    "cross_entry_spec": {"type": "string", "default": "class:pipeline_runner:Pipe", "description": "交叉验证入口（入口调用闭包为确证依据）"},
                     "background": {"type": "boolean", "default": True},
                 }, "required": ["project_path"]},
             },
@@ -1494,7 +1499,10 @@ class Server:
         elif n == "coderef_docs":
             r = Pipe().docs(p, output_dir=o,
                             wiki_style=a.get("wiki_style") or "comprehensive",
-                            include_subprojects=True if a.get("include_subprojects", True) else False)
+                            include_subprojects=True if a.get("include_subprojects", True) else False,
+                            enable_agent_pointer=True if a.get("enable_agent_pointer", False) else False,
+                            cross_verify=True if a.get("cross_verify", True) else False,
+                            cross_entry_spec=a.get("cross_entry_spec") or "class:pipeline_runner:Pipe")
             wr = getattr(r, "wiki_result", None)
             # 结构化返回：携带输出目录/文档清单/失败明细，让调用方能区分"全量成功"与"部分失败"，
             # 避免部分文档生成失败时仍被当作 fully completed。

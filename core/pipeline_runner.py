@@ -633,11 +633,17 @@ class Pipe:
     def docs(self, project_path: str, output_dir: str = None,
              resume: bool = False,
              wiki_style: str = "comprehensive",
-             include_subprojects: bool = True) -> PipeResult:
+             include_subprojects: bool = True,
+             enable_agent_pointer: bool = False,
+             cross_verify: bool = True,
+             cross_entry_spec: str = "class:pipeline_runner:Pipe") -> PipeResult:
         """文档探查管线：Wiki
 
         wiki_style: Wiki 风格 (comprehensive / reference / tutorial / plain)
         include_subprojects: 是否同时为子项目生成独立 Wiki
+        enable_agent_pointer: 是否在项目根维护 AGENTS.md 的 CodeRef Wiki 指针区块（R7）
+        cross_verify: 是否对模块描述做静态交叉验证（确证徽章）
+        cross_entry_spec: 交叉验证的入口（入口调用闭包为确证依据）
         """
         self._t0 = time.time()
         r = PipeResult(project_path=project_path)
@@ -652,7 +658,10 @@ class Pipe:
 
             self._wiki(project_path, r, d, output_dir,
                        wiki_style=wiki_style,
-                       include_subprojects=include_subprojects)
+                       include_subprojects=include_subprojects,
+                       enable_agent_pointer=enable_agent_pointer,
+                       cross_verify=cross_verify,
+                       cross_entry_spec=cross_entry_spec)
 
             r.report = self._fmt(r, "文档探查报告")
             os.makedirs(output_dir or os.path.join(os.path.dirname(os.path.dirname(
@@ -1222,7 +1231,10 @@ class Pipe:
 
     def _wiki(self, p: str, r: PipeResult, done: set, output_dir: str = None,
               wiki_style: str = "comprehensive",
-              include_subprojects: bool = True):
+              include_subprojects: bool = True,
+              enable_agent_pointer: bool = False,
+              cross_verify: bool = True,
+              cross_entry_spec: str = "class:pipeline_runner:Pipe"):
         if "wiki" in done: return
         try:
             from core.wiki_generator import WikiGenerator
@@ -1231,7 +1243,10 @@ class Pipe:
                 os.path.abspath(__file__))), "txt")
             wg = WikiGenerator()
             gres = wg.generate(p, output_dir=wo, wiki_style=wiki_style,
-                               include_subprojects=include_subprojects)
+                               include_subprojects=include_subprojects,
+                               enable_agent_pointer=enable_agent_pointer,
+                               cross_verify=cross_verify,
+                               cross_entry_spec=cross_entry_spec)
             # 把 Wiki 生成失败明细带入管线结果，让 _fmt / MCP 层能感知"部分文档生成失败"，
             # 避免部分阶段失败却仍对外标记为 fully completed。
             for e in getattr(gres, "errors", []) or []:
