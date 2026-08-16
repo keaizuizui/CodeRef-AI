@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.8.7** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.8.8** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -412,6 +412,13 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 
 ## 更新日志
 
+> **日志范围说明**：本更新日志仅记录**产品代码（Coderef-Ai）**的功能新增与缺陷修复。测试侧工程——`coderef-positive-test` 测试框架/脚本、`coderef-src` 测试环境同步、正向测试报告/handover——的改动**不并入本日志**，避免把"测试侧修复"误记为产品代码变更。测试侧最新状态见独立测试报告与 handover 文档。
+
+### v4.8.8 — 流程验证输入校验与跨语言动态类名注入面检测
+
+- **流程验证空 `steps` 输入校验**（`mcp_server` `_flow_verify`）：`coderef_flow_verify` 对 `steps` 做非空与类型校验——空数组/`0`/`None`/空串/纯空白统一返回结构化错误（`steps 不能为空`），不再被 `or []` 静默吞掉后返回假成功；非数组（如数字）也明确报错，与 `project_path` 校验风格一致
+- **跨语言动态类名注入面检测**（`flow_verify` `cross_lang_contract_scan`）：新增 `cross_lang_dynamic_class_inject` 信号——识别 Go 侧 `map[string]any{...}` 含 `plugin`/`class` 动态键、值为运行时变量（非字符串字面量）并经 `json.Marshal` 序列化转发跨语言执行面的注入风险（chatwiki `internal/app/plugin/php/multi_pool.go:117` 盲区）。与前端硬编码 `pluginName='x'` 的断链检测互补：此为"有实现但类名由外部 payload 动态决定"的动态插件名注入面
+
 ### v4.8.7 — 盲区缺陷全量修复与健壮性加固（P0/P1/P2）
 
 - **审计结果跨项目隔离**（`pipeline_runner`）：`audit_findings.json` 与报告文件名按项目哈希命名，`_latest_report` 按项目过滤，修复 `strategy=no_change` 复用时返回他项目报告的串扰
@@ -422,11 +429,10 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 - **tool/strategy 枚举严格校验**（`mcp_server`）：`coderef_scan` 的 `tool` 维度与 `coderef_audit` 的 `strategy`（`auto`/`full`/`incr`/`no_change`）改为大小写敏感白名单校验，非法值返回结构化错误，不再静默放行（此前 `Gov`/`bogus_strategy` 被按默认执行）
 - **跨地区检测 CodeRabbit 复审修复**（`governance_audit` `_scan_crossregion_conflicts`）：按 CodeRabbit 复审结论消除误报——`IRON-GOV-04` 仅当并存统计均缺乏来源/范围/版本标注时报违规（带 `数据来源`/`2022年全年` 等标注的合规趋势报告不再误报）；扫描目录排除列表移除 `docs`（现可检出 `docs/*.md` 跨区域冲突）；主权独立主体表述排除「禁止/不得/例如/假设」等否定与政策举例语境（合规红线举例不再误判为实际独立主张）
 
-### v4.8.6 — 回灌测试环境领先功能（并行 SCA / 治理新规则）
+### v4.8.6 — 并行 SCA 与治理新规则
 
 - **并行 SCA 漏洞查询**（`sca_checker`）：依赖漏洞核查改用 `ThreadPoolExecutor`（8 worker）并发查询 OSV，配合源码缓存，显著缩短大项目依赖扫描耗时，避免单个工具 900s 轮询超时
 - **治理/安全规则新增**（`governance_audit`）：`IRON-SEC-01` 硬编码凭据（变量名含 Key/Secret/Token 且值为长随机串）、`IRON-SEC-18` 空鉴权中间件（闭包直接 `return` 不做权限校验）、`IRON-GOV-02` 伪科学术语检测
-- **测试环境全量同步**：master 与 `coderef-src` 测试环境 `core` 目录全部文件逻辑与行尾（CRLF）完全一致，哈希逐一核对通过，消除跨环境 diff 噪音
 - **WSL 子系统工具探测**（`operation_memory`）：新增 `_locate_wsl_launcher`（先 PATH、再 `SystemRoot\System32` fallback，解决 PATH 缺 System32 时连 wsl.exe 都找不到）与 `_find_wsl_tool`（经 wsl.exe 用 `command -v` 探测、失败回退 `~/.local/bin`），可定位 WSL 内工具（如 coderabbit 在 `/root/.local/bin`）；`query(tool)` 补齐 `env_tool` 分类覆盖，避免"探测到了却查不到"。`skills/coderef-mcp/SKILL.md` 工作流 E 增加工具定位引导，避免 AI 每次满 PATH 摸索
 - **CodeRabbit 复审修复**：`governance_audit` 的 IRON-SEC-01 硬编码凭据规则支持 Go `:=` 短声明、词边界防 `publicKeyHash` 类误报、错误码排除区分大小写、共享 `CREDENTIAL_VALUE` 提取器；`sca_checker` 源码缓存改为按规范化项目路径隔离，修复同一实例跨项目/重扫复用旧缓存导致漏洞利用面误判
 

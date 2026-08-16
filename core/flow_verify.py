@@ -481,6 +481,7 @@ def cross_lang_contract_scan(project_path: str) -> List[dict]:
         r'''(?:Param\(\s*['"]action['"]\s*,\s*|['"]action['"]\s*:\s*)['"]([a-zA-Z][a-zA-Z0-9_\-]*)/''',
         re.I)
     refs: Dict[str, List[tuple]] = {}
+    out: List[dict] = []  # 信号输出（断链 + 动态类名注入面），在文件扫描循环开始前初始化
     for root, dirs, files in os.walk(project_path):
         dirs[:] = [d for d in dirs if d not in _SKIP_CONTRACT_DIRS]
         # 排除前端 UI 插件目录（components/plugins/）、PHP 插件实现目录本身：
@@ -499,6 +500,31 @@ def cross_lang_contract_scan(project_path: str) -> List[dict]:
             except Exception:
                 continue
             rel = os.path.relpath(path, project_path).replace("\\", "/")
+            # Go 动态插件名/类名注入面（§二.2）：map[string]any{...} 含 plugin/class 键
+            # 且值为运行时变量（非字符串字面量），经 json.Marshal 序列化转发跨语言执行面。
+            # "有实现但类名由外部 payload 动态决定" —— 与前端硬编码引用(pluginName='x')
+            # 不同，是动态插件名注入面，运行时可由外部请求决定加载哪个插件。
+            # （chatwiki internal/app/plugin/php/multi_pool.go:117 盲区）
+            if fn.endswith(".go"):
+                content = "\n".join(lines)
+                if (re.search(r'map\[string\](?:any|interface\{\})\s*\{', content, re.I)
+                        and re.search(r'["\'](?:plugin|class)["\']\s*:\s*[a-zA-Z_][a-zA-Z0-9_]*',
+                                      content, re.I)
+                        and re.search(r'json\.Marshal\s*\(', content, re.I)):
+                    dyn_line = next(
+                        (i for i, ln in enumerate(lines, 1)
+                         if re.search(r'["\'](?:plugin|class)["\']\s*:\s*[a-zA-Z_][a-zA-Z0-9_]*', ln)), 0)
+                    out.append({
+                        "signal": "cross_lang_dynamic_class_inject",
+                        "severity": "medium",
+                        "plugin": "动态(外部payload)",
+                        "file": rel,
+                        "line": dyn_line,
+                        "implemented": sorted(php_plugins),
+                        "detail": "Go 侧把运行时插件名/类名作为动态键经 json.Marshal 序列化"
+                                  "转发跨语言执行面，类名由外部 payload 动态决定，"
+                                  "存在跨语言动态插件名注入面",
+                    })
             for i, line in enumerate(lines, 1):
                 for m in plug_re.finditer(line):
                     refs.setdefault(m.group(1).lower(), []).append((rel, i))
@@ -506,7 +532,6 @@ def cross_lang_contract_scan(project_path: str) -> List[dict]:
                     if m.group(1):
                         refs.setdefault(m.group(1).lower(), []).append((rel, i))
     # 3) 比对：引用但无 PHP 实现 → 断链
-    out: List[dict] = []
     for name, locs in sorted(refs.items()):
         if name in php_plugins:
             continue
