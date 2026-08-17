@@ -33,9 +33,10 @@ lang = [
 # 以 MCP stdio server 方式启动（等价 `python -m core.mcp_server`）
 coderef-mcp = "core.mcp_server:main"
 
-[tool.setuptools]
-# 本项目以 `python -m core.mcp_server` 运行；top-level 包为 config / core。
-packages = ["config", "core"]
+[tool.setuptools.packages.find]
+# 自动发现含 __init__.py 的包（约束在 config*/core*，未来 core 下新增子包无需手工补列）
+include = ["config*", "core*"]
+exclude = ["tests*", "samples*", "workspace*", "*.tests"]
 
 [tool.setuptools.package-data]
 config = ["*.json"]
