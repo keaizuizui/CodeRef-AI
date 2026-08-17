@@ -766,7 +766,12 @@ CodeRef-AI v4.8 的操作记忆层（`BRAIN.md` 产物、判存标准、时间�
 - **mindmuxai/brain.md**（Apache-2.0）—— 提供了 `BRAIN.md` 命名、「能否从代码重建」的判存标准、以及「当前理解 + 时间线」的记录结构。参考：[https://github.com/mindmuxai/brain.md](https://github.com/mindmuxai/brain.md)
 - **TencentDB-Agent-Memory**（MIT）—— 提供了分层记忆与渐进式披露的思路，控制上下文 token 占用。参考：[https://github.com/Tencent/TencentDB-Agent-Memory](https://github.com/Tencent/TencentDB-Agent-Memory)
 
-完整取舍分析见 [操作记忆层设计文档](docs/operation-memory-design/operation-memory-design.html)。
+CodeRef-AI v4.9 的 Wiki 工具增强层（`wiki_generator` 增量同步 / `wiki_ir` / `wiki_cross_verify`）在方案思路上参考了以下开源项目的实践：
+
+- **langchain-ai/openwiki**（MIT）—— 提供了增量同步（`.last-update.json` + 快照比对，仅重建受影响文档）与结构化元数据（front matter 头 + 确定性 index）的思路；同时以其成本失控、限流重试不健壮、输出截断静默失败等真实缺陷警示我们为增量模式补上开销封顶与诚实失败。参考：[https://github.com/langchain-ai/openwiki](https://github.com/langchain-ai/openwiki)
+- **tt-a1i/archify**（Apache-2.0）—— 提供了「生成/校验分离」（LLM 先产出结构化 JSON-IR → schema 校验 → 确定性渲染）与 Last-good 门控（校验通过的产物备份，失败时保留上次可用版本）的思路。参考：[https://github.com/tt-a1i/archify](https://github.com/tt-a1i/archify)
+
+与上述项目不同，CodeRef 保留了自己的差异化主轴：以静态知识图谱交叉验证徽章为文档可信来源，而不是依赖宿主 LLM 的自我断言。完整取舍分析见 [操作记忆层设计文档](docs/operation-memory-design/operation-memory-design.html) 与 Wiki 增强评估报告 `wiki-tool-enhancement-evaluation.html`。
 
 ## 许可证
 
