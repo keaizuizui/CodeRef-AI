@@ -1354,6 +1354,12 @@ class Server:
             max_chars = int(a.get("max_chars", 20000))
         except (TypeError, ValueError):
             max_chars = 20000
+        # 负 max_chars 会被 content[:max_chars] 当成"去尾 n 字符"（content[:-n]）静默截断
+        if max_chars <= 0:
+            return json.dumps({
+                "status": "error", "tool": "coderef_docs_read",
+                "error": f"max_chars 必须为正整数（收到 {max_chars}）",
+            }, ensure_ascii=False)
         r = Pipe().docs_read(
             pp, doc=a.get("doc") or None,
             output_dir=a.get("output_dir") or None,
@@ -1497,8 +1503,23 @@ class Server:
                 "errors": getattr(r, "errors", []),
             }, ensure_ascii=False)
         elif n == "coderef_docs":
+            # 与 coderef_audit 的 strategy 一致：非法枚举显式拒绝（结构化错误），
+            # 不静默回落默认值，避免调用方误以为用上了自定义风格。
+            try:
+                from core.wiki_generator import WikiGenerator
+                _ws = getattr(WikiGenerator, "WIKI_STYLES", {}) or {}
+            except Exception:
+                _ws = {}
+            ws = a.get("wiki_style") or "comprehensive"
+            if ws not in _ws:
+                return json.dumps({
+                    "status": "error",
+                    "tool": n,
+                    "error": (f"非法 wiki_style: {ws!r}；允许的取值为 "
+                              "comprehensive / reference / tutorial / plain"),
+                }, ensure_ascii=False)
             r = Pipe().docs(p, output_dir=o,
-                            wiki_style=a.get("wiki_style") or "comprehensive",
+                            wiki_style=ws,
                             include_subprojects=True if a.get("include_subprojects", True) else False,
                             enable_agent_pointer=True if a.get("enable_agent_pointer", False) else False,
                             cross_verify=True if a.get("cross_verify", True) else False,
