@@ -168,6 +168,9 @@ WIKI_LAST_GOOD_DIR = ".last-good"
 # 用户授权层（R6）：只读不重写的用户 brief 文件名（位于项目根）
 WIKI_INSTRUCTIONS_FILE = "INSTRUCTIONS.md"
 
+# 用户授权指令注入 system prompt 的字符上限（防越权注入撑爆 context；超限按章节截断）
+WIKI_INSTRUCTIONS_MAX_CHARS = 2000
+
 # Agent 指针集成（R7）：写入 AGENTS.md / CLAUDE.md 的指针区块标记
 WIKI_AGENT_POINTER_START = "<!--CODEREFF:START-->"
 WIKI_AGENT_POINTER_END = "<!--CODEREFF:END-->"
