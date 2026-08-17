@@ -74,7 +74,16 @@ def _safe_int(raw, default: int) -> int:
 
 class LLMIntegration:
     """LLM集成管理器"""
-    
+    # 结构化错误串统一前缀：预算拒绝/缺Key/初始化失败/调用失败等非正常内容
+    # 一律以此前缀返回，供调用方用 is_error_response() 判定并跳过落盘，
+    # 避免“LLM调用错误: ...”被当成正常文档正文写入（R10 成本封顶的配套防御）。
+    ERROR_PREFIX = "LLM调用错误:"
+
+    @classmethod
+    def is_error_response(cls, text: str) -> bool:
+        """判断 chat_completion 返回值是否为结构化错误串（而非正常内容）。"""
+        return bool(text) and text.startswith(cls.ERROR_PREFIX)
+
     def __init__(self, config: Optional[LLMConfig] = None):
         if config is None:
             config = self._load_config_from_settings()

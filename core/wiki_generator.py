@@ -574,19 +574,39 @@ class WikiGenerator:
         """返回 last_head..HEAD 之间的变更文件相对路径列表。
 
         非 git 仓库 / last_head 无效 / 命令失败返回 None（调用方降级全量）。
+        已提交变更（last_head..HEAD）与工作区未提交变更（git status）一并纳入，
+        否则开发者在改动文件但尚未 commit 时增量同步会漏掉这些模块。
         """
         try:
+            files = []
+            # 1. 已提交变更
             out = subprocess.run(
                 [git_bin, "log", f"{last_head}..HEAD", "--name-only", "--pretty=format:"],
                 cwd=project_path, capture_output=True, text=True, timeout=30,
             )
             if out.returncode != 0:
                 return None
-            files = []
             for line in out.stdout.splitlines():
                 line = line.strip()
                 if line and line not in files:
                     files.append(line)
+            # 2. 工作区未提交变更（已跟踪文件的修改，以及新增/删除/重命名）
+            #    status --porcelain 第二列为路径，支持包含空格/特殊字符的路径
+            st = subprocess.run(
+                [git_bin, "status", "--porcelain", "--untracked-files=no"],
+                cwd=project_path, capture_output=True, text=True, timeout=30,
+            )
+            if st.returncode == 0:
+                for line in st.stdout.splitlines():
+                    if len(line) < 4:
+                        continue
+                    rel = line[3:].strip()
+                    # 重命名 "R old -> new" 取新路径
+                    if " -> " in rel:
+                        rel = rel.split(" -> ", 1)[1]
+                    rel = rel.strip('"')
+                    if rel and rel not in files:
+                        files.append(rel)
             return files
         except Exception:
             return None
@@ -644,13 +664,16 @@ class WikiGenerator:
                 if rel in changed_set:
                     affected.add(mod.name)
 
-        # Stage 1: 全量 AST 元数据（无 LLM，成本低）
-        code_metadata = self._build_code_metadata(modules, project_path)
+        # Stage 1: 全量 AST 元数据（无 LLM，成本低）。
+        # 增量路径下变更文件已改动，缓存的元数据必然过时 → 跳过缓存重扫。
+        code_metadata = self._build_code_metadata(modules, project_path,
+                                                  skip_cache=bool(changed_files))
         if result.large_repo:
             code_metadata = self._sample_metadata(code_metadata)
 
-        # Stage 2: 模块描述（走缓存，未命中则全量归纳）
-        module_descriptions = self._generate_module_descriptions(code_metadata, wiki_style)
+        # Stage 2: 受影响模块的描述必须重算（invalidate 失效其缓存），其余复用缓存
+        module_descriptions = self._generate_module_descriptions(
+            code_metadata, wiki_style, invalidate=sorted(affected))
 
         # Stage 2.5: 静态交叉验证（可选，熔断降级）
         cross_badges = {}
@@ -675,7 +698,7 @@ class WikiGenerator:
             )
             docs.extend(global_docs)
             if cite_warnings:
-                result.errors.extend(cite_warnings)
+                result.warnings.extend(cite_warnings)
 
         return docs
 
@@ -1029,22 +1052,33 @@ class WikiGenerator:
     # ═══════════════════════════════════════════════════════════════════
 
     def _generate_module_descriptions(self, meta: ProjectCodeMetadata,
-                                       style: str) -> Dict[str, str]:
+                                       style: str,
+                                       invalidate: Optional[List[str]] = None
+                                       ) -> Dict[str, str]:
         """Stage 2：对每个模块，LLM 从全量元数据归纳出模块描述
 
         元数据比原始代码紧凑 10-20 倍，因此 LLM 可以看到所有文件。
         输出缓存到 CodeRef cache 避免重复调用。
+        invalidate: 需要失效重算的模块名列表（增量路径下受影响模块），
+        其余模块复用缓存，避免全量重复调用 LLM。
         """
+        invalidate = invalidate or []
         cache_dir = self._project_cache_path(meta.project_path)
         cache_file = os.path.join(cache_dir, f"stage2_descriptions_{style}.json")
+        cached: Dict[str, str] = {}
         if os.path.exists(cache_file):
             try:
                 with open(cache_file, "r", encoding="utf-8") as f:
                     cached = json.load(f)
-                if len(cached) == len(meta.modules):
-                    return cached
             except Exception:
-                pass
+                cached = {}
+
+        # 命中缓存的条件：缓存 key 命中了全部模块，且这些模块不在失效列表中
+        # （增量路径下受影响模块的描述来自改动前的元数据，必须重算）。
+        missing = [m.name for m in meta.modules
+                   if m.name not in cached or m.name in invalidate]
+        if not missing and len(cached) == len(meta.modules):
+            return cached
 
         # 生成项目级概览元数据（紧凑形式）
         overview_lines = [f"项目: {os.path.basename(meta.project_path)}"]
@@ -1062,9 +1096,12 @@ class WikiGenerator:
         full_metadata = "\n".join(overview_lines)
 
         guidelines = self._style_guidelines(style)
-        descriptions = {}
+        # 先复用缓存中仍有效的描述，仅对缺失 / 被失效的模块重新调用 LLM
+        descriptions = {k: v for k, v in cached.items() if k not in invalidate}
 
         for mod in meta.modules:
+            if mod.name in descriptions:
+                continue
             md_text = self._module_metadata_to_text(mod)
 
             # 风格区分
@@ -1268,6 +1305,38 @@ class WikiGenerator:
 
     # ─── LLM 文档生成 ───
 
+    def _strip_deterministic_prefix(self, doc_text: str) -> Tuple[str, str]:
+        """把模块文档拆成「确定性前缀」与「LLM body」两部分。
+
+        模块文档 = front matter（R2） + 徽章/证据锚定引用块（R3，`>` 开头）
+        + LLM 生成的正文。cite-verify/fix 只应对 LLM body 生效，
+        否则修复（LLM 重写全文）会把确定性前缀覆盖或改写成立造的文本。
+
+        Returns:
+            (prefix, body) —— 前缀原样保留，body 交给 LLM 校验/修复。
+        """
+        prefix = ""
+        body = doc_text
+        # 1. front matter（--- 包裹的 YAML 头，R2）
+        if body.startswith("---"):
+            end = body.find("\n---\n", 3)
+            if end != -1:
+                prefix += body[:end + 5]
+                body = body[end + 5:]
+        # 2. 开头的 `>` 引用块（交叉验证徽章 + 证据锚定，R3）
+        lines = body.split("\n")
+        idx = 0
+        while idx < len(lines):
+            line = lines[idx]
+            if line.lstrip().startswith(">") or line.strip() == "":
+                idx += 1
+                continue
+            break
+        if idx:
+            prefix += "\n".join(lines[:idx])
+            body = "\n".join(lines[idx:])
+        return prefix, body
+
     def _generate_all_documents(self, project_name: str, modules: List[WikiModule],
                                  meta: ProjectCodeMetadata,
                                  descriptions: Dict[str, str],
@@ -1307,12 +1376,15 @@ class WikiGenerator:
                 content = open(doc_path, encoding="utf-8").read()
             except Exception:
                 continue
-            uv = self._cite_verify(content, meta, doc_name)
+            # 只对 LLM body 做 cite-verify/fix，保留确定性前缀（front matter/
+            # 徽章/证据锚定）不被 LLM 重写覆盖；修复后原子拼回前缀与修复后的 body。
+            prefix, body = self._strip_deterministic_prefix(content)
+            uv = self._cite_verify(body, meta, doc_name)
             if uv:
-                fixed = self._cite_fix(content, doc_name, uv, meta)
+                fixed = self._cite_fix(body, doc_name, uv, meta)
                 if fixed and len(fixed) > 100:
                     with open(doc_path, "w", encoding="utf-8") as f:
-                        f.write(fixed)
+                        f.write(prefix + fixed)
                 cite_warnings.append(f"- {doc_name}: 修复了 {len(uv)} 个未验证标识符: {', '.join(uv[:8])}")
 
         # =============================================================
@@ -1323,9 +1395,11 @@ class WikiGenerator:
                 project_name, modules, meta, descriptions, output_dir, result,
                 cite_warnings))
 
-        # 记录编校警告到 result
+        # 记录编校警告到 result（引用修复是成功操作，记入 warnings，
+        # 不进入 errors——否则任何一次标识符修复都会触发 R1/R3 的"失败"门控，
+        # 导致增量同步永不激活、Last-good 永不备份）
         if cite_warnings:
-            result.errors.extend(cite_warnings)
+            result.warnings.extend(cite_warnings)
 
         return docs
 
@@ -1564,7 +1638,13 @@ class WikiGenerator:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ]
-            return self.llm.chat_completion(messages, max_tokens=4096, temperature=0.3)
+            text = self.llm.chat_completion(messages, max_tokens=4096, temperature=0.3)
+            # fix9：预算拒绝/缺Key/调用失败等结构化错误串不得写入文档，
+            # 统一判定后返回空串（由 _write_doc 跳过落盘并计入失败统计）。
+            if self.llm.is_error_response(text):
+                self._last_llm_error = text
+                return ""
+            return text
         except Exception as e:
             self._last_llm_error = str(e)
             return ""
@@ -2468,17 +2548,27 @@ class WikiGenerator:
         输入格式（来自 _cross_verify_modules）：`func@file.py:line`；
         输出格式：`SRC n: file.py:line (commit)`（n 为序号）。
         无 git 时降级为 `file.py:line` 不带 commit。
+
+        性能/正确性：
+        - 用相对项目根的路径做 pathspec（`git log -- <rel>`），避免裸文件名在
+          非根目录匹配不到（file_base 只给了 basename）。
+        - 每个不同文件只 spawn 一次 git（按 rel 缓存 commit），避免同一文件
+          被多个 confirmed 符号重复触发 git 进程。
         """
         git_bin = git_bin or self._git_bin()
+        commit_cache: Dict[str, str] = {}
         anchors = []
         for i, item in enumerate(confirmed or [], 1):
             m = re.match(r"^(.*)@(.+):(\d+)$", item.strip())
             if not m:
                 continue
             file_path, line = m.group(2), m.group(3)
-            commit = ""
-            if git_bin and project_path:
-                commit = self._git_last_commit(git_bin, project_path, file_path)
+            # 归一为相对项目根的路径；已经是相对/绝对路径则原样，避免 pathspec 失配
+            rel = self._to_repo_rel(project_path, file_path)
+            commit = commit_cache.get(rel, "")
+            if not commit and git_bin and project_path:
+                commit = self._git_last_commit(git_bin, project_path, rel)
+                commit_cache[rel] = commit or ""
             if commit:
                 anchors.append(
                     f"{WIKI_SRC_MARK_PREFIX} {i}: {file_path}:{line} ({commit})")
@@ -2486,16 +2576,48 @@ class WikiGenerator:
                 anchors.append(f"{WIKI_SRC_MARK_PREFIX} {i}: {file_path}:{line}")
         return anchors
 
-    def _save_last_good(self, output_dir: str) -> None:
-        """R3 Last-good 门控：把当前 wiki 输出目录整体复制到 .last-good/。
+    @staticmethod
+    def _to_repo_rel(project_path: str, file_path: str) -> str:
+        """把符号引用的文件路径归一为相对项目根的路径（供 git pathspec 使用）。
 
+        - 空项目路径直接返回原值
+        - 绝对路径 → 去掉项目根前缀（仍是相对仓库的路径）
+        - 含 ../ 的路径 → 规范化去点
+        - 其余（含相对路径、裸文件名）→ 原样返回（裸文件名仅当位于仓库根才可匹配，
+          这是 cross-verify 提供 basename 的固有局限，保留给上层感知）
+        """
+        if not project_path or not file_path:
+            return file_path
+        fp = file_path.replace("\\", "/")
+        root = os.path.abspath(project_path).replace("\\", "/")
+        if os.path.isabs(file_path):
+            norm = os.path.abspath(file_path).replace("\\", "/")
+            try:
+                return os.path.relpath(norm, root).replace("\\", "/")
+            except ValueError:
+                return fp
+        # 相对路径规范化（去掉 ./ 及多余的 ..），保留相对仓库形式
+        norm = os.path.normpath(fp).replace("\\", "/")
+        return norm
+
+    def _save_last_good(self, output_dir: str) -> None:
+        """R3 Last-good 门控：把当前 wiki 输出目录整体备份到同级隐藏目录。
+
+        备份放在输出目录的同级目录（`<输出目录>.<last-good后缀>`），而不是输出
+        目录内部，避免 docs_read / _count_md 递归枚举输出目录时把备份里的文档
+        重复统计（Last-good 是门控产物，不应进 Wiki 维度计数）。拷贝时忽略
+        嵌套的 Last-good 目录，防止把上次备份一起带进新备份。
         先删旧备份再复制，避免残留旧文件；失败静默（备份是增强项，不阻断主流程）。
         """
-        dst = os.path.join(output_dir, WIKI_LAST_GOOD_DIR)
+        absp = os.path.abspath(output_dir)
+        dst = os.path.join(os.path.dirname(absp),
+                           os.path.basename(absp) + WIKI_LAST_GOOD_DIR)
         try:
             if os.path.exists(dst):
                 shutil.rmtree(dst)
-            shutil.copytree(output_dir, dst)
+            shutil.copytree(
+                output_dir, dst,
+                ignore=shutil.ignore_patterns(WIKI_LAST_GOOD_DIR))
         except Exception:
             pass
 
