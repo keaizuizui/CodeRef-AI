@@ -1124,6 +1124,10 @@ class WikiGenerator:
             except Exception:
                 cached = {}
 
+        # 只保留仍存在于元数据中的模块描述，排除已删除/改名模块的残留缓存
+        module_names = {m.name for m in meta.modules}
+        cached = {k: v for k, v in cached.items() if k in module_names}
+
         # 命中缓存的条件：缓存 key 命中了全部模块，且这些模块不在失效列表中
         # （增量路径下受影响模块的描述来自改动前的元数据，必须重算）。
         missing = [m.name for m in meta.modules
@@ -2530,9 +2534,9 @@ class WikiGenerator:
         entry_docs = [d for d in norm if "/ENTRIES/" in d]
         flow_docs = [d for d in norm if "/FLOWS/" in d]
         if entry_docs:
-            lines.append(f"| [🚪 入口流程](ENTRIES/) | 每个业务入口做什么、怎么做（人话版） | 非技术读者 |")
+            lines.append(f"| [🚪 入口流程]({entry_docs[0]}) | 每个业务入口做什么、怎么做（人话版） | 非技术读者 |")
         if flow_docs:
-            lines.append(f"| [🔗 数据流](FLOWS/) | 模块之间如何传递数据（人话版） | 非技术读者 |")
+            lines.append(f"| [🔗 数据流]({flow_docs[0]}) | 模块之间如何传递数据（人话版） | 非技术读者 |")
 
         lines.append("")
         lines.append(f"## 模块概览")
@@ -2582,25 +2586,26 @@ class WikiGenerator:
                             source: str = "", confidence: str = "high") -> str:
         """R2 生成 YAML front matter 字符串（含 type/title/description/tags/source/confidence/generated_at）。
 
-        对 title/description/source 做 YAML 安全处理（去换行、冒号后空格转全角），
-        避免破坏 front matter 解析。
+        所有标量值输出为 YAML 双引号字符串，并转义反斜杠与内嵌双引号，
+        避免特殊字符破坏 front matter 解析。
         """
-        def _yaml_safe(s: str) -> str:
-            s = str(s or "").replace("\n", " ").replace("\r", " ")
-            s = re.sub(r":\s+", "：", s)
-            return s.strip()
+        def _yaml_quote(s: str) -> str:
+            s = str(s or "").replace("\n", " ").replace("\r", " ").strip()
+            # 转义反斜杠与内嵌双引号，再整体用双引号包裹
+            return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
         tags = tags or ["comprehensive"]
         now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        quoted_tags = ", ".join(_yaml_quote(t) for t in tags)
         lines = [
             "---",
-            f"type: {_yaml_safe(doc_type)}",
-            f"title: {_yaml_safe(title)}",
-            f"description: {_yaml_safe(description)}",
-            f"tags: [{', '.join(tags)}]",
-            f"source: {_yaml_safe(source)}",
-            f"confidence: {_yaml_safe(confidence)}",
-            f"generated_at: {now}",
+            f"type: {_yaml_quote(doc_type)}",
+            f"title: {_yaml_quote(title)}",
+            f"description: {_yaml_quote(description)}",
+            f"tags: [{quoted_tags}]",
+            f"source: {_yaml_quote(source)}",
+            f"confidence: {_yaml_quote(confidence)}",
+            f"generated_at: {_yaml_quote(now)}",
             "---",
             "",
         ]

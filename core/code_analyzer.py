@@ -218,8 +218,11 @@ class CodeAnalyzer:
                 if abs(old.get("mtime", 0) - cur["mtime"]) > 0.1 or old.get("size") != cur["size"]:
                     return False
             else:
-                # 旧快照格式：仅存 mtime
-                if abs(old - cur["mtime"]) > 0.1:
+                # 旧快照格式：仅存 mtime；非法条目（字符串/None 等）作废缓存
+                try:
+                    if abs(float(old) - cur["mtime"]) > 0.1:
+                        return False
+                except (TypeError, ValueError):
                     return False
         return True
     

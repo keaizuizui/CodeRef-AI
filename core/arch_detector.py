@@ -114,7 +114,9 @@ _FRAMEWORK_PATTERNS: Dict[str, List[re.Pattern]] = {
         re.compile(r"\bkafka\b|@kafka_listener|@KafkaListener|消息队列|消息中间件", re.I),
         re.compile(r"\brabbitmq\b|@rabbit_listener|@RabbitListener|@Consume|pika\.", re.I),
         re.compile(r"\bcelery\b|@task\b|事件总线|event.?bus|EventBus|@on_event|@subscribe", re.I),
-        re.compile(r"\bpubsub\b|PubSub|redis|pulsar|Pulsar|\bnats\b|\bmqtt\b|\bsqs\b|发布|订阅", re.I),
+        re.compile(r"\bpubsub\b|PubSub|redis\.(?:pubsub|publish|subscribe)|"
+                   r"\bpulsar\b|\bnats\b|\bmqtt\b|\bsqs\b|"
+                   r"消息发布|消息订阅|事件订阅", re.I),
     ],
     ARCH_PLUGIN: [
         re.compile(r"register_plugin|registerPlugin|@plugin\b|@Plugin\b|plugin\.register|register_hook", re.I),

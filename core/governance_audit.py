@@ -166,7 +166,9 @@ class GovernanceAuditor:
         # （目标项目 code_run.go:5 const CodeRunKey = `QwXKBkHZRJ4StIYr06hvUOLVu9AemFa2`）
         # 词尾后 (?!\w) 防止 publicKeyHash 类把 Key 当普通词中片段；:= 支持 Go 短声明。
         # 占位符/规则串（纯字母/纯数字/重复字符）由 _is_credential_false_positive 排除。
-        (re.compile(r'\b(?:const\s+)?[A-Za-z_]\w*(?:Key|Secret|Token|Credential|Passwd|Pwd)(?!\w)\s*(?::=|=)\s*[`"\']([^`"\']{16,})[`"\']', re.IGNORECASE),
+        # 不加 IGNORECASE：规则依赖词尾大写（CodeRunKey/apiSecret），
+        # 大小写不敏感会把 cache_key 等普通标识符误报为 critical。
+        (re.compile(r'\b(?:const\s+)?[A-Za-z_]\w*(?:Key|Secret|Token|Credential|Passwd|Pwd)(?!\w)\s*(?::=|=)\s*[`"\']([^`"\']{16,})[`"\']'),
          "IRON-SEC-01", "硬编码凭据", "critical",
          "代码中直接写入了自定义密钥常量（变量名含 Key/Secret/Token 等，值为长随机串），应改用环境变量或密钥管理服务"),
     ]
@@ -1281,10 +1283,15 @@ class GovernanceAuditor:
                         for lineno, line in enumerate(fh, 1):
                             for pattern, rule_id, rule_name, severity, detail in self.DOC_SECRET_PATTERNS:
                                 if pattern.search(line):
+                                    # 占位符/示例配置（=your_key_here）=<your_key> 等不报
+                                    if self._doc_placeholder(line):
+                                        continue
                                     violations.append(self._doc_violation(
                                         rule_id, rule_name, severity, detail, fpath, lineno, line))
                             for pattern, rule_id, rule_name, severity, detail in self.DOC_ENV_CRED_PATTERNS:
                                 if pattern.search(line):
+                                    if self._doc_placeholder(line):
+                                        continue
                                     violations.append(self._doc_violation(
                                         rule_id, rule_name, severity, detail, fpath, lineno, line))
                             for pattern, rule_name, severity, detail in self.GOV_BYPASS_PATTERNS:
@@ -1300,7 +1307,19 @@ class GovernanceAuditor:
         return violations
 
     @staticmethod
-    def _doc_violation(rule_id, rule_name, severity, detail, fpath, lineno, line) -> GovernanceViolation:
+    def _doc_placeholder(line: str) -> bool:
+        """判断文档行是否仅为占位符/示例配置，避免把示例密钥误报为明文泄露。
+
+        复用 _scan_non_py_secrets 的占位符思路（your_key_here/changeme/xxx 等），
+        并覆盖角括号占位符（= <your_key>），供文档类扫描过滤 guidance 用。
+        """
+        if re.search(r'(?i)(your_|your-|your\s+key|your\s+secret|your\s+token|'
+                     r'changeme|replace_me|replace\s+me|xxx|placeholder|\be\.?g\.?\b|'
+                     r'example|dummy|sample|todo|fixme|<[A-Za-z_>-]+>|`<[^`]+>`)\s*$', line.strip()):
+            return True
+        return False
+
+    def _doc_violation(self, rule_id, rule_name, severity, detail, fpath, lineno, line) -> GovernanceViolation:
         """构造文档类违规项"""
         return GovernanceViolation(
             rule_id=rule_id, rule_name=rule_name, category="security",
@@ -1438,10 +1457,15 @@ class GovernanceAuditor:
         for i, line in enumerate(lines):
             if self.SECRET_PERSIST_FUNC.search(line):
                 body = [line]
+                base_indent = len(line) - len(line.lstrip())
                 j = i + 1
                 while j < total:
                     nxt = lines[j]
-                    if re.match(r'^\s*(?:def|class)\s+', nxt):
+                    # 仅当 def/class 与原方法同级（缩进深度一致）时才视为方法体结束；
+                    # 嵌套在方法内的子定义（缩进更深）仍属于本方法体，继续保留，
+                    # 以免内部的 .env 写入被提前截断漏检。
+                    if (re.match(r'^\s*(?:def|class)\s+', nxt)
+                            and len(nxt) - len(nxt.lstrip()) == base_indent):
                         break
                     body.append(nxt)
                     j += 1

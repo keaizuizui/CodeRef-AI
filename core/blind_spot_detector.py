@@ -332,11 +332,17 @@ class BlindSpotDetector:
                 logger.info("[BlindSpotDetector] GitNexus CLI 未安装，跳过符号索引盲区检测")
                 return spots
             indexed_files = set()
+            row_limit = 5000
             with GitNexusMCPClient(project_path) as client:
                 result = client.query_cypher(
-                    "MATCH (n) RETURN DISTINCT n.filePath LIMIT 5000"
+                    f"MATCH (n) RETURN DISTINCT n.filePath LIMIT {row_limit}"
                 )
-                for row in client.parse_markdown_table(result, ["filePath"]):
+                rows = list(client.parse_markdown_table(result, ["filePath"]))
+                if len(rows) >= row_limit:
+                    logger.info("[BlindSpotDetector] GitNexus 索引结果达到查询上限，"
+                                "结果不完整，跳过符号索引盲区检测")
+                    return spots
+                for row in rows:
                     fp = row.get("filePath", "")
                     if fp:
                         # 归一化为 / 分隔，统一 Windows \ 与 POSIX / 的差异

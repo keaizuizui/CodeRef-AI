@@ -173,12 +173,28 @@ def _attr(s: str) -> str:
     return _html.escape(s or "", quote=True)
 
 
+# _safe_link 允许的绝对 URL scheme 白名单（其余 scheme 一律拒绝为纯文本）
+_SAFE_LINK_SCHEMES = frozenset({"http", "https", "mailto", "tel"})
+
+
 def _safe_link(text: str, url: str) -> str:
-    """生成 <a>，过滤 javascript:/vbscript:/data:text/html 等危险协议，防链接注入。"""
-    low = (url or "").strip().lower()
-    if low.startswith(("javascript:", "vbscript:", "data:text/html")):
+    """生成 <a>，只允许相对 URL 与显式安全 scheme 白名单，防链接注入。
+
+    先 HTML unescape 再校验，避免 `java&#115;cript:` 类混淆绕过；去除前导
+    空白与 HTML 控制/空白字符后做 scheme 判断。javascript:/vbscript:/data:
+    及其它非白名单 scheme 一律返回纯文本，保留安全相对链接与允许的绝对链接。
+    """
+    raw = _html.unescape(url or "").strip()
+    # HTML 空白/控制字符（如 0x00-0x20）可能夹在 scheme 前后用于绕过，归一化处理
+    norm = re.sub(r'[\x00-\x20]+', '', re.sub(r'&#x?[0-9a-fA-F]+;', '', raw))
+    low = norm.lower()
+    if low.startswith(("javascript:", "vbscript:", "data:")):
         return text
-    return f'<a href="{_attr(_html.unescape(url))}" rel="noopener">{text}</a>'
+    # 仅允许显式安全 scheme 或相对 URL（无 scheme）
+    if re.match(r'^[a-zA-Z][a-zA-Z0-9+.\-]*:', low):
+        if low.split(":", 1)[0] not in _SAFE_LINK_SCHEMES:
+            return text
+    return f'<a href="{_attr(raw)}" rel="noopener">{text}</a>'
 
 
 def _inline(s: str) -> str:
@@ -332,11 +348,14 @@ class HtmlReportRenderer:
             return {"ok": False, "error": str(e), "files": []}
 
         written = []
-        for fname, content in results.items():
-            fp = os.path.join(out, fname)
-            with open(fp, "w", encoding="utf-8") as f:
-                f.write(content)
-            written.append(fp)
+        try:
+            for fname, content in results.items():
+                fp = os.path.join(out, fname)
+                with open(fp, "w", encoding="utf-8") as f:
+                    f.write(content)
+                written.append(fp)
+        except Exception as e:
+            return {"ok": False, "error": str(e), "files": []}
 
         return {"ok": True, "index": os.path.join(out, "index.html"),
                 "files": written}
@@ -400,7 +419,10 @@ class HtmlReportRenderer:
             adv = sum(1 for f in findings if getattr(f, "kind", "") == "advice")
         else:
             h = m = lo = adv = "--"
-        kgn = kg_d.get("nodes", 0) if kg_status == "done" else (kg_stats or {}).get("node_count", 0)
+        kgn = kg_d.get("nodes") if kg_status == "done" else None
+        if not kgn:
+            # done 但 kg_d 缺 nodes，或非 done 时：回退到 kg_stats.node_count
+            kgn = (kg_stats or {}).get("node_count", 0)
         kge = (kg_stats or {}).get("edge_count", 0)
 
         def _card(lbl, val, color=None):

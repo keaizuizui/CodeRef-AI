@@ -518,7 +518,8 @@ class AgentSecurityAuditor:
          "检测到对外部/不可信 URL 直接发起网络请求下载，无 scheme/host 白名单校验，攻击者可注入内网地址触发 SSRF",
          "为网络请求目标添加 scheme/host 白名单，禁止访问内网/保留地址段"),
         # aiohttp / requests.Session 异步客户端下载（session.get）
-        (re.compile(r'(?:self\.)?session\.get\s*\(', re.IGNORECASE),
+        # 仅当第一参数看起来是 URL 变量/字面量时才判定为下载（排除 session.get("user_id")）
+        (re.compile(r'(?:self\.)?session\.get\s*\(\s*(?:f?["\']https?://|[a-z_]*url[a-z_]*\b|[a-z_]*uri[a-z_]*\b)', re.IGNORECASE),
          "AGENT-SEC-SSRF", "SSRF 面（Session 下载）", "high",
          "检测到经 Session 客户端（aiohttp/requests.Session）对外部/不可信 URL 发起下载，无 scheme/host 白名单，可注入内网地址触发 SSRF",
          "约束下载 URL 的 scheme/host，禁止内网与保留地址段"),
@@ -955,6 +956,9 @@ class AgentSecurityAuditor:
             return self._scan_crosslang_file(filepath, content, ext)
         risks = []
         lines = content.splitlines()
+        # 日志/打印/异常等非 prompt 上下文行（AST 精确识别），提示注入/上下文操纵
+        # 检测只对这些"噪声"行做豁免：logger.info/print/raise 中的描述性消息不判注入
+        noise_lines = self._collect_noise_lines(content)
         # 用 AST 精确识别真实 docstring 行（模块/类/函数 docstring），避免把多行
         # 字符串赋值（如 TEMPLATE = """..."""）的结束符误判为 docstring 开始，
         # 导致其后的真实代码被当作 docstring 整段跳过（漏检）
@@ -1046,6 +1050,9 @@ class AgentSecurityAuditor:
                         # 跳过模式定义自身（如类中的正则表达式定义）
                         if self._is_pattern_definition(stripped, risk_name):
                             continue
+                        # 提示注入/上下文操纵：噪声行（logger/print/raise 描述性消息）不明判注入
+                        if category_key in ("prompt_injection", "context_manipulation") and i in noise_lines:
+                            continue
                         # 提取完整调用参数（平衡括号，支持跨行/嵌套），避免单行匹配误报：
                         # AGENT-SEC-25 无 timeout；AGENT-SEC-AUTH 多行 router 调用挂载了 dependencies
                         if risk_id in ("AGENT-SEC-25", "AGENT-SEC-AUTH"):
@@ -1096,7 +1103,15 @@ class AgentSecurityAuditor:
                             suggestion=suggestion,
                         ))
 
-        return risks
+        # 同一源行、同一风险族/类别保留最高严重性的一条，避免同行同类重复罗列。
+        # 多个规则对同一行命中（如同一行 SSRF+INFO_LEAK 各模式）只取最严重项。
+        best: dict = {}
+        for r in risks:
+            key = (r.line_number, r.category)
+            cur = best.get(key)
+            if cur is None or SEVERITY_ORDER.get(r.severity, 99) < SEVERITY_ORDER.get(cur.severity, 99):
+                best[key] = r
+        return list(best.values())
 
     def _scan_crosslang_file(self, filepath: str, content: str, ext: str) -> List[AgentSecurityRisk]:
         """扫描 Go / Node / PHP 文件：仅应用该语言的跨语言安全模式组。
@@ -1254,10 +1269,10 @@ class AgentSecurityAuditor:
             # Vue v-html 注入确证：绑定表达式含用户数据字段（props./item./msg./record./
             # tplInfo./rc./content/description/instructions/answer/question/html 等）且
             # 未经过 escapeHTML/sanitize/DOMPurify 净化才上报；静态文本（t('...')）与
-            # 已净化渲染不报，避免把 230 处 v-html 全量误报。
+            # 已净化渲染不报。同时识别单/双引号 v-html 绑定（v-html='item.content'）。
             result = set()
-            for m in re.finditer(r'v-html\s*=\s*"([^"]*)"', content, re.IGNORECASE):
-                expr = m.group(1)
+            for m in re.finditer(r'''v-html\s*=\s*(?:"([^"]*)"|'([^']*)')''', content, re.IGNORECASE):
+                expr = m.group(1) if m.group(1) is not None else m.group(2)
                 if re.search(r'escapeHTML|sanitize|DOMPurify|xss|purify', expr, re.IGNORECASE):
                     continue
                 if re.search(
@@ -1667,6 +1682,11 @@ class AgentSecurityAuditor:
             "knowledge": "知识投毒",
             "resilience_gap": "防御层级韧性缺口",
             "deserialization": "反序列化",
+            "ssrf": "SSRF",
+            "path_traversal": "路径穿越",
+            "browser_sandbox": "浏览器沙箱逃逸",
+            "info_leak": "信息泄露",
+            "resource_leak": "资源泄漏",
         }
 
         lines = [
@@ -1706,9 +1726,16 @@ class AgentSecurityAuditor:
             "knowledge": "知识库/向量数据库可能被投毒",
             "resilience_gap": "缺失的防御层级，如重试退避、模型回退、可观测性等",
             "deserialization": "从文件/不可信输入反序列化，可能触发任意代码执行或知识图谱文件投毒",
+            "ssrf": "对不可信 URL 发起网络请求，无 scheme/host 白名单可注入内网地址",
+            "path_traversal": "用户可控输入拼接文件路径，未净化可能越权读写任意文件",
+            "browser_sandbox": "浏览器/沙箱隔离不足，可能逃逸访问宿主资源",
+            "info_leak": "敏感信息可能通过响应、日志或报错泄露",
+            "resource_leak": "打开的资源（连接/文件/句柄）未及时关闭导致泄漏",
         }
 
-        for cat_key in ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "param_shadow", "resilience_gap", "deserialization"]:
+        _CAT_LIST = ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "param_shadow", "resilience_gap", "deserialization", "ssrf", "path_traversal", "browser_sandbox", "info_leak", "resource_leak"]
+
+        for cat_key in _CAT_LIST:
             cat_risks = by_category.get(cat_key, [])
             if not cat_risks:
                 continue
@@ -1722,7 +1749,7 @@ class AgentSecurityAuditor:
         lines.append("## 详细风险列表")
         lines.append("")
 
-        for cat_key in ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "param_shadow", "resilience_gap", "deserialization"]:
+        for cat_key in _CAT_LIST:
             cat_risks = by_category.get(cat_key, [])
             if not cat_risks:
                 continue
