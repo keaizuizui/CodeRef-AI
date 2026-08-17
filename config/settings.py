@@ -7,6 +7,8 @@ LLM 配置统一由 core/llm_integration.py 的 LLMIntegration() 无参构造加
 （环境变量 QSettings → config.json → 默认值），本文件不再承载 LLM 密钥配置。
 """
 
+import os
+
 # ═══════════════════════════════════════════════════════════════
 # 检测阈值常量
 # ═══════════════════════════════════════════════════════════════
@@ -83,9 +85,9 @@ OMEM_ENV_TOOL_BINS = {
 }
 
 # 常见便携根目录（支持 glob 通配，如 work/*/PortableGit）。
-# PATH 中找不到工具时，在这些位置探测可执行文件，解决便携工具不在 PATH 的问题。
-# 末尾几项覆盖"项目内嵌解释器 / 测试 venv"：它们不在 PATH、也不在标准便携根，
-# 若不显式列出，自动探测会漏掉（如 psd_tool 自带 python）。
+# PATH 中找不到工具时，在这些通用位置探测可执行文件，解决便携工具不在 PATH 的问题。
+# 个人化根（项目内嵌解释器 / 私有 test venv）不走版本库，改由
+# omem_extra_tool_roots() 从环境变量 CODEREF_EXTRA_TOOL_ROOTS / config.json 注入并追加。
 OMEM_ENV_TOOL_ROOTS = (
     "~/.trae-cn/work/*/PortableGit",
     "~/.trae-cn/work/*/*/PortableGit",
@@ -93,10 +95,44 @@ OMEM_ENV_TOOL_ROOTS = (
     "~/AppData/Local/Programs/Python",
     "C:/Program Files/Git",
     "C:/Program Files (x86)/Git",
-    # --- 项目内嵌解释器 / 测试 venv（自动探测补充）---
-    "~/Desktop/psd_tool/psd_tool",                        # psd_tool 自带 python
-    "~/Desktop/1111/Coderef-Test/测试用例/*/.venv",       # Coderef-Test 用例 venv
+    # ── 个人化工具根（项目内嵌解释器 / 私有 test venv）──────────────────
+    # 不再硬编码到版本库：由环境变量 CODEREF_EXTRA_TOOL_ROOTS（分号分隔 glob）
+    # 或 config/config.json 的 extra_tool_roots 字段注入，保持代码库通用。
+    # 例：CODEREF_EXTRA_TOOL_ROOTS="~/Desktop/psd_tool/psd_tool;C:/my/venvs/*"
 )
+
+# 个人化工具根的环境变量名（分号分隔的 glob 列表，最高优先级）
+OMEM_ENV_TOOL_ROOTS_EXTRA_ENV = "CODEREF_EXTRA_TOOL_ROOTS"
+
+
+def omem_extra_tool_roots():
+    """读取个人化工具根（不进版本库）：环境变量优先级最高，config/config.json 兜底。
+
+    返回按注入顺序排列的 glob 列表（不含通用根），允许重复注入与 `~` 展开。
+    """
+    extra = []
+    raw = os.environ.get(OMEM_ENV_TOOL_ROOTS_EXTRA_ENV, "")
+    if raw:
+        for part in raw.split(";"):
+            part = (part or "").strip()
+            if part:
+                extra.append(part)
+        return extra
+    # config/config.json 兜底（已被 .gitignore 忽略，不随版本库分发）
+    try:
+        import json
+        here = os.path.dirname(os.path.abspath(__file__))
+        cfg_path = os.path.join(here, "config.json")
+        if os.path.isfile(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as fh:
+                cfg = json.load(fh)
+            for item in (cfg.get("extra_tool_roots") or []):
+                item = (item or "").strip()
+                if item:
+                    extra.append(item)
+    except Exception:
+        pass
+    return extra
 
 # 便携根下的 bin 子目录名（相对便携根）
 # "python" 用于 psd_tool 内嵌解释器（位于 <root>/python/python.exe）

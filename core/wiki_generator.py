@@ -534,6 +534,8 @@ class WikiGenerator:
         try:
             import glob
             roots = getattr(_settings, "OMEM_ENV_TOOL_ROOTS", ()) if _settings else ()
+            if _settings and hasattr(_settings, "omem_extra_tool_roots"):
+                roots = tuple(roots) + tuple(_settings.omem_extra_tool_roots())
             subdirs = getattr(_settings, "OMEM_ENV_TOOL_BIN_SUBDIRS",
                               ("bin", "cmd", "mingw64/bin", "usr/bin")) if _settings else ("bin", "cmd")
             for root_pat in roots:

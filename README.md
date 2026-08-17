@@ -439,6 +439,13 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 - 全量编译 65 个 py 文件零失败；再按顺序同步 coderef-src 测试环境并跑关键回归
 - 版本号：4.9.3 → 4.9.4
 
+### 补充修复（并入 v4.9.4）：移除 settings.py 中的个人化路径
+
+- `config/settings.py` 中硬编码的开发者个人工具根（`~/Desktop/psd_tool/psd_tool`、`~/Desktop/Coderef-Test` 用例 venv）从版本库移除，代码库恢复通用性
+- 个人化工具根改由 `CODEREF_EXTRA_TOOL_ROOTS` 环境变量（分号分隔 glob）或 `config/config.json` 的 `extra_tool_roots` 字段注入（config.json 已被 .gitignore 忽略，不随版本库分发）
+- 新增 `settings.omem_extra_tool_roots()`：环境变量优先、config.json 兜底；两个消费点 `operation_memory` 便携根探测、`wiki_generator` 的 git 便携路径解析均追加该结果
+- 验证：全量编译零失败 + `diag_omem_env_missing` PASS + 组装后 roots 数/内容定向校验通过
+
 ### v4.9.3 — 收尾修复：front matter 引导文档缺 source/description（P3）
 
 - 为 **OVERVIEW / ARCHITECTURE / INSTALLATION** 三篇引导文档显式注入 front matter：`description` 用文档用途文案、`source` 回填项目路径（`meta.project_path`，空则回退项目名）、`confidence=high`
