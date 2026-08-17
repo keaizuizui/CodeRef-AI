@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""CI 编译检查（v4.9.2 新增）—— 轻量、零第三方依赖的并行快速门禁。
+"""CI 编译检查（v4.9.2 新增）—— 轻量、零第三方依赖的快速门禁。
 
 做什么：
   1. 编译校验全部核心 Python 文件（语法无误）
-  2. 校验 requirements.txt 与 pyproject.toml 的 dependencies 一致
+  2. 校验 requirements.txt 与 pyproject.toml 的依赖清单双向一致（PEP 503 归一化）
   3. 计数裸 except 与 print()（作为可读性趋势，不失败门禁）
 
 用法:
@@ -16,8 +16,12 @@ import ast
 import os
 import re
 import sys
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib  # Python 3.11+
+except ImportError:  # Python 3.10：回退到第三方 tomli
+    import tomli as tomllib  # type: ignore[no-redef]
 
 
 def walk_py_files(root: Path):
@@ -41,6 +45,8 @@ def compile_check(root: Path):
             ast.parse(p.read_text(encoding="utf-8"))
         except SyntaxError as e:
             errors.append(f"{p.relative_to(root)}:{e.lineno}: {e.msg}")
+        except (UnicodeDecodeError, ValueError, OSError) as e:
+            errors.append(f"{p.relative_to(root)}: 无法解析 ({type(e).__name__}: {e})")
     return count, errors
 
 
@@ -49,7 +55,7 @@ def count_bare_except(root: Path):
     for p in walk_py_files(root):
         try:
             tree = ast.parse(p.read_text(encoding="utf-8"))
-        except SyntaxError:
+        except (SyntaxError, UnicodeDecodeError, ValueError, OSError):
             continue
         for n in ast.walk(tree):
             if isinstance(n, ast.ExceptHandler) and n.type is None:
@@ -59,23 +65,29 @@ def count_bare_except(root: Path):
     return bare, prints
 
 
+def _norm(name: str) -> str:
+    """PEP 503 归一化：下划线/连字符/点视为等距，统一小写。"""
+    return name.replace("_", "-").replace(".", "-").casefold()
+
+
+def _req_name(line: str):
+    """从 requirements 单行提取规范化包名；跳过注释、选项/r-文件等指令行。"""
+    seg = line.split("#")[0].strip()
+    if not seg or seg.startswith(("-r", "-e", "-i", "--index-url", "--extra-index-url")):
+        return None
+    m = re.match(r"^([A-Za-z0-9_\-\.]+)", seg)
+    return _norm(m.group(1)) if m else None
+
+
 def deps_req(paths_from_req, deps):
-    """把 requirements 注释规范化为开源要求，与 pyproject deps 做子集比对。"""
-    req_names = set()
-    for line in paths_from_req:
-        seg = line.split("#")[0].strip()
-        if not seg:
-            continue
-        m = re.match(r"^([A-Za-z0-9_\-\.]+)", seg)
-        if m:
-            req_names.add(m.group(1).lower())
+    """把 requirements 与 pyproject deps 做双向子集比对，返回 (req 缺, py 独有)。"""
+    req_names = {n for ln in paths_from_req if (n := _req_name(ln))}
     py_names = set()
     for d in deps:
         m = re.match(r"^([A-Za-z0-9_\-\.]+)", d.strip())
         if m:
-            py_names.add(m.group(1).lower())
-    missing = req_names - py_names
-    return missing
+            py_names.add(_norm(m.group(1)))
+    return req_names - py_names, py_names - req_names
 
 
 def main() -> int:
@@ -95,9 +107,12 @@ def main() -> int:
         req_lines = req_path.read_text(encoding="utf-8").splitlines()
         with pyproject_path.open("rb") as f:
             pp = tomllib.load(f)
-        deps = pp.get("project", {}).get("dependencies", [])
-        missing = deps_req(req_lines, deps)
-        print(f"[CI] 依赖一致性: requirements vs pyproject，漂移 {sorted(missing)}")
+        project = pp.get("project", {})
+        deps = list(project.get("dependencies", []))
+        for extra in project.get("optional-dependencies", {}).values():
+            deps.extend(extra or [])
+        missing, extra = deps_req(req_lines, deps)
+        print(f"[CI] 依赖一致性: requirements vs pyproject，缺失 {sorted(missing)}，py 独有(可选) {sorted(extra)}")
     else:
         print("[CI] 跳过依赖一致性（缺 requirements.txt 或 pyproject.toml）")
 
