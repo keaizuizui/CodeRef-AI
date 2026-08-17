@@ -405,7 +405,7 @@ class CodeReviewer:
                     "file": f,
                     "abs_path": abs_path,
                     "content": content,
-                    "changed_lines": set(range(1, content.count("\n") + 1)) if content else set(),
+                    "changed_lines": set(range(1, len(content.splitlines()) + 1)) if content else set(),
                 })
             logger.info(f"diff 模式：按变更文件构造 {len(units)} 个审查单元")
         else:
@@ -445,6 +445,7 @@ class CodeReviewer:
 
         # AST 上下文增强
         _, context = _extract_function_context(content, changed_lines)
+        context = context[:MAX_PROMPT_CODE_CHARS]
         if not context:
             context = "(未定位到相关函数/类，或文件无法解析)"
 

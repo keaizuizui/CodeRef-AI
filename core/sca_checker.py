@@ -13,6 +13,7 @@ import sys
 import json
 import hashlib
 import logging
+import threading
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -374,13 +375,17 @@ class SCAChecker:
     def __init__(self, offline: bool = False):
         self.offline = offline
         self._osv_degraded = False  # OSV 在线查询是否失败（降级标记）
+        # 并发漏洞检查共享的项目源码缓存：dict（按规范化路径索引）+ 锁，
+        # 保证并行 _collect_project_source 复用它而不会各自独立遍历项目。
+        self._source_cache: Dict[str, str] = {}
+        self._source_lock = threading.Lock()
 
     def scan(self, project_path: str) -> SCAReport:
         """扫描项目依赖"""
         # 加载项目专属的 cache 硬编码优化（白名单）
         SharedFilter.load_cache(project_path)
-        # 重置源码收集缓存，避免同一实例跨项目/重扫复用上一次的旧源码
-        self._source_cache = None
+        # 重置源码收集缓存（清空保留 dict 结构），避免同一实例跨项目/重扫复用旧源码
+        self._source_cache.clear()
 
         dependencies = []
         dep_files = self._find_dep_files(project_path)
@@ -424,10 +429,19 @@ class SCAChecker:
             return dep, vulns
 
         with ThreadPoolExecutor(max_workers=8) as ex:
-            futures = [ex.submit(_check_one, dep) for dep in unique_deps]
-            for fut in as_completed(futures):
-                dep, vulns = fut.result()
-                dep.vulnerabilities = vulns
+            future_map = {ex.submit(_check_one, dep): dep for dep in unique_deps}
+            for fut in as_completed(future_map):
+                dep = future_map[fut]
+                try:
+                    dep, vulns = fut.result()
+                    dep.vulnerabilities = vulns
+                except Exception as e:
+                    # 单个依赖检查异常不中断整个扫描：记录该失败并继续处理其余 future，
+                    # 避免一个依赖的 OSV 查询异常拖垮整次扫描。
+                    logger.warning(
+                        "SCA 漏洞检查失败 package=%r version=%r: %s",
+                        dep.package, dep.version, e,
+                    )
 
         # 统计
         vulnerable = [d for d in unique_deps if d.has_vuln]
@@ -763,11 +777,16 @@ class SCAChecker:
 
         供应链风险：依赖版本不可精确复现，构建不可复现，存在引入已知漏洞小版本风险。
         """
-        # 依赖锁文件按文件名识别（补全 npm/Go/composer 的常用锁文件）
+        # 依赖锁文件按文件名识别（补全 npm/Go/composer 的常用锁文件）。
+        # 锁文件按所属目录限定：仅当 dep.source_file 所在目录存在 lock 文件时，
+        # 该依赖的范围约束才视为可复现而被豁免，避免全局 has_lock 掩盖
+        # 其它子项目未锁定依赖。
         _LOCK_BASENAMES = {"package-lock.json", "go.sum", "composer.lock", "Pipfile.lock"}
-        has_lock = any(
-            os.path.basename(f) in _LOCK_BASENAMES or f.endswith(".lock")
-            for f in dep_files)
+        lock_dirs = {
+            os.path.dirname(os.path.abspath(f))
+            for f in dep_files
+            if os.path.basename(f) in _LOCK_BASENAMES or f.endswith(".lock")
+        }
         out = []
         for dep in deps:
             # 裸包名（无任何版本约束）
@@ -779,8 +798,8 @@ class SCAChecker:
                               "无版本约束（裸包名），构建不可复现，存在供应链风险",
                 })
                 continue
-            # 范围约束且无 lock 文件 → 版本不可精确复现
-            if has_lock:
+            # 范围约束且该依赖源目录无 lock 文件 → 版本不可精确复现
+            if os.path.dirname(os.path.abspath(dep.source_file)) in lock_dirs:
                 continue
             if dep.constraint in self._UNPINNED_RANGE_OPS:
                 out.append({
@@ -914,13 +933,14 @@ class SCAChecker:
     def _collect_project_source(self, project_path: str) -> str:
         """收集项目内所有 .py/.pyi 源码文本，用于利用面判定（跳过依赖目录）。
 
-        结果按规范化 project_path 缓存，避免多线程漏洞检查时重复遍历项目源码；
-        scan() 开始会重置，防止同一实例跨项目/重扫复用旧缓存。
+        结果按规范化 project_path 缓存（dict + 锁），避免多线程漏洞检查时重复
+        遍历项目源码；scan() 开始会清空，防止同一实例跨项目/重扫复用旧缓存。
         """
         norm = os.path.normcase(os.path.abspath(project_path))
-        cache = getattr(self, "_source_cache", None)
-        if isinstance(cache, dict) and norm in cache:
-            return cache[norm]
+        cache = self._source_cache
+        with self._source_lock:
+            if norm in cache:
+                return cache[norm]
         parts = []
         for root, dirs, files in os.walk(project_path):
             dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
@@ -936,10 +956,8 @@ class SCAChecker:
                     except OSError:
                         continue
         source = "\n".join(parts)
-        if not isinstance(cache, dict):
-            cache = {}
-            self._source_cache = cache
-        cache[norm] = source
+        with self._source_lock:
+            cache[norm] = source
         return source
 
     def _check_vulnerability(self, package: str, version: str, constraint: str = "", ecosystem: str = "PyPI") -> List[DependencyVulnerability]:
@@ -986,7 +1004,7 @@ class SCAChecker:
     def _split_version_constraint(self, ver_raw: str) -> Tuple[str, str]:
         """拆分版本约束运算符与版本号。
 
-        例：">=10.0.0" -> ("", "10.0.0") 中 const 保留范围判断；
+        例：">=10.0.0" -> (">=", "10.0.0")；"==10.0.0" -> ("", "10.0.0")；
         固定版本如 "10.0.0" -> ("", "10.0.0")。
         范围约束（>= > < <= ~= !=）无法确定精确安装版本，标记 constraint 供上层
         决定是否跳过 OSV 精确命中，避免把 `>=10.0.0` 当成 `10.0.0` 造误报。
@@ -1082,7 +1100,9 @@ class SCAChecker:
           - 版本解析失败返回 False（不命中），避免误报，并记录日志
         """
         if version == "latest":
-            return True  # 无法确定版本，保守处理：命中以便提示人工核查
+            # 版本未知：不做范围命中，避免把"未锁定"渲染成"确证高危 CVE"。
+            # 该情形已由 _detect_unpinned_deps / _detect_unpinned_from_imports 如实报告。
+            return False
         if Version is None:
             # packaging 未安装：无法可靠比较版本大小，保守返回 False（不命中），
             # 避免字符串前缀匹配把修复版本误判为受影响版本

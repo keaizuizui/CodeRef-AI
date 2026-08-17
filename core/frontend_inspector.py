@@ -414,8 +414,14 @@ class FrontendInspector:
                 # 整体另设 LLM_REVIEW_TOTAL_TIMEOUT 总预算，超时即放弃剩余节点并诚实标记，
                 # 保证即便个别节点真正卡死，整体也绝不无限挂起。
                 llm_review_items = reviewed_buttons + reviewed_menus
-                with ThreadPoolExecutor(max_workers=LLM_REVIEW_WORKERS) as ex:
+                # 手动管理执行器生命周期：with 上下文退出会 shutdown(wait=True)
+                # 阻塞等待所有未完成任务，导致 LLM_REVIEW_TOTAL_TIMEOUT 不能真正约束
+                # 整体运行时长。改为在总预算耗尽时取消排队实例并 shutdown(wait=False)，
+                # 不等未完成任务即退出本次扫描。
+                ex = ThreadPoolExecutor(max_workers=LLM_REVIEW_WORKERS)
+                try:
                     futures = [ex.submit(self._review_item, item) for item in llm_review_items]
+                    timed_out = False
                     try:
                         for fut in as_completed(futures, timeout=LLM_REVIEW_TOTAL_TIMEOUT):
                             try:
@@ -426,13 +432,21 @@ class FrontendInspector:
                                     "全局", f"并发审查节点异常: {e}"))
                     except TimeoutError:
                         # 总预算耗尽：as_completed 抛 TimeoutError，落到下方统一标记
-                        pass
+                        timed_out = True
                     # 未完成节点如实标记为待确认，绝不静默丢弃
                     pending = [f for f in futures if not f.done()]
                     if pending:
                         findings.append(self._pending_finding(
                             "全局", f"LLM 审查总预算 {LLM_REVIEW_TOTAL_TIMEOUT}s 内未完成 "
                             f"{len(pending)}/{len(llm_review_items)} 个节点，已放弃并请人工复核。"))
+                finally:
+                    if timed_out:
+                        # 总预算超时：不再等待未完成任务，避免扫描被挂起的节点拖垮
+                        for f in futures:
+                            f.cancel()
+                        ex.shutdown(wait=False)
+                    else:
+                        ex.shutdown(wait=True)
                 if len(buttons) > MAX_LLM_REVIEW_ITEMS or len(menu_nodes) > MAX_LLM_REVIEW_ITEMS:
                     findings.append(self._pending_finding(
                         "全局", f"按钮/菜单数量超过 {MAX_LLM_REVIEW_ITEMS} 上限，"

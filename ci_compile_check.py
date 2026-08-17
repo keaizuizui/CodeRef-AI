@@ -21,7 +21,10 @@ from pathlib import Path
 try:
     import tomllib  # Python 3.11+
 except ImportError:  # Python 3.10：回退到第三方 tomli
-    import tomli as tomllib  # type: ignore[no-redef]
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ImportError:
+        tomllib = None  # type: ignore[assignment]
 
 
 def walk_py_files(root: Path):
@@ -103,18 +106,23 @@ def main() -> int:
     req_path = root / "requirements.txt"
     pyproject_path = root / "pyproject.toml"
     missing = set()
-    if req_path.exists() and pyproject_path.exists():
+    if req_path.exists() and pyproject_path.exists() and tomllib is not None:
         req_lines = req_path.read_text(encoding="utf-8").splitlines()
         with pyproject_path.open("rb") as f:
             pp = tomllib.load(f)
         project = pp.get("project", {})
-        deps = list(project.get("dependencies", []))
-        for extra in project.get("optional-dependencies", {}).values():
-            deps.extend(extra or [])
-        missing, extra = deps_req(req_lines, deps)
-        print(f"[CI] 依赖一致性: requirements vs pyproject，缺失 {sorted(missing)}，py 独有(可选) {sorted(extra)}")
+        core_deps = list(project.get("dependencies", []))
+        opt_deps = []
+        for group in project.get("optional-dependencies", {}).values():
+            opt_deps.extend(group or [])
+        # req 缺失：requirements 有、pyproject（含可选）无
+        missing, _ = deps_req(req_lines, core_deps + opt_deps)
+        # 反向缺失：pyproject 核心依赖未写入 requirements.txt
+        _, core_only = deps_req(req_lines, core_deps)
+        missing |= core_only
+        print(f"[CI] 依赖一致性: requirements vs pyproject，双向缺失 {sorted(missing)}")
     else:
-        print("[CI] 跳过依赖一致性（缺 requirements.txt 或 pyproject.toml）")
+        print("[CI] 跳过依赖一致性（缺 requirements.txt / pyproject.toml，或 tomllib 不可用）")
 
     bare, prints = count_bare_except(root)
     print(f"[CI] 趋势统计: 裸 except={bare}, print()={prints}")

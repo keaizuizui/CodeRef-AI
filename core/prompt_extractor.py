@@ -134,14 +134,14 @@ class PromptExtractor:
         # 治理缺陷：知识包/提示词库等纯文本指令内容文件（如 brandposter 的
         # knowledge_pack/*.txt）也是 prompt 资产，只扫 .py/.md 会漏检其内容污染。
         txt_files = list(Path(project_path).rglob("*.txt"))
-        scan_files = py_files + md_files + txt_files
+        _SKIP = ('__pycache__', '.venv', 'venv', 'node_modules', '.git')
+        scan_files = [
+            f for f in (py_files + md_files + txt_files)
+            if not any(skip in str(f) for skip in _SKIP)
+        ]
         result.total_files_scanned = len(scan_files)
-        
+
         for scan_file in scan_files:
-            # 跳过虚拟环境和缓存
-            if any(skip in str(scan_file) for skip in ['__pycache__', '.venv', 'venv', 'node_modules', '.git']):
-                continue
-            
             try:
                 if scan_file.suffix.lower() == ".md":
                     prompts = self._extract_from_markdown(str(scan_file), project_path)

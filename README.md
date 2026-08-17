@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.9.3** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.9.4** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -63,7 +63,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | 工具 | 功能 | 需要 LLM |
 |------|------|---------|
 | `coderef_audit` | 11 审计工具一键产出 + 自动降噪 + 知识图谱构建；支持 `strategy` 策略（auto 自动判定/full 全量/incr 增量裁剪重型工具） | 否 |
-| `coderef_scan` | 单维度审计（11 选 1），实时安全带，快一个量级；大项目自动转后台执行，立即返回 `task_id`，用 `coderef_task_status` 轮询获取结果 | 否 |
+| `coderef_scan` | 单维度审计（11 选 1），实时安全带，快一个量级；默认后台执行，立即返回 `task_id`，用 `coderef_task_status` 轮询获取结果（`background` 参数可覆盖为同步） | 否 |
 | `coderef_scan_list` | 列出 `coderef_scan` 可选的维度清单 | 否 |
 | `coderef_flow_verify` | 流程合规验证：非编程人员验证「项目是否按我期望的流程执行」（入口 A 的调用管线是否覆盖步骤 B→C→D）。纯静态、确定性，只读知识图谱 CALLS 边，不依赖 LLM；状态分确证/在管线/存疑/缺失 | 否 |
 | `coderef_verify_findings` | 确定性核验 LLM/CodeRabbit 论断：论断引用的代码目标是否真实存在、是否在关键管线内。verdict（确证/证伪/部分确证/存疑）由静态图谱打出，诚实话标签来源分离，LLM 无权改结论 | 否 |
@@ -88,6 +88,11 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_memory_query` | 语义检索（向量库）+ 结构查询（知识图谱）复用项目记忆 | 否 |
 | `coderef_memory_status` | 「AI 知道什么」：认知覆盖度 + 置信度 + 盲区地图 | 否 |
 | `coderef_memory_quality` | 记忆质量评估（引用完整性/语义覆盖/偏差）+ 自动补全 | 可选 |
+| `coderef_operation_memory_sync` | 操作记忆增量同步（ledger / BRAIN.md） | 否 |
+| `coderef_operation_memory_query` | 操作记忆语义 / 结构查询 | 否 |
+| `coderef_operation_memory_status` | 操作记忆状态概览 | 否 |
+| `coderef_operation_memory_find` | 定位工具 / 约定 / 陷阱（跨进程并发安全） | 否 |
+| `coderef_operation_memory_recover` | 恢复关键工具位置 / 约定摘要 / 待人工确认项 | 否 |
 
 ### 创新识别引擎
 
@@ -99,6 +104,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_replicate_apply` | 复刻落地（4.6 新增）：把已固化资产的复刻指引真正落到目标项目——写入 template_code 骨架 + patch_suggestion / migration_guide 说明，生成落地清单 manifest。诚实话护栏：只落地"确定性可给"内容，不自动接入目标源码；默认不覆盖已存在同名文件（冲突如实标注）；template_code 缺失明确标注待补全 | 否 |
 | `coderef_asset_blueprint` | 把复刻铺排得出的确定性结论（entry_points / verified_findings）写回资产蓝图，补全为可复刻蓝图 | 否 |
 | `coderef_registry` | 管理已知设计库，别名归一（解决 LLM 命名漂移） | 否 |
+| `coderef_innovation_review` | 创新复刻的 LLM 协助排查（4.7 新增）：让 LLM 阅读源项目管线设计 + wiki，判定是否确属创新 workflow、管线与 wiki 是否一致、复刻是否合理；无 API Key 时硬阻断 | 是 |
 
 ### 变更守护引擎
 
@@ -421,6 +427,17 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 | **4.0** | 通过四个引擎和四个支柱，增强工具的功能覆盖，形成逻辑闭环 |
 
 ## 更新日志
+
+### v4.9.4 — CodeRabbit 全量审查（67 条）修复闭环（4.X 系列收尾）
+
+- 对全仓库 89 个文件跑 CodeRabbit 全量审查，共 67 条 finding（major/minor），按两个并行组全部处理：官方 major 风险组 23 条、其余 minor 组 30 条、文档一致类与 core 小缺陷由主流程处理，`config/settings.py` 中开发者专属路径（psd_tool/Coderef-Test）按指示保留
+- 本轮主要修复项：
+  - **图谱与调用链正确性**：`ast_signals` 仅模块级函数用裸名注册、类方法/嵌套函数用限定名，避免同名覆盖；`code_knowledge_graph` Go 处理跳过 `if(/len(` 等关键字避免误建 CALLS 边；`memory_layer` 覆盖率用文件集合判成员，`arch_audit` 递归模块经 self_edges 正确报为循环，`memory_quality` 识别 AsyncFunctionDef 并修正覆盖率守卫
+  - **输入与输出健壮性**：`blind_spot_detector` 查询达 5000 行上限视为结果不完整而跳过（不把截断当完整）；`code_review` AST 上下文截断 + changed_lines 计入无换行末行；`wiki_generator` front matter 标量统一 YAML 双引号并转义；`pipeline_runner` 记忆同步仅增量策略触发、`_finding_to_dict/_from_dict` 持久化 count/locations
+  - **资源与生命周期**：`operation_memory` 无变更分支防御缺键、`_summarize_deps` 仅取四类依赖组、删除死代码；`mcp_server` `_bg` 完成时写入 `finished_at` 让未轮询任务可被回收；`memory_quality` 用 `get_all_edges()` 单趟 + try/finally 保证 `kg.close()`
+  - **CI/打包**：`ci_compile_check` 依赖一致性改双向（pyproject 核心依赖未写入 requirements 亦判失败）+ tomllib 缺失容忍回退
+- 全量编译 65 个 py 文件零失败；再按顺序同步 coderef-src 测试环境并跑关键回归
+- 版本号：4.9.3 → 4.9.4
 
 ### v4.9.3 — 收尾修复：front matter 引导文档缺 source/description（P3）
 
