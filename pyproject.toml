@@ -1,0 +1,41 @@
+# CodeRef-AI 打包配置（v4.9.2 新增）：支持 `pip install .` 规范化安装与依赖声明。
+# 与 requirements.txt 维护同一份依赖清单；要求 pip>=21.3 / setuptools>=61。
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coderef-ai"
+version = "4.9.2"
+description = "静态图驱动的 LLM 代码审计工具 —— 非编程人员也可验证 AI 项目是否按期望执行、架构是否健康、文档是否可信"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "CodeRef Team" }]
+keywords = ["code-audit", "llm", "static-analysis", "audit", "mcp"]
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.10.0",
+    "requests>=2.31.0",
+    "numpy>=1.26.0",
+    "pyyaml>=6.0.1",
+    "loguru>=0.7.2",
+    "packaging>=23.0",
+]
+
+[project.optional-dependencies]
+# 多语言高级解析（可选，未安装时 code_analyzer 自动降级到标准库 ast）
+lang = [
+    "tree-sitter==0.20.4; python_version < '3.13'",
+    "tree-sitter-languages>=1.10.0; python_version < '3.13'",
+]
+
+[project.scripts]
+# 以 MCP stdio server 方式启动（等价 `python -m core.mcp_server`）
+coderef-mcp = "core.mcp_server:main"
+
+[tool.setuptools]
+# 本项目以 `python -m core.mcp_server` 运行；top-level 包为 config / core。
+packages = ["config", "core"]
+
+[tool.setuptools.package-data]
+config = ["*.json"]

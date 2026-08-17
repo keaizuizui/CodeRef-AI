@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.9.0** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.9.2** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -421,6 +421,22 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 | **4.0** | 通过四个引擎和四个支柱，增强工具的功能覆盖，形成逻辑闭环 |
 
 ## 更新日志
+
+### v4.9.2 — 工具注册表重构 + 打包与 CI + 依赖收敛（4.X 系列收尾）
+
+- **工具注册表外置**：`core/mcp_server.py` 中 700+ 行工具 schema 自 `__init__` 抽取为模块级 `BUILTIN_TOOLS` 常量，`__init__` 缩减至 ~100 行；37 工具 / 36 handlers / 24 重型工具经逐字节 dump 一致性验证为零变化
+- **打包规范化**：新增 `pyproject.toml`，支持 `pip install .`；依赖清单与 requirements.txt 双处同步维护，`pip install .[lang]` 可选开启 tree-sitter 多语言解析
+- **CI 编译检查**：新增 `ci_compile_check.py`（编译校验 + 依赖一致性 + 裸 except/print 趋势统计）与配套 GitHub Actions（`.github/workflows/compile-check.yml`）
+- **依赖收敛**：移除 pandas / tqdm / pathspec / ollama 四个死依赖（安装体积与时长下降）
+- **坏味道修复**：`_SINGLE_TOOL_LABELS` 提升为模块级常量，消除注册表内对 `self` 的非法引用（重构期引入、已修复并回归验证）
+
+### v4.9.1 — v4.9.0 交接待修复（P1/P2/P3 六项）
+
+- **P1 渲染层崩溃**：`wiki_ir.ir_to_mermaid/ir_to_markdown` 增加类型护栏，非字典/非列表/不可哈希节点 id 安全降级不再崩溃
+- **P2 必填校验**：`validate_ir` 校验节点必填字段（name/file_path），缺失返回结构化 `IR_MISSING_FIELD` 而非静默通过
+- **P2 Front Matter**：`wiki_generator._build_front_matter` 为 FLOWS / ENTRIES 文档回填 source/description 元数据
+- **P3 输入校验**：`docs_read` 负 max_chars、`wiki_style` 非法枚举均返回结构化错误，不再静默回落
+- **CodeRabbit minor**：`wiki_style` 仅「key 缺失」才回落默认，显式空串/0/False 等价非法值被拒绝
 
 ### v4.9.0 — 版本号提升 + CodeRabbit 复审修复 + 工具数对齐
 

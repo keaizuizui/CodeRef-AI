@@ -117,680 +117,692 @@ TOOL_BOUNDARY_NOTES = {
     ),
 }
 
+# ── 单维度审计工具的维度注册表 ───────────────────────────────────
+# 模块级常量：既被 BUILTIN_TOOLS 中 coderef_scan 的 enum 引用，也被
+# __init__ 内 _SINGLE_TOOL_LABELS 初始化使用（同源，避免重复字面量）。
+_SINGLE_TOOL_LABELS: List[tuple] = [
+    ("gov", "治理审计"), ("agent", "Agent安全"), ("sca", "依赖扫描(CVE)"),
+    ("td", "技术债务"), ("integ", "完整性检查"), ("blind", "盲区检测"),
+    ("inn", "创新传播"), ("junk", "垃圾文件"), ("resgap", "资源遗漏"),
+    ("simp", "代码精简"), ("matu", "项目成熟度"),
+]
+
+# ── 内置工具注册表（MCP tools/list 的 schema 数据）───────────────
+# 原为 Server.__init__ 内 700+ 行字面量 + 多次 append；外置成本模块级常量后，
+# 增删工具只需改本表，构造函数只做引用（单个工具定义不再塞进构造逻辑）。
+# 请保持顺序稳定：顺序即 tools/list 的展示顺序，也影响 handlers 映射的多对一解析。
+BUILTIN_TOOLS: List[Dict] = [
+        {
+                        "name": "coderef_whitelist",
+                        "description": (
+                            "管理 AI 白名单和核心模块判定规则。\n"
+                            "action=add/list/clear → 误报白名单管理；\n"
+                            "action=core_rules_get → 查看当前核心模块判定规则；\n"
+                            "action=core_rules_set → 设置核心模块规则（entry_files入口文件名列表/core_names强制核心模块名/min_files文件数阈值）；\n"
+                            "action=core_rules_reset → 重置为默认规则。\n"
+                            "你审查完报告后，把确认无误的误报条目写入白名单。发现 Wiki 漏了核心模块时，用 core_rules_set 追加。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "action": {"type": "string", "enum": ["add", "list", "clear", "core_rules_get", "core_rules_set", "core_rules_reset"], "default": "add"},
+                            "entries": {
+                                "type": "array", "items": {"type": "object",
+                                    "properties": {
+                                        "file": {"type": "string", "description": "文件路径子串"},
+                                        "rule": {"type": "string", "description": "规则名/标题子串"},
+                                        "category": {"type": "string", "description": "分类子串"},
+                                    }
+                                },
+                                "description": "要加入白名单的条目 (action=add 时必填)"
+                            },
+                            "core_rules": {
+                                "type": "object",
+                                "properties": {
+                                    "entry_files": {"type": "array", "items": {"type": "string"}, "description": "入口文件名列表，如 [\"main.py\",\"app.py\",\"server.py\"]"},
+                                    "core_names": {"type": "array", "items": {"type": "string"}, "description": "强制核心模块名列表，如 [\"洞察工具\",\"shared\"]"},
+                                    "min_files": {"type": "integer", "description": "文件数阈值（>=此值自动视为核心模块）"},
+                                },
+                                "description": "核心模块规则 (action=core_rules_set 时必填)"
+                            },
+                        }, "required": ["project_path"]},
+                    },
+        {
+                        "name": "coderef_audit",
+                        "description": (
+                            "全维度代码审计 = 治理审计 + Agent安全 + 依赖扫描(CVE) + 技术债务 + "
+                            "完整性检查 + 盲区检测 + 创新传播 + 垃圾文件 + 资源遗漏 + 代码精简 + 项目成熟度。\n"
+                            "11 个工具一次产出，交叉验证自动分级(HIGH/MEDIUM/LOW)。\n"
+                            "解决 AI 自查幻觉：多独立工具互验。\n"
+                            "支持 background=True 后台执行。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "output_dir": {"type": "string", "description": "报告输出目录（默认 coderef-report/）"},
+                            "background": {"type": "boolean", "description": "后台执行", "default": True},
+                            "strategy": {"type": "string",
+                                "enum": ["auto", "full", "incr", "no_change"],
+                                "default": "auto",
+                                "description": "审计策略：auto=自动判定（首次全量/增量裁剪重型工具）；full=全量 11 工具；incr=增量裁剪；no_change=复用既有结论"},
+                        }, "required": ["project_path"]},
+                    },
+        {
+                        "name": "coderef_architecture",
+                        "description": (
+                            "架构分析图谱 = 代码结构分析 + 交互式模块画布(HTML)。\n"
+                            "含 GitNexus 索引增强，展示模块交互关系、调用链。\n"
+                            "用于发现零散重复代码、模块不统一等问题。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                        }, "required": ["project_path"]},
+                    },
+        {
+                        "name": "coderef_docs",
+                        "description": (
+                            "项目文档探查 = 结构化 Wiki 生成(README/架构/安装/使用/API)。\n"
+                            "三级管线：AST元数据(全量)→LLM归纳→编校验证(无幻觉)。\n"
+                            "wiki_style 可选 comprehensive/reference/tutorial/plain；"
+                            "include_subprojects 控制是否同时为子项目生成独立 Wiki。\n"
+                            "enable_agent_pointer 控制在项目根维护 AGENTS.md 的 CodeRef Wiki 指针区块（R7）；"
+                            "cross_verify 控制是否对模块描述做静态交叉验证（确证徽章）。\n"
+                            "自动发现子项目并生成独立 Wiki。\n"
+                            "支持 background=True（推荐，生成耗时 3-20 分钟）。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "output_dir": {"type": "string", "description": "输出目录（默认 txt/）"},
+                            "wiki_style": {"type": "string", "enum": ["comprehensive","reference","tutorial","plain"], "default": "comprehensive"},
+                            "include_subprojects": {"type": "boolean", "default": True},
+                            "enable_agent_pointer": {"type": "boolean", "default": False, "description": "在项目根维护 AGENTS.md 的 CodeRef Wiki 指针区块（R7）"},
+                            "cross_verify": {"type": "boolean", "default": True, "description": "对模块描述做静态交叉验证（确证徽章）"},
+                            "cross_entry_spec": {"type": "string", "default": "class:pipeline_runner:Pipe", "description": "交叉验证入口（入口调用闭包为确证依据）"},
+                            "background": {"type": "boolean", "default": True},
+                        }, "required": ["project_path"]},
+                    },
+        {
+                        "name": "coderef_docs_read",
+                        "description": (
+                            "按需读取已生成的 Wiki 文档正文（返回文档内容，而非路径）。\n"
+                            "解决编程 AI 无法主动调取外部文件夹的问题：docs 生成后正文落在磁盘，\n"
+                            "本工具把正文作为返回值直接交给 AI，无需 fs 访问。\n"
+                            "doc 为空 → 列出全部文档；doc 指定 → 返回该文档正文（可截断）。\n"
+                            "输出目录自动探测 docs/wiki/ 或 txt/，也可用 output_dir 显式指定。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "doc": {"type": "string", "description": "文档相对路径，如 README.md 或 MODULES/xxx.md；留空则列出全部"},
+                            "output_dir": {"type": "string", "description": "Wiki 输出目录（可选，默认自动探测）"},
+                            "max_chars": {"type": "integer", "description": "返回正文最大字符数", "default": 20000},
+                        }, "required": ["project_path"]},
+                    },
+        {
+                        "name": "coderef_task_status",
+                        "description": "查询后台任务状态",
+                        "inputSchema": {"type": "object", "properties": {
+                            "task_id": {"type": "string"},
+                        }},
+                    },
+        {
+                        "name": "coderef_query",
+                        "description": (
+                            "查询项目知识图谱（结构化项目记忆层）。\n"
+                            "在运行 coderef_audit/coderef_docs/coderef_architecture 后自动构建。\n"
+                            "query_type 支持:\n"
+                            "  stats      → 图谱统计（节点数、边数、类型分布）\n"
+                            "  entity     → 按名称搜索实体 (需 name；可选 type: function/class/module/config/constant)\n"
+                            "  callers    → 查询谁调用了这个函数 (需 func_name)\n"
+                            "  callees    → 查询这个函数调用了谁 (需 func_name)\n"
+                            "  impact     → 修改影响分析：修改此文件会影响哪些模块 (需 file_path)\n"
+                            "  relations  → 查询节点所有关系 (需 node_id)\n"
+                            "  file_entities → 查询文件中的所有实体 (需 file_path)\n"
+                            "  search     → 全文搜索 (需 keyword)\n"
+                            "  call_graph → 调用链子图 (需 func_name；可选 depth 默认2)\n"
+                            "用于编程 AI 替代 grep/读文件：精准查询项目结构，节省 10-100 倍 token。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "query_type": {"type": "string", "enum": ["stats","entity","callers","callees","impact","relations","file_entities","search","call_graph"]},
+                            "name": {"type": "string", "description": "实体名称（query_type=entity 时必填）"},
+                            "func_name": {"type": "string", "description": "函数名（query_type=callers/callees/call_graph 时必填）"},
+                            "file_path": {"type": "string", "description": "文件路径（query_type=impact/file_entities 时必填）"},
+                            "node_id": {"type": "string", "description": "节点ID（query_type=relations 时必填）"},
+                            "keyword": {"type": "string", "description": "搜索关键词（query_type=search 时必填）"},
+                            "depth": {"type": "integer", "description": "调用链深度（call_graph 默认2）", "default": 2},
+                            "type": {"type": "string", "description": "实体类型过滤（query_type=entity 时可选）"},
+                            "limit": {"type": "integer", "description": "返回数量上限（search 默认30）", "default": 30},
+                        }, "required": ["project_path", "query_type"]},
+                    },
+        {
+                        "name": "coderef_review",
+                        "description": (
+                            "代码审查（Code Review）= 基于 diff 的变更审查 + 新项目全量语义首查。\n"
+                            "mode=diff（默认）：审变更范围，给出行内评论（file:line + 分级 + 证据标记）。\n"
+                            "mode=full：新项目无 git 历史时一次性全量语义审查，按模块分块 batching。\n"
+                            "用 LLM 语义判断 + 上下文增强，结论带 evidence 标记（pending-human/static-confirmed）供交叉验证。\n"
+                            "支持 background=True 后台执行。\n"
+                            "诚实边界：本工具为规则级 + LLM 审查，对语义级缺陷（XSS、死代码、跨平台、竞态、资源泄漏）"
+                            "覆盖有限。若你持有一条 LLM/CodeRabbit 论断，建议先用 coderef_verify_findings 做确定性核验"
+                            "（确证引用目标是否真实存在），再决定是否采信，避免把未核验的语义论断当事实。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "mode": {"type": "string", "enum": ["diff", "full"], "default": "diff", "description": "diff=审变更；full=新项目全量语义首查"},
+                            "diff": {"type": "string", "description": "git diff 文本；与 changed_files 二选一（mode=diff 用）"},
+                            "changed_files": {"type": "array", "items": {"type": "string"}, "description": "变更文件列表（无 diff 时用）"},
+                            "dimensions": {"type": "array", "items": {"type": "string"}, "description": "审查维度，默认全部（bug/security/cross_module/maintainability/consistency/testing/regression）"},
+                            "background": {"type": "boolean", "description": "后台执行", "default": True},
+                        }, "required": ["project_path"]},
+                    },
+        {
+                        "name": "coderef_frontend",
+                        "description": (
+                            "前端交互审查（Frontend Review）= 静态清单全量枚举 + LLM 审查（可选运行时抽查）。\n"
+                            "静态枚举 HTML/JS 所有按钮（含事件/确认弹窗/禁用）与 L1-L5 菜单树，再按 6 维度审查。\n"
+                            "mode=static（默认）：静态清单 + LLM 审查，不依赖浏览器，100% 覆盖。\n"
+                            "mode=runtime：需 url，用浏览器抽查关键路径，失败自动降级为静态结论。\n"
+                            "支持 background=True 后台执行。\n"
+                            "诚实边界：静态枚举只确证按钮/菜单'存在与否'，不确证'交互逻辑正确'；"
+                            "SPA 组件逻辑请用 mode=runtime 浏览器抽查，或联动外部前端审查工具。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "前端项目路径"},
+                            "entry": {"type": "string", "description": "入口 HTML/路由文件；不填则自动扫描"},
+                            "mode": {"type": "string", "enum": ["static", "runtime"], "default": "static"},
+                            "url": {"type": "string", "description": "运行 URL（mode=runtime 时必填）"},
+                            "check_levels": {"type": "array", "items": {"type": "integer"}, "description": "要审查的菜单层级，默认 [1,2,3,4,5]"},
+                            "background": {"type": "boolean", "description": "后台执行", "default": True},
+                        }, "required": ["project_path"]},
+                    },
+        {
+                        "name": "coderef_report",
+                        "description": (
+                            "把审计报告 / 知识图谱 / Wiki 聚合成自包含 HTML 报告目录（解决没有有效前端的问题）。\n"
+                            "渲染到 output_dir（默认 coderef-report/html/）：index.html（概览+导航）/ audit.html / kg.html / wiki.html。\n"
+                            "优先重渲染既有产物（图谱+Wiki，不重跑扫描，速度快）；若项目尚无审计/图谱产物，则回退为跑一次全量审计并渲染。\n"
+                            "返回 index.html 绝对路径与生成文件清单。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "output_dir": {"type": "string", "description": "报告输出目录（默认 coderef-report/html/）"},
+                            "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                        }, "required": ["project_path"]},
+                    },
+        {
+                        "name": "coderef_audit_advisor",
+                        "description": (
+                            "审计策略判定 + 功能审查（审计前先和 AI 沟通审查范围）。\n"
+                            "不直接跑代码审计，而是先判断本次该【增量审查】还是【全量审查】。\n"
+                            "依据：变更信号（记忆层快照 diff）+ 知识图谱影响闭包（多跳 BFS）+ 图谱新旧。\n"
+                            "同时给出应重点审查的功能维度（创新传播/结构复杂度/回归一致性等），\n"
+                            "并可选叠加 LLM 功能审查（with_functional=True 时）。\n"
+                            "建议：调用前先 coderef_memory_sync 建立基线，效果最佳。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "with_functional": {"type": "boolean", "description": "是否叠加 LLM 功能审查增强", "default": True},
+                            "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                        }, "required": ["project_path"]},
+                    },
+        {
+                    "name": "coderef_scan",
+                    "description": (
+                        "单维度代码审计，实时安全带 + 客观第二意见。\n"
+                        "coderef_audit 是 11 个维度一次全跑；本工具只跑 tool 指定的一个维度，"
+                        "速度快一个量级（不建知识图谱/不生成 dashboard），适合 AI 写完一个模块后即时自查。\n"
+                        "tool 可选: gov治理 / agent安全 / sca依赖CVE / td技术债务 / integ完整性 / "
+                        "blind盲区 / inn创新传播 / junk垃圾文件 / resgap资源遗漏 / simp代码精简 / matu成熟度。\n"
+                        "先用 coderef_scan_list 查看可选维度清单。返回该维度 findings（tier 分级 + file/line + suggestion）。\n"
+                        "[可靠性] 单维度扫描只跑一个工具，无法产生「多工具交叉验证」的 xval_by 字段"
+                        "（交叉验证需 coderef_audit 全量多工具互验），请勿把空 xval_by 误判为异常。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "tool": {"type": "string", "enum": [k for k, _ in _SINGLE_TOOL_LABELS],
+                                 "description": "要审计的维度，如 gov / agent / sca / td / integ / blind / inn / junk / resgap / simp / matu"},
+                        "background": {"type": "boolean",
+                            "description": "后台执行（超大项目单维度如 gov 会全量盘点，可能超过单次调用超时，默认后台返回 task_id 用 coderef_task_status 查询）",
+                            "default": True},
+                    }, "required": ["project_path", "tool"]},
+                },
+        {
+                    "name": "coderef_scan_list",
+                    "description": "列出 coderef_scan 可选的单维度审计清单（维度名 + 说明）。",
+                    "inputSchema": {"type": "object", "properties": {}},
+                },
+        {
+                    "name": "coderef_flow_verify",
+                    "description": (
+                        "流程合规验证 —— 非编程人员最核心的需求：项目是不是按我期待的流程执行。\n"
+                        "验证「入口 A 的调用管线是否覆盖期望步骤 B→C→D」，确认数据真的按这条管线走。\n"
+                        "纯静态、确定性：数据只来自知识图谱 CALLS 边，不依赖 LLM。\n"
+                        "entry 支持 模块.函数（如 pipeline_runner.audit）消除同名歧义；"
+                        "steps 传期望步骤的符号关键词（中英文均可，编程 AI 需先把中文期望步骤映射为代码符号）。\n"
+                        "状态语义：ordered=调用链确证(含顺序)；in_pipeline=在管线但顺序未确证(可能并行)；"
+                        "outside=管线外/动态调用，需编程AI复核；missing=项目内无对应符号。\n"
+                        "图谱不存在时会明确反馈需先构建（coderef_audit / coderef_memory_sync）。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "entry": {"type": "string", "description": "入口符号，支持 模块.函数（如 pipeline_runner.audit）"},
+                        "steps": {"type": ["array", "string"], "items": {"type": "string"},
+                                  "description": "期望步骤的符号关键词列表或逗号分隔字符串，如 ['analyze_project','build_knowledge_graph','render']。省略（可选）时仅执行跨语言契约检测与入口/图谱定位，不验证流程步骤；提供空/非法元素则报错"},
+                        "depth": {"type": "integer", "description": "调用链搜索深度，默认 8"},
+                    }, "required": ["project_path", "entry"]},
+                },
+        {
+                    "name": "coderef_arch_audit",
+                    "description": (
+                        "架构腐化诊断 —— 补齐 MCP 工具的架构诊断层。\n"
+                        "复用知识图谱 CALLS 边做模块级静态诊断，输出四类架构症状：\n"
+                        "cycles=循环依赖（模块依赖图强连通分量）；god_modules=上帝模块（扇出过高）；"
+                        "layer_violations=分层违例（低层依赖高层）；large_modules=异常模块规模。\n"
+                        "聚合为 0-10 架构健康度。纯静态、确定性，不依赖 LLM。\n"
+                        "图谱不存在时会明确反馈需先构建（coderef_audit / coderef_memory_sync）。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                        }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_verify_findings",
+                    "description": (
+                        "确定性核验 LLM / CodeRabbit 论断（爬取翼咽喉 + 诚实话解读护栏）。\n"
+                        "编程 AI 或 CodeRabbit 给出一条'论断'（finding），本工具用知识图谱 + 静态原语"
+                        "核验论断引用的代码目标是否真实存在、是否在指定入口管线内，\n"
+                        "输出 verdict（确证/证伪/部分确证/无法核验）+ 证据链 + 影响面。\n"
+                        "诚实话纪律：verdict 只由本工具的确定性逻辑打出，调用方 AI 无权改变；\n"
+                        "无确定性证据一律存疑，绝不默认确证；确证只代表'引用目标真实存在'，不代表语义结论正确。\n"
+                        "findings 传论断列表，每条含 title（必填）+ detail/file/line/rule/severity/symbols（可选）；\n"
+                        "entry 可选：指定入口符号（模块.函数）核验符号是否在关键管线内；\n"
+                        "out_format=html 输出自包含人话 HTML 报告（非编程人员可读）。\n"
+                        "图谱不存在会明确反馈需先构建（coderef_audit / coderef_memory_sync），不返回空结论。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径（自动定位知识图谱）"},
+                        "findings": {"type": "array", "items": {"type": "object"},
+                                     "description": "论断列表，每条含 title(必填)+detail/file/line/rule/severity/symbols(可选)"},
+                        "entry": {"type": "string", "description": "可选入口符号（模块.函数），核验符号是否在关键管线内"},
+                        "out_format": {"type": "string", "enum": ["json", "html", "text"], "default": "json",
+                                       "description": "输出格式：json=结构化 / html=自包含人话报告 / text=终端可读"},
+                        "background": {"type": "boolean", "description": "后台执行（核验需加载图谱，重型工具默认后台）", "default": True},
+                    }, "required": ["project_path", "findings"]},
+                },
+        {
+                    "name": "coderef_change_guard",
+                    "description": (
+                        "AI 代码退化检测 —— 拦截「AI 把之前写好的代码改坏了」。\n"
+                        "守护引擎建立在 git 之上：先确保 git 基层，再对比基线与新代码能力签名，"
+                        "识别四类退化：校验链被删(high)、重试/超时削弱(medium)、输入约束移除(medium)、回归风险。\n"
+                        "vibecoder 最需要的功能：AI 改没改坏代码，提交前自动拦截。\n"
+                        "action=guard（默认）：退化检测。\n"
+                        "  动态兜底：传 diff 则精确检测；否则传 baseline_dir 全量对比；"
+                        "两者皆缺时自动从 git 历史提取最近改动作为基线对比"
+                        "(git-auto；若工作区干净会回退检测最近一次提交的改动)；"
+                        "仍无法建立基线则明确反馈需补充输入，绝不静默返回空结论。\n"
+                        "  返回附带 git_ready 与 health_baseline（最近健康基线 tag），供外层 AI 回滚参照。\n"
+                        "action=ensure_git：守护前置保障。项目无 git 时自动 git init 并补齐最小配置，"
+                        "使守护引擎从形同虚设变为真正可用。\n"
+                        "action=anchor：锚定健康基线。把审计通过/人工确认健康的当前代码 commit 并打 "
+                        "coderef-health-* tag，作为后续回滚参照。label 可选。\n"
+                        "action=list_baselines：列出全部健康基线 tag。\n"
+                        "回滚交由外层 AI 执行（如 git checkout <health_baseline tag>），CodeRef 仅提供确定性参照。\n"
+                        "git_bin 可选：由外层 AI 用 Get-Command git / where git 探测 git 可执行文件路径或安装目录后传入，"
+                        "避免依赖系统 PATH（git 常不在 PATH）。缺省回退到 PATH 的 git。\n"
+                        "git_timeout 建议：小型项目(<1万行)15s；中型(1~10万行)30s；大型(>10万行)60s。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径（新代码）"},
+                        "action": {"type": "string", "enum": ["guard", "ensure_git", "anchor", "list_baselines"], "default": "guard", "description": "guard=退化检测；ensure_git=确保 git 基层；anchor=锚定健康基线；list_baselines=列出健康基线"},
+                        "diff": {"type": "string", "description": "git diff 文本（action=guard，推荐，用于精确检测）"},
+                        "baseline_dir": {"type": "string", "description": "基线目录（改动前的代码快照，action=guard 可选）"},
+                        "label": {"type": "string", "description": "健康基线标签（action=anchor 可选，如 release-1.0）"},
+                        "allow_autocommit": {"type": "boolean", "description": "anchor 时若工作区有改动是否先自动提交再打 tag（默认 true，使基线指向完整健康状态）"},
+                        "git_bin": {"type": "string", "description": "git 可执行文件路径或安装目录（由外层 AI 探测后传入，可选；缺省回退 PATH 的 git）"},
+                        "git_timeout": {"type": "integer", "description": "git 命令超时秒数；默认 30，小型项目 15 / 中型 30 / 大型 60"},
+                        "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                    }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_change_report",
+                    "description": (
+                        "人能看懂的变更报告 —— 把 diff 归纳为「人话版」变更说明。\n"
+                        "不是 diff，而是「新增 XX 功能 / 修改 XX 逻辑 / 可能影响 XX 地方 / 风险」，"
+                        "让不懂代码的人也能知道 AI 到底改了什么。\n"
+                        "LLM 不可用时自动降级为结构摘要，保证始终可读。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "diff": {"type": "string", "description": "git diff 文本"},
+                        "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                    }, "required": ["project_path", "diff"]},
+                },
+        {
+                    "name": "coderef_memory_sync",
+                    "description": (
+                        "初始化 / 增量同步项目记忆层。用 mtime+size 快照做增量，只重扫变更文件。\n"
+                        "mode=full 全量初始化；mode=incr 增量（改一行只重扫该文件）。\n"
+                        "返回认知覆盖度、置信度、图谱/向量库统计。供所有 AI 助手复用项目记忆。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "mode": {"type": "string", "enum": ["full", "incr"], "default": "full"},
+                        "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                    }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_memory_query",
+                    "description": (
+                        "供 AI 助手复用项目记忆（替代重扫）。\n"
+                        "query_type=semantic 语义检索（走向量库，Ollama 缺失降级关键词）；\n"
+                        "query_type=stats/entity/callers/callees/impact/relations/file_entities/search/call_graph 结构查询（走知识图谱）。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "query_type": {"type": "string", "enum": ["semantic","stats","entity","callers","callees","impact","relations","file_entities","search","call_graph"], "default": "semantic"},
+                        "keyword": {"type": "string", "description": "语义检索关键词或全文搜索关键词"},
+                        "name": {"type": "string", "description": "实体名称（entity 用）"},
+                        "func_name": {"type": "string", "description": "函数名（callers/callees/call_graph 用）"},
+                        "file_path": {"type": "string", "description": "文件路径（impact/file_entities 用）"},
+                        "limit": {"type": "integer", "default": 10},
+                    }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_memory_status",
+                    "description": (
+                        "「AI 知道什么」：认知覆盖度 + 每模块置信度 + 盲区地图 + 认知地图 HTML。\n"
+                        "用户直观看到项目哪些部分已被 AI 理解、哪些未理解。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                    }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_memory_quality",
+                    "description": (
+                        "记忆质量评估 + 自动补全。三项体检：引用完整性、语义覆盖、偏差检测。\n"
+                        "auto_fix=True 自动补全缺失上下文并标注来源；偏差检测自动注入全局 LLM（有 API Key 时真正复核），"
+                        "无可用 LLM 时降级 pending-human。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "auto_fix": {"type": "boolean", "default": False},
+                        "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                    }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_operation_memory_sync",
+                    "description": (
+                        "初始化 / 增量同步「AI 操作记忆层」。静态审计识别主目录 + 旁目录资源位置"
+                        "（git / 模型权重 / API 引用 / 测试工具 / 文档报告 / 依赖清单），可选 LLM 提炼"
+                        "隐性知识（决策理由 / 约定俗成 / 踩坑解法）。输出 ledger.json + BRAIN.md，"
+                        "供对话上下文丢失后快速恢复。mode=full 全量盘点；mode=incr 增量（mtime+size 快照）。"
+                        "with_llm=false 跳过 LLM 提炼以省调用；API Key 缺失时自动降级为待人工确认。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "mode": {"type": "string", "enum": ["full", "incr"], "default": "full",
+                                 "description": "full=全量盘点；incr=基于快照只重扫变更"},
+                        "with_llm": {"type": "boolean", "default": True,
+                                     "description": "是否启用 LLM 提炼隐性知识"},
+                        "background": {"type": "boolean", "description": "后台执行（同步含 LLM 提炼较慢，默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                    }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_operation_memory_query",
+                    "description": (
+                        "按类别检索操作记忆（替代重新扫描）。query_type=decision / convention / "
+                        "pitfall 检索隐性知识；resource / tool / doc 检索资源定位；all 全量。"
+                        "keyword 可选，做 name/summary/path 模糊过滤。供 AI 上下文丢失后快速恢复。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "query_type": {"type": "string",
+                                       "enum": ["all", "resource", "tool", "doc", "decision", "convention", "pitfall"],
+                                       "default": "all"},
+                        "keyword": {"type": "string", "description": "可选，模糊匹配 name/summary/path"},
+                        "limit": {"type": "integer", "default": 10},
+                    }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_operation_memory_find",
+                    "description": (
+                        "定位资源：给定资源名 / 路径片段，返回实际位置、来源、主目录 / 旁目录归属。"
+                        "例如想知道『test 工具在哪儿』『模型文件在哪儿』『API 配在哪儿』，别再满项目找。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "name": {"type": "string", "description": "资源名或路径片段，如 'test'、'model'、'.env'"},
+                        "limit": {"type": "integer", "default": 5},
+                    }, "required": ["project_path", "name"]},
+                },
+        {
+                    "name": "coderef_operation_memory_status",
+                    "description": (
+                        "操作记忆健康状态：已覆盖分类、各分类条目数（资源 / 知识 / 旁目录）、"
+                        "LLM 可用性、待人工确认项。快速判断『这份操作记忆还新鲜吗、够覆盖吗』。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                    }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_operation_memory_recover",
+                    "description": (
+                        "上下文丢失后『一次调用』恢复关键记忆：返回关键工具位置（env_tool，含 git / "
+                        "python / wsl / coderabbit 等）+ 已确认的约定 / 踩坑 / 决策摘要 + 待人工确认项。"
+                        "供 AI 在上下文被压缩后最小成本拿回『东西在哪儿、过去的规范是什么』。"
+                        "涉及 git / push / CodeRabbit / Release 等工具或约定类操作时，先调用本工具，"
+                        "勿满 PATH 找工具，也勿在未查询操作记忆前直接抓取外部连接器。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "limit": {"type": "integer", "default": 8,
+                                  "description": "每类隐性知识（决策/约定/踩坑）最多返回条数"},
+                    }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_owasp",
+                    "description": (
+                        "OWASP LLM Top 10 合规检测。复用 AgentSecurityAuditor + SCA，\n"
+                        "把全部风险归并到 LLM01-LLM10 十类，补充 LLM09/LLM10 维度，逐类分级。\n"
+                        "未覆盖维度如实标注 covered=false（避免过度承诺）。out_format=report 输出中文合规报告。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "out_format": {"type": "string", "enum": ["json", "report"], "default": "json"},
+                        "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                    }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_innovation",
+                    "description": (
+                        "识别项目创新设计 + 传播缺口。按意图分组（prompt/validation/retry/orchestration），\n"
+                        "理想清单 vs 实际实现对照，registry 归一化命名，输出 structured workflows/gaps/designs。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "intent": {"type": "string", "description": "只查指定意图（空=全部）"},
+                        "min_adoption": {"type": "number", "description": "最小采用率过滤", "default": 0},
+                        "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                    }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_asset",
+                    "description": (
+                        "WorkflowAsset 资产化 / 查询 / 导出。\n"
+                        "action=list 列出资产；get 查单个（支持别名）；export 导出（可省略 canonical 导出全部）；"
+                        "commit 固化设计为资产（需 ≥2 workflow 采用 + evidence，防污染）。\n"
+                        "commit 时可选传 blueprint（结构化复刻蓝图 dict）；缺省自动从已验证 adopters 构建骨架。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "action": {"type": "string", "enum": ["list","get","export","commit"], "default": "list"},
+                        "canonical": {"type": "string", "description": "规范设计名"},
+                        "description": {"type": "string", "description": "一句话说明（commit 用）"},
+                        "template_code": {"type": "string", "description": "可复制骨架代码（commit 用）"},
+                        "patch_suggestion": {"type": "string", "description": "迁移补丁建议（commit 用）"},
+                        "migration_guide": {"type": "string", "description": "迁移指南（commit 用）"},
+                        "blueprint": {"type": "object", "description": "结构化复刻蓝图 dict（commit 可选；缺省自动构建骨架）"},
+                        "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                    }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_replicate",
+                    "description": (
+                        "复刻铺排：检测目标项目对某已固化资产（蓝图）的采用缺口，并生成可复刻指引。\n"
+                        "输入 canonical（资产 canonical 或别名）与目标项目路径。\n"
+                        "输出 gap_report（确定性缺口：已采用/未采用模块）+ steps（复刻步骤）+ entry_points"
+                        "（入口，来自蓝图或已验证采用模块）+ verified_findings（复用 coderef_verify_findings 的确定性核验）。\n"
+                        "诚实话护栏：本工具是审计工具，不自动改代码；未采用不等于'该采用'；"
+                        "template_code 缺失会明确标注待补全，不编造。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径（要复刻到的项目）"},
+                        "canonical": {"type": "string", "description": "要复刻的已固化资产 canonical（或别名）"},
+                        "verify_symbols": {"type": "boolean", "description": "是否对蓝图入口做确定性核验", "default": True},
+                        "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                    }, "required": ["project_path", "canonical"]},
+                },
+        {
+                    "name": "coderef_replicate_apply",
+                    "description": (
+                        "复刻落地（4.6 新增）：把已固化资产的复刻指引真正落到目标项目。\n"
+                        "输入 canonical（资产 canonical 或别名）与目标项目路径。\n"
+                        "把资产自带的 template_code 骨架与 patch_suggestion / migration_guide 说明"
+                        "写入目标项目的 coderef-replicate-apply 目录，并生成落地清单 manifest。\n"
+                        "诚实话护栏：只落地'确定性可给'的内容（template_code 骨架、说明文档），"
+                        "不自动接入目标源码；默认不覆盖已存在的同名文件（冲突时如实标注，"
+                        "overwrite=true 才允许覆盖）；template_code 缺失会明确标注待补全。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "触发调用的项目路径（用于解析资产）"},
+                        "canonical": {"type": "string", "description": "要落地的已固化资产 canonical（或别名）"},
+                        "target": {"type": "string", "description": "目标项目路径（默认 = project_path 对应项目根）"},
+                        "filename": {"type": "string", "description": "落地文件名（默认取 template_code 标题或 replicate_template.py；可含子路径）"},
+                        "overwrite": {"type": "boolean", "description": "是否允许覆盖已存在的同名文件（默认 False，冲突时如实标注）", "default": False},
+                        "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                    }, "required": ["project_path", "canonical"]},
+                },
+        {
+                    "name": "coderef_asset_blueprint",
+                    "description": (
+                        "把复刻铺排（coderef_replicate）得出的确定性结论写回资产蓝图。\n"
+                        "仅写回确定性可填字段（entry_points / verified_findings 若空），不臆断 steps。\n"
+                        "供对方 AI 确认铺排有效后调用，把蓝图从骨架补全为可复刻蓝图。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "canonical": {"type": "string", "description": "要补全蓝图的资产 canonical（或别名）"},
+                        "entry_points": {"type": "array", "items": {"type": "string"}, "description": "要写入蓝图的可信入口符号列表"},
+                        "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                    }, "required": ["project_path", "canonical"]},
+                },
+        {
+                    "name": "coderef_registry",
+                    "description": (
+                        "管理已知设计库（DesignRegistry）。\n"
+                        "action=list 列出已知设计；add 新增 canonical 设计；alias 把别名归一到 canonical（解决 LLM 命名漂移）。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "action": {"type": "string", "enum": ["list","add","alias"], "default": "list"},
+                        "name": {"type": "string", "description": "设计名/别名"},
+                        "canonical": {"type": "string", "description": "规范设计名（add/alias 用）"},
+                        "alias": {"type": "string", "description": "要归一化的别名（alias 用）"},
+                        "description": {"type": "string", "description": "设计说明（add 用）"},
+                    }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_innovation_review",
+                    "description": (
+                        "创新复刻的 LLM 协助排查（4.7 收口）：让 LLM 阅读源项目的管线设计（知识图谱调用链）"
+                        "+ wiki 文档，对『创新确认』与『复刻排查』给出 AI 判断。\n"
+                        "判定三点：(1) 该设计是否确属一个创新 workflow（区别于已知/常见模式或静态能力标签误命中）；"
+                        "(2) 管线调用链与 wiki 人话描述是否一致；(3) 复刻到目标项目是否合理（提供 target 时）。\n"
+                        "wiki 来源『生成+兜底』：优先读已有，无则自动生成再排查。\n"
+                        "诚实话护栏：确定性管线摘要照常给出；LLM 结论为 AI 意见而非确定性事实，不下『必须复刻』指令；"
+                        "无 API Key 时硬阻断（只给确定性管线摘要，不产出降级判断）。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "源项目路径（创新所在项目）"},
+                        "canonical": {"type": "string", "description": "要复查的创新设计（workflow 名或资产 canonical/别名）"},
+                        "target": {"type": "string", "description": "目标项目路径（可选；提供时追加复刻合理性排查）"},
+                        "out_format": {"type": "string", "enum": ["json","text","html"], "default": "json"},
+                        "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                    }, "required": ["project_path", "canonical"]},
+                },
+        {
+                    "name": "coderef_prompt_governance",
+                    "description": (
+                        "Prompt 治理平台：一次调用编排 资产生命周期 × 合规审计 × 跨模块一致性。\n"
+                        "4.6 已合并原 coderef_prompt_mgmt 与 coderef_prompt_audit 的全部能力，"
+                        "本工具是 Prompt 治理的唯一入口。\n"
+                        "action=overview → 治理总览（资产清单 + 生效版本 + 合规审计 + 跨模块漂移，一屏看清 Prompt 资产健不健康）；\n"
+                        "action=assets → 资产生命周期（asset_action=list 查清单 / version 登记新版本 / "
+                        "compare 多版本评分 / abtest 下发 A/B 组并择优晋升；name+content+version+abtest_group 透传）；\n"
+                        "action=audit → 合规审计（注入风险 + 一致性；out_format=json/text/html 指定输出）；\n"
+                        "action=cross_module → 跨模块一致性专项（同一角色/场景在多模块的同名定义漂移）。\n"
+                        "诚实话护栏：纯编排 + 确定性规则，不引入 LLM；各维度如实标注是否已执行，"
+                        "不把'未审计'渲染成'无风险'；跨模块漂移是风险提示而非已发生故障。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "action": {"type": "string", "enum": ["overview","assets","audit","cross_module"], "default": "overview"},
+                        "name": {"type": "string", "description": "资产名（assets veraction/compare/abtest 用）"},
+                        "content": {"type": "string", "description": "资产内容（assets version/abtest 登记用）"},
+                        "version": {"type": "string", "description": "版本号（assets version/compare/abtest 用）"},
+                        "abtest_group": {"type": "string", "description": "A/B 分组（assets abtest 用）"},
+                        "asset_action": {"type": "string", "enum": ["list","version","compare","abtest"], "description": "资产生命周期子动作（action=assets 时用；缺省按 name/version 自动判定 list 或 version）"},
+                        "out_format": {"type": "string", "enum": ["json","text","html"], "default": "json", "description": "合规审计输出格式（action=audit 用）"},
+                        "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                    }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_interpret",
+                    "description": (
+                        "人话解读平台：让非编程人员一屏看懂 AI 项目的真实状态。\n"
+                        "action=health → 健康总览（确定性人话：健康分 + 高危清单 + 图谱/合规背景；未审计时诚实提示不给分）；\n"
+                        "action=dashboard → 生成健康仪表盘 HTML（非编程人员可读）；\n"
+                        "action=wiki → 生成 Wiki 人话文档（依赖 LLM，无 API Key 时诚实阻断）；\n"
+                        "action=prompt → Prompt 治理总览；\n"
+                        "action=assets → 人话解读已固化创新资产。\n"
+                        "4.6 收敛：论断核验动作 verify/verify_html 已移除，统一走 coderef_verify_findings。\n"
+                        "诚实话护栏：人话结论全部来自确定性原语，不引入 LLM 给结论；"
+                        "健康分只在确实审计过时给出，未审计绝不臆断；依赖 LLM 的能力无 Key 时诚实阻断。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "action": {"type": "string", "enum": ["health","dashboard","wiki","prompt","assets"], "default": "health"},
+                        "out_format": {"type": "string", "enum": ["json","text","html"], "default": "json"},
+                        "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                    }, "required": ["project_path"]},
+                }
+]
 
 class Server:
 
     def __init__(self):
-        self._tools = [
-            {
-                "name": "coderef_whitelist",
-                "description": (
-                    "管理 AI 白名单和核心模块判定规则。\n"
-                    "action=add/list/clear → 误报白名单管理；\n"
-                    "action=core_rules_get → 查看当前核心模块判定规则；\n"
-                    "action=core_rules_set → 设置核心模块规则（entry_files入口文件名列表/core_names强制核心模块名/min_files文件数阈值）；\n"
-                    "action=core_rules_reset → 重置为默认规则。\n"
-                    "你审查完报告后，把确认无误的误报条目写入白名单。发现 Wiki 漏了核心模块时，用 core_rules_set 追加。"
-                ),
-                "inputSchema": {"type": "object", "properties": {
-                    "project_path": {"type": "string", "description": "目标项目路径"},
-                    "action": {"type": "string", "enum": ["add", "list", "clear", "core_rules_get", "core_rules_set", "core_rules_reset"], "default": "add"},
-                    "entries": {
-                        "type": "array", "items": {"type": "object",
-                            "properties": {
-                                "file": {"type": "string", "description": "文件路径子串"},
-                                "rule": {"type": "string", "description": "规则名/标题子串"},
-                                "category": {"type": "string", "description": "分类子串"},
-                            }
-                        },
-                        "description": "要加入白名单的条目 (action=add 时必填)"
-                    },
-                    "core_rules": {
-                        "type": "object",
-                        "properties": {
-                            "entry_files": {"type": "array", "items": {"type": "string"}, "description": "入口文件名列表，如 [\"main.py\",\"app.py\",\"server.py\"]"},
-                            "core_names": {"type": "array", "items": {"type": "string"}, "description": "强制核心模块名列表，如 [\"洞察工具\",\"shared\"]"},
-                            "min_files": {"type": "integer", "description": "文件数阈值（>=此值自动视为核心模块）"},
-                        },
-                        "description": "核心模块规则 (action=core_rules_set 时必填)"
-                    },
-                }, "required": ["project_path"]},
-            },
-            {
-                "name": "coderef_audit",
-                "description": (
-                    "全维度代码审计 = 治理审计 + Agent安全 + 依赖扫描(CVE) + 技术债务 + "
-                    "完整性检查 + 盲区检测 + 创新传播 + 垃圾文件 + 资源遗漏 + 代码精简 + 项目成熟度。\n"
-                    "11 个工具一次产出，交叉验证自动分级(HIGH/MEDIUM/LOW)。\n"
-                    "解决 AI 自查幻觉：多独立工具互验。\n"
-                    "支持 background=True 后台执行。"
-                ),
-                "inputSchema": {"type": "object", "properties": {
-                    "project_path": {"type": "string", "description": "目标项目路径"},
-                    "output_dir": {"type": "string", "description": "报告输出目录（默认 coderef-report/）"},
-                    "background": {"type": "boolean", "description": "后台执行", "default": True},
-                    "strategy": {"type": "string",
-                        "enum": ["auto", "full", "incr", "no_change"],
-                        "default": "auto",
-                        "description": "审计策略：auto=自动判定（首次全量/增量裁剪重型工具）；full=全量 11 工具；incr=增量裁剪；no_change=复用既有结论"},
-                }, "required": ["project_path"]},
-            },
-            {
-                "name": "coderef_architecture",
-                "description": (
-                    "架构分析图谱 = 代码结构分析 + 交互式模块画布(HTML)。\n"
-                    "含 GitNexus 索引增强，展示模块交互关系、调用链。\n"
-                    "用于发现零散重复代码、模块不统一等问题。"
-                ),
-                "inputSchema": {"type": "object", "properties": {
-                    "project_path": {"type": "string", "description": "目标项目路径"},
-                    "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-                }, "required": ["project_path"]},
-            },
-            {
-                "name": "coderef_docs",
-                "description": (
-                    "项目文档探查 = 结构化 Wiki 生成(README/架构/安装/使用/API)。\n"
-                    "三级管线：AST元数据(全量)→LLM归纳→编校验证(无幻觉)。\n"
-                    "wiki_style 可选 comprehensive/reference/tutorial/plain；"
-                    "include_subprojects 控制是否同时为子项目生成独立 Wiki。\n"
-                    "enable_agent_pointer 控制在项目根维护 AGENTS.md 的 CodeRef Wiki 指针区块（R7）；"
-                    "cross_verify 控制是否对模块描述做静态交叉验证（确证徽章）。\n"
-                    "自动发现子项目并生成独立 Wiki。\n"
-                    "支持 background=True（推荐，生成耗时 3-20 分钟）。"
-                ),
-                "inputSchema": {"type": "object", "properties": {
-                    "project_path": {"type": "string", "description": "目标项目路径"},
-                    "output_dir": {"type": "string", "description": "输出目录（默认 txt/）"},
-                    "wiki_style": {"type": "string", "enum": ["comprehensive","reference","tutorial","plain"], "default": "comprehensive"},
-                    "include_subprojects": {"type": "boolean", "default": True},
-                    "enable_agent_pointer": {"type": "boolean", "default": False, "description": "在项目根维护 AGENTS.md 的 CodeRef Wiki 指针区块（R7）"},
-                    "cross_verify": {"type": "boolean", "default": True, "description": "对模块描述做静态交叉验证（确证徽章）"},
-                    "cross_entry_spec": {"type": "string", "default": "class:pipeline_runner:Pipe", "description": "交叉验证入口（入口调用闭包为确证依据）"},
-                    "background": {"type": "boolean", "default": True},
-                }, "required": ["project_path"]},
-            },
-            {
-                "name": "coderef_docs_read",
-                "description": (
-                    "按需读取已生成的 Wiki 文档正文（返回文档内容，而非路径）。\n"
-                    "解决编程 AI 无法主动调取外部文件夹的问题：docs 生成后正文落在磁盘，\n"
-                    "本工具把正文作为返回值直接交给 AI，无需 fs 访问。\n"
-                    "doc 为空 → 列出全部文档；doc 指定 → 返回该文档正文（可截断）。\n"
-                    "输出目录自动探测 docs/wiki/ 或 txt/，也可用 output_dir 显式指定。"
-                ),
-                "inputSchema": {"type": "object", "properties": {
-                    "project_path": {"type": "string", "description": "目标项目路径"},
-                    "doc": {"type": "string", "description": "文档相对路径，如 README.md 或 MODULES/xxx.md；留空则列出全部"},
-                    "output_dir": {"type": "string", "description": "Wiki 输出目录（可选，默认自动探测）"},
-                    "max_chars": {"type": "integer", "description": "返回正文最大字符数", "default": 20000},
-                }, "required": ["project_path"]},
-            },
-            {
-                "name": "coderef_task_status",
-                "description": "查询后台任务状态",
-                "inputSchema": {"type": "object", "properties": {
-                    "task_id": {"type": "string"},
-                }},
-            },
-            {
-                "name": "coderef_query",
-                "description": (
-                    "查询项目知识图谱（结构化项目记忆层）。\n"
-                    "在运行 coderef_audit/coderef_docs/coderef_architecture 后自动构建。\n"
-                    "query_type 支持:\n"
-                    "  stats      → 图谱统计（节点数、边数、类型分布）\n"
-                    "  entity     → 按名称搜索实体 (需 name；可选 type: function/class/module/config/constant)\n"
-                    "  callers    → 查询谁调用了这个函数 (需 func_name)\n"
-                    "  callees    → 查询这个函数调用了谁 (需 func_name)\n"
-                    "  impact     → 修改影响分析：修改此文件会影响哪些模块 (需 file_path)\n"
-                    "  relations  → 查询节点所有关系 (需 node_id)\n"
-                    "  file_entities → 查询文件中的所有实体 (需 file_path)\n"
-                    "  search     → 全文搜索 (需 keyword)\n"
-                    "  call_graph → 调用链子图 (需 func_name；可选 depth 默认2)\n"
-                    "用于编程 AI 替代 grep/读文件：精准查询项目结构，节省 10-100 倍 token。"
-                ),
-                "inputSchema": {"type": "object", "properties": {
-                    "project_path": {"type": "string", "description": "目标项目路径"},
-                    "query_type": {"type": "string", "enum": ["stats","entity","callers","callees","impact","relations","file_entities","search","call_graph"]},
-                    "name": {"type": "string", "description": "实体名称（query_type=entity 时必填）"},
-                    "func_name": {"type": "string", "description": "函数名（query_type=callers/callees/call_graph 时必填）"},
-                    "file_path": {"type": "string", "description": "文件路径（query_type=impact/file_entities 时必填）"},
-                    "node_id": {"type": "string", "description": "节点ID（query_type=relations 时必填）"},
-                    "keyword": {"type": "string", "description": "搜索关键词（query_type=search 时必填）"},
-                    "depth": {"type": "integer", "description": "调用链深度（call_graph 默认2）", "default": 2},
-                    "type": {"type": "string", "description": "实体类型过滤（query_type=entity 时可选）"},
-                    "limit": {"type": "integer", "description": "返回数量上限（search 默认30）", "default": 30},
-                }, "required": ["project_path", "query_type"]},
-            },
-            {
-                "name": "coderef_review",
-                "description": (
-                    "代码审查（Code Review）= 基于 diff 的变更审查 + 新项目全量语义首查。\n"
-                    "mode=diff（默认）：审变更范围，给出行内评论（file:line + 分级 + 证据标记）。\n"
-                    "mode=full：新项目无 git 历史时一次性全量语义审查，按模块分块 batching。\n"
-                    "用 LLM 语义判断 + 上下文增强，结论带 evidence 标记（pending-human/static-confirmed）供交叉验证。\n"
-                    "支持 background=True 后台执行。\n"
-                    "诚实边界：本工具为规则级 + LLM 审查，对语义级缺陷（XSS、死代码、跨平台、竞态、资源泄漏）"
-                    "覆盖有限。若你持有一条 LLM/CodeRabbit 论断，建议先用 coderef_verify_findings 做确定性核验"
-                    "（确证引用目标是否真实存在），再决定是否采信，避免把未核验的语义论断当事实。"
-                ),
-                "inputSchema": {"type": "object", "properties": {
-                    "project_path": {"type": "string", "description": "目标项目路径"},
-                    "mode": {"type": "string", "enum": ["diff", "full"], "default": "diff", "description": "diff=审变更；full=新项目全量语义首查"},
-                    "diff": {"type": "string", "description": "git diff 文本；与 changed_files 二选一（mode=diff 用）"},
-                    "changed_files": {"type": "array", "items": {"type": "string"}, "description": "变更文件列表（无 diff 时用）"},
-                    "dimensions": {"type": "array", "items": {"type": "string"}, "description": "审查维度，默认全部（bug/security/cross_module/maintainability/consistency/testing/regression）"},
-                    "background": {"type": "boolean", "description": "后台执行", "default": True},
-                }, "required": ["project_path"]},
-            },
-            {
-                "name": "coderef_frontend",
-                "description": (
-                    "前端交互审查（Frontend Review）= 静态清单全量枚举 + LLM 审查（可选运行时抽查）。\n"
-                    "静态枚举 HTML/JS 所有按钮（含事件/确认弹窗/禁用）与 L1-L5 菜单树，再按 6 维度审查。\n"
-                    "mode=static（默认）：静态清单 + LLM 审查，不依赖浏览器，100% 覆盖。\n"
-                    "mode=runtime：需 url，用浏览器抽查关键路径，失败自动降级为静态结论。\n"
-                    "支持 background=True 后台执行。\n"
-                    "诚实边界：静态枚举只确证按钮/菜单'存在与否'，不确证'交互逻辑正确'；"
-                    "SPA 组件逻辑请用 mode=runtime 浏览器抽查，或联动外部前端审查工具。"
-                ),
-                "inputSchema": {"type": "object", "properties": {
-                    "project_path": {"type": "string", "description": "前端项目路径"},
-                    "entry": {"type": "string", "description": "入口 HTML/路由文件；不填则自动扫描"},
-                    "mode": {"type": "string", "enum": ["static", "runtime"], "default": "static"},
-                    "url": {"type": "string", "description": "运行 URL（mode=runtime 时必填）"},
-                    "check_levels": {"type": "array", "items": {"type": "integer"}, "description": "要审查的菜单层级，默认 [1,2,3,4,5]"},
-                    "background": {"type": "boolean", "description": "后台执行", "default": True},
-                }, "required": ["project_path"]},
-            },
-            {
-                "name": "coderef_report",
-                "description": (
-                    "把审计报告 / 知识图谱 / Wiki 聚合成自包含 HTML 报告目录（解决没有有效前端的问题）。\n"
-                    "渲染到 output_dir（默认 coderef-report/html/）：index.html（概览+导航）/ audit.html / kg.html / wiki.html。\n"
-                    "优先重渲染既有产物（图谱+Wiki，不重跑扫描，速度快）；若项目尚无审计/图谱产物，则回退为跑一次全量审计并渲染。\n"
-                    "返回 index.html 绝对路径与生成文件清单。"
-                ),
-                "inputSchema": {"type": "object", "properties": {
-                    "project_path": {"type": "string", "description": "目标项目路径"},
-                    "output_dir": {"type": "string", "description": "报告输出目录（默认 coderef-report/html/）"},
-                    "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-                }, "required": ["project_path"]},
-            },
-            {
-                "name": "coderef_audit_advisor",
-                "description": (
-                    "审计策略判定 + 功能审查（审计前先和 AI 沟通审查范围）。\n"
-                    "不直接跑代码审计，而是先判断本次该【增量审查】还是【全量审查】。\n"
-                    "依据：变更信号（记忆层快照 diff）+ 知识图谱影响闭包（多跳 BFS）+ 图谱新旧。\n"
-                    "同时给出应重点审查的功能维度（创新传播/结构复杂度/回归一致性等），\n"
-                    "并可选叠加 LLM 功能审查（with_functional=True 时）。\n"
-                    "建议：调用前先 coderef_memory_sync 建立基线，效果最佳。"
-                ),
-                "inputSchema": {"type": "object", "properties": {
-                    "project_path": {"type": "string", "description": "目标项目路径"},
-                    "with_functional": {"type": "boolean", "description": "是否叠加 LLM 功能审查增强", "default": True},
-                    "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-                }, "required": ["project_path"]},
-            },
-        ]
+        self._tools = list(BUILTIN_TOOLS)
         # ── 单维度审计工具（coderef_scan）：11 个维度合并为 1 个工具
         #    实时安全带 + 客观第二意见：AI 写完一个模块即可按需调用单维度自查，
         #    无需跑全量 coderef_audit。用 tool 参数选维度，避免 11 个同构工具
         #    撑爆工具列表、增加 AI 选择负担。复用 pipeline_runner.run_single()。
-        self._SINGLE_TOOL_LABELS = [
-            ("gov", "治理审计"), ("agent", "Agent安全"), ("sca", "依赖扫描(CVE)"),
-            ("td", "技术债务"), ("integ", "完整性检查"), ("blind", "盲区检测"),
-            ("inn", "创新传播"), ("junk", "垃圾文件"), ("resgap", "资源遗漏"),
-            ("simp", "代码精简"), ("matu", "项目成熟度"),
-        ]
-        self._tools.append({
-            "name": "coderef_scan",
-            "description": (
-                "单维度代码审计，实时安全带 + 客观第二意见。\n"
-                "coderef_audit 是 11 个维度一次全跑；本工具只跑 tool 指定的一个维度，"
-                "速度快一个量级（不建知识图谱/不生成 dashboard），适合 AI 写完一个模块后即时自查。\n"
-                "tool 可选: gov治理 / agent安全 / sca依赖CVE / td技术债务 / integ完整性 / "
-                "blind盲区 / inn创新传播 / junk垃圾文件 / resgap资源遗漏 / simp代码精简 / matu成熟度。\n"
-                "先用 coderef_scan_list 查看可选维度清单。返回该维度 findings（tier 分级 + file/line + suggestion）。\n"
-                "[可靠性] 单维度扫描只跑一个工具，无法产生「多工具交叉验证」的 xval_by 字段"
-                "（交叉验证需 coderef_audit 全量多工具互验），请勿把空 xval_by 误判为异常。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "tool": {"type": "string", "enum": [k for k, _ in self._SINGLE_TOOL_LABELS],
-                         "description": "要审计的维度，如 gov / agent / sca / td / integ / blind / inn / junk / resgap / simp / matu"},
-                "background": {"type": "boolean",
-                    "description": "后台执行（超大项目单维度如 gov 会全量盘点，可能超过单次调用超时，默认后台返回 task_id 用 coderef_task_status 查询）",
-                    "default": True},
-            }, "required": ["project_path", "tool"]},
-        })
-        self._tools.append({
-            "name": "coderef_scan_list",
-            "description": "列出 coderef_scan 可选的单维度审计清单（维度名 + 说明）。",
-            "inputSchema": {"type": "object", "properties": {}},
-        })
+        # 维度注册表提升为模块级常量 _SINGLE_TOOL_LABELS（BUILTIN_TOOLS 中
+        # coderef_scan 的 enum 同源引用），此处仅做引用，避免重复字面量漂移。
+        self._SINGLE_TOOL_LABELS = _SINGLE_TOOL_LABELS
         # ── 流程合规验证：非编程人员验证项目是否按期望流程执行 ──
-        self._tools.append({
-            "name": "coderef_flow_verify",
-            "description": (
-                "流程合规验证 —— 非编程人员最核心的需求：项目是不是按我期待的流程执行。\n"
-                "验证「入口 A 的调用管线是否覆盖期望步骤 B→C→D」，确认数据真的按这条管线走。\n"
-                "纯静态、确定性：数据只来自知识图谱 CALLS 边，不依赖 LLM。\n"
-                "entry 支持 模块.函数（如 pipeline_runner.audit）消除同名歧义；"
-                "steps 传期望步骤的符号关键词（中英文均可，编程 AI 需先把中文期望步骤映射为代码符号）。\n"
-                "状态语义：ordered=调用链确证(含顺序)；in_pipeline=在管线但顺序未确证(可能并行)；"
-                "outside=管线外/动态调用，需编程AI复核；missing=项目内无对应符号。\n"
-                "图谱不存在时会明确反馈需先构建（coderef_audit / coderef_memory_sync）。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "entry": {"type": "string", "description": "入口符号，支持 模块.函数（如 pipeline_runner.audit）"},
-                "steps": {"type": ["array", "string"], "items": {"type": "string"},
-                          "description": "期望步骤的符号关键词列表或逗号分隔字符串，如 ['analyze_project','build_knowledge_graph','render']。省略（可选）时仅执行跨语言契约检测与入口/图谱定位，不验证流程步骤；提供空/非法元素则报错"},
-                "depth": {"type": "integer", "description": "调用链搜索深度，默认 8"},
-            }, "required": ["project_path", "entry"]},
-        })
         # ── 架构腐化诊断：非编程人员验证工程结构是否健康 ──
-        self._tools.append({
-            "name": "coderef_arch_audit",
-            "description": (
-                "架构腐化诊断 —— 补齐 MCP 工具的架构诊断层。\n"
-                "复用知识图谱 CALLS 边做模块级静态诊断，输出四类架构症状：\n"
-                "cycles=循环依赖（模块依赖图强连通分量）；god_modules=上帝模块（扇出过高）；"
-                "layer_violations=分层违例（低层依赖高层）；large_modules=异常模块规模。\n"
-                "聚合为 0-10 架构健康度。纯静态、确定性，不依赖 LLM。\n"
-                "图谱不存在时会明确反馈需先构建（coderef_audit / coderef_memory_sync）。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                    "project_path": {"type": "string", "description": "目标项目路径"},
-                }, "required": ["project_path"]},
-        })
         # ── 诚实话解读护栏：确定性核验 LLM / CodeRabbit 论断 ──
-        self._tools.append({
-            "name": "coderef_verify_findings",
-            "description": (
-                "确定性核验 LLM / CodeRabbit 论断（爬取翼咽喉 + 诚实话解读护栏）。\n"
-                "编程 AI 或 CodeRabbit 给出一条'论断'（finding），本工具用知识图谱 + 静态原语"
-                "核验论断引用的代码目标是否真实存在、是否在指定入口管线内，\n"
-                "输出 verdict（确证/证伪/部分确证/无法核验）+ 证据链 + 影响面。\n"
-                "诚实话纪律：verdict 只由本工具的确定性逻辑打出，调用方 AI 无权改变；\n"
-                "无确定性证据一律存疑，绝不默认确证；确证只代表'引用目标真实存在'，不代表语义结论正确。\n"
-                "findings 传论断列表，每条含 title（必填）+ detail/file/line/rule/severity/symbols（可选）；\n"
-                "entry 可选：指定入口符号（模块.函数）核验符号是否在关键管线内；\n"
-                "out_format=html 输出自包含人话 HTML 报告（非编程人员可读）。\n"
-                "图谱不存在会明确反馈需先构建（coderef_audit / coderef_memory_sync），不返回空结论。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径（自动定位知识图谱）"},
-                "findings": {"type": "array", "items": {"type": "object"},
-                             "description": "论断列表，每条含 title(必填)+detail/file/line/rule/severity/symbols(可选)"},
-                "entry": {"type": "string", "description": "可选入口符号（模块.函数），核验符号是否在关键管线内"},
-                "out_format": {"type": "string", "enum": ["json", "html", "text"], "default": "json",
-                               "description": "输出格式：json=结构化 / html=自包含人话报告 / text=终端可读"},
-                "background": {"type": "boolean", "description": "后台执行（核验需加载图谱，重型工具默认后台）", "default": True},
-            }, "required": ["project_path", "findings"]},
-        })
         # ── 引擎四 · 变更守护：AI 代码退化检测 + 人话版变更报告 ──
-        self._tools.append({
-            "name": "coderef_change_guard",
-            "description": (
-                "AI 代码退化检测 —— 拦截「AI 把之前写好的代码改坏了」。\n"
-                "守护引擎建立在 git 之上：先确保 git 基层，再对比基线与新代码能力签名，"
-                "识别四类退化：校验链被删(high)、重试/超时削弱(medium)、输入约束移除(medium)、回归风险。\n"
-                "vibecoder 最需要的功能：AI 改没改坏代码，提交前自动拦截。\n"
-                "action=guard（默认）：退化检测。\n"
-                "  动态兜底：传 diff 则精确检测；否则传 baseline_dir 全量对比；"
-                "两者皆缺时自动从 git 历史提取最近改动作为基线对比"
-                "(git-auto；若工作区干净会回退检测最近一次提交的改动)；"
-                "仍无法建立基线则明确反馈需补充输入，绝不静默返回空结论。\n"
-                "  返回附带 git_ready 与 health_baseline（最近健康基线 tag），供外层 AI 回滚参照。\n"
-                "action=ensure_git：守护前置保障。项目无 git 时自动 git init 并补齐最小配置，"
-                "使守护引擎从形同虚设变为真正可用。\n"
-                "action=anchor：锚定健康基线。把审计通过/人工确认健康的当前代码 commit 并打 "
-                "coderef-health-* tag，作为后续回滚参照。label 可选。\n"
-                "action=list_baselines：列出全部健康基线 tag。\n"
-                "回滚交由外层 AI 执行（如 git checkout <health_baseline tag>），CodeRef 仅提供确定性参照。\n"
-                "git_bin 可选：由外层 AI 用 Get-Command git / where git 探测 git 可执行文件路径或安装目录后传入，"
-                "避免依赖系统 PATH（git 常不在 PATH）。缺省回退到 PATH 的 git。\n"
-                "git_timeout 建议：小型项目(<1万行)15s；中型(1~10万行)30s；大型(>10万行)60s。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径（新代码）"},
-                "action": {"type": "string", "enum": ["guard", "ensure_git", "anchor", "list_baselines"], "default": "guard", "description": "guard=退化检测；ensure_git=确保 git 基层；anchor=锚定健康基线；list_baselines=列出健康基线"},
-                "diff": {"type": "string", "description": "git diff 文本（action=guard，推荐，用于精确检测）"},
-                "baseline_dir": {"type": "string", "description": "基线目录（改动前的代码快照，action=guard 可选）"},
-                "label": {"type": "string", "description": "健康基线标签（action=anchor 可选，如 release-1.0）"},
-                "allow_autocommit": {"type": "boolean", "description": "anchor 时若工作区有改动是否先自动提交再打 tag（默认 true，使基线指向完整健康状态）"},
-                "git_bin": {"type": "string", "description": "git 可执行文件路径或安装目录（由外层 AI 探测后传入，可选；缺省回退 PATH 的 git）"},
-                "git_timeout": {"type": "integer", "description": "git 命令超时秒数；默认 30，小型项目 15 / 中型 30 / 大型 60"},
-                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-            }, "required": ["project_path"]},
-        })
-        self._tools.append({
-            "name": "coderef_change_report",
-            "description": (
-                "人能看懂的变更报告 —— 把 diff 归纳为「人话版」变更说明。\n"
-                "不是 diff，而是「新增 XX 功能 / 修改 XX 逻辑 / 可能影响 XX 地方 / 风险」，"
-                "让不懂代码的人也能知道 AI 到底改了什么。\n"
-                "LLM 不可用时自动降级为结构摘要，保证始终可读。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "diff": {"type": "string", "description": "git diff 文本"},
-                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-            }, "required": ["project_path", "diff"]},
-        })
         # ── 引擎一 · 记忆层（M1/M2/M3）──────────────────────────────
-        self._tools.append({
-            "name": "coderef_memory_sync",
-            "description": (
-                "初始化 / 增量同步项目记忆层。用 mtime+size 快照做增量，只重扫变更文件。\n"
-                "mode=full 全量初始化；mode=incr 增量（改一行只重扫该文件）。\n"
-                "返回认知覆盖度、置信度、图谱/向量库统计。供所有 AI 助手复用项目记忆。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "mode": {"type": "string", "enum": ["full", "incr"], "default": "full"},
-                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-            }, "required": ["project_path"]},
-        })
-        self._tools.append({
-            "name": "coderef_memory_query",
-            "description": (
-                "供 AI 助手复用项目记忆（替代重扫）。\n"
-                "query_type=semantic 语义检索（走向量库，Ollama 缺失降级关键词）；\n"
-                "query_type=stats/entity/callers/callees/impact/relations/file_entities/search/call_graph 结构查询（走知识图谱）。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "query_type": {"type": "string", "enum": ["semantic","stats","entity","callers","callees","impact","relations","file_entities","search","call_graph"], "default": "semantic"},
-                "keyword": {"type": "string", "description": "语义检索关键词或全文搜索关键词"},
-                "name": {"type": "string", "description": "实体名称（entity 用）"},
-                "func_name": {"type": "string", "description": "函数名（callers/callees/call_graph 用）"},
-                "file_path": {"type": "string", "description": "文件路径（impact/file_entities 用）"},
-                "limit": {"type": "integer", "default": 10},
-            }, "required": ["project_path"]},
-        })
-        self._tools.append({
-            "name": "coderef_memory_status",
-            "description": (
-                "「AI 知道什么」：认知覆盖度 + 每模块置信度 + 盲区地图 + 认知地图 HTML。\n"
-                "用户直观看到项目哪些部分已被 AI 理解、哪些未理解。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-            }, "required": ["project_path"]},
-        })
-        self._tools.append({
-            "name": "coderef_memory_quality",
-            "description": (
-                "记忆质量评估 + 自动补全。三项体检：引用完整性、语义覆盖、偏差检测。\n"
-                "auto_fix=True 自动补全缺失上下文并标注来源；偏差检测自动注入全局 LLM（有 API Key 时真正复核），"
-                "无可用 LLM 时降级 pending-human。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "auto_fix": {"type": "boolean", "default": False},
-                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-            }, "required": ["project_path"]},
-        })
         # ── 引擎 · 操作记忆层（4.8）──────────────────────────────
         # 与 memory_layer（记忆"代码是什么"）互补：操作记忆记忆"东西在哪儿、
         # 从哪儿来、到哪儿去、过去的规范是什么"，应对对话过多后上下文丢失。
-        self._tools.append({
-            "name": "coderef_operation_memory_sync",
-            "description": (
-                "初始化 / 增量同步「AI 操作记忆层」。静态审计识别主目录 + 旁目录资源位置"
-                "（git / 模型权重 / API 引用 / 测试工具 / 文档报告 / 依赖清单），可选 LLM 提炼"
-                "隐性知识（决策理由 / 约定俗成 / 踩坑解法）。输出 ledger.json + BRAIN.md，"
-                "供对话上下文丢失后快速恢复。mode=full 全量盘点；mode=incr 增量（mtime+size 快照）。"
-                "with_llm=false 跳过 LLM 提炼以省调用；API Key 缺失时自动降级为待人工确认。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "mode": {"type": "string", "enum": ["full", "incr"], "default": "full",
-                         "description": "full=全量盘点；incr=基于快照只重扫变更"},
-                "with_llm": {"type": "boolean", "default": True,
-                             "description": "是否启用 LLM 提炼隐性知识"},
-                "background": {"type": "boolean", "description": "后台执行（同步含 LLM 提炼较慢，默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-            }, "required": ["project_path"]},
-        })
-        self._tools.append({
-            "name": "coderef_operation_memory_query",
-            "description": (
-                "按类别检索操作记忆（替代重新扫描）。query_type=decision / convention / "
-                "pitfall 检索隐性知识；resource / tool / doc 检索资源定位；all 全量。"
-                "keyword 可选，做 name/summary/path 模糊过滤。供 AI 上下文丢失后快速恢复。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "query_type": {"type": "string",
-                               "enum": ["all", "resource", "tool", "doc", "decision", "convention", "pitfall"],
-                               "default": "all"},
-                "keyword": {"type": "string", "description": "可选，模糊匹配 name/summary/path"},
-                "limit": {"type": "integer", "default": 10},
-            }, "required": ["project_path"]},
-        })
-        self._tools.append({
-            "name": "coderef_operation_memory_find",
-            "description": (
-                "定位资源：给定资源名 / 路径片段，返回实际位置、来源、主目录 / 旁目录归属。"
-                "例如想知道『test 工具在哪儿』『模型文件在哪儿』『API 配在哪儿』，别再满项目找。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "name": {"type": "string", "description": "资源名或路径片段，如 'test'、'model'、'.env'"},
-                "limit": {"type": "integer", "default": 5},
-            }, "required": ["project_path", "name"]},
-        })
-        self._tools.append({
-            "name": "coderef_operation_memory_status",
-            "description": (
-                "操作记忆健康状态：已覆盖分类、各分类条目数（资源 / 知识 / 旁目录）、"
-                "LLM 可用性、待人工确认项。快速判断『这份操作记忆还新鲜吗、够覆盖吗』。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-            }, "required": ["project_path"]},
-        })
-        self._tools.append({
-            "name": "coderef_operation_memory_recover",
-            "description": (
-                "上下文丢失后『一次调用』恢复关键记忆：返回关键工具位置（env_tool，含 git / "
-                "python / wsl / coderabbit 等）+ 已确认的约定 / 踩坑 / 决策摘要 + 待人工确认项。"
-                "供 AI 在上下文被压缩后最小成本拿回『东西在哪儿、过去的规范是什么』。"
-                "涉及 git / push / CodeRabbit / Release 等工具或约定类操作时，先调用本工具，"
-                "勿满 PATH 找工具，也勿在未查询操作记忆前直接抓取外部连接器。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "limit": {"type": "integer", "default": 8,
-                          "description": "每类隐性知识（决策/约定/踩坑）最多返回条数"},
-            }, "required": ["project_path"]},
-        })
         # 引擎 · Prompt 治理（4.6 合并收敛：原 coderef_prompt_mgmt / coderef_prompt_audit
         # 已并入 coderef_prompt_governance 唯一入口，见下方 governance 工具定义）
         # ── 引擎三 · OWASP LLM 合规（M4）────────────────────────────
-        self._tools.append({
-            "name": "coderef_owasp",
-            "description": (
-                "OWASP LLM Top 10 合规检测。复用 AgentSecurityAuditor + SCA，\n"
-                "把全部风险归并到 LLM01-LLM10 十类，补充 LLM09/LLM10 维度，逐类分级。\n"
-                "未覆盖维度如实标注 covered=false（避免过度承诺）。out_format=report 输出中文合规报告。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "out_format": {"type": "string", "enum": ["json", "report"], "default": "json"},
-                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-            }, "required": ["project_path"]},
-        })
         # ── 引擎二 · 创新识别 + 资产沉淀（M6/M7）────────────────────
-        self._tools.append({
-            "name": "coderef_innovation",
-            "description": (
-                "识别项目创新设计 + 传播缺口。按意图分组（prompt/validation/retry/orchestration），\n"
-                "理想清单 vs 实际实现对照，registry 归一化命名，输出 structured workflows/gaps/designs。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "intent": {"type": "string", "description": "只查指定意图（空=全部）"},
-                "min_adoption": {"type": "number", "description": "最小采用率过滤", "default": 0},
-                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-            }, "required": ["project_path"]},
-        })
-        self._tools.append({
-            "name": "coderef_asset",
-            "description": (
-                "WorkflowAsset 资产化 / 查询 / 导出。\n"
-                "action=list 列出资产；get 查单个（支持别名）；export 导出（可省略 canonical 导出全部）；"
-                "commit 固化设计为资产（需 ≥2 workflow 采用 + evidence，防污染）。\n"
-                "commit 时可选传 blueprint（结构化复刻蓝图 dict）；缺省自动从已验证 adopters 构建骨架。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "action": {"type": "string", "enum": ["list","get","export","commit"], "default": "list"},
-                "canonical": {"type": "string", "description": "规范设计名"},
-                "description": {"type": "string", "description": "一句话说明（commit 用）"},
-                "template_code": {"type": "string", "description": "可复制骨架代码（commit 用）"},
-                "patch_suggestion": {"type": "string", "description": "迁移补丁建议（commit 用）"},
-                "migration_guide": {"type": "string", "description": "迁移指南（commit 用）"},
-                "blueprint": {"type": "object", "description": "结构化复刻蓝图 dict（commit 可选；缺省自动构建骨架）"},
-                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-            }, "required": ["project_path"]},
-        })
-        self._tools.append({
-            "name": "coderef_replicate",
-            "description": (
-                "复刻铺排：检测目标项目对某已固化资产（蓝图）的采用缺口，并生成可复刻指引。\n"
-                "输入 canonical（资产 canonical 或别名）与目标项目路径。\n"
-                "输出 gap_report（确定性缺口：已采用/未采用模块）+ steps（复刻步骤）+ entry_points"
-                "（入口，来自蓝图或已验证采用模块）+ verified_findings（复用 coderef_verify_findings 的确定性核验）。\n"
-                "诚实话护栏：本工具是审计工具，不自动改代码；未采用不等于'该采用'；"
-                "template_code 缺失会明确标注待补全，不编造。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径（要复刻到的项目）"},
-                "canonical": {"type": "string", "description": "要复刻的已固化资产 canonical（或别名）"},
-                "verify_symbols": {"type": "boolean", "description": "是否对蓝图入口做确定性核验", "default": True},
-                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-            }, "required": ["project_path", "canonical"]},
-        })
-        self._tools.append({
-            "name": "coderef_replicate_apply",
-            "description": (
-                "复刻落地（4.6 新增）：把已固化资产的复刻指引真正落到目标项目。\n"
-                "输入 canonical（资产 canonical 或别名）与目标项目路径。\n"
-                "把资产自带的 template_code 骨架与 patch_suggestion / migration_guide 说明"
-                "写入目标项目的 coderef-replicate-apply 目录，并生成落地清单 manifest。\n"
-                "诚实话护栏：只落地'确定性可给'的内容（template_code 骨架、说明文档），"
-                "不自动接入目标源码；默认不覆盖已存在的同名文件（冲突时如实标注，"
-                "overwrite=true 才允许覆盖）；template_code 缺失会明确标注待补全。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "触发调用的项目路径（用于解析资产）"},
-                "canonical": {"type": "string", "description": "要落地的已固化资产 canonical（或别名）"},
-                "target": {"type": "string", "description": "目标项目路径（默认 = project_path 对应项目根）"},
-                "filename": {"type": "string", "description": "落地文件名（默认取 template_code 标题或 replicate_template.py；可含子路径）"},
-                "overwrite": {"type": "boolean", "description": "是否允许覆盖已存在的同名文件（默认 False，冲突时如实标注）", "default": False},
-                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-            }, "required": ["project_path", "canonical"]},
-        })
-        self._tools.append({
-            "name": "coderef_asset_blueprint",
-            "description": (
-                "把复刻铺排（coderef_replicate）得出的确定性结论写回资产蓝图。\n"
-                "仅写回确定性可填字段（entry_points / verified_findings 若空），不臆断 steps。\n"
-                "供对方 AI 确认铺排有效后调用，把蓝图从骨架补全为可复刻蓝图。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "canonical": {"type": "string", "description": "要补全蓝图的资产 canonical（或别名）"},
-                "entry_points": {"type": "array", "items": {"type": "string"}, "description": "要写入蓝图的可信入口符号列表"},
-                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-            }, "required": ["project_path", "canonical"]},
-        })
-        self._tools.append({
-            "name": "coderef_registry",
-            "description": (
-                "管理已知设计库（DesignRegistry）。\n"
-                "action=list 列出已知设计；add 新增 canonical 设计；alias 把别名归一到 canonical（解决 LLM 命名漂移）。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "action": {"type": "string", "enum": ["list","add","alias"], "default": "list"},
-                "name": {"type": "string", "description": "设计名/别名"},
-                "canonical": {"type": "string", "description": "规范设计名（add/alias 用）"},
-                "alias": {"type": "string", "description": "要归一化的别名（alias 用）"},
-                "description": {"type": "string", "description": "设计说明（add 用）"},
-            }, "required": ["project_path"]},
-        })
-        self._tools.append({
-            "name": "coderef_innovation_review",
-            "description": (
-                "创新复刻的 LLM 协助排查（4.7 收口）：让 LLM 阅读源项目的管线设计（知识图谱调用链）"
-                "+ wiki 文档，对『创新确认』与『复刻排查』给出 AI 判断。\n"
-                "判定三点：(1) 该设计是否确属一个创新 workflow（区别于已知/常见模式或静态能力标签误命中）；"
-                "(2) 管线调用链与 wiki 人话描述是否一致；(3) 复刻到目标项目是否合理（提供 target 时）。\n"
-                "wiki 来源『生成+兜底』：优先读已有，无则自动生成再排查。\n"
-                "诚实话护栏：确定性管线摘要照常给出；LLM 结论为 AI 意见而非确定性事实，不下『必须复刻』指令；"
-                "无 API Key 时硬阻断（只给确定性管线摘要，不产出降级判断）。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "源项目路径（创新所在项目）"},
-                "canonical": {"type": "string", "description": "要复查的创新设计（workflow 名或资产 canonical/别名）"},
-                "target": {"type": "string", "description": "目标项目路径（可选；提供时追加复刻合理性排查）"},
-                "out_format": {"type": "string", "enum": ["json","text","html"], "default": "json"},
-                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-            }, "required": ["project_path", "canonical"]},
-        })
-        self._tools.append({
-            "name": "coderef_prompt_governance",
-            "description": (
-                "Prompt 治理平台：一次调用编排 资产生命周期 × 合规审计 × 跨模块一致性。\n"
-                "4.6 已合并原 coderef_prompt_mgmt 与 coderef_prompt_audit 的全部能力，"
-                "本工具是 Prompt 治理的唯一入口。\n"
-                "action=overview → 治理总览（资产清单 + 生效版本 + 合规审计 + 跨模块漂移，一屏看清 Prompt 资产健不健康）；\n"
-                "action=assets → 资产生命周期（asset_action=list 查清单 / version 登记新版本 / "
-                "compare 多版本评分 / abtest 下发 A/B 组并择优晋升；name+content+version+abtest_group 透传）；\n"
-                "action=audit → 合规审计（注入风险 + 一致性；out_format=json/text/html 指定输出）；\n"
-                "action=cross_module → 跨模块一致性专项（同一角色/场景在多模块的同名定义漂移）。\n"
-                "诚实话护栏：纯编排 + 确定性规则，不引入 LLM；各维度如实标注是否已执行，"
-                "不把'未审计'渲染成'无风险'；跨模块漂移是风险提示而非已发生故障。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "action": {"type": "string", "enum": ["overview","assets","audit","cross_module"], "default": "overview"},
-                "name": {"type": "string", "description": "资产名（assets veraction/compare/abtest 用）"},
-                "content": {"type": "string", "description": "资产内容（assets version/abtest 登记用）"},
-                "version": {"type": "string", "description": "版本号（assets version/compare/abtest 用）"},
-                "abtest_group": {"type": "string", "description": "A/B 分组（assets abtest 用）"},
-                "asset_action": {"type": "string", "enum": ["list","version","compare","abtest"], "description": "资产生命周期子动作（action=assets 时用；缺省按 name/version 自动判定 list 或 version）"},
-                "out_format": {"type": "string", "enum": ["json","text","html"], "default": "json", "description": "合规审计输出格式（action=audit 用）"},
-                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-            }, "required": ["project_path"]},
-        })
-        self._tools.append({
-            "name": "coderef_interpret",
-            "description": (
-                "人话解读平台：让非编程人员一屏看懂 AI 项目的真实状态。\n"
-                "action=health → 健康总览（确定性人话：健康分 + 高危清单 + 图谱/合规背景；未审计时诚实提示不给分）；\n"
-                "action=dashboard → 生成健康仪表盘 HTML（非编程人员可读）；\n"
-                "action=wiki → 生成 Wiki 人话文档（依赖 LLM，无 API Key 时诚实阻断）；\n"
-                "action=prompt → Prompt 治理总览；\n"
-                "action=assets → 人话解读已固化创新资产。\n"
-                "4.6 收敛：论断核验动作 verify/verify_html 已移除，统一走 coderef_verify_findings。\n"
-                "诚实话护栏：人话结论全部来自确定性原语，不引入 LLM 给结论；"
-                "健康分只在确实审计过时给出，未审计绝不臆断；依赖 LLM 的能力无 Key 时诚实阻断。"
-            ),
-            "inputSchema": {"type": "object", "properties": {
-                "project_path": {"type": "string", "description": "目标项目路径"},
-                "action": {"type": "string", "enum": ["health","dashboard","wiki","prompt","assets"], "default": "health"},
-                "out_format": {"type": "string", "enum": ["json","text","html"], "default": "json"},
-                "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-            }, "required": ["project_path"]},
-        })
         self._tasks: Dict[str, Any] = {}
         # 并发保护：多 Agent 后台任务可能同时读写 _tasks，用可重入锁保证一致性
         self._lock = threading.RLock()
