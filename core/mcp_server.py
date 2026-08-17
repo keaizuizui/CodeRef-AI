@@ -127,6 +127,10 @@ _SINGLE_TOOL_LABELS: List[tuple] = [
     ("simp", "代码精简"), ("matu", "项目成熟度"),
 ]
 
+# ── coderef_whitelist 合法 action 枚举（同源：schema enum 与 _wl 校验共用）──
+WHITELIST_ACTIONS: tuple = ("add", "list", "clear",
+                            "core_rules_get", "core_rules_set", "core_rules_reset")
+
 # ── 内置工具注册表（MCP tools/list 的 schema 数据）───────────────
 # 原为 Server.__init__ 内 700+ 行字面量 + 多次 append；外置成本模块级常量后，
 # 增删工具只需改本表，构造函数只做引用（单个工具定义不再塞进构造逻辑）。
@@ -1648,6 +1652,15 @@ class Server:
     def _wl(self, a) -> str:
         from core.pipeline_runner import Pipe
         act = a.get("action", "add")
+        # 非法 action 此前静默落到默认 add 分支（参数契约矩阵暴露的缺陷）；
+        # 改为结构化拒绝，与 wiki_style/docs_read/strategy 的枚举严格校验保持一致。
+        if not isinstance(act, str) or act not in WHITELIST_ACTIONS:
+            return json.dumps({
+                "status": "error",
+                "tool": "coderef_whitelist",
+                "error": (f"非法 action 枚举: {act!r}；允许的取值为 "
+                          f"{' / '.join(sorted(WHITELIST_ACTIONS))}"),
+            }, ensure_ascii=False)
         pp = a["project_path"]
         if act == "list":
             wl = Pipe.whitelist_list(pp)
