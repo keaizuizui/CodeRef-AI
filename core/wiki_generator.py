@@ -1693,8 +1693,8 @@ class WikiGenerator:
         失败时返回空串并记录错误：空内容统一由 _write_doc 跳过落盘并计入失败统计，
         避免把"(LLM 生成失败: ...)"这类占位符当成正常文档写入，产生"看似成功实为错误"的假象。
 
-        R6：若存在 INSTRUCTIONS.md，其内容会拼接在 system prompt 之后，
-        让所有文档生成都遵循用户的 scope/优先级指令。
+        R6：若存在 INSTRUCTIONS.md，其内容会作为 user-level 上下文拼入 user prompt
+        （不进承载事实约束的 system prompt），让所有文档生成遵循用户的 scope/优先级指令。
         """
         try:
             # R6: 注入用户授权指令（INSTRUCTIONS.md，只读不重写）。
