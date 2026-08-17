@@ -328,7 +328,9 @@ def validate_ir(ir: dict) -> dict:
         src = edge.get("source")
         tgt = edge.get("target")
         for ref, label in ((src, "source"), (tgt, "target")):
-            if ref not in seen_ids:
+            # ref 来自 LLM 输出，可能是 list/dict（不可哈希），先做类型检查
+            # 避免 ref not in seen_ids 抛出 TypeError 使校验函数崩溃
+            if not isinstance(ref, str) or ref not in seen_ids:
                 errors.append({"code": IR_EDGE_DANGLING,
                                "field": f"edges[{idx}].{label}",
                                "message": f"edges[{idx}].{label} 引用了不存在的节点: {ref!r}"})
@@ -340,7 +342,8 @@ def validate_ir(ir: dict) -> dict:
                        "message": "entry_points 必须是数组"})
         entry_points = []
     for ep in entry_points:
-        if ep not in seen_ids:
+        # ep 来自 LLM 输出，可能是 list/dict，先做类型检查避免成员测试崩溃
+        if not isinstance(ep, str) or ep not in seen_ids:
             errors.append({"code": IR_ENTRY_UNKNOWN, "field": "entry_points",
                            "message": f"入口点引用了不存在的节点: {ep!r}"})
 
