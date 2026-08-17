@@ -426,7 +426,7 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 
 - **工具注册表外置**：`core/mcp_server.py` 中 700+ 行工具 schema 自 `__init__` 抽取为模块级 `BUILTIN_TOOLS` 常量，`__init__` 缩减至 ~100 行；37 工具 / 36 handlers / 24 重型工具经逐字节 dump 一致性验证为零变化
 - **打包规范化**：新增 `pyproject.toml`，支持 `pip install .`；依赖清单与 requirements.txt 双处同步维护，`pip install .[lang]` 可选开启 tree-sitter 多语言解析
-- **CI 编译检查**：新增 `ci_compile_check.py`（编译校验 + 依赖一致性 + 裸 except/print 趋势统计）与配套 GitHub Actions（`.github/workflows/compile-check.yml`）
+- **CI 编译检查**：新增 `ci_compile_check.py`（编译校验 + 依赖一致性 + 裸 except/print 趋势统计）与配套 GitHub Actions（`.github/workflows/compile-check.yml`）；依赖比对按 PEP 503 归一化包名、忽略 `-r`/`-e` 等指令行、并纳入 `[lang]` 可选依赖做双向核对，Python 3.10 自动回退 tomli
 - **依赖收敛**：移除 pandas / tqdm / pathspec / ollama 四个死依赖（安装体积与时长下降）
 - **坏味道修复**：`_SINGLE_TOOL_LABELS` 提升为模块级常量，消除注册表内对 `self` 的非法引用（重构期引入、已修复并回归验证）
 
