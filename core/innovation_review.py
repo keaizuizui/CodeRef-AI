@@ -233,11 +233,12 @@ class InnovationReviewer:
             found.append(spec)
             closure = downstream(adj, nid, max_depth=CALL_CHAIN_MAX_DEPTH)
             chain = []
-            for cid in closure:
+            for cid in sorted(closure):
                 n = nodes.get(cid)
                 if not n:
                     continue
                 chain.append(f"{file_base(n)}:{n.get('name')}@{n.get('start_line', 0)}")
+            chain.sort()
             pipelines.append({
                 "entry": spec,
                 "node": f"{nodes[nid].get('name')} ({file_base(nodes[nid])}:{nodes[nid].get('start_line', 0)})",
@@ -319,7 +320,7 @@ class InnovationReviewer:
             if name in docs and name not in wanted:
                 wanted.append(name)
         for ad in (subject.get("adopters") or [])[:MAX_ADOPTERS_FOR_ENTRY]:
-            for cand in (f"MODULES/{ad}.md", f"MODULES/{ad}.md", f"{ad}.md"):
+            for cand in (f"MODULES/{ad}.md", f"{ad}.md"):
                 if cand in docs and cand not in wanted:
                     wanted.append(cand)
                     break

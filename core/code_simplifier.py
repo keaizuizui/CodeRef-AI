@@ -489,7 +489,7 @@ class CodeSimplifier:
         """判断项目是否用到 loguru 特有高级 API（说明有格式化/结构化需求）。
 
         命中 logger.opt / logger.bind / logger.patch / logger.contextualize /
-        logger.level / logger.add(fmt=...) 任一即视为需要 loguru 而非标准库 logging。
+        logger.level / logger.add(format=...) 任一即视为需要 loguru 而非标准库 logging。
         """
         api_patterns = (
             r'logger\.opt\s*\(',
@@ -497,7 +497,7 @@ class CodeSimplifier:
             r'logger\.patch\s*\(',
             r'logger\.contextualize\s*\(',
             r'logger\.level\s*\(',
-            r'logger\.add\s*\([^)]*fmt\s*=',
+            r'logger\.add\s*\([^)]*\bformat\s*=',
         )
         for cf in analysis.files:
             raw = cf.raw_content or ""

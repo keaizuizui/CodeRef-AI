@@ -978,12 +978,16 @@ class Server:
             return {"jsonrpc":"2.0","id":rid,"error":{"code":-32000,"message":str(e)}}
 
     def _bg(self, rc, n, a):
+        import time
         try:
             # progress 回调：每个阶段完成后写入共享 rc，_tsk 据此回传进度
             def prog(stage, done, total, detail=None):
                 rc["progress"] = {"stage": stage, "done": done, "total": total, "detail": detail}
             rc["result"] = self._run(n, a, progress_cb=prog)
         except Exception as e: rc["error"] = str(e); rc["tb"] = traceback.format_exc()
+        finally:
+            # 任务终态标记完成时间（无论成败），供 _tsk / 调用方判断终态
+            rc["finished_at"] = time.time()
 
     def _scan_tool(self, a: dict) -> str:
         """运行单个审计维度（coderef_scan），返回结构化 JSON findings。

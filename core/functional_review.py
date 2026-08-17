@@ -420,6 +420,7 @@ class FunctionalReviewer:
         # 归一化 verdict → 白名单候选
         candidates = []
         summary = {"suspected_fp": 0, "needs_review": 0, "confirmed": 0}
+        norm_reasons = {}
         for idx, f in enumerate(findings):
             key = self._find_key(f, idx)
             # 兼容 LLM 返回的三种键格式：f0（内部键）/ 0（裸序号）/ [0]（prompt 展示的方括号序号），
@@ -429,6 +430,10 @@ class FunctionalReviewer:
             if v not in (_VERDICT_CONFIRMED, _VERDICT_NEEDS_REVIEW, _VERDICT_SUSPECTED_FP):
                 v = _VERDICT_NEEDS_REVIEW
             verdicts[key] = v
+            r = (reasons.get(key) or reasons.get(str(idx))
+                 or reasons.get(f"[{idx}]") or "")
+            if r:
+                norm_reasons[key] = r
             summary[v] = summary.get(v, 0) + 1
             if v == _VERDICT_SUSPECTED_FP:
                 candidates.append(self._suggest_whitelist_entry(f))
@@ -437,7 +442,7 @@ class FunctionalReviewer:
             "llm_available": True,
             "ran": True,
             "verdicts": verdicts,
-            "reasons": reasons or {},
+            "reasons": norm_reasons,
             "candidates": candidates,
             "summary": summary,
         }

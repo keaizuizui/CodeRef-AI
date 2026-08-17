@@ -537,6 +537,9 @@ def extract_ir_from_kg(project_path: str,
         if n.get("type") != "module":
             continue
         fp = n.get("file_path") or ""
+        if not isinstance(fp, str) or not fp:
+            # 无文件路径的模块节点无法通过 validate_ir 的必填校验，跳过
+            continue
         mod_nodes[nid] = {
             "id": nid,
             "name": n.get("name", nid),

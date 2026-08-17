@@ -1068,7 +1068,8 @@ class BusinessAnalyzer:
                 return workflows
 
         # 优先级 2：LLM + 知识库驱动（知识库本身是确定性底座，LLM 只做语义整合）
-        if enrichment is not None:
+        # LLM 可用即尝试（enrichment 为可选上下文，缺失时 _llm_workflow_discovery 内部已容错）
+        if self.llm and hasattr(self.llm, 'chat_completion'):
             try:
                 llm_flows = self._llm_workflow_discovery(analysis, entities, roles, enrichment=enrichment)
                 if llm_flows:
@@ -2876,7 +2877,8 @@ def analyze_project_business(project_analysis, llm_client=None, max_iterations=3
     if llm_client is None:
         from core.llm_integration import LLMIntegration
         llm_client = LLMIntegration()
-    if not getattr(llm_client, "is_available", lambda: False)():
+    probe = getattr(llm_client, "is_available", None)
+    if callable(probe) and not probe():
         return (
             "【业务报告未生成】业务全景报告需要 LLM 才能产出，但当前未配置有效的 API Key。\n"
             "请在配置面板填写 API Key 后再生成。\n"

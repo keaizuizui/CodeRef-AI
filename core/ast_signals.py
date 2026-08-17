@@ -82,6 +82,20 @@ def detect_silent_except(tree, rel_path) -> List[dict]:
                  and not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant)
                           and isinstance(s.value.value, str))]
         if not stmts:
+            # 空体（仅 pass/docstring）是最典型的静默吞掉，直接报告
+            exc_name = ""
+            if node.type:
+                if isinstance(node.type, ast.Name):
+                    exc_name = node.type.id
+                elif isinstance(node.type, ast.Attribute):
+                    exc_name = node.type.attr
+            out.append({
+                "signal": "silent_except",
+                "file": rel_path,
+                "line": node.lineno,
+                "exc": exc_name or "Exception",
+                "detail": f"except {exc_name or 'Exception'} 块内仅 pass/docstring，异常被完全静默吞掉",
+            })
             continue
         if any(_is_log_call(s) for s in stmts):
             continue
@@ -177,7 +191,9 @@ def _collect_func_signatures(project_path: str) -> Dict[str, dict]:
         if tree is None:
             continue
         rel = _rel(project_path, path)
-        for node in ast.walk(tree):
+        # 仅模块级 FunctionDef/AsyncFunctionDef 用裸名；类方法用 `Class.method`
+        # 限定名；嵌套函数不注册（避免以裸名覆盖模块级同名函数）
+        for node in tree.body:
             if isinstance(node, ast.ClassDef):
                 for sub in node.body:
                     if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -185,7 +201,6 @@ def _collect_func_signatures(project_path: str) -> Dict[str, dict]:
                         sigs.setdefault(key, {"params": _sig_of(sub),
                                               "file": rel, "line": sub.lineno})
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                # 模块级函数用裸名（类方法已用限定名入库，不与模块级冲突）
                 sigs.setdefault(node.name, {"params": _sig_of(node),
                                             "file": rel, "line": node.lineno})
     return sigs
@@ -238,6 +253,10 @@ def detect_missing_param_pass(tree, rel_path, sigs: Dict[str, dict]) -> List[dic
         if params is None:
             continue
         names = list(params.keys())
+        # 方法调用（限定名命中，如 self.render(width, height)）时第一个形参是
+        # self/cls，不占用实参位；非方法函数保持原映射
+        if callee and "." in callee and names and names[0] in ("self", "cls"):
+            names = names[1:]
         passed: Set[str] = set()
         for i in range(len(node.args)):
             if i < len(names):

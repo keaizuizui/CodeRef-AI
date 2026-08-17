@@ -322,9 +322,12 @@ class DesignRegistry:
         canonical = asset.get("canonical", "") or ""
         if not canonical:
             raise ValueError("资产必须提供 canonical 字段。")
-        self._data["assets"][canonical] = asset
+        resolved = self.resolve(canonical)
+        asset = dict(asset)
+        asset["canonical"] = resolved
+        self._data["assets"][resolved] = asset
         self._save()
-        return self.get_asset(canonical) or asset
+        return self.get_asset(resolved) or asset
 
     def get_asset(self, canonical: str) -> Optional[Dict[str, Any]]:
         """按 canonical 获取资产。"""

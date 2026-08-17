@@ -397,6 +397,10 @@ class CodeKnowledgeGraph:
         """
         n_nodes = 0
         n_edges = 0
+        # 第一趟：遍历所有 .go 文件，注册每个函数节点，同时收集函数体/位置信息
+        # 供第二趟统一建边。两趟分离使 CALLS 边解析不依赖 os.walk 顺序——
+        # 被调用函数即便位于更晚遍历的文件中也已先注册，避免漏建跨文件边。
+        go_calls: List[tuple] = []
         for root, dirs, files in os.walk(project_path):
             dirs[:] = [d for d in dirs if not d.startswith('.') and d not in
                        ('node_modules', 'venv', '.venv', 'env', '.git', 'dist',
@@ -442,17 +446,22 @@ class CodeKnowledgeGraph:
                                "params": self._go_params(content, m.end()),
                                "doc": body[:1000]}))
                     n_nodes += 1
-                    # 函数体内调用 → CALLS 边（目标在图谱中存在才建边）
-                    for cm in self._GO_CALL_RE.finditer(body):
-                        callee = cm.group(1)
-                        tgt = self._find_go_callee(callee)
-                        if tgt and tgt != nid:
-                            self._upsert_edge(KGEdge(
-                                source=nid, target=tgt, type="CALLS",
-                                props={"line": start_line - 1 +
-                                       body[:cm.start()].count('\n'),
-                                       "full_name": cm.group(0).rstrip('(')}))
-                            n_edges += 1
+                    go_calls.append((nid, body, start_line))
+        # 第二趟：所有 go_func 节点已注册，再解析函数体内调用 → CALLS 边
+        for nid, body, start_line in go_calls:
+            for cm in self._GO_CALL_RE.finditer(body):
+                callee = cm.group(1)
+                # Go 关键字 / 内置函数：_GO_CALL_RE 会命中 `if(`、`len(` 等
+                if callee in self._GO_KEYWORDS:
+                    continue
+                tgt = self._find_go_callee(callee)
+                if tgt and tgt != nid:
+                    self._upsert_edge(KGEdge(
+                        source=nid, target=tgt, type="CALLS",
+                        props={"line": start_line - 1 +
+                               body[:cm.start()].count('\n'),
+                               "full_name": cm.group(0).rstrip('(')}))
+                    n_edges += 1
         stats["nodes"] += n_nodes
         stats["edges"] += n_edges
 

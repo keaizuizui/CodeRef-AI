@@ -411,8 +411,27 @@ class FindingsVerifier:
             **EvidenceLabeler.make(verdict, reason, evidence),
         }
 
+    # ─── 资源释放（每次核验都关闭打开着的图谱/管线资源，避免连接泄漏）───
+    def _close(self) -> None:
+        """释放 CodeKnowledgeGraph（sqlite 连接）与 FlowVerifier 持有的资源。"""
+        kg, self.kg = self.kg, None
+        if kg is not None:
+            try:
+                close = getattr(kg, "close", None)
+                if callable(close):
+                    close()
+            except Exception as exc:
+                _log(f"关闭知识图谱资源失败: {exc}")
+        self.flow = None
+
     # ─── 批量核验 ───
     def verify(self, findings: List[Dict], entry: Optional[str] = None) -> Dict:
+        try:
+            return self._verify(findings, entry=entry)
+        finally:
+            self._close()
+
+    def _verify(self, findings: List[Dict], entry: Optional[str] = None) -> Dict:
         if not self.graph_exists:
             return {
                 "ok": False,

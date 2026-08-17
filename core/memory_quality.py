@@ -189,62 +189,62 @@ class MemoryQuality:
 
         node_ids = set(kg.get_node_ids())
 
-        # 遍历所有边，找出指向不存在节点的孤儿边
         orphan_edges = []
-        for eid, e in kg.get_all_edges():
-            if e.source not in node_ids or e.target not in node_ids:
-                missing = []
-                if e.source not in node_ids:
-                    missing.append(f"source={e.source}")
-                if e.target not in node_ids:
-                    missing.append(f"target={e.target}")
-                orphan_edges.append((eid, e, "，".join(missing)))
-
-        # 找出没有入边也没有出边的孤立节点
         referenced = set()
-        for _eid, e in kg.get_all_edges():
-            referenced.add(e.source)
-            referenced.add(e.target)
-        orphan_nodes = sorted(node_ids - referenced)
-
-        # 报告孤儿边
         edge_findings: List[Dict[str, Any]] = []
-        for eid, e, missing in orphan_edges[:MAX_ORPHAN_EDGES_REPORT]:
-            f = self._make_finding(
-                kind=KIND_INTEGRITY,
-                file="",
-                line=0,
-                title="孤儿边：引用了不存在的节点",
-                detail=f"边 {e.source} --[{e.type}]--> {e.target} 存在失效引用（{missing}）。"
-                       "引用完整性被破坏，可能影响查询/影响分析的准确性。",
-                suggestion="删除该孤儿边，或补建缺失的目标节点。",
-                severity=SEVERITY_MEDIUM,
-            )
-            findings.append(f)
-            edge_findings.append(f)
+        try:
+            # 单次遍历所有边：同时找出孤儿边与引用到的节点集合，避免重复全量扫描
+            for eid, e in kg.get_all_edges():
+                referenced.add(e.source)
+                referenced.add(e.target)
+                if e.source not in node_ids or e.target not in node_ids:
+                    missing = []
+                    if e.source not in node_ids:
+                        missing.append(f"source={e.source}")
+                    if e.target not in node_ids:
+                        missing.append(f"target={e.target}")
+                    orphan_edges.append((eid, e, "，".join(missing)))
 
-        # 报告孤立节点
-        for nid in orphan_nodes[:MAX_ORPHAN_NODES_REPORT]:
-            findings.append(self._make_finding(
-                kind=KIND_INTEGRITY,
-                file="",
-                line=0,
-                title="孤立节点：没有任何关联边",
-                detail=f"节点 {nid} 没有入边也没有出边，可能是死代码或构建残留。",
-                suggestion="确认该节点是否仍需保留；若已失效请清理。",
-                severity=SEVERITY_LOW,
-            ))
+            # 找出没有入边也没有出边的孤立节点
+            orphan_nodes = sorted(node_ids - referenced)
 
-        # auto_fix：删除孤儿边（孤立节点保留，交由人工确认）
-        if auto_fix and orphan_edges:
-            eids = [eid for eid, _, _ in orphan_edges]
-            applied = kg.delete_orphan_edges(eids)
-            # 只标记孤儿边发现（edge_findings），避免误标孤立节点发现
-            for f in edge_findings:
-                f["status"] = STATUS_AUTO_FIXED
-                f["detail"] += " [已自动修复]"
+            # 报告孤儿边
+            for eid, e, missing in orphan_edges[:MAX_ORPHAN_EDGES_REPORT]:
+                f = self._make_finding(
+                    kind=KIND_INTEGRITY,
+                    file="",
+                    line=0,
+                    title="孤儿边：引用了不存在的节点",
+                    detail=f"边 {e.source} --[{e.type}]--> {e.target} 存在失效引用（{missing}）。"
+                           "引用完整性被破坏，可能影响查询/影响分析的准确性。",
+                    suggestion="删除该孤儿边，或补建缺失的目标节点。",
+                    severity=SEVERITY_MEDIUM,
+                )
+                findings.append(f)
+                edge_findings.append(f)
 
-        kg.close()
+            # 报告孤立节点
+            for nid in orphan_nodes[:MAX_ORPHAN_NODES_REPORT]:
+                findings.append(self._make_finding(
+                    kind=KIND_INTEGRITY,
+                    file="",
+                    line=0,
+                    title="孤立节点：没有任何关联边",
+                    detail=f"节点 {nid} 没有入边也没有出边，可能是死代码或构建残留。",
+                    suggestion="确认该节点是否仍需保留；若已失效请清理。",
+                    severity=SEVERITY_LOW,
+                ))
+
+            # auto_fix：删除孤儿边（孤立节点保留，交由人工确认）
+            if auto_fix and orphan_edges:
+                eids = [eid for eid, _, _ in orphan_edges]
+                applied = kg.delete_orphan_edges(eids)
+                # 只标记孤儿边发现（edge_findings），避免误标孤立节点发现
+                for f in edge_findings:
+                    f["status"] = STATUS_AUTO_FIXED
+                    f["detail"] += " [已自动修复]"
+        finally:
+            kg.close()
         stats = {
             "graph_exists": True,
             "orphan_edges": len(orphan_edges),
@@ -302,7 +302,7 @@ class MemoryQuality:
             ))
 
         # 覆盖率偏低整体提示
-        if total and ratio < COVERAGE_WARN_THRESHOLD and not findings:
+        if total and ratio < COVERAGE_WARN_THRESHOLD:
             findings.append(self._make_finding(
                 kind=KIND_COVERAGE,
                 title="记忆覆盖率偏低",
@@ -360,12 +360,12 @@ class MemoryQuality:
 
             # 只收集模块级与类级符号（函数/类/方法），避免重复统计
             for node in ast.iter_child_nodes(tree):
-                if isinstance(node, ast.FunctionDef):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     symbols.append(self._to_symbol(node, py_file, "function"))
                 elif isinstance(node, ast.ClassDef):
                     symbols.append(self._to_symbol(node, py_file, "class"))
                     for sub in ast.iter_child_nodes(node):
-                        if isinstance(sub, ast.FunctionDef):
+                        if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
                             symbols.append(self._to_symbol(sub, py_file, "method"))
         return symbols
 

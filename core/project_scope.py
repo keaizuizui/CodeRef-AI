@@ -429,7 +429,7 @@ class ProjectScope:
             ext = os.path.splitext(entry)[1].lower()
             if ext in SOURCE_EXTENSIONS:
                 code_count += 1
-            elif ext in CODE_EXTENSIONS:  # 编译产物/二进制（非源码）
+            elif ext in BINARY_EXTENSIONS:  # 编译产物/二进制（非源码）
                 binary_count += 1
 
         # 打包元数据大量出现 → 强信号
@@ -468,7 +468,7 @@ class ProjectScope:
                 code_count += 1
                 if code_count > 2:  # 含较多真源码 → 不跳过
                     return False
-            elif ext in CODE_EXTENSIONS or ext in RESOURCE_EXTENSIONS:  # 编译产物/二进制/模型权重
+            elif ext in BINARY_EXTENSIONS or ext in RESOURCE_EXTENSIONS:  # 编译产物/二进制/模型权重
                 has_binary = True
 
         # 有二进制/编译产物，且几乎没有源码 → 视为资源目录

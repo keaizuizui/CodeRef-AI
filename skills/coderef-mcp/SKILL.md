@@ -26,7 +26,7 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 | `coderef_audit` | 11 维度一次全量审计 + 自动降噪 + 构建知识图谱 | 首次必跑；`strategy=auto` 自动判定 |
 | `coderef_scan` | 单维度审计（快一个量级），写完模块即时自查 | 先 `coderef_scan_list` 看维度 |
 | `coderef_architecture` | 架构分析图谱 + 模块画布 HTML | 发现零散重复/模块不统一 |
-| `coderef_docs` | 生成结构化 Wiki（README/架构/安装/使用/API） | 后台，3-20 分钟 |
+| `coderef_docs` | 生成结构化 Wiki（OVERVIEW/架构/安装/使用/API/ENTRIES/FLOWS）+ 交叉验证徽标 + YAML front matter | 后台，3-20 分钟 |
 | `coderef_docs_read` | 按需读已生成的 Wiki 正文（返回内容而非路径） | 省 token |
 | `coderef_query` | 查询知识图谱（callers/callees/impact/search 等） | 替代 grep，省 10-100 倍 token |
 | `coderef_report` | 聚合审计/图谱/Wiki 为自包含 HTML 报告 | 给非编程人员看 |

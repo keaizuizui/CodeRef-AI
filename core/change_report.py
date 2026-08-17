@@ -90,6 +90,9 @@ class ChangeReport:
         try:
             if available and len(units) <= MAX_UNITS_PER_PROMPT:
                 items = self._llm_summarize(project_path, units)
+                if not items:
+                    # LLM 成功但未产出可解析项：回落到结构性归纳，避免空报告
+                    items = self._structural_summarize(project_path, units)
             else:
                 items = self._structural_summarize(project_path, units)
         except Exception as e:

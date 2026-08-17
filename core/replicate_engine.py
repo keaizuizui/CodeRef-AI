@@ -466,6 +466,7 @@ class ReplicateEngine:
 
         written: List[Dict[str, Any]] = []
         conflicts: List[Dict[str, Any]] = []
+        missing_optional: List[str] = []  # 资产未提供的可选内容（不算写入冲突）
 
         def _safe_dest(name: str, kind: str) -> Optional[str]:
             """把相对文件名解析为 out_dir 内的安全绝对路径；越界（绝对路径 / 父级穿越）返回 None 并记冲突。"""
@@ -508,16 +509,13 @@ class ReplicateEngine:
                         f.write(template_code)
                     written.append({"kind": "template_code", "dest": dest})
         else:
-            conflicts.append({
-                "kind": "template_code",
-                "dest": "",
-                "reason": "资产未提供 template_code（待补全），无法落地骨架。",
-            })
+            missing_optional.append("template_code")
 
         # 2. 落地 patch_suggestion / migration_guide（若存在，作为说明文档）
         for kind, value in (("patch_suggestion", asset.get("patch_suggestion")),
                             ("migration_guide", asset.get("migration_guide"))):
             if not (value or "").strip():
+                missing_optional.append(kind)
                 continue
             ext = "_patch.md" if kind == "patch_suggestion" else "_migration.md"
             dest = _safe_dest(f"{resolved}{ext}", kind)
@@ -544,6 +542,7 @@ class ReplicateEngine:
             "target_dir": out_dir,
             "written": written,
             "conflicts": conflicts,
+            "missing_optional": missing_optional,
             "overwrite": overwrite,
             "applied_at": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "note": (
@@ -573,6 +572,7 @@ class ReplicateEngine:
             "written_count": len(written),
             "conflicts": conflicts,
             "conflict_count": len(conflicts),
+            "missing_optional": missing_optional,
             "summary": summary,
         }
 

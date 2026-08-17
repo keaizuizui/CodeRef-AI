@@ -317,8 +317,12 @@ class ChangeGuard:
                 full = os.path.join(p, cand)
                 if os.path.isfile(full):
                     return full
+            return "git"
+        # 只接受以 git / git.exe 命名的可执行文件，否则回退系统 PATH 的 "git"
+        base = os.path.basename(p).lower()
+        if base in ("git", "git.exe"):
             return p
-        return p
+        return "git"
 
     @staticmethod
     def _git(project_path: str, args: List[str],

@@ -631,14 +631,6 @@ def _tool_location_source(path: str) -> str:
     if "\\appdata\\" in low:
         return "用户级安装（PATH 可能不含）"
     return "PATH 可执行"
-    """从依赖清单内容提取简短的版本 / 来源摘要"""
-    if not content:
-        return "（空清单）"
-    lines = [l.strip() for l in content.splitlines()
-             if l.strip() and not l.strip().startswith(("#", "//"))]
-    count = len(lines)
-    head = lines[0] if lines else ""
-    return f"约 {count} 项依赖；首项：{head[:60]}"
 
 
 def _locate_wsl_launcher() -> str:
@@ -709,10 +701,19 @@ def _summarize_deps(filename: str, content: str) -> str:
         if not lines:
             return "空清单"
         if filename == "package.json":
-            # 抓 dependencies / devDependencies 的键名
-            names = re.findall(r'"(?!"(?:dependencies|devDependencies|peerDependencies|optionalDependencies)"":)\s*"([A-Za-z0-9@._/-]+)"\s*:', content)
-            if not names:
-                names = re.findall(r'"([A-Za-z0-9@._/-]+)"\s*:\s*"', content)
+            # 完整解析 manifest，只取四个依赖组键名，避免 name/version/scripts 等元数据
+            names = []
+            try:
+                manifest = json.loads(content)
+                for dep_key in ("dependencies", "devDependencies",
+                                "peerDependencies", "optionalDependencies"):
+                    group = manifest.get(dep_key)
+                    if isinstance(group, dict):
+                        names.extend(str(k) for k in group)
+            except Exception:
+                # 内容截断 / 非法 JSON：回退正则抓包名，跳过元数据区键
+                names = re.findall(
+                    r'"(?!"(?:scripts|name|version|description|author|license|repository|engines|keywords)"):)\s*"([A-Za-z0-9@._/-]+)"\s*:', content)
             picked = names[:20]
         else:
             # requirements/pyproject/Cargo/go/Gemfile 等：取每行包名（去掉版本/约束/注释）
@@ -951,8 +952,8 @@ class OperationMemory:
                 return {
                     "status": "ok", "mode": mode, "changed": False,
                     "message": "文件无变更，复用已有操作记忆",
-                    "resources": prev["resources"],
-                    "side_dirs": prev["side_dirs"],
+                    "resources": prev.get("resources", {}),
+                    "side_dirs": prev.get("side_dirs", []),
                     "ledger_path": _omem_dir(project_path),
                     "brain_path": os.path.join(_omem_dir(project_path), "BRAIN.md"),
                 }

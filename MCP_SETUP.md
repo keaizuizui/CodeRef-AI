@@ -2,7 +2,7 @@
 
 ## 概述
 
-CodeRef-AI 通过 MCP (Model Context Protocol) 协议暴露 32 个工具给 AI 编程助手使用。配置一次后，AI 可以分析**任何项目**——每次调用时传入 `project_path` 参数即可，不需要重复配置。
+CodeRef-AI 通过 MCP (Model Context Protocol) 协议暴露 37 个工具给 AI 编程助手使用。配置一次后，AI 可以分析**任何项目**——每次调用时传入 `project_path` 参数即可，不需要重复配置。
 
 **适用客户端：** Trae / Claude Desktop / Cursor / 任何支持 MCP 的 AI 编程助手
 
@@ -167,7 +167,7 @@ export CODEREF_API_KEY="ollama"
 | 工具 | 功能 | 模式 | 需要 LLM |
 |------|------|------|---------|
 | `coderef_audit` | 11 审计工具一键产出 + 自动降噪 + 知识图谱构建 | 后台 | 否 |
-| `coderef_scan` | 单维度审计（11 选 1），实时安全带；默认后台执行、立即返回 task_id，客户端用 `coderef_task_status` 查询结果 | 后台 | 否 |
+| `coderef_scan` | 单维度审计（11 选 1），实时安全带；默认后台执行、立即返回 task_id（`background` 参数可覆盖为同步），客户端用 `coderef_task_status` 查询结果 | 后台 | 否 |
 | `coderef_scan_list` | 列出 `coderef_scan` 可选的维度清单 | 同步 | 否 |
 | `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 后台 | 否 |
 | `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 后台 | 是 |
@@ -187,6 +187,11 @@ export CODEREF_API_KEY="ollama"
 | `coderef_memory_query` | 记忆语义检索 + 结构查询 | 同步 | 否 |
 | `coderef_memory_status` | 认知覆盖度 + 置信度 + 盲区地图 | 同步 | 否 |
 | `coderef_memory_quality` | 记忆质量评估 + 自动补全 | 后台 | 可选 |
+| `coderef_operation_memory_sync` | 操作记忆增量同步（ledger / BRAIN.md） | 后台 | 否 |
+| `coderef_operation_memory_query` | 操作记忆语义 / 结构查询 | 同步 | 否 |
+| `coderef_operation_memory_status` | 操作记忆状态概览 | 同步 | 否 |
+| `coderef_operation_memory_find` | 定位工具 / 约定 / 陷阱（跨进程并发安全） | 同步 | 否 |
+| `coderef_operation_memory_recover` | 恢复关键工具位置 / 约定摘要 / 待人工确认项 | 同步 | 否 |
 | `coderef_prompt_governance` | Prompt 治理平台（资产生命周期 × 合规审计 × 跨模块一致性，4.6 合并原 prompt_mgmt + prompt_audit） | 后台 | 否 |
 | `coderef_verify_findings` | 论断确定性核验（确证/证伪/部分确证/存疑） | 后台 | 否 |
 | `coderef_innovation` | 识别项目创新设计 + 传播缺口 | 后台 | 是 |

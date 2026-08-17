@@ -593,7 +593,8 @@ class MemoryLayer:
 
         total_files = len(files)
         ast_cache = state.get("ast_cache", {})
-        indexed = [fp for fp, d in ast_cache.items() if d and fp in files]
+        file_set = set(files)
+        indexed = [fp for fp, d in ast_cache.items() if d and fp in file_set]
         coverage = round(len(indexed) / total_files * 100, 1) if total_files else 0.0
 
         confidence_map = self._module_confidence(ast_cache, files)

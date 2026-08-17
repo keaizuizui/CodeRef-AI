@@ -921,7 +921,9 @@ class Pipe:
             suggestion=d.get("suggestion", ""), tier=tier,
             xval_by=list(d.get("xval_by", []) or []),
             line_start=d.get("line_start", 0), line_end=d.get("line_end", 0),
-            kind=d.get("kind", "defect"))
+            kind=d.get("kind", "defect"),
+            count=int(d.get("count", 1) or 1),
+            locations=list(d.get("locations", []) or []))
 
     @staticmethod
     def _findings_json_path(project_path: str, out: Optional[str] = None) -> str:
