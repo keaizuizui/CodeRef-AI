@@ -428,6 +428,12 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 - 修复前这三篇经 `_auto_front_matter` 默认生成，`description`/`source` 落空串，被复测判定为缺失；FLOWS/ENTRIES 因显式传值本就不受影响
 - 验证：CodeRabbit 审计 0 findings、AST 校验 + 行为级回归（三篇 source/description 均非空）+ 全量编译通过
 
+### 补充修复（并入 v4.9.3）：coderef_whitelist 非法 action 显式拒绝
+
+- 参数契约矩阵暴露真实缺口：`coderef_whitelist` 传入非法 `action` 未校验枚举，此前静默落到默认 add 分支并返回成功
+- 新增模块级常量 `WHITELIST_ACTIONS`（schema enum 与 `_wl` 校验同源）；非字符串 / 非枚举 `action` 一律返回结构化错误，与 `wiki_style`/`docs_read`/`strategy` 的枚举严格校验保持一致
+- 验证：行为测试 6/6 PASS + 全量编译通过
+
 ### v4.9.2 — 工具注册表重构 + 打包与 CI + 依赖收敛（4.X 系列收尾）
 
 - **工具注册表外置**：`core/mcp_server.py` 中 700+ 行工具 schema 自 `__init__` 抽取为模块级 `BUILTIN_TOOLS` 常量，`__init__` 缩减至 ~100 行；37 工具 / 36 handlers / 24 重型工具经逐字节 dump 一致性验证为零变化
