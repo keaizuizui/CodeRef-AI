@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.9.2** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.9.3** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -421,6 +421,12 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 | **4.0** | 通过四个引擎和四个支柱，增强工具的功能覆盖，形成逻辑闭环 |
 
 ## 更新日志
+
+### v4.9.3 — 收尾修复：front matter 引导文档缺 source/description（P3）
+
+- 为 **OVERVIEW / ARCHITECTURE / INSTALLATION** 三篇引导文档显式注入 front matter：`description` 用文档用途文案、`source` 回填项目路径（`meta.project_path`，空则回退项目名）、`confidence=high`
+- 修复前这三篇经 `_auto_front_matter` 默认生成，`description`/`source` 落空串，被复测判定为缺失；FLOWS/ENTRIES 因显式传值本就不受影响
+- 验证：CodeRabbit 审计 0 findings、AST 校验 + 行为级回归（三篇 source/description 均非空）+ 全量编译通过
 
 ### v4.9.2 — 工具注册表重构 + 打包与 CI + 依赖收敛（4.X 系列收尾）
 
