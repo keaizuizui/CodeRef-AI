@@ -80,7 +80,10 @@ def verify_mermaid(mermaid_code: str) -> dict:
     # 2. 节点 id 合法性
     for line in code.splitlines():
         line = line.strip()
-        m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\s*[\[({]', line)
+        # 先捕获原始 token（允许任意非分隔/非空白字符），再校验是否
+        # 是合法 Mermaid id——避免用预过滤后的字符类做二次匹配（那样永远成立）。
+        # 覆盖普通节点 "id[label]" 与 subgraph 头 "subgraph id[标题]" 两种形态。
+        m = re.match(r'^(?:subgraph\s+)?((?:[^\s\[({"]+)|(?:<[^>]*>))\s*[\[({]', line)
         if m:
             nid = m.group(1)
             if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', nid):
