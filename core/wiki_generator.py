@@ -1488,7 +1488,12 @@ class WikiGenerator:
         if uv:
             overview = self._cite_fix(overview, "OVERVIEW.md", uv, meta)
             cite_warnings.append(f"- OVERVIEW.md: 修复了 {len(uv)} 个未验证标识符")
-        self._emit(docs, output_dir, "OVERVIEW.md", overview)
+        self._emit(docs, output_dir, "OVERVIEW.md", overview,
+                   front_matter=self._build_front_matter(
+                       "overview", title="业务概览",
+                       description="项目业务视角总览：面向非技术读者梳理项目是做什么的、怎么用",
+                       source=getattr(meta, "project_path", "") or project_name,
+                       confidence="high"))
 
         # 2.5 分层人话版：入口级(L1) + 数据流级(L2)
         # 面向更大规模项目：按入口/数据流分块喂 LLM（避免 token 爆炸），
@@ -1559,7 +1564,12 @@ class WikiGenerator:
         if uv:
             arch = self._cite_fix(arch, "ARCHITECTURE.md", uv, meta)
             cite_warnings.append(f"- ARCHITECTURE.md: 修复了 {len(uv)} 个未验证标识符: {', '.join(uv[:8])}")
-        self._emit(docs, output_dir, "ARCHITECTURE.md", arch)
+        self._emit(docs, output_dir, "ARCHITECTURE.md", arch,
+                   front_matter=self._build_front_matter(
+                       "architecture", title="架构设计",
+                       description="系统架构与技术全景：模块划分、调用关系与设计理念",
+                       source=getattr(meta, "project_path", "") or project_name,
+                       confidence="high"))
 
         # 3. INSTALLATION.md
         install = self._generate_installation(project_name, project_summary, modules, style, meta)
@@ -1567,7 +1577,12 @@ class WikiGenerator:
         if uv:
             install = self._cite_fix(install, "INSTALLATION.md", uv, meta)
             cite_warnings.append(f"- INSTALLATION.md: 修复了 {len(uv)} 个未验证标识符")
-        self._emit(docs, output_dir, "INSTALLATION.md", install)
+        self._emit(docs, output_dir, "INSTALLATION.md", install,
+                   front_matter=self._build_front_matter(
+                       "installation", title="安装指南",
+                       description="安装、环境配置与运行说明",
+                       source=getattr(meta, "project_path", "") or project_name,
+                       confidence="high"))
 
         # 4. USAGE.md
         usage = self._generate_usage(project_name, project_summary, modules, style,
