@@ -311,6 +311,15 @@ class PromptAssetManager:
 
         content = content[:CONTENT_CAP]
         version = version or self._next_version(info)
+        # 与 _action_version 保持一致：A/B 版本也登记进 versions，
+        # 保证 _promote 后 active_version 可被 _find_version 找回，且 _next_version 用完整版本集确保唯一
+        if not self._find_version(info, version):
+            info["versions"].append({
+                "version": version,
+                "content": content,
+                "size": len(content),
+                "created_at": datetime.now().isoformat(),
+            })
         abtest[abtest_group] = {
             "version": version,
             "content": content,
@@ -425,6 +434,11 @@ class PromptAssetManager:
             ver = str(v.get("version", ""))
             if ver.startswith("v") and ver[1:].isdigit():
                 nums.append(int(ver[1:]))
+        # A/B 分组当前版本也计入，避免连续 abtest 部署（未显式版本）生成重复版本号
+        for g in ABTEST_GROUPS:
+            gver = str(info.get("abtest", {}).get(g, {}).get("version", ""))
+            if gver.startswith("v") and gver[1:].isdigit():
+                nums.append(int(gver[1:]))
         nxt = (max(nums) + 1) if nums else 1
         return f"v{nxt}"
 

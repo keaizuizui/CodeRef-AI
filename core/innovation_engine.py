@@ -313,6 +313,7 @@ class InnovationEngine:
 
         # 过滤后重新计算分母，避免分子（过滤后）与分母（过滤前）不一致
         scope_total = len(workflows)
+        workflow_scope_total = total  # 未过滤的完整范围，独立字段暴露，避免设计率分母被意图缩小
 
         # ── designs（每个已知设计的采用情况） ──
         designs: List[Dict[str, Any]] = []
@@ -391,7 +392,8 @@ class InnovationEngine:
             "project_path": project_path,
             "intent": intent,
             "min_adoption": min_adoption,
-            "total_workflows": total,
+            "total_workflows": scope_total,
+            "workflow_scope_total": workflow_scope_total,
             "workflows": workflows,
             "gaps": [self._gap_to_dict(g) for g in gaps],
             "designs": designs,

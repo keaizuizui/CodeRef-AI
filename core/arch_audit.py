@@ -86,10 +86,13 @@ def build_module_graph(nodes: Dict[str, dict],
                        project_path: str = "") -> Dict[str, List[str]]:
     """把符号级 CALLS 边聚合为模块级依赖图（剔除自环）。
 
-    返回 {模块名: [下游模块, ...]（去重、排序）}。
+    返回 (mod_adj, self_edges)：
+      mod_adj    {模块名: [下游模块, ...]（去重、排序）}
+      self_edges 存在模块内递归（自环）调用的模块名集合。
     模块名用相对路径，区分不同目录下的同名文件，避免边被错误合并。
     """
     mod_adj: Dict[str, set] = defaultdict(set)
+    self_edges: set = set()
     for src, targets in adj.items():
         ms = module_of(nodes.get(src, {}), project_path)
         if not ms:
@@ -98,7 +101,9 @@ def build_module_graph(nodes: Dict[str, dict],
             mt = module_of(nodes.get(tgt, {}), project_path)
             if mt and mt != ms:
                 mod_adj[ms].add(mt)
-    return {m: sorted(t) for m, t in mod_adj.items()}
+            elif mt and mt == ms:
+                self_edges.add(ms)
+    return {m: sorted(t) for m, t in mod_adj.items()}, self_edges
 
 
 def find_sccs(adj: Dict[str, List[str]]) -> List[List[str]]:
@@ -188,7 +193,7 @@ def audit(project_path: str, db_path: str = None,
         "calls_edges": sum(len(v) for v in adj.values()),
     }
 
-    mod_adj = build_module_graph(nodes, adj, project_path)
+    mod_adj, self_edges = build_module_graph(nodes, adj, project_path)
     result["graph_stats"]["modules"] = len(mod_adj)
 
     # 1) 循环依赖（模块级 SCC）
@@ -196,7 +201,7 @@ def audit(project_path: str, db_path: str = None,
     for comp in find_sccs(mod_adj):
         is_cycle = len(comp) >= sc_min
         if len(comp) == 1:
-            is_cycle = comp[0] in mod_adj.get(comp[0], [])
+            is_cycle = comp[0] in self_edges
         if is_cycle:
             cycles.append(comp)
     result["cycles"] = cycles
