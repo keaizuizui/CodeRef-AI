@@ -1510,8 +1510,10 @@ class Server:
                 _ws = getattr(WikiGenerator, "WIKI_STYLES", {}) or {}
             except Exception:
                 _ws = {}
-            ws = a.get("wiki_style") or "comprehensive"
-            if ws not in _ws:
+            # 仅在 key 完全缺失时才回落默认值；显式传入空串/非字符串/非法枚举
+            # 一律结构化拒绝，避免调用方误以为用上了目标风格
+            ws = a["wiki_style"] if "wiki_style" in a else "comprehensive"
+            if not isinstance(ws, str) or ws not in _ws:
                 return json.dumps({
                     "status": "error",
                     "tool": n,
