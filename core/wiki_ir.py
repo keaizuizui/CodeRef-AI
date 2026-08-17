@@ -314,6 +314,13 @@ def validate_ir(ir: dict) -> dict:
                                "field": f"nodes[{idx}].{f}",
                                "message": f"nodes[{idx}].{f} 应为字符串"})
 
+        # 必填字段：name 与 file_path 缺失 → 结构化纠正而非静默 ok
+        for f in ("name", "file_path"):
+            if not isinstance(node.get(f), str) or not node.get(f):
+                errors.append({"code": IR_MISSING_FIELD,
+                               "field": f"nodes[{idx}].{f}",
+                               "message": f"nodes[{idx}] 缺少必填字段 {f}"})
+
     # 4. 边引用完整性
     edges = ir.get("edges")
     if not isinstance(edges, list):
@@ -359,54 +366,105 @@ def ir_to_mermaid(ir: dict) -> str:
 
     IR 边用节点 id 引用，generate_mermaid 用节点 name 生成 ID，
     因此先把 id 映射回 name 再交给渲染层。
+
+    渲染层对非法 IR（None / nodes 为字符串 / node id 为 list/dict 等不可哈希值）
+    做防御性降级：安全返回空串而不是抛异常（与 validate_ir 的类型护栏一致）。
     """
     from core.diagram_generator import generate_mermaid
-    nodes = ir.get("nodes") or []
-    id_to_name = {n.get("id"): n.get("name", "") for n in nodes}
-    dg_nodes = [{"name": n.get("name", ""),
-                 "filePath": n.get("file_path", "")} for n in nodes]
+    if not isinstance(ir, dict):
+        return ""
+    nodes = ir.get("nodes")
+    if not isinstance(nodes, list):
+        nodes = []
+    # node id 可能来自 LLM 输出为 list/dict（不可哈希），构造 dict 前先过滤，
+    # 只接受 str 作 key，避免 `{n.get("id"): ...}` 抛 TypeError: unhashable type
+    id_to_name: Dict[str, str] = {}
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        nid = n.get("id")
+        if isinstance(nid, str):
+            id_to_name[nid] = n.get("name", "")
+    dg_nodes = []
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        nm = n.get("name", "")
+        dg_nodes.append({"name": nm if isinstance(nm, str) else (str(nm) if nm is not None else ""),
+                         "filePath": n.get("file_path", "") if isinstance(n.get("file_path", ""), str) else ""})
     dg_edges = []
     for e in ir.get("edges") or []:
-        src = id_to_name.get(e.get("source"), e.get("source", ""))
-        tgt = id_to_name.get(e.get("target"), e.get("target", ""))
-        dg_edges.append({"source": src, "target": tgt,
+        if not isinstance(e, dict):
+            continue
+        src = e.get("source")
+        tgt = e.get("target")
+        # source/target 可能为 list/dict，id_to_name.get 以不可哈希值作 key 会崩，
+        # 非 str 一律转成可安全渲染的字符串（str(list) 而非直接透传原始对象，
+        # 否则渲染层对 list 做 len()/sanitize 会抛 TypeError）
+        if isinstance(src, str):
+            src_name = id_to_name.get(src, src)
+        else:
+            src_name = str(src) if src is not None else ""
+        if isinstance(tgt, str):
+            tgt_name = id_to_name.get(tgt, tgt)
+        else:
+            tgt_name = str(tgt) if tgt is not None else ""
+        dg_edges.append({"source": src_name, "target": tgt_name,
                          "relation_type": e.get("relation", "calls")})
     entry = ""
-    if ir.get("entry_points"):
-        entry = id_to_name.get(ir["entry_points"][0], ir["entry_points"][0])
+    eps = ir.get("entry_points")
+    if isinstance(eps, list) and eps:
+        ep0 = eps[0]
+        entry = id_to_name.get(ep0, ep0) if isinstance(ep0, str) else (str(ep0) if ep0 is not None else "")
     title = ir.get("project_name") or "Architecture Overview"
     return generate_mermaid(dg_nodes, dg_edges, entry_point=entry, title=title)
 
 
 def ir_to_markdown(ir: dict) -> str:
-    """把 IR 渲染成结构化 Markdown 段落（节点表 + 边表 + 入口点），供 wiki 嵌入。"""
+    """把 IR 渲染成结构化 Markdown 段落（节点表 + 边表 + 入口点），供 wiki 嵌入。
+
+    渲染层对非法 IR（None / nodes/edges 非 list）做防御性降级：安全返回
+    段落（可能为空）而不是抛异常，与 ir_to_mermaid 的类型护栏保持一致。
+    """
     lines = []
     lines.append("## 架构事实")
     lines.append("")
+    if not isinstance(ir, dict):
+        return "\n".join(lines)
     lines.append(f"- 项目：**{ir.get('project_name', '')}**")
     lines.append(f"- IR schema 版本：v{ir.get('schema_version', '?')}")
     lines.append("")
 
-    nodes = ir.get("nodes") or []
+    nodes = ir.get("nodes")
+    if not isinstance(nodes, list):
+        nodes = []
     lines.append("### 节点")
     lines.append("| ID | 名称 | 类型 | 角色 | 文件路径 | 信任边界 |")
     lines.append("|----|------|------|------|----------|----------|")
     for n in nodes:
+        if not isinstance(n, dict):
+            continue
         lines.append(f"| `{n.get('id', '')}` | {n.get('name', '')} | "
                      f"{n.get('type', '')} | {n.get('role', '')} | "
                      f"`{n.get('file_path', '')}` | {n.get('trust_boundary', '')} |")
     lines.append("")
 
-    edges = ir.get("edges") or []
+    edges = ir.get("edges")
+    if not isinstance(edges, list):
+        edges = []
     lines.append("### 依赖关系")
     lines.append("| 源 | 目标 | 关系 |")
     lines.append("|----|------|------|")
     for e in edges:
+        if not isinstance(e, dict):
+            continue
         lines.append(f"| `{e.get('source', '')}` | `{e.get('target', '')}` | "
                      f"{e.get('relation', 'calls')} |")
     lines.append("")
 
-    entry_points = ir.get("entry_points") or []
+    entry_points = ir.get("entry_points")
+    if not isinstance(entry_points, list):
+        entry_points = []
     lines.append("### 入口点")
     for ep in entry_points:
         lines.append(f"- `{ep}`")

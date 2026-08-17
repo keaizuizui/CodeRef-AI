@@ -1518,9 +1518,15 @@ class WikiGenerator:
                     edoc = self._cite_fix(edoc, f"ENTRIES/{entry['key']}.md", uv, meta)
                     cite_warnings.append(f"- ENTRIES/{entry['key']}.md: 修复了 {len(uv)} 个未验证标识符")
                 os.makedirs(os.path.join(output_dir, "ENTRIES"), exist_ok=True)
-                fp = self._write_doc(output_dir, f"ENTRIES/{entry['key']}.md", edoc)
-                if fp:
-                    docs.append(fp)
+                # R2：入口文档带 source/description（从入口元数据回填）
+                entry_src = (entry.get("files") or [""])[0] or entry.get("module", "")
+                efm = self._build_front_matter(
+                    "entry", title=f"{entry['module']} 入口",
+                    description=f"{entry['module']} 业务入口流程",
+                    source=entry_src, confidence="high",
+                )
+                self._emit(docs, output_dir, f"ENTRIES/{entry['key']}.md", edoc,
+                           front_matter=efm)
 
             flows = self._extract_cross_module_flows(fv)
             if len(flows) > self.MAX_FLOW_DOCS:
@@ -1537,9 +1543,14 @@ class WikiGenerator:
                     fdoc = self._cite_fix(fdoc, f"FLOWS/{fs}__{ft}.md", uv, meta)
                     cite_warnings.append(f"- FLOWS/{fs}__{ft}.md: 修复了 {len(uv)} 个未验证标识符")
                 os.makedirs(os.path.join(output_dir, "FLOWS"), exist_ok=True)
-                fp = self._write_doc(output_dir, f"FLOWS/{fs}__{ft}.md", fdoc)
-                if fp:
-                    docs.append(fp)
+                # R2：数据流文档带 source/description（源→目标 模块名回填）
+                ffm = self._build_front_matter(
+                    "flow", title=f"{flow['source']} → {flow['target']}",
+                    description=f"数据流 {flow['source']} → {flow['target']}",
+                    source=f"{flow['source']} → {flow['target']}", confidence="high",
+                )
+                self._emit(docs, output_dir, f"FLOWS/{fs}__{ft}.md", fdoc,
+                           front_matter=ffm)
 
         # 3. ARCHITECTURE.md
         arch = self._generate_architecture(project_name, project_summary, modules, style,
