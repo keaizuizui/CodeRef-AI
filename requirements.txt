@@ -1,20 +1,18 @@
 # CodeRef-AI - 智能代码分析引擎
-# 依赖清单
+# 依赖清单（v4.9.2 收敛：移除 pandas/tqdm/pathspec/ollama 四个死依赖）
 
-# LLM集成
+# LLM集成（openai 客户端走官方 SDK；Ollama 走本地 HTTP API，无需 python ollama 包）
 openai>=1.10.0
-ollama>=0.1.7
 
-# 数据处理
-requests>=2.31.0
-pandas>=2.2.0
-numpy>=1.26.0
+# 数据/网络
+requests>=2.31.0        # Ollama Embedding / SCA OSV 在线查询等 HTTP 调用
+numpy>=1.26.0           # 知识图谱向量化检索（code_knowledge_base：np.dot / np.linalg 相似度）
 pyyaml>=6.0.1
 
-# 工具
-tqdm>=4.66.0
+# 日志
 loguru>=0.7.2
-pathspec>=0.12.1
+
+# SCA 版本比较（未安装时 sca_checker 自动降级为字符串前缀比较，不影响其它功能）
 packaging>=23.0
 
 # ─── 可选依赖（非必需）────────────────────────────
