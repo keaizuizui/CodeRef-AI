@@ -1,4 +1,4 @@
-<!-- AI Summary: CodeRef-AI exposes 32 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. Core results (audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, prompt compliance) are pure static analysis — no LLM, reproducible. LLM is only used for synthesis tasks (wiki, code review) and hard-blocks honestly without an API key. Builds a closed loop: verify LLM/CodeRabbit claims deterministically, replicate solidified design assets, and interpret everything in plain language for non-programmers. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams who want AI that augments rather than hallucinates. -->
+<!-- AI Summary: CodeRef-AI exposes 37 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. Core results (audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, prompt compliance) are pure static analysis — no LLM, reproducible. LLM is only used for synthesis tasks (wiki, code review) and hard-blocks honestly without an API key. Builds a closed loop: verify LLM/CodeRabbit claims deterministically, replicate solidified design assets, and interpret everything in plain language for non-programmers. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams who want AI that augments rather than hallucinates. -->
 [![MCP Badge](https://lobehub.com/badge/mcp/keaizuizui-coderef-ai?style=flat)](https://lobehub.com/mcp/keaizuizui-coderef-ai)
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
@@ -290,7 +290,7 @@ coderef_asset(project_path="/path/to/project", action="list")
 ```
 coderef-ai/
 ├── core/                             # 核心引擎
-│   ├── mcp_server.py                 # MCP Server 入口（32 个工具）
+│   ├── mcp_server.py                 # MCP Server 入口（37 个工具）
 │   ├── pipeline_runner.py            # 管线引擎（audit/architecture/docs + 知识图谱）
 │   ├── tool_registry.py              # 工具注册中心（收敛管线引擎的上帝模块职责）
 │   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
@@ -435,7 +435,7 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 - **证据锚定（R3）**：模块文档附「证据锚定」区块，链接到 Git 文件+行号+commit，让非技术人员能追溯每段描述的确证来源；Last-good 门控把全校验通过的产物备份到 `.last-good/`，生成失败时保留上次可用版本
 - **JSON-IR 分离（R4）**（新增 `wiki_ir`）：LLM 先输出结构化架构事实 JSON → schema 校验（节点 id 唯一、边/入口引用完整）→ 再渲染 Mermaid/Markdown；LLM 不可用时从知识图谱确定性提取 IR 兜底；容错解析修复 LLM 截断的 JSON（引号/裸 token/未闭合括号）
 - **架构图可视化（R5）**（`diagram_generator`）：`generate_mermaid_embed` / `generate_arch_markdown` 生成可嵌入 wiki 的 Mermaid 图 + 节点清单表，节点数不足阈值时自动省略避免噪音
-- **用户授权层（R6）**：项目根 `INSTRUCTIONS.md` 只读解析（`## 章节` → 内容），注入 LLM system prompt 约束文档 scope/优先级；生成器绝不覆盖该文件
+- **用户授权层（R6）**：项目根 `INSTRUCTIONS.md` 只读解析（`## 章节` → 内容），作为 user-level 上下文拼入 LLM 的 user prompt 约束文档 scope/优先级（不进入承载事实约束的 system prompt）；生成器绝不覆盖该文件
 - **Agent 指针集成（R7）**：`enable_agent_pointer` 在项目根维护 `AGENTS.md` 的 `<!--CODEREFF:START/END-->` 区块指向 wiki 入口，区块外正文原样保留
 - **架构快照比对（R8）**（新增 `wiki_compare`）：`.arch-snapshot.json` 原子快照 + `compare_snapshots` 五类变更收据（added/removed/changed/moved/rerouted），输出 Markdown/JSON 变更报告（viewer-only，不做风险推断）
 - **Mermaid 自愈（R9）**（`wiki_cross_verify`）：`verify_mermaid` 校验 fence/节点 id/括号配对，失败时 `fallback_mermaid` 降级为 text fence 并附 `<!-- mermaid-fallback -->` 标记
