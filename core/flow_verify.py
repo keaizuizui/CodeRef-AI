@@ -444,26 +444,28 @@ _SKIP_CONTRACT_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules",
                        "vendor", "dist", "build", "static", "assets"}
 
 
-def cross_lang_contract_scan(project_path: str) -> List[dict]:
-    """跨语言插件契约断链检测：前端/Go 引用的业务插件名 vs PHP 插件实现目录。
+# 前端 pluginName = 'xxx' 硬编码引用（业务组件内）
+_PLUG_NAME_RE = re.compile(r'''pluginName\s*=\s*['"]([a-zA-Z][a-zA-Z0-9_\-]*)['"]''', re.I)
+# Go 的 "action":"a/b" / Param("action","a/b") 引用（捕获插件名前缀）
+_ACTION_RE = re.compile(
+    r'''(?:Param\(\s*['"]action['"]\s*,\s*|['"]action['"]\s*:\s*)['"]([a-zA-Z][a-zA-Z0-9_\-]*)/''',
+    re.I)
+# Go 动态插件名/类名注入面特征（§二.2）
+_GO_DYNAMIC_MAP_RE = re.compile(r'map\[string\](?:any|interface\{\})\s*\{', re.I)
+_GO_DYNAMIC_KEY_RE = re.compile(r'["\'](?:plugin|class)["\']\s*:\s*[a-zA-Z_][a-zA-Z0-9_]*', re.I)
+_GO_MARSHAL_RE = re.compile(r'json\.Marshal\s*\(', re.I)
 
-    背景：chatwiki worker.php 用 `setModule($plugin, "\\app\\plugins\\{$plugin}\\Module")`
-    动态加载插件，插件名即 `php/plugins/<name>/` 目录名。前端 Vue/JS 的
-    `pluginName = 'xxx'` 与 Go 的 `"action":"a/b"` / `Param("action","a/b")` 引用
-    同名插件，而 PHP 端无对应目录即跨语言契约断裂——运行时加载失败/静默降级。
 
-    只收集"业务组件"目录下的插件名引用，排除前端 UI 插件目录
-    （`components/plugins/`）与构建产物（`static/`），避免把 canvasHistory/elk
-    等纯前端 UI 插件误判为 PHP 插件断链。输出结构化信号（medium 提示性），
-    不置流程失败。
+def _php_plugins_under(project_path: str) -> Optional[Set[str]]:
+    """收集 PHP 插件约定根目录 php/plugins/<name>/ 的目录名集合（小写）。
+
+    返回 None 表示项目没有 PHP 插件约定根目录（不存在"跨语言插件契约"，
+    不上报断链）；目录存在但不可访问时返回空集合（按无 PHP 插件处理）。
     """
-    if not project_path or not os.path.isdir(project_path):
-        return []
-    # 1) PHP 插件实现目录：仅限 PHP 插件约定根目录 php/plugins/<name>/
-    #    （排除 components/vendor 等任意名为 plugins 的无关路径，避免误补缺失实现）
-    php_plugins: Set[str] = set()
     php_plugins_root = os.path.join(project_path, "php", "plugins")
-    has_php_plugin_root = os.path.isdir(php_plugins_root)
+    if not os.path.isdir(php_plugins_root):
+        return None
+    php_plugins: Set[str] = set()
     try:
         with os.scandir(php_plugins_root) as it:
             for entry in it:
@@ -471,69 +473,67 @@ def cross_lang_contract_scan(project_path: str) -> List[dict]:
                     php_plugins.add(entry.name.lower())
     except OSError:
         php_plugins = set()  # 路径不存在或不可访问 → 按无 PHP 插件处理
-    if not has_php_plugin_root:
-        # 项目根本没有 PHP 插件约定目录 → 不存在"跨语言插件契约"，不上报断链。
-        # 否则纯前端/Go 项目里任何形似插件引用（pluginName/action）都会被误报为缺失。
-        return []
-    # 2) 收集前端/Go 引用插件名
-    plug_re = re.compile(r'''pluginName\s*=\s*['"]([a-zA-Z][a-zA-Z0-9_\-]*)['"]''', re.I)
-    action_re = re.compile(
-        r'''(?:Param\(\s*['"]action['"]\s*,\s*|['"]action['"]\s*:\s*)['"]([a-zA-Z][a-zA-Z0-9_\-]*)/''',
-        re.I)
-    refs: Dict[str, List[tuple]] = {}
-    out: List[dict] = []  # 信号输出（断链 + 动态类名注入面），在文件扫描循环开始前初始化
-    for root, dirs, files in os.walk(project_path):
-        dirs[:] = [d for d in dirs if d not in _SKIP_CONTRACT_DIRS]
-        # 排除前端 UI 插件目录（components/plugins/）、PHP 插件实现目录本身：
-        # 仅当路径以 php/plugins 或 components/plugins 结尾时才剪枝，其余恰好叫
-        # plugins 的业务目录照常扫描，避免漏掉缺失实现
-        rel = os.path.relpath(root, project_path).replace("\\", "/")
-        if rel.endswith("php/plugins") or rel.endswith("components/plugins"):
-            dirs[:] = []  # 剪枝该子树，避免深入扫描被排除插件目录内的文件产生假断链信号
-            continue
-        for fn in files:
-            if not fn.endswith((".vue", ".js", ".ts", ".go", ".php")):
-                continue
-            path = os.path.join(root, fn)
-            try:
-                lines = open(path, encoding="utf-8", errors="ignore").read().splitlines()
-            except Exception as e:
-                # 文件不可读，跳过该文件
-                _log(f"读取文件失败，跳过流程扫描 {path}: {e}")
-                continue
-            rel = os.path.relpath(path, project_path).replace("\\", "/")
-            # Go 动态插件名/类名注入面（§二.2）：map[string]any{...} 含 plugin/class 键
-            # 且值为运行时变量（非字符串字面量），经 json.Marshal 序列化转发跨语言执行面。
-            # "有实现但类名由外部 payload 动态决定" —— 与前端硬编码引用(pluginName='x')
-            # 不同，是动态插件名注入面，运行时可由外部请求决定加载哪个插件。
-            # （chatwiki internal/app/plugin/php/multi_pool.go:117 盲区）
-            if fn.endswith(".go"):
-                content = "\n".join(lines)
-                if (re.search(r'map\[string\](?:any|interface\{\})\s*\{', content, re.I)
-                        and re.search(r'["\'](?:plugin|class)["\']\s*:\s*[a-zA-Z_][a-zA-Z0-9_]*',
-                                      content, re.I)
-                        and re.search(r'json\.Marshal\s*\(', content, re.I)):
-                    dyn_line = next(
-                        (i for i, ln in enumerate(lines, 1)
-                         if re.search(r'["\'](?:plugin|class)["\']\s*:\s*[a-zA-Z_][a-zA-Z0-9_]*', ln)), 0)
-                    out.append({
-                        "signal": "cross_lang_dynamic_class_inject",
-                        "severity": "medium",
-                        "plugin": "动态(外部payload)",
-                        "file": rel,
-                        "line": dyn_line,
-                        "implemented": sorted(php_plugins),
-                        "detail": "Go 侧把运行时插件名/类名作为动态键经 json.Marshal 序列化"
-                                  "转发跨语言执行面，类名由外部 payload 动态决定，"
-                                  "存在跨语言动态插件名注入面",
-                    })
-            for i, line in enumerate(lines, 1):
-                for m in plug_re.finditer(line):
-                    refs.setdefault(m.group(1).lower(), []).append((rel, i))
-                for m in action_re.finditer(line):
-                    if m.group(1):
-                        refs.setdefault(m.group(1).lower(), []).append((rel, i))
-    # 3) 比对：引用但无 PHP 实现 → 断链
+    return php_plugins
+
+
+def _detect_go_dynamic_class_inject(lines, rel, fn, php_plugins) -> Optional[dict]:
+    """Go 动态插件名/类名注入面检测，返回信号 dict 或 None。
+
+    map[string]any{...} 含 plugin/class 键且值为运行时变量（非字符串字面量），
+    经 json.Marshal 序列化转发跨语言执行面。"有实现但类名由外部 payload
+    动态决定" —— 与前端硬编码引用(pluginName='x')不同，是动态插件名注入面，
+    运行时可由外部请求决定加载哪个插件。（chatwiki internal/app/plugin/php/multi_pool.go:117 盲区）
+    """
+    if not fn.endswith(".go"):
+        return None
+    content = "\n".join(lines)
+    if (not _GO_DYNAMIC_MAP_RE.search(content)
+            or not _GO_DYNAMIC_KEY_RE.search(content)
+            or not _GO_MARSHAL_RE.search(content)):
+        return None
+    dyn_line = next(
+        (i for i, ln in enumerate(lines, 1) if _GO_DYNAMIC_KEY_RE.search(ln)), 0)
+    return {
+        "signal": "cross_lang_dynamic_class_inject",
+        "severity": "medium",
+        "plugin": "动态(外部payload)",
+        "file": rel,
+        "line": dyn_line,
+        "implemented": sorted(php_plugins),
+        "detail": "Go 侧把运行时插件名/类名作为动态键经 json.Marshal 序列化"
+                  "转发跨语言执行面，类名由外部 payload 动态决定，"
+                  "存在跨语言动态插件名注入面",
+    }
+
+
+def _scan_one_contract_file(project_path: str, root: str, fn: str,
+                            php_plugins: Set[str],
+                            refs: Dict[str, List[tuple]],
+                            out: List[dict]) -> None:
+    """扫描单个前端/Go/PHP 文件：收集插件名引用 + 动态注入面信号。"""
+    path = os.path.join(root, fn)
+    try:
+        lines = open(path, encoding="utf-8", errors="ignore").read().splitlines()
+    except Exception as e:
+        # 文件不可读，跳过该文件
+        _log(f"读取文件失败，跳过流程扫描 {path}: {e}")
+        return
+    rel = os.path.relpath(path, project_path).replace("\\", "/")
+    sig = _detect_go_dynamic_class_inject(lines, rel, fn, php_plugins)
+    if sig:
+        out.append(sig)
+    for i, line in enumerate(lines, 1):
+        for m in _PLUG_NAME_RE.finditer(line):
+            refs.setdefault(m.group(1).lower(), []).append((rel, i))
+        for m in _ACTION_RE.finditer(line):
+            if m.group(1):
+                refs.setdefault(m.group(1).lower(), []).append((rel, i))
+
+
+def _append_missing_plugin_breaks(refs: Dict[str, List[tuple]],
+                                  php_plugins: Set[str],
+                                  out: List[dict]) -> None:
+    """比对：前端/Go 引用的插件名在 PHP plugins/ 无同名实现 → 断链信号。"""
     for name, locs in sorted(refs.items()):
         if name in php_plugins:
             continue
@@ -553,6 +553,48 @@ def cross_lang_contract_scan(project_path: str) -> List[dict]:
                           f"(现有: {', '.join(sorted(php_plugins))})，"
                           f"跨语言插件名契约断裂，运行时将加载失败或静默降级",
             })
+
+
+def cross_lang_contract_scan(project_path: str) -> List[dict]:
+    """跨语言插件契约断链检测：前端/Go 引用的业务插件名 vs PHP 插件实现目录。
+
+    背景：chatwiki worker.php 用 `setModule($plugin, "\\app\\plugins\\{$plugin}\\Module")`
+    动态加载插件，插件名即 `php/plugins/<name>/` 目录名。前端 Vue/JS 的
+    `pluginName = 'xxx'` 与 Go 的 `"action":"a/b"` / `Param("action","a/b")` 引用
+    同名插件，而 PHP 端无对应目录即跨语言契约断裂——运行时加载失败/静默降级。
+
+    只收集"业务组件"目录下的插件名引用，排除前端 UI 插件目录
+    （`components/plugins/`）与构建产物（`static/`），避免把 canvasHistory/elk
+    等纯前端 UI 插件误判为 PHP 插件断链。输出结构化信号（medium 提示性），
+    不置流程失败。
+    """
+    if not project_path or not os.path.isdir(project_path):
+        return []
+    # 1) PHP 插件实现目录：仅限 PHP 插件约定根目录 php/plugins/<name>/
+    #    （排除 components/vendor 等任意名为 plugins 的无关路径，避免误补缺失实现）
+    php_plugins = _php_plugins_under(project_path)
+    if php_plugins is None:
+        # 项目根本没有 PHP 插件约定目录 → 不存在"跨语言插件契约"，不上报断链。
+        # 否则纯前端/Go 项目里任何形似插件引用（pluginName/action）都会被误报为缺失。
+        return []
+    # 2) 收集前端/Go 引用插件名
+    refs: Dict[str, List[tuple]] = {}
+    out: List[dict] = []  # 信号输出（断链 + 动态类名注入面），在文件扫描循环开始前初始化
+    for root, dirs, files in os.walk(project_path):
+        dirs[:] = [d for d in dirs if d not in _SKIP_CONTRACT_DIRS]
+        # 排除前端 UI 插件目录（components/plugins/）、PHP 插件实现目录本身：
+        # 仅当路径以 php/plugins 或 components/plugins 结尾时才剪枝，其余恰好叫
+        # plugins 的业务目录照常扫描，避免漏掉缺失实现
+        rel = os.path.relpath(root, project_path).replace("\\", "/")
+        if rel.endswith("php/plugins") or rel.endswith("components/plugins"):
+            dirs[:] = []  # 剪枝该子树，避免深入扫描被排除插件目录内的文件产生假断链信号
+            continue
+        for fn in files:
+            if not fn.endswith((".vue", ".js", ".ts", ".go", ".php")):
+                continue
+            _scan_one_contract_file(project_path, root, fn, php_plugins, refs, out)
+    # 3) 比对：引用但无 PHP 实现 → 断链
+    _append_missing_plugin_breaks(refs, php_plugins, out)
     return out
 
 

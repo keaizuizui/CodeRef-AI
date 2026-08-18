@@ -349,16 +349,13 @@ class FindingsVerifier:
             _log(f"管线核验失败: {exc}")
             return None
 
-    # ─── 单条核验 ───
-    def verify_one(self, finding: Dict, entry: Optional[str] = None) -> Dict:
-        title = str(finding.get("title") or "")
-        detail = str(finding.get("detail") or "")
-        file = str(finding.get("file") or "").strip()
-        line = finding.get("line")
+    @staticmethod
+    def _normalize_symbols(finding: Dict, title: str, detail: str) -> List[str]:
+        """归一化显式 symbols；无合法符号时回退到文本启发式提取。
 
-        # 显式 symbols 优先，否则启发式提取
-        # 健壮化：symbols 合法形态为「字符串」或「字符串列表」；数字/字典/None/
-        # 含非字符串元素的集合一律视为无显式符号，回退到文本启发式提取，绝不抛异常。
+        健壮化：symbols 合法形态为「字符串」或「字符串列表」；数字/字典/None/
+        含非字符串元素的集合一律视为无显式符号，回退到文本启发式提取，绝不抛异常。
+        """
         raw_symbols = finding.get("symbols") or []
         if isinstance(raw_symbols, str):
             raw_symbols = [s.strip() for s in re.split(r"[,\s;]+", raw_symbols) if s.strip()]
@@ -370,14 +367,30 @@ class FindingsVerifier:
         symbols_all = list(raw_symbols)
         if not symbols_all:
             symbols_all = extract_symbols(title + " " + detail)
+        return symbols_all
+
+    def _probe_symbols(self, symbols_all: List[str]):
+        """逐符号核验，返回 (probes, 已找到符号, 未找到符号)。"""
+        probes = [self._symbol_probe(s) for s in symbols_all]
+        symbols_found = [p["symbol"] for p in probes if p["found"]]
+        symbols_missing = [p["symbol"] for p in probes if not p["found"]]
+        return probes, symbols_found, symbols_missing
+
+    # ─── 单条核验 ───
+    def verify_one(self, finding: Dict, entry: Optional[str] = None) -> Dict:
+        title = str(finding.get("title") or "")
+        detail = str(finding.get("detail") or "")
+        file = str(finding.get("file") or "").strip()
+        line = finding.get("line")
+
+        # 显式 symbols 优先，否则启发式提取
+        symbols_all = self._normalize_symbols(finding, title, detail)
 
         # 文件核验
         file_found = self._file_found(file) if file else None
 
         # 符号核验
-        probes = [self._symbol_probe(s) for s in symbols_all]
-        symbols_found = [p["symbol"] for p in probes if p["found"]]
-        symbols_missing = [p["symbol"] for p in probes if not p["found"]]
+        probes, symbols_found, symbols_missing = self._probe_symbols(symbols_all)
 
         # 管线核验
         in_pipeline = self._in_pipeline(symbols_found, entry) if entry else None

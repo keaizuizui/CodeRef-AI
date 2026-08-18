@@ -103,66 +103,74 @@ def _is_collect_call(node) -> bool:
     return any(low.startswith(p) for p in _COLLECT_NAME_PREFIXES)
 
 
+def _effective_stmts(node) -> List[ast.stmt]:
+    """剔除 except 块体尾部的 return、pass 与 docstring，返回有效语句。"""
+    body = list(node.body)
+    if body and isinstance(body[-1], ast.Return):
+        body = body[:-1]
+    return [s for s in body
+            if not isinstance(s, ast.Pass)
+            and not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant)
+                     and isinstance(s.value.value, str))]
+
+
+def _exc_name_of(node) -> str:
+    """提取 except 子句的异常名（Name 取 id，Attribute 取 attr，无类型返回空）。"""
+    if node.type is None:
+        return ""
+    if isinstance(node.type, ast.Name):
+        return node.type.id
+    if isinstance(node.type, ast.Attribute):
+        return node.type.attr
+    return ""
+
+
+def _scan_except_handler(node, rel_path) -> List[dict]:
+    """对单个 except 块做静默吞掉判定（返回 0 或 1 条信号）。"""
+    stmts = _effective_stmts(node)
+    exc_name = _exc_name_of(node)
+    shown = exc_name or "Exception"
+    if not stmts:
+        # 空体（仅 pass/docstring）是最典型的静默吞掉，直接报告
+        return [{
+            "signal": "silent_except",
+            "file": rel_path,
+            "line": node.lineno,
+            "exc": shown,
+            "detail": f"except {shown} 块内仅 pass/docstring，异常被完全静默吞掉",
+        }]
+    if any(_is_log_call(s) for s in stmts):
+        return []
+    if any(isinstance(s, ast.Raise) for s in stmts):
+        return []
+    # 错误收集模式：异常被 append/extend 等收进错误列表统一处理
+    #（典型如 ci_compile_check 的 errors.append 决定 CI 退出码），
+    # 错误信息并未丢失，仅缺显式日志 → 换文案，不再报"完全丢失"。
+    if any(_is_collect_call(s) for s in stmts):
+        return [{
+            "signal": "silent_except",
+            "file": rel_path,
+            "line": node.lineno,
+            "exc": shown,
+            "detail": f"except {shown} 块内 {len(stmts)} 条语句无日志/无 raise，"
+                      f"异常未显式记录日志（已收集到错误列表统一处理）",
+        }]
+    return [{
+        "signal": "silent_except",
+        "file": rel_path,
+        "line": node.lineno,
+        "exc": shown,
+        "detail": f"except {shown} 块内 {len(stmts)} 条语句无日志/无 raise，"
+                  f"异常被静默吞掉，错误信息完全丢失",
+    }]
+
+
 def detect_silent_except(tree, rel_path) -> List[dict]:
     """检测 except 块内无日志/无 raise/无 return 的静默吞掉。"""
     out: List[dict] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.ExceptHandler):
-            continue
-        body = list(node.body)
-        if body and isinstance(body[-1], ast.Return):
-            body = body[:-1]
-        stmts = [s for s in body
-                 if not isinstance(s, ast.Pass)
-                 and not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant)
-                          and isinstance(s.value.value, str))]
-        if not stmts:
-            # 空体（仅 pass/docstring）是最典型的静默吞掉，直接报告
-            exc_name = ""
-            if node.type:
-                if isinstance(node.type, ast.Name):
-                    exc_name = node.type.id
-                elif isinstance(node.type, ast.Attribute):
-                    exc_name = node.type.attr
-            out.append({
-                "signal": "silent_except",
-                "file": rel_path,
-                "line": node.lineno,
-                "exc": exc_name or "Exception",
-                "detail": f"except {exc_name or 'Exception'} 块内仅 pass/docstring，异常被完全静默吞掉",
-            })
-            continue
-        if any(_is_log_call(s) for s in stmts):
-            continue
-        if any(isinstance(s, ast.Raise) for s in stmts):
-            continue
-        exc_name = ""
-        if node.type:
-            if isinstance(node.type, ast.Name):
-                exc_name = node.type.id
-            elif isinstance(node.type, ast.Attribute):
-                exc_name = node.type.attr
-        # 错误收集模式：异常被 append/extend 等收进错误列表统一处理
-        #（典型如 ci_compile_check 的 errors.append 决定 CI 退出码），
-        # 错误信息并未丢失，仅缺显式日志 → 换文案，不再报"完全丢失"。
-        if any(_is_collect_call(s) for s in stmts):
-            out.append({
-                "signal": "silent_except",
-                "file": rel_path,
-                "line": node.lineno,
-                "exc": exc_name or "Exception",
-                "detail": f"except {exc_name or 'Exception'} 块内 {len(stmts)} 条语句无日志/无 raise，"
-                          f"异常未显式记录日志（已收集到错误列表统一处理）",
-            })
-            continue
-        out.append({
-            "signal": "silent_except",
-            "file": rel_path,
-            "line": node.lineno,
-            "exc": exc_name or "Exception",
-            "detail": f"except {exc_name or 'Exception'} 块内 {len(stmts)} 条语句无日志/无 raise，"
-                      f"异常被静默吞掉，错误信息完全丢失",
-        })
+        if isinstance(node, ast.ExceptHandler):
+            out.extend(_scan_except_handler(node, rel_path))
     return out
 
 

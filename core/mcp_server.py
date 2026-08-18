@@ -785,6 +785,685 @@ BUILTIN_TOOLS: List[Dict] = [
                 }
 ]
 
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 模块级工具实现（v4.9.5 存量债治理：自 Server 类平移，零 self 依赖纯转发）
+# ═══════════════════════════════════════════════════════════════════
+def _evict_finished_tasks(tasks: Dict[str, Any], max_age: int = 3600, max_size: int = 50):
+    """清除已完成且过期的后台任务，避免 _tasks 无限增长。
+
+    策略：1) 超过 max_age 秒的已完成任务直接清除；
+          2) 已完成任务数超过 max_size 时，按 finished_at 从旧到新清除。
+    """
+    import time
+    now = time.time()
+    # 清除超时的已完成任务
+    expired = [
+        tid for tid, t in tasks.items()
+        if t.get("finished_at") is not None and now - t["finished_at"] > max_age
+    ]
+    for tid in expired:
+        del tasks[tid]
+    # 如果已完成任务仍过多，按时间从旧到新清除
+    finished = sorted(
+        [(tid, t) for tid, t in tasks.items() if t.get("finished_at") is not None],
+        key=lambda x: x[1]["finished_at"],
+    )
+    while len(finished) > max_size:
+        tid, _ = finished.pop(0)
+        if tid in tasks:
+            del tasks[tid]
+
+
+def _scan_tool(a: dict) -> str:
+    """运行单个审计维度（coderef_scan），返回结构化 JSON findings。
+
+    实时安全带：只跑一个维度（不建图谱/不生成 dashboard），快速返回，
+    供 AI 在写完一个模块后即时自查 / 作为客观第二意见。
+    """
+    from core.pipeline_runner import Pipe
+    tool = a.get("tool", "")
+    # P2-2：工具维度名严格白名单校验（大小写敏感）。schema enum 为精确匹配，
+    # 运行时不再借 run_single 的 .lower() 容错，避免 "Gov" 等大小写混写被静默
+    # 放行执行；非法维度返回结构化错误而非空成功。
+    valid = {k for k, _ in _SINGLE_TOOL_LABELS}
+    if tool not in valid:
+        raise ValueError(
+            f"coderef_scan: 未知工具维度 '{tool}'，支持(大小写敏感): "
+            f"{', '.join(sorted(valid))}")
+    pp = a["project_path"]
+    r = Pipe().run_single(pp, tool)
+    return json.dumps({
+        "status": "completed",
+        "tool": "coderef_scan",
+        "dimension": tool,
+        "project_path": pp,
+        "findings": [
+            {
+                "id": f.id, "category": f.category, "severity": f.severity,
+                "tier": f.tier.value, "file": f.file_path, "line": f.line,
+                "line_label": f.line_label, "title": f.title,
+                "detail": f.detail, "suggestion": f.suggestion,
+                "xval_by": f.xval_by,
+                # 降噪聚合保留的追溯字段：count=该 finding 代表的同规则违规数，
+                # locations=被合并的全部位置。硬约束：工具结果必须完整收集，
+                # 禁止静默丢弃管道层精心保留的结构化字段。
+                "count": getattr(f, "count", 1),
+                "locations": getattr(f, "locations", []),
+            }
+            for f in r.findings
+        ],
+        "summary": {
+            "total_files": r.total_files, "total_lines": r.total_lines,
+            "findings": len(r.findings),
+            # 加权总数：把聚合条目的 count 展开回真实违规数，
+            # 与 findings（聚合后的条目数）互补，供调用方估算真实规模。
+            "findings_weighted": sum(getattr(f, "count", 1) for f in r.findings),
+            "high": sum(1 for f in r.findings if f.tier.value == "high"),
+            "medium": sum(1 for f in r.findings if f.tier.value == "medium"),
+            "low": sum(1 for f in r.findings if f.tier.value == "low"),
+            "elapsed": r.elapsed,
+        },
+        "errors": r.errors,
+    }, ensure_ascii=False)
+
+
+def _scan_list() -> str:
+    """列出 coderef_scan 可选维度清单"""
+    from core.pipeline_runner import Pipe
+    return json.dumps({
+        "status": "completed",
+        "tool": "coderef_scan_list",
+        "dimensions": Pipe.list_single_tools(),
+    }, ensure_ascii=False)
+
+
+def _change_guard(a: dict) -> str:
+    """运行 AI 代码退化检测 / 守护 git 基层管理（coderef_change_guard）"""
+    from core.change_guard import ChangeGuard
+    pp = a["project_path"]
+    action = a.get("action") or "guard"
+    timeout = a.get("git_timeout")
+    git_bin = a.get("git_bin") or None
+    cg = ChangeGuard()
+    if action == "ensure_git":
+        r = cg.ensure_git_repo(pp, git_timeout=timeout, git_bin=git_bin)
+    elif action == "anchor":
+        r = cg.anchor_health_baseline(
+            pp, label=a.get("label"), git_timeout=timeout,
+            allow_autocommit=a.get("allow_autocommit", True), git_bin=git_bin)
+    elif action == "list_baselines":
+        r = {"ok": True, "baselines": cg.list_health_baselines(
+            pp, git_timeout=timeout, git_bin=git_bin)}
+    else:
+        diff = a.get("diff") or None
+        baseline = a.get("baseline_dir") or None
+        r = cg.guard(pp, diff=diff, baseline_dir=baseline,
+                     git_timeout=timeout, git_bin=git_bin)
+    r["tool"] = "coderef_change_guard"
+    r["project_path"] = pp
+    r["action"] = action
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _change_report(a: dict) -> str:
+    """生成人话版变更报告（coderef_change_report）"""
+    from core.change_report import ChangeReport
+    pp = a["project_path"]
+    diff = a.get("diff") or ""
+    r = ChangeReport().report(pp, diff)
+    r["tool"] = "coderef_change_report"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _memory_sync(a: dict) -> str:
+    """初始化/增量同步项目记忆层（coderef_memory_sync）"""
+    from core.memory_layer import memory_layer
+    pp = a["project_path"]
+    mode = a.get("mode", "full")
+    r = memory_layer.sync(pp, mode=mode)
+    r["tool"] = "coderef_memory_sync"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _memory_query(a: dict) -> str:
+    """供 AI 助手复用项目记忆（coderef_memory_query）"""
+    from core.memory_layer import memory_layer
+    pp = a["project_path"]
+    qt = a.get("query_type", "semantic")
+    kwargs = {k: v for k, v in a.items()
+              if k not in ("project_path", "query_type") and v}
+    r = memory_layer.query(pp, query_type=qt, **kwargs)
+    r["tool"] = "coderef_memory_query"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _memory_status(a: dict) -> str:
+    """「AI 知道什么」认知地图（coderef_memory_status）"""
+    from core.memory_layer import memory_layer
+    pp = a["project_path"]
+    r = memory_layer.status(pp)
+    r["tool"] = "coderef_memory_status"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _memory_quality(a: dict) -> str:
+    """记忆质量评估 + 自动补全（coderef_memory_quality）"""
+    from core.memory_quality import MemoryQuality
+    pp = a["project_path"]
+    auto_fix = a.get("auto_fix", False)
+    r = MemoryQuality().assess(pp, auto_fix=auto_fix)
+    r["tool"] = "coderef_memory_quality"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _operation_memory_sync(a: dict) -> str:
+    """初始化/增量同步操作记忆层（coderef_operation_memory_sync）"""
+    from core.operation_memory import operation_memory
+    pp = a["project_path"]
+    mode = a.get("mode", "full")
+    with_llm = a.get("with_llm", True)
+    r = operation_memory.sync(pp, mode=mode, with_llm=with_llm)
+    r["tool"] = "coderef_operation_memory_sync"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _operation_memory_query(a: dict) -> str:
+    """按类别检索操作记忆（coderef_operation_memory_query）"""
+    from core.operation_memory import operation_memory
+    pp = a["project_path"]
+    qt = a.get("query_type", "all")
+    kw = a.get("keyword", "")
+    limit = a.get("limit", 10)
+    r = operation_memory.query(pp, query_type=qt, keyword=kw, limit=limit)
+    r["tool"] = "coderef_operation_memory_query"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _operation_memory_find(a: dict) -> str:
+    """定位资源（coderef_operation_memory_find）"""
+    from core.operation_memory import operation_memory
+    pp = a["project_path"]
+    name = a.get("name", "")
+    limit = a.get("limit", 5)
+    r = operation_memory.find(pp, name=name, limit=limit)
+    r["tool"] = "coderef_operation_memory_find"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _operation_memory_status(a: dict) -> str:
+    """操作记忆健康状态（coderef_operation_memory_status）"""
+    from core.operation_memory import operation_memory
+    pp = a["project_path"]
+    r = operation_memory.status(pp)
+    r["tool"] = "coderef_operation_memory_status"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _operation_memory_recover(a: dict) -> str:
+    """上下文丢失后一次调用恢复关键记忆（coderef_operation_memory_recover）"""
+    from core.operation_memory import operation_memory
+    pp = a["project_path"]
+    limit = int(a.get("limit", 8))
+    r = operation_memory.recover(pp, limit=limit)
+    r["tool"] = "coderef_operation_memory_recover"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _prompt_mgmt(a: dict) -> str:
+    """Prompt 资产管理（兼容层：4.6 已并入 coderef_prompt_governance，此处仅做转发）"""
+    from core.prompt_governance import govern_prompt
+    pp = a["project_path"]
+    r = govern_prompt(
+        pp,
+        action="assets",
+        name=a.get("name", ""),
+        content=a.get("content", ""),
+        version=a.get("version", ""),
+        abtest_group=a.get("abtest_group", ""),
+        asset_action=a.get("action", ""),
+    )
+    r["tool"] = "coderef_prompt_mgmt"
+    r["deprecated"] = True
+    r["migrate_to"] = "coderef_prompt_governance"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _prompt_audit(a: dict) -> str:
+    """确定性 Prompt 合规审计（兼容层：4.6 已并入 coderef_prompt_governance，此处仅做转发）"""
+    from core.prompt_governance import govern_prompt
+    pp = a["project_path"]
+    r = govern_prompt(
+        pp,
+        action="audit",
+        out_format=a.get("out_format", "json"),
+    )
+    r["tool"] = "coderef_prompt_audit"
+    r["deprecated"] = True
+    r["migrate_to"] = "coderef_prompt_governance"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _owasp(a: dict) -> str:
+    """OWASP LLM Top 10 合规检测（coderef_owasp）"""
+    from core.owasp_compliance import OWASPCompliance
+    pp = a["project_path"]
+    out_format = a.get("out_format", "json")
+    r = OWASPCompliance().check(pp, out_format=out_format)
+    r["tool"] = "coderef_owasp"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _innovation(a: dict) -> str:
+    """识别项目创新设计 + 传播缺口（coderef_innovation）"""
+    from core.innovation_engine import InnovationEngine
+    pp = a["project_path"]
+    r = InnovationEngine().detect(
+        pp, intent=a.get("intent", ""),
+        min_adoption=a.get("min_adoption", 0.0),
+    )
+    r["tool"] = "coderef_innovation"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _asset(a: dict) -> str:
+    """WorkflowAsset 资产化/查询/导出（coderef_asset）"""
+    from core.innovation_engine import InnovationEngine
+    pp = a["project_path"]
+    r = InnovationEngine().asset(
+        pp, action=a.get("action", "list"), canonical=a.get("canonical", ""),
+        description=a.get("description", ""), template_code=a.get("template_code", ""),
+        patch_suggestion=a.get("patch_suggestion", ""),
+        migration_guide=a.get("migration_guide", ""),
+        blueprint=a.get("blueprint"),
+    )
+    r["tool"] = "coderef_asset"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _registry(a: dict) -> str:
+    """管理已知设计库（coderef_registry）"""
+    from core.design_registry import DesignRegistry
+    pp = a["project_path"]
+    r = DesignRegistry().manage(
+        pp, action=a.get("action", "list"), name=a.get("name", ""),
+        canonical=a.get("canonical", ""), alias=a.get("alias", ""),
+        description=a.get("description", ""),
+    )
+    r["tool"] = "coderef_registry"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _replicate(a: dict) -> str:
+    """复刻铺排：检测目标项目缺口 + 生成复刻指引（coderef_replicate）"""
+    from core.replicate_engine import replicate_design, render_report, render_html
+    pp = a["project_path"]
+    out_format = a.get("out_format", "json")
+    r = replicate_design(
+        pp, a["canonical"],
+        verify_symbols=a.get("verify_symbols", True),
+    )
+    r["tool"] = "coderef_replicate"
+    r["project_path"] = pp
+    if out_format == "html":
+        r["report_html"] = render_html(r)
+    elif out_format == "text":
+        r["report_text"] = render_report(r)
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _replicate_apply(a: dict) -> str:
+    """复刻落地：把已固化资产的复刻指引落到目标项目（coderef_replicate_apply）"""
+    from core.replicate_engine import apply_replicate
+    pp = a["project_path"]
+    # overwrite 必须是真正的布尔：只接受 True/False，拒绝 "false"/"0" 等被 bool() 误转成 True 的输入
+    raw_overwrite = a.get("overwrite", False)
+    if raw_overwrite is not True and raw_overwrite is not False:
+        return json.dumps({
+            "ok": False,
+            "tool": "coderef_replicate_apply",
+            "project_path": pp,
+            "error": f"overwrite 必须是布尔值（True/False），收到 {raw_overwrite!r}（{type(raw_overwrite).__name__}）。",
+            "summary": "overwrite 参数类型非法，已拒绝执行。",
+        }, ensure_ascii=False)
+    r = apply_replicate(
+        pp, a["canonical"],
+        target=a.get("target", ""),
+        filename=a.get("filename", ""),
+        overwrite=raw_overwrite,
+    )
+    r["tool"] = "coderef_replicate_apply"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _innovation_review(a: dict) -> str:
+    """创新复刻排查：LLM 阅读管线设计 + wiki，判定创新与复刻合理性（coderef_innovation_review）"""
+    from core.innovation_review import review_innovation, render_report, render_html
+    pp = a["project_path"]
+    out_format = a.get("out_format", "json")
+    r = review_innovation(
+        pp, a["canonical"],
+        target=a.get("target", ""),
+        out_format=out_format,
+    )
+    r["tool"] = "coderef_innovation_review"
+    r["project_path"] = pp
+    if out_format == "html":
+        r["report_html"] = render_html(r)
+    elif out_format == "text":
+        r["report_text"] = render_report(r)
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _asset_blueprint(a: dict) -> str:
+    """把复刻铺排结论写回资产蓝图（coderef_asset_blueprint）"""
+    from core.replicate_engine import solidify_asset_blueprint
+    pp = a["project_path"]
+    entry_points = a.get("entry_points") or []
+    if isinstance(entry_points, str):
+        import re as _re
+        entry_points = [s.strip() for s in _re.split(r"[,\s;]+", entry_points) if s.strip()]
+    r = solidify_asset_blueprint(pp, a["canonical"], entry_points=list(entry_points))
+    r["tool"] = "coderef_asset_blueprint"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _govern(a: dict) -> str:
+    """Prompt 治理平台：编排资产生命周期 × 合规审计 × 跨模块一致性（coderef_prompt_governance）"""
+    from core.prompt_governance import govern_prompt
+    pp = a["project_path"]
+    r = govern_prompt(
+        pp,
+        action=a.get("action", "overview"),
+        name=a.get("name", ""),
+        content=a.get("content", ""),
+        version=a.get("version", ""),
+        abtest_group=a.get("abtest_group", ""),
+        asset_action=a.get("asset_action", ""),
+        out_format=a.get("out_format", "json"),
+    )
+    r["tool"] = "coderef_prompt_governance"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _interpret(a: dict) -> str:
+    """人话解读平台：健康/仪表盘/论断核验/Wiki/Prompt 治理/资产（coderef_interpret）"""
+    from core.interpretation_platform import interpret_project
+    pp = a["project_path"]
+    r = interpret_project(
+        pp,
+        action=a.get("action", "health"),
+        findings_text=a.get("findings_text", ""),
+        entry=a.get("entry", ""),
+        out_format=a.get("out_format", "json"),
+    )
+    r["tool"] = "coderef_interpret"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _docs_read(a: dict) -> str:
+    """按需读取 Wiki 文档正文（coderef_docs_read）"""
+    from core.pipeline_runner import Pipe
+    pp = a["project_path"]
+    # max_chars 防御性转换：非法值回退默认，避免 MCP 层抛 ValueError
+    try:
+        max_chars = int(a.get("max_chars", 20000))
+    except (TypeError, ValueError):
+        max_chars = 20000
+    # 负 max_chars 会被 content[:max_chars] 当成"去尾 n 字符"（content[:-n]）静默截断
+    if max_chars <= 0:
+        return json.dumps({
+            "status": "error", "tool": "coderef_docs_read",
+            "error": f"max_chars 必须为正整数（收到 {max_chars}）",
+        }, ensure_ascii=False)
+    r = Pipe().docs_read(
+        pp, doc=a.get("doc") or None,
+        output_dir=a.get("output_dir") or None,
+        max_chars=max_chars,
+    )
+    r["tool"] = "coderef_docs_read"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _flow_verify(a: dict) -> str:
+    """流程合规验证（coderef_flow_verify）"""
+    from core.flow_verify import verify_flow
+    pp = a["project_path"]
+    # steps 校验：schema 中 steps 为可选（optional）。省略 steps 键时仅执行
+    # cross_lang 契约检测 / 入口与图谱定位（不依赖流程步骤），供跨语言契约专项复用；
+    # 显式传 steps 但为空或含非法元素（[]/0/None/空串/非字符串元素）属契约非法，
+    # 返回结构化错误而非假成功。
+    if "steps" in a:
+        steps = a["steps"]
+        if isinstance(steps, str):
+            # 兼容逗号分隔字符串
+            steps = [s.strip() for s in steps.split(",") if s.strip()]
+        elif isinstance(steps, (list, tuple)):
+            # 逐元素校验：每个 step 必须是非空字符串（拒绝 [0]/[None]/[" "]/[""]）
+            if any(not isinstance(s, str) or not s.strip() for s in steps):
+                raise ValueError(
+                    "coderef_flow_verify: steps 的每个元素必须是非空字符串")
+            steps = [s.strip() for s in steps]
+        else:
+            # 非数组/非字符串（如数字 0、负数、None）→ 结构化错误
+            raise ValueError(
+                f"coderef_flow_verify: steps 必须是数组或逗号分隔字符串，收到 {type(steps).__name__}")
+        if not steps:
+            # 空数组/0/空串/全空白元素清空后 → 无待验证步骤，契约非法
+            raise ValueError("coderef_flow_verify: steps 不能为空，请传入待验证的流程步骤")
+    else:
+        # 省略 steps 键：仅执行跨语言契约检测 / 入口与图谱定位，不验证流程步骤
+        steps = []
+    r = verify_flow(pp, a["entry"], list(steps), depth=a.get("depth"))
+    r["tool"] = "coderef_flow_verify"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _arch_audit(a: dict) -> str:
+    """架构腐化诊断（coderef_arch_audit）—— 复用知识图谱 CALLS 边做模块级静态诊断"""
+    from core.arch_audit import audit as arch_audit
+    pp = a["project_path"]
+    r = arch_audit(pp)
+    r["tool"] = "coderef_arch_audit"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _verify_findings(a: dict) -> str:
+    """确定性核验 LLM / CodeRabbit 论断（coderef_verify_findings）"""
+    from core.verify_findings import verify_findings, render_report, render_html
+    pp = a["project_path"]
+    findings = a.get("findings") or []
+    if isinstance(findings, str):
+        findings = json.loads(findings)
+    entry = a.get("entry") or None
+    out_format = a.get("out_format", "json")
+    r = verify_findings(pp, list(findings), entry=entry)
+    r["tool"] = "coderef_verify_findings"
+    r["project_path"] = pp
+    if out_format == "html":
+        r["report_html"] = render_html(r)
+    elif out_format == "text":
+        r["report_text"] = render_report(r)
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _validate_project_path(tool: str, p: str) -> str:
+    """校验并规范化 project_path。
+
+    规则：
+    1. 空串/纯空白/缺省 → 结构化错误（此前缺省键 audit 仍完成并生成报告，属假阴性）
+    2. 相对路径（含 .. / . / 纯文件名）→ 拒绝，要求绝对路径，
+       避免 ".." 越权扫描上级目录、空串被当作 cwd 扫描被测源码自身
+    3. 绝对路径但目录不存在/不是目录 → 结构化错误（此前静默返回空成功）
+    返回规范化后的绝对路径（realpath）。
+    """
+    if not p or not p.strip():
+        raise ValueError(
+            f"{tool}: project_path 不能为空或缺失，请传入目标项目的绝对路径")
+    p = p.strip()
+    if not os.path.isabs(p):
+        raise ValueError(
+            f"{tool}: project_path 必须是绝对路径（收到相对路径 '{p}'）。"
+            f"相对路径（如 .. / 空串）会被解析到非预期目录，已拒绝以防越权扫描")
+    real = os.path.realpath(p)
+    if not os.path.isdir(real):
+        raise ValueError(f"{tool}: project_path 目录不存在: {p}")
+    return real
+
+
+def _review(a) -> str:
+    """执行代码审查（coderef_review），返回结构化 JSON 文本"""
+    from core.code_review import CodeReviewer
+    pp = a["project_path"]
+    mode = a.get("mode", "diff")
+    dims = a.get("dimensions") or None
+    changed_files = a.get("changed_files") or None
+    diff = a.get("diff") or None
+    r = CodeReviewer().review(
+        pp, mode=mode, diff=diff,
+        changed_files=changed_files, dimensions=dims,
+    )
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _frontend(a) -> str:
+    """执行前端交互审查（coderef_frontend），返回结构化 JSON 文本"""
+    from core.frontend_inspector import FrontendInspector
+    pp = a["project_path"]
+    mode = a.get("mode", "static")
+    url = a.get("url") or None
+    entry = a.get("entry") or None
+    levels = a.get("check_levels") or None
+    r = FrontendInspector().inspect(
+        pp, entry=entry, mode=mode, url=url, check_levels=levels,
+    )
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _report(a) -> str:
+    """执行 HTML 报告渲染（coderef_report）：
+    优先重渲染既有产物（图谱+Wiki，不重跑扫描）；无既有产物时回退为跑一次全量审计并渲染。"""
+    from core.pipeline_runner import Pipe
+    pp = a["project_path"]
+    out = a.get("output_dir") or None
+    r, has_artifacts = Pipe().render_report(pp, output_dir=out)
+    if not has_artifacts:
+        r = Pipe().audit(pp, output_dir=out)
+    hr = getattr(r, "html_report", None) or {}
+    return json.dumps(hr, ensure_ascii=False)
+
+
+def _advisor(a) -> str:
+    """审计策略判定 + 功能审查（coderef_audit_advisor）"""
+    from core.review_strategy import review_advisor
+    from core.functional_review import functional_reviewer
+    pp = a["project_path"]
+    with_functional = a.get("with_functional", True)
+    strategy = review_advisor.advise(pp)
+    result = {"strategy": strategy}
+    if with_functional:
+        try:
+            fr = functional_reviewer.review(pp, strategy)
+            result["functional_review"] = fr
+        except Exception as e:
+            result["functional_review"] = {"llm_available": False,
+                                           "degraded": True, "error": str(e)}
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _arch(a) -> str:
+    from core.pipeline_runner import Pipe
+    r = Pipe().architecture(a["project_path"])
+    # 结构化返回，与 coderef_audit 一致
+    return json.dumps({
+        "status": "completed",
+        "tool": "coderef_architecture",
+        "project_path": a["project_path"],
+        "report": r.report,
+        "report_path": r.report_path or "",
+        "summary": {
+            "total_files": getattr(r, "total_files", 0),
+            "total_lines": getattr(r, "total_lines", 0),
+            "findings": len(r.findings),
+            "elapsed": getattr(r, "elapsed", 0),
+        },
+        "errors": getattr(r, "errors", []),
+    }, ensure_ascii=False)
+
+
+def _wl(a) -> str:
+    from core.pipeline_runner import Pipe
+    act = a.get("action", "add")
+    # 非法 action 此前静默落到默认 add 分支（参数契约矩阵暴露的缺陷）；
+    # 改为结构化拒绝，与 wiki_style/docs_read/strategy 的枚举严格校验保持一致。
+    if not isinstance(act, str) or act not in WHITELIST_ACTIONS:
+        return json.dumps({
+            "status": "error",
+            "tool": "coderef_whitelist",
+            "error": (f"非法 action 枚举: {act!r}；允许的取值为 "
+                      f"{' / '.join(sorted(WHITELIST_ACTIONS))}"),
+        }, ensure_ascii=False)
+    pp = a["project_path"]
+    if act == "list":
+        wl = Pipe.whitelist_list(pp)
+        return json.dumps({"count": len(wl), "entries": wl}, ensure_ascii=False)
+    elif act == "clear":
+        n = Pipe.whitelist_clear(pp)
+        return json.dumps({"cleared": n}, ensure_ascii=False)
+    elif act == "core_rules_get":
+        return json.dumps(Pipe.core_rules_get(pp), ensure_ascii=False)
+    elif act == "core_rules_set":
+        rules = a.get("core_rules", {})
+        if not rules:
+            return json.dumps({"error": "core_rules 不能为空"})
+        return json.dumps(Pipe.core_rules_set(pp, rules), ensure_ascii=False)
+    elif act == "core_rules_reset":
+        return json.dumps(Pipe.core_rules_reset(pp), ensure_ascii=False)
+    else:  # add
+        entries = a.get("entries", [])
+        if not entries:
+            return json.dumps({"error": "entries 不能为空"})
+        n = Pipe.whitelist_add(pp, entries)
+        return json.dumps({"added": n, "total": len(Pipe.whitelist_list(pp))}, ensure_ascii=False)
+
+
+
+def _query(a) -> str:
+    from core.pipeline_runner import Pipe
+    qt = a.get("query_type", "stats")
+    pp = a["project_path"]
+    kwargs = {k: v for k, v in a.items()
+              if k not in ("project_path", "query_type") and v}
+    result = Pipe.kg_query(pp, qt, **kwargs)
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _ok(rid, text):
+    return {"jsonrpc":"2.0","id":rid,"result":{"content":[{"type":"text","text":text}]}}
 class Server:
 
     def __init__(self):
@@ -903,30 +1582,8 @@ class Server:
         with self._lock:
             yield self._tasks
 
-    def _evict_finished_tasks(self, tasks: Dict[str, Any], max_age: int = 3600, max_size: int = 50):
-        """清除已完成且过期的后台任务，避免 _tasks 无限增长。
-
-        策略：1) 超过 max_age 秒的已完成任务直接清除；
-              2) 已完成任务数超过 max_size 时，按 finished_at 从旧到新清除。
-        """
-        import time
-        now = time.time()
-        # 清除超时的已完成任务
-        expired = [
-            tid for tid, t in tasks.items()
-            if t.get("finished_at") is not None and now - t["finished_at"] > max_age
-        ]
-        for tid in expired:
-            del tasks[tid]
-        # 如果已完成任务仍过多，按时间从旧到新清除
-        finished = sorted(
-            [(tid, t) for tid, t in tasks.items() if t.get("finished_at") is not None],
-            key=lambda x: x[1]["finished_at"],
-        )
-        while len(finished) > max_size:
-            tid, _ = finished.pop(0)
-            if tid in tasks:
-                del tasks[tid]
+    def _evict_finished_tasks(tasks: Dict[str, Any], max_age: int = 3600, max_size: int = 50):
+        return _evict_finished_tasks(tasks, max_age, max_size)
 
     # ─── request ───
 
@@ -990,498 +1647,98 @@ class Server:
             # 任务终态标记完成时间（无论成败），供 _tsk / 调用方判断终态
             rc["finished_at"] = time.time()
 
-    def _scan_tool(self, a: dict) -> str:
-        """运行单个审计维度（coderef_scan），返回结构化 JSON findings。
+    def _scan_tool(a: dict):
+        return _scan_tool(a)
 
-        实时安全带：只跑一个维度（不建图谱/不生成 dashboard），快速返回，
-        供 AI 在写完一个模块后即时自查 / 作为客观第二意见。
-        """
-        from core.pipeline_runner import Pipe
-        tool = a.get("tool", "")
-        # P2-2：工具维度名严格白名单校验（大小写敏感）。schema enum 为精确匹配，
-        # 运行时不再借 run_single 的 .lower() 容错，避免 "Gov" 等大小写混写被静默
-        # 放行执行；非法维度返回结构化错误而非空成功。
-        valid = {k for k, _ in self._SINGLE_TOOL_LABELS}
-        if tool not in valid:
-            raise ValueError(
-                f"coderef_scan: 未知工具维度 '{tool}'，支持(大小写敏感): "
-                f"{', '.join(sorted(valid))}")
-        pp = a["project_path"]
-        r = Pipe().run_single(pp, tool)
-        return json.dumps({
-            "status": "completed",
-            "tool": "coderef_scan",
-            "dimension": tool,
-            "project_path": pp,
-            "findings": [
-                {
-                    "id": f.id, "category": f.category, "severity": f.severity,
-                    "tier": f.tier.value, "file": f.file_path, "line": f.line,
-                    "line_label": f.line_label, "title": f.title,
-                    "detail": f.detail, "suggestion": f.suggestion,
-                    "xval_by": f.xval_by,
-                    # 降噪聚合保留的追溯字段：count=该 finding 代表的同规则违规数，
-                    # locations=被合并的全部位置。硬约束：工具结果必须完整收集，
-                    # 禁止静默丢弃管道层精心保留的结构化字段。
-                    "count": getattr(f, "count", 1),
-                    "locations": getattr(f, "locations", []),
-                }
-                for f in r.findings
-            ],
-            "summary": {
-                "total_files": r.total_files, "total_lines": r.total_lines,
-                "findings": len(r.findings),
-                # 加权总数：把聚合条目的 count 展开回真实违规数，
-                # 与 findings（聚合后的条目数）互补，供调用方估算真实规模。
-                "findings_weighted": sum(getattr(f, "count", 1) for f in r.findings),
-                "high": sum(1 for f in r.findings if f.tier.value == "high"),
-                "medium": sum(1 for f in r.findings if f.tier.value == "medium"),
-                "low": sum(1 for f in r.findings if f.tier.value == "low"),
-                "elapsed": r.elapsed,
-            },
-            "errors": r.errors,
-        }, ensure_ascii=False)
+    def _scan_list(self):
+        return _scan_list()
 
-    def _scan_list(self) -> str:
-        """列出 coderef_scan 可选维度清单"""
-        from core.pipeline_runner import Pipe
-        return json.dumps({
-            "status": "completed",
-            "tool": "coderef_scan_list",
-            "dimensions": Pipe.list_single_tools(),
-        }, ensure_ascii=False)
+    def _change_guard(a: dict):
+        return _change_guard(a)
 
-    def _change_guard(self, a: dict) -> str:
-        """运行 AI 代码退化检测 / 守护 git 基层管理（coderef_change_guard）"""
-        from core.change_guard import ChangeGuard
-        pp = a["project_path"]
-        action = a.get("action") or "guard"
-        timeout = a.get("git_timeout")
-        git_bin = a.get("git_bin") or None
-        cg = ChangeGuard()
-        if action == "ensure_git":
-            r = cg.ensure_git_repo(pp, git_timeout=timeout, git_bin=git_bin)
-        elif action == "anchor":
-            r = cg.anchor_health_baseline(
-                pp, label=a.get("label"), git_timeout=timeout,
-                allow_autocommit=a.get("allow_autocommit", True), git_bin=git_bin)
-        elif action == "list_baselines":
-            r = {"ok": True, "baselines": cg.list_health_baselines(
-                pp, git_timeout=timeout, git_bin=git_bin)}
-        else:
-            diff = a.get("diff") or None
-            baseline = a.get("baseline_dir") or None
-            r = cg.guard(pp, diff=diff, baseline_dir=baseline,
-                         git_timeout=timeout, git_bin=git_bin)
-        r["tool"] = "coderef_change_guard"
-        r["project_path"] = pp
-        r["action"] = action
-        return json.dumps(r, ensure_ascii=False)
-
-    def _change_report(self, a: dict) -> str:
-        """生成人话版变更报告（coderef_change_report）"""
-        from core.change_report import ChangeReport
-        pp = a["project_path"]
-        diff = a.get("diff") or ""
-        r = ChangeReport().report(pp, diff)
-        r["tool"] = "coderef_change_report"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _change_report(a: dict):
+        return _change_report(a)
 
     # ── 引擎一 · 记忆层 ─────────────────────────────────────────────
-    def _memory_sync(self, a: dict) -> str:
-        """初始化/增量同步项目记忆层（coderef_memory_sync）"""
-        from core.memory_layer import memory_layer
-        pp = a["project_path"]
-        mode = a.get("mode", "full")
-        r = memory_layer.sync(pp, mode=mode)
-        r["tool"] = "coderef_memory_sync"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _memory_sync(a: dict):
+        return _memory_sync(a)
 
-    def _memory_query(self, a: dict) -> str:
-        """供 AI 助手复用项目记忆（coderef_memory_query）"""
-        from core.memory_layer import memory_layer
-        pp = a["project_path"]
-        qt = a.get("query_type", "semantic")
-        kwargs = {k: v for k, v in a.items()
-                  if k not in ("project_path", "query_type") and v}
-        r = memory_layer.query(pp, query_type=qt, **kwargs)
-        r["tool"] = "coderef_memory_query"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _memory_query(a: dict):
+        return _memory_query(a)
 
-    def _memory_status(self, a: dict) -> str:
-        """「AI 知道什么」认知地图（coderef_memory_status）"""
-        from core.memory_layer import memory_layer
-        pp = a["project_path"]
-        r = memory_layer.status(pp)
-        r["tool"] = "coderef_memory_status"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _memory_status(a: dict):
+        return _memory_status(a)
 
-    def _memory_quality(self, a: dict) -> str:
-        """记忆质量评估 + 自动补全（coderef_memory_quality）"""
-        from core.memory_quality import MemoryQuality
-        pp = a["project_path"]
-        auto_fix = a.get("auto_fix", False)
-        r = MemoryQuality().assess(pp, auto_fix=auto_fix)
-        r["tool"] = "coderef_memory_quality"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _memory_quality(a: dict):
+        return _memory_quality(a)
 
-    def _operation_memory_sync(self, a: dict) -> str:
-        """初始化/增量同步操作记忆层（coderef_operation_memory_sync）"""
-        from core.operation_memory import operation_memory
-        pp = a["project_path"]
-        mode = a.get("mode", "full")
-        with_llm = a.get("with_llm", True)
-        r = operation_memory.sync(pp, mode=mode, with_llm=with_llm)
-        r["tool"] = "coderef_operation_memory_sync"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _operation_memory_sync(a: dict):
+        return _operation_memory_sync(a)
 
-    def _operation_memory_query(self, a: dict) -> str:
-        """按类别检索操作记忆（coderef_operation_memory_query）"""
-        from core.operation_memory import operation_memory
-        pp = a["project_path"]
-        qt = a.get("query_type", "all")
-        kw = a.get("keyword", "")
-        limit = a.get("limit", 10)
-        r = operation_memory.query(pp, query_type=qt, keyword=kw, limit=limit)
-        r["tool"] = "coderef_operation_memory_query"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _operation_memory_query(a: dict):
+        return _operation_memory_query(a)
 
-    def _operation_memory_find(self, a: dict) -> str:
-        """定位资源（coderef_operation_memory_find）"""
-        from core.operation_memory import operation_memory
-        pp = a["project_path"]
-        name = a.get("name", "")
-        limit = a.get("limit", 5)
-        r = operation_memory.find(pp, name=name, limit=limit)
-        r["tool"] = "coderef_operation_memory_find"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _operation_memory_find(a: dict):
+        return _operation_memory_find(a)
 
-    def _operation_memory_status(self, a: dict) -> str:
-        """操作记忆健康状态（coderef_operation_memory_status）"""
-        from core.operation_memory import operation_memory
-        pp = a["project_path"]
-        r = operation_memory.status(pp)
-        r["tool"] = "coderef_operation_memory_status"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _operation_memory_status(a: dict):
+        return _operation_memory_status(a)
 
-    def _operation_memory_recover(self, a: dict) -> str:
-        """上下文丢失后一次调用恢复关键记忆（coderef_operation_memory_recover）"""
-        from core.operation_memory import operation_memory
-        pp = a["project_path"]
-        limit = int(a.get("limit", 8))
-        r = operation_memory.recover(pp, limit=limit)
-        r["tool"] = "coderef_operation_memory_recover"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _operation_memory_recover(a: dict):
+        return _operation_memory_recover(a)
 
-    def _prompt_mgmt(self, a: dict) -> str:
-        """Prompt 资产管理（兼容层：4.6 已并入 coderef_prompt_governance，此处仅做转发）"""
-        from core.prompt_governance import govern_prompt
-        pp = a["project_path"]
-        r = govern_prompt(
-            pp,
-            action="assets",
-            name=a.get("name", ""),
-            content=a.get("content", ""),
-            version=a.get("version", ""),
-            abtest_group=a.get("abtest_group", ""),
-            asset_action=a.get("action", ""),
-        )
-        r["tool"] = "coderef_prompt_mgmt"
-        r["deprecated"] = True
-        r["migrate_to"] = "coderef_prompt_governance"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _prompt_mgmt(a: dict):
+        return _prompt_mgmt(a)
 
-    def _prompt_audit(self, a: dict) -> str:
-        """确定性 Prompt 合规审计（兼容层：4.6 已并入 coderef_prompt_governance，此处仅做转发）"""
-        from core.prompt_governance import govern_prompt
-        pp = a["project_path"]
-        r = govern_prompt(
-            pp,
-            action="audit",
-            out_format=a.get("out_format", "json"),
-        )
-        r["tool"] = "coderef_prompt_audit"
-        r["deprecated"] = True
-        r["migrate_to"] = "coderef_prompt_governance"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _prompt_audit(a: dict):
+        return _prompt_audit(a)
 
     # ── 引擎三 · OWASP 合规 ────────────────────────────────────────
-    def _owasp(self, a: dict) -> str:
-        """OWASP LLM Top 10 合规检测（coderef_owasp）"""
-        from core.owasp_compliance import OWASPCompliance
-        pp = a["project_path"]
-        out_format = a.get("out_format", "json")
-        r = OWASPCompliance().check(pp, out_format=out_format)
-        r["tool"] = "coderef_owasp"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _owasp(a: dict):
+        return _owasp(a)
 
     # ── 引擎二 · 创新识别 + 资产沉淀 ───────────────────────────────
-    def _innovation(self, a: dict) -> str:
-        """识别项目创新设计 + 传播缺口（coderef_innovation）"""
-        from core.innovation_engine import InnovationEngine
-        pp = a["project_path"]
-        r = InnovationEngine().detect(
-            pp, intent=a.get("intent", ""),
-            min_adoption=a.get("min_adoption", 0.0),
-        )
-        r["tool"] = "coderef_innovation"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _innovation(a: dict):
+        return _innovation(a)
 
-    def _asset(self, a: dict) -> str:
-        """WorkflowAsset 资产化/查询/导出（coderef_asset）"""
-        from core.innovation_engine import InnovationEngine
-        pp = a["project_path"]
-        r = InnovationEngine().asset(
-            pp, action=a.get("action", "list"), canonical=a.get("canonical", ""),
-            description=a.get("description", ""), template_code=a.get("template_code", ""),
-            patch_suggestion=a.get("patch_suggestion", ""),
-            migration_guide=a.get("migration_guide", ""),
-            blueprint=a.get("blueprint"),
-        )
-        r["tool"] = "coderef_asset"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _asset(a: dict):
+        return _asset(a)
 
-    def _registry(self, a: dict) -> str:
-        """管理已知设计库（coderef_registry）"""
-        from core.design_registry import DesignRegistry
-        pp = a["project_path"]
-        r = DesignRegistry().manage(
-            pp, action=a.get("action", "list"), name=a.get("name", ""),
-            canonical=a.get("canonical", ""), alias=a.get("alias", ""),
-            description=a.get("description", ""),
-        )
-        r["tool"] = "coderef_registry"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _registry(a: dict):
+        return _registry(a)
 
-    def _replicate(self, a: dict) -> str:
-        """复刻铺排：检测目标项目缺口 + 生成复刻指引（coderef_replicate）"""
-        from core.replicate_engine import replicate_design, render_report, render_html
-        pp = a["project_path"]
-        out_format = a.get("out_format", "json")
-        r = replicate_design(
-            pp, a["canonical"],
-            verify_symbols=a.get("verify_symbols", True),
-        )
-        r["tool"] = "coderef_replicate"
-        r["project_path"] = pp
-        if out_format == "html":
-            r["report_html"] = render_html(r)
-        elif out_format == "text":
-            r["report_text"] = render_report(r)
-        return json.dumps(r, ensure_ascii=False)
+    def _replicate(a: dict):
+        return _replicate(a)
 
-    def _replicate_apply(self, a: dict) -> str:
-        """复刻落地：把已固化资产的复刻指引落到目标项目（coderef_replicate_apply）"""
-        from core.replicate_engine import apply_replicate
-        pp = a["project_path"]
-        # overwrite 必须是真正的布尔：只接受 True/False，拒绝 "false"/"0" 等被 bool() 误转成 True 的输入
-        raw_overwrite = a.get("overwrite", False)
-        if raw_overwrite is not True and raw_overwrite is not False:
-            return json.dumps({
-                "ok": False,
-                "tool": "coderef_replicate_apply",
-                "project_path": pp,
-                "error": f"overwrite 必须是布尔值（True/False），收到 {raw_overwrite!r}（{type(raw_overwrite).__name__}）。",
-                "summary": "overwrite 参数类型非法，已拒绝执行。",
-            }, ensure_ascii=False)
-        r = apply_replicate(
-            pp, a["canonical"],
-            target=a.get("target", ""),
-            filename=a.get("filename", ""),
-            overwrite=raw_overwrite,
-        )
-        r["tool"] = "coderef_replicate_apply"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _replicate_apply(a: dict):
+        return _replicate_apply(a)
 
-    def _innovation_review(self, a: dict) -> str:
-        """创新复刻排查：LLM 阅读管线设计 + wiki，判定创新与复刻合理性（coderef_innovation_review）"""
-        from core.innovation_review import review_innovation, render_report, render_html
-        pp = a["project_path"]
-        out_format = a.get("out_format", "json")
-        r = review_innovation(
-            pp, a["canonical"],
-            target=a.get("target", ""),
-            out_format=out_format,
-        )
-        r["tool"] = "coderef_innovation_review"
-        r["project_path"] = pp
-        if out_format == "html":
-            r["report_html"] = render_html(r)
-        elif out_format == "text":
-            r["report_text"] = render_report(r)
-        return json.dumps(r, ensure_ascii=False)
+    def _innovation_review(a: dict):
+        return _innovation_review(a)
 
-    def _asset_blueprint(self, a: dict) -> str:
-        """把复刻铺排结论写回资产蓝图（coderef_asset_blueprint）"""
-        from core.replicate_engine import solidify_asset_blueprint
-        pp = a["project_path"]
-        entry_points = a.get("entry_points") or []
-        if isinstance(entry_points, str):
-            import re as _re
-            entry_points = [s.strip() for s in _re.split(r"[,\s;]+", entry_points) if s.strip()]
-        r = solidify_asset_blueprint(pp, a["canonical"], entry_points=list(entry_points))
-        r["tool"] = "coderef_asset_blueprint"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _asset_blueprint(a: dict):
+        return _asset_blueprint(a)
 
-    def _govern(self, a: dict) -> str:
-        """Prompt 治理平台：编排资产生命周期 × 合规审计 × 跨模块一致性（coderef_prompt_governance）"""
-        from core.prompt_governance import govern_prompt
-        pp = a["project_path"]
-        r = govern_prompt(
-            pp,
-            action=a.get("action", "overview"),
-            name=a.get("name", ""),
-            content=a.get("content", ""),
-            version=a.get("version", ""),
-            abtest_group=a.get("abtest_group", ""),
-            asset_action=a.get("asset_action", ""),
-            out_format=a.get("out_format", "json"),
-        )
-        r["tool"] = "coderef_prompt_governance"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _govern(a: dict):
+        return _govern(a)
 
-    def _interpret(self, a: dict) -> str:
-        """人话解读平台：健康/仪表盘/论断核验/Wiki/Prompt 治理/资产（coderef_interpret）"""
-        from core.interpretation_platform import interpret_project
-        pp = a["project_path"]
-        r = interpret_project(
-            pp,
-            action=a.get("action", "health"),
-            findings_text=a.get("findings_text", ""),
-            entry=a.get("entry", ""),
-            out_format=a.get("out_format", "json"),
-        )
-        r["tool"] = "coderef_interpret"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _interpret(a: dict):
+        return _interpret(a)
 
-    def _docs_read(self, a: dict) -> str:
-        """按需读取 Wiki 文档正文（coderef_docs_read）"""
-        from core.pipeline_runner import Pipe
-        pp = a["project_path"]
-        # max_chars 防御性转换：非法值回退默认，避免 MCP 层抛 ValueError
-        try:
-            max_chars = int(a.get("max_chars", 20000))
-        except (TypeError, ValueError):
-            max_chars = 20000
-        # 负 max_chars 会被 content[:max_chars] 当成"去尾 n 字符"（content[:-n]）静默截断
-        if max_chars <= 0:
-            return json.dumps({
-                "status": "error", "tool": "coderef_docs_read",
-                "error": f"max_chars 必须为正整数（收到 {max_chars}）",
-            }, ensure_ascii=False)
-        r = Pipe().docs_read(
-            pp, doc=a.get("doc") or None,
-            output_dir=a.get("output_dir") or None,
-            max_chars=max_chars,
-        )
-        r["tool"] = "coderef_docs_read"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _docs_read(a: dict):
+        return _docs_read(a)
 
-    def _flow_verify(self, a: dict) -> str:
-        """流程合规验证（coderef_flow_verify）"""
-        from core.flow_verify import verify_flow
-        pp = a["project_path"]
-        # steps 校验：schema 中 steps 为可选（optional）。省略 steps 键时仅执行
-        # cross_lang 契约检测 / 入口与图谱定位（不依赖流程步骤），供跨语言契约专项复用；
-        # 显式传 steps 但为空或含非法元素（[]/0/None/空串/非字符串元素）属契约非法，
-        # 返回结构化错误而非假成功。
-        if "steps" in a:
-            steps = a["steps"]
-            if isinstance(steps, str):
-                # 兼容逗号分隔字符串
-                steps = [s.strip() for s in steps.split(",") if s.strip()]
-            elif isinstance(steps, (list, tuple)):
-                # 逐元素校验：每个 step 必须是非空字符串（拒绝 [0]/[None]/[" "]/[""]）
-                if any(not isinstance(s, str) or not s.strip() for s in steps):
-                    raise ValueError(
-                        "coderef_flow_verify: steps 的每个元素必须是非空字符串")
-                steps = [s.strip() for s in steps]
-            else:
-                # 非数组/非字符串（如数字 0、负数、None）→ 结构化错误
-                raise ValueError(
-                    f"coderef_flow_verify: steps 必须是数组或逗号分隔字符串，收到 {type(steps).__name__}")
-            if not steps:
-                # 空数组/0/空串/全空白元素清空后 → 无待验证步骤，契约非法
-                raise ValueError("coderef_flow_verify: steps 不能为空，请传入待验证的流程步骤")
-        else:
-            # 省略 steps 键：仅执行跨语言契约检测 / 入口与图谱定位，不验证流程步骤
-            steps = []
-        r = verify_flow(pp, a["entry"], list(steps), depth=a.get("depth"))
-        r["tool"] = "coderef_flow_verify"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _flow_verify(a: dict):
+        return _flow_verify(a)
 
-    def _arch_audit(self, a: dict) -> str:
-        """架构腐化诊断（coderef_arch_audit）—— 复用知识图谱 CALLS 边做模块级静态诊断"""
-        from core.arch_audit import audit as arch_audit
-        pp = a["project_path"]
-        r = arch_audit(pp)
-        r["tool"] = "coderef_arch_audit"
-        r["project_path"] = pp
-        return json.dumps(r, ensure_ascii=False)
+    def _arch_audit(a: dict):
+        return _arch_audit(a)
 
-    def _verify_findings(self, a: dict) -> str:
-        """确定性核验 LLM / CodeRabbit 论断（coderef_verify_findings）"""
-        from core.verify_findings import verify_findings, render_report, render_html
-        pp = a["project_path"]
-        findings = a.get("findings") or []
-        if isinstance(findings, str):
-            findings = json.loads(findings)
-        entry = a.get("entry") or None
-        out_format = a.get("out_format", "json")
-        r = verify_findings(pp, list(findings), entry=entry)
-        r["tool"] = "coderef_verify_findings"
-        r["project_path"] = pp
-        if out_format == "html":
-            r["report_html"] = render_html(r)
-        elif out_format == "text":
-            r["report_text"] = render_report(r)
-        return json.dumps(r, ensure_ascii=False)
+    def _verify_findings(a: dict):
+        return _verify_findings(a)
 
-    @staticmethod
-    def _validate_project_path(tool: str, p: str) -> str:
-        """校验并规范化 project_path。
-
-        规则：
-        1. 空串/纯空白/缺省 → 结构化错误（此前缺省键 audit 仍完成并生成报告，属假阴性）
-        2. 相对路径（含 .. / . / 纯文件名）→ 拒绝，要求绝对路径，
-           避免 ".." 越权扫描上级目录、空串被当作 cwd 扫描被测源码自身
-        3. 绝对路径但目录不存在/不是目录 → 结构化错误（此前静默返回空成功）
-        返回规范化后的绝对路径（realpath）。
-        """
-        if not p or not p.strip():
-            raise ValueError(
-                f"{tool}: project_path 不能为空或缺失，请传入目标项目的绝对路径")
-        p = p.strip()
-        if not os.path.isabs(p):
-            raise ValueError(
-                f"{tool}: project_path 必须是绝对路径（收到相对路径 '{p}'）。"
-                f"相对路径（如 .. / 空串）会被解析到非预期目录，已拒绝以防越权扫描")
-        real = os.path.realpath(p)
-        if not os.path.isdir(real):
-            raise ValueError(f"{tool}: project_path 目录不存在: {p}")
-        return real
+    def _validate_project_path(tool: str, p: str):
+        return _validate_project_path(tool, p)
 
     def _run(self, n, a, progress_cb=None) -> str:
         from core.pipeline_runner import Pipe
@@ -1587,115 +1844,23 @@ class Server:
             return handler(a)
         return "未知工具: " + n
 
-    def _review(self, a) -> str:
-        """执行代码审查（coderef_review），返回结构化 JSON 文本"""
-        from core.code_review import CodeReviewer
-        pp = a["project_path"]
-        mode = a.get("mode", "diff")
-        dims = a.get("dimensions") or None
-        changed_files = a.get("changed_files") or None
-        diff = a.get("diff") or None
-        r = CodeReviewer().review(
-            pp, mode=mode, diff=diff,
-            changed_files=changed_files, dimensions=dims,
-        )
-        return json.dumps(r, ensure_ascii=False)
+    def _review(a):
+        return _review(a)
 
-    def _frontend(self, a) -> str:
-        """执行前端交互审查（coderef_frontend），返回结构化 JSON 文本"""
-        from core.frontend_inspector import FrontendInspector
-        pp = a["project_path"]
-        mode = a.get("mode", "static")
-        url = a.get("url") or None
-        entry = a.get("entry") or None
-        levels = a.get("check_levels") or None
-        r = FrontendInspector().inspect(
-            pp, entry=entry, mode=mode, url=url, check_levels=levels,
-        )
-        return json.dumps(r, ensure_ascii=False)
+    def _frontend(a):
+        return _frontend(a)
 
-    def _report(self, a) -> str:
-        """执行 HTML 报告渲染（coderef_report）：
-        优先重渲染既有产物（图谱+Wiki，不重跑扫描）；无既有产物时回退为跑一次全量审计并渲染。"""
-        from core.pipeline_runner import Pipe
-        pp = a["project_path"]
-        out = a.get("output_dir") or None
-        r, has_artifacts = Pipe().render_report(pp, output_dir=out)
-        if not has_artifacts:
-            r = Pipe().audit(pp, output_dir=out)
-        hr = getattr(r, "html_report", None) or {}
-        return json.dumps(hr, ensure_ascii=False)
+    def _report(a):
+        return _report(a)
 
-    def _advisor(self, a) -> str:
-        """审计策略判定 + 功能审查（coderef_audit_advisor）"""
-        from core.review_strategy import review_advisor
-        from core.functional_review import functional_reviewer
-        pp = a["project_path"]
-        with_functional = a.get("with_functional", True)
-        strategy = review_advisor.advise(pp)
-        result = {"strategy": strategy}
-        if with_functional:
-            try:
-                fr = functional_reviewer.review(pp, strategy)
-                result["functional_review"] = fr
-            except Exception as e:
-                result["functional_review"] = {"llm_available": False,
-                                               "degraded": True, "error": str(e)}
-        return json.dumps(result, ensure_ascii=False)
+    def _advisor(a):
+        return _advisor(a)
 
-    def _arch(self, a) -> str:
-        from core.pipeline_runner import Pipe
-        r = Pipe().architecture(a["project_path"])
-        # 结构化返回，与 coderef_audit 一致
-        return json.dumps({
-            "status": "completed",
-            "tool": "coderef_architecture",
-            "project_path": a["project_path"],
-            "report": r.report,
-            "report_path": r.report_path or "",
-            "summary": {
-                "total_files": getattr(r, "total_files", 0),
-                "total_lines": getattr(r, "total_lines", 0),
-                "findings": len(r.findings),
-                "elapsed": getattr(r, "elapsed", 0),
-            },
-            "errors": getattr(r, "errors", []),
-        }, ensure_ascii=False)
+    def _arch(a):
+        return _arch(a)
 
-    def _wl(self, a) -> str:
-        from core.pipeline_runner import Pipe
-        act = a.get("action", "add")
-        # 非法 action 此前静默落到默认 add 分支（参数契约矩阵暴露的缺陷）；
-        # 改为结构化拒绝，与 wiki_style/docs_read/strategy 的枚举严格校验保持一致。
-        if not isinstance(act, str) or act not in WHITELIST_ACTIONS:
-            return json.dumps({
-                "status": "error",
-                "tool": "coderef_whitelist",
-                "error": (f"非法 action 枚举: {act!r}；允许的取值为 "
-                          f"{' / '.join(sorted(WHITELIST_ACTIONS))}"),
-            }, ensure_ascii=False)
-        pp = a["project_path"]
-        if act == "list":
-            wl = Pipe.whitelist_list(pp)
-            return json.dumps({"count": len(wl), "entries": wl}, ensure_ascii=False)
-        elif act == "clear":
-            n = Pipe.whitelist_clear(pp)
-            return json.dumps({"cleared": n}, ensure_ascii=False)
-        elif act == "core_rules_get":
-            return json.dumps(Pipe.core_rules_get(pp), ensure_ascii=False)
-        elif act == "core_rules_set":
-            rules = a.get("core_rules", {})
-            if not rules:
-                return json.dumps({"error": "core_rules 不能为空"})
-            return json.dumps(Pipe.core_rules_set(pp, rules), ensure_ascii=False)
-        elif act == "core_rules_reset":
-            return json.dumps(Pipe.core_rules_reset(pp), ensure_ascii=False)
-        else:  # add
-            entries = a.get("entries", [])
-            if not entries:
-                return json.dumps({"error": "entries 不能为空"})
-            n = Pipe.whitelist_add(pp, entries)
-            return json.dumps({"added": n, "total": len(Pipe.whitelist_list(pp))}, ensure_ascii=False)
+    def _wl(a):
+        return _wl(a)
 
     def _tsk(self, a) -> str:
         import time
@@ -1787,18 +1952,11 @@ class Server:
             r = rc.get("result","")
         return json.dumps({"status":"completed","task_id":tid,"content":r}, ensure_ascii=False)
 
-    def _query(self, a) -> str:
-        from core.pipeline_runner import Pipe
-        qt = a.get("query_type", "stats")
-        pp = a["project_path"]
-        kwargs = {k: v for k, v in a.items()
-                  if k not in ("project_path", "query_type") and v}
-        result = Pipe.kg_query(pp, qt, **kwargs)
-        return json.dumps(result, ensure_ascii=False)
+    def _query(a):
+        return _query(a)
 
-    @staticmethod
     def _ok(rid, text):
-        return {"jsonrpc":"2.0","id":rid,"result":{"content":[{"type":"text","text":text}]}}
+        return _ok(rid, text)
 
     def run(self):
         # 强制 stdout 为 UTF-8，解决 Windows 下中文乱码

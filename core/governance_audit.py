@@ -142,6 +142,432 @@ class GovernanceReport:
 # 治理审计器
 # ═══════════════════════════════════════════════════════════════════
 
+# ==================== 模块级规则常量区（自 GovernanceAuditor 提取，规则数据与检测逻辑分离） ====================
+# ─── 安全铁律：高危模式 ────────────────────────────────────────
+
+# 共享的凭据字面量值提取器：从已命中的凭据声明行提取引号内字面量值。
+# 供 HARDCODED_SECRET_PATTERNS 命中后的占位符过滤复用，保证取值逻辑唯一。
+CREDENTIAL_VALUE = re.compile(r'[:=]\s*([`"\'])([^`"\']{8,})[`"\']')
+
+# 硬编码密钥/密码/Token（使用 \b 单词边界防止子串误匹配）
+HARDCODED_SECRET_PATTERNS = [
+    # 只匹配字面值（引号内的值），不匹配变量引用/函数调用
+    (re.compile(r'\b(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)\b\s*(?::=|=)\s*["\'][^"\']{8,}["\']', re.IGNORECASE),
+     "IRON-SEC-01", "硬编码凭据", "critical",
+     "代码中直接写入了密码/Token/密钥等敏感凭据，应改用环境变量或密钥管理服务"),
+    # 自定义密钥常量：变量名含 Key/Secret/Token/Credential/Passwd/Pwd 词尾，值为 16+ 字符随机串
+    # （chatwiki code_run.go:5 const CodeRunKey = `QwXKBkHZRJ4StIYr06hvUOLVu9AemFa2`）
+    # 词尾后 (?!\w) 防止 publicKeyHash 类把 Key 当普通词中片段；:= 支持 Go 短声明。
+    # 占位符/规则串（纯字母/纯数字/重复字符）由 _is_credential_false_positive 排除。
+    # 不加 IGNORECASE：规则依赖词尾大写（CodeRunKey/apiSecret），
+    # 大小写不敏感会把 cache_key 等普通标识符误报为 critical。
+    (re.compile(r'\b(?:const\s+)?[A-Za-z_]\w*(?:Key|Secret|Token|Credential|Passwd|Pwd)(?!\w)\s*(?::=|=)\s*[`"\']([^`"\']{16,})[`"\']'),
+     "IRON-SEC-01", "硬编码凭据", "critical",
+     "代码中直接写入了自定义密钥常量（变量名含 Key/Secret/Token 等，值为长随机串），应改用环境变量或密钥管理服务"),
+]
+
+# 凭据检测的排除模式（匹配后仍需要二次验证）
+# 这些模式指示变量引用而非字面值，应排除
+SECRET_EXCLUDE_PATTERNS = [
+    # 函数调用：token = create_access_token(...) 或 token = getToken()
+    re.compile(r'[:=]\s*\w+\s*\(', re.IGNORECASE),
+    # 对象属性访问：self.config.xxx, self.xxx
+    re.compile(r'self\.\w+', re.IGNORECASE),
+    # 配置字典访问：config["key"], config.get("key")
+    re.compile(r'(?:config|settings|cfg)\s*\[', re.IGNORECASE),
+    re.compile(r'(?:config|settings|cfg)\.get\s*\(', re.IGNORECASE),
+    # 环境变量：os.environ / os.getenv / process.env
+    re.compile(r'os\.(?:environ|getenv)', re.IGNORECASE),
+    re.compile(r'process\.env', re.IGNORECASE),
+    # .env 文件引用
+    re.compile(r'\.env\b', re.IGNORECASE),
+    # 注释（Python # 或 JS //）
+    re.compile(r'^\s*#', re.IGNORECASE),
+    re.compile(r'^\s*//', re.IGNORECASE),
+    # 错误码常量：E1001_KEY = "E1001_KEY"（全大写约定，区分大小写避免误排小写/复合凭据名）
+    re.compile(r'^[A-Z_]{4,}\s*=\s*["\'][A-Z_\d]+["\']'),
+    # 错误码/错误常量名（全大写约定；E 前缀错误码加词边界，避免误匹配值内数字串）
+    re.compile(r'MISSING_|_MISSING|ERROR_|\bE\d{3,}'),
+    # 从 localStorage/sessionStorage 获取（JS/TS）
+    re.compile(r'(?:localStorage|sessionStorage)\.(?:get|getItem)', re.IGNORECASE),
+    # 函数返回值赋值：token = get_xxx() 或 const token = getXxx()
+    re.compile(r'=\s*\w+\s*\(\s*\)', re.IGNORECASE),
+]
+
+# SQL 注入风险
+SQL_INJECTION_PATTERNS = [
+    (re.compile(r'(?:execute|cursor\.execute|\.raw)\s*\(\s*(?:f["\']|["\'].*%.*["\'])', re.IGNORECASE),
+     "IRON-SEC-02", "SQL注入风险", "critical",
+     "使用字符串拼接/f-string构造SQL，存在SQL注入风险。应使用参数化查询"),
+    (re.compile(r'(?:execute|cursor\.execute)\s*\(\s*["\'].*\{\s*\}.*["\']', re.IGNORECASE),
+     "IRON-SEC-02", "SQL注入风险", "critical",
+     "使用字符串格式化构造SQL，存在SQL注入风险。应使用参数化查询"),
+]
+
+# 命令注入风险
+COMMAND_INJECTION_PATTERNS = [
+    (re.compile(r'(?:os\.system|subprocess\.call|subprocess\.Popen|eval|exec)\s*\(\s*.*\+', re.IGNORECASE),
+     "IRON-SEC-03", "命令注入风险", "high",
+     "使用字符串拼接构造系统命令，存在命令注入风险。应使用subprocess.run(list) + shlex.quote()"),
+    (re.compile(r'(?:os\.system|subprocess\.call|subprocess\.Popen)\s*\(\s*(?:f["\'])', re.IGNORECASE),
+     "IRON-SEC-03", "命令注入风险", "high",
+     "使用f-string构造系统命令，存在命令注入风险。应使用subprocess.run(list)"),
+]
+
+# 不安全的反序列化
+UNSAFE_DESERIALIZE = [
+    (re.compile(r'pickle\.(?:load|loads)\s*\(', re.IGNORECASE),
+     "IRON-SEC-04", "不安全反序列化", "high",
+     "pickle.load/loads 可被利用执行任意代码。应使用 json 或安全的序列化格式",
+     "改用 json 或安全的序列化格式（如 msgpack）"),
+    (re.compile(r'yaml\.(?:load|full_load)\s*\(', re.IGNORECASE),
+     "IRON-SEC-04", "不安全反序列化", "high",
+     "yaml.load 可被利用执行任意代码。应使用 yaml.safe_load()",
+     "改用 yaml.safe_load()"),
+    (re.compile(r'\bunserialize\s*\(', re.IGNORECASE),
+     "IRON-SEC-04", "不安全反序列化(PHP)", "high",
+     "PHP 的 unserialize() 可被利用触发对象注入/任意代码执行，若数据来自用户输入（$_POST/$_COOKIE）风险极高。",
+     "避免对不可信输入使用 unserialize()；改用 json_decode() 或对反序列化对象做白名单校验"),
+]
+
+# 硬编码 URL/端口
+HARDCODED_NETWORK = [
+    (re.compile(r'(?:url|host|endpoint|base_url|api_url)\s*[:=]\s*["\']https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', re.IGNORECASE),
+     "IRON-SEC-05", "硬编码内网地址", "medium",
+     "代码中硬编码了IP地址，部署时容易遗漏修改。应使用配置文件或环境变量"),
+]
+
+# 危险协议/函数检测（marshal、eval、exec 等可执行任意代码的函数）
+DANGEROUS_FUNCTIONS = [
+    (re.compile(r'marshal\.loads?\s*\(', re.IGNORECASE),
+     "IRON-SEC-06", "危险函数调用(marshal)", "critical",
+     "marshal.load/loads 可被恶意构造的数据触发任意代码执行。通俗解释：marshal 就像把压缩包解压后自动运行里面的程序，坏人可以伪造压缩包让你的电脑执行恶意代码。",
+     "改用 json.loads() 或 msgpack 等安全的序列化格式，并始终用 try-except 包裹"),
+    (re.compile(r'\beval\s*\(', re.IGNORECASE),
+     "IRON-SEC-06", "危险函数调用(eval)", "critical",
+     "eval() 会将字符串当作代码执行，攻击者可通过输入注入恶意代码。通俗解释：eval 就像让别人直接在你的电脑上敲命令，你不知道对方会敲什么。",
+     "使用 ast.literal_eval() 替代 eval()，或完全避免动态执行。如果必须使用，对输入做严格白名单校验"),
+    (re.compile(r'(?<!\.)\bexec\s*\(', re.IGNORECASE),
+     "IRON-SEC-06", "危险函数调用(exec)", "critical",
+     "exec() 会执行任意 Python 代码，是最高危的函数之一。通俗解释：exec 比 eval 更危险，相当于把家门钥匙和保险柜密码一起给了陌生人。",
+     "几乎永远不应该使用 exec()。如果确需动态代码执行，考虑使用受限的沙箱环境"),
+]
+
+# 跨语言危险命令执行（Go/PHP/Java/Node 等）—— 多语言适配（证据审计缺陷 7）
+# 原有规则只覆盖 Python（subprocess/os.system/eval/exec），对 Go/PHP/Java/JS
+# 项目的系统命令执行"看不见"。这里补充主流后端语言的命令执行函数检测，
+# 作为审计关注点提示（确认命令与参数来源可信），避免非 Python 项目致命漏洞静默漏检。
+CROSS_LANG_COMMAND_EXEC = [
+    (re.compile(r'exec\.Command\s*\(', re.IGNORECASE),   # Go
+     "IRON-SEC-17", "系统命令执行(exec.Command)", "high",
+     "调用 exec.Command 执行系统命令，若命令或参数可被外部输入影响，存在命令注入风险。",
+     "确认命令与参数均来自可信来源；对用户输入做白名单校验，避免拼接成命令"),
+    (re.compile(r'(?<!os\.)\b(?:shell_exec|system|passthru|pcntl_exec|proc_open)\s*\(', re.IGNORECASE),  # PHP
+     "IRON-SEC-17", "系统命令执行(PHP)", "high",
+     "PHP 调用 system/shell_exec 等执行系统命令，若参数来自用户输入（$_GET/$_POST/$_REQUEST），存在远程命令执行风险。",
+     "避免使用命令执行函数；改用安全的库，或对输入做严格白名单校验"),
+    (re.compile(r'Runtime\s*\.\s*getRuntime\s*\(\)\s*\.\s*exec|ProcessBuilder\s*\(', re.IGNORECASE),  # Java
+     "IRON-SEC-17", "系统命令执行(Java)", "high",
+     "调用 Runtime.exec / ProcessBuilder 执行系统命令，若参数可被外部输入影响，存在命令注入风险。",
+     "确认命令与参数来源可信；对用户输入做白名单校验"),
+    (re.compile(r'child_process\s*\.\s*(?:exec|execSync|spawn|spawnSync)\s*\(', re.IGNORECASE),  # Node
+     "IRON-SEC-17", "系统命令执行(Node)", "high",
+     "调用 child_process.exec/spawn 执行系统命令，若参数可被外部输入影响，存在命令注入风险。",
+     "优先使用 spawn 的数组参数形式；对用户输入做白名单校验"),
+]
+
+# 不安全的子进程调用（shell=True 未校验参数）
+UNSAFE_SUBPROCESS = [
+    (re.compile(r'subprocess\.(?:call|Popen|run)\s*\([^)]*shell\s*=\s*True', re.IGNORECASE),
+     "IRON-SEC-07", "不安全的子进程调用(shell=True)", "high",
+     "shell=True 会启动系统 shell 解释命令字符串，攻击者可注入额外命令（如 ; rm -rf /）。通俗解释：shell=True 就像把命令写在纸条上交给一个不检查内容的人去执行，坏人可以在纸条上加料。",
+     "去掉 shell=True，改用列表形式传递参数：subprocess.run(['cmd', 'arg1', 'arg2'])。如果必须用 shell，使用 shlex.quote() 转义所有用户输入"),
+    (re.compile(r'os\.system\s*\([^)]*\+', re.IGNORECASE),
+     "IRON-SEC-07", "不安全的子进程调用(os.system)", "high",
+     "os.system() 直接调用系统 shell，且通过字符串拼接构造命令，极易被注入。通俗解释：os.system 是直接对操作系统喊话，如果喊的内容里混入了用户输入，坏人可以让系统执行任意命令。",
+     "使用 subprocess.run() 替代 os.system()，参数以列表形式传递"),
+]
+
+# 不安全的文件操作（路径遍历风险）
+PATH_TRAVERSAL = [
+    (re.compile(r'os\.(?:remove|unlink|rmdir)\s*\([^)]*\+', re.IGNORECASE),
+     "IRON-SEC-08", "路径遍历风险(拼接删除)", "high",
+     "使用字符串拼接构造文件删除路径，攻击者可通过 ../ 跳出预期目录，删除系统关键文件。通俗解释：如果让用户输入文件名然后直接删除，坏人可以输入 ../../windows/system32/xxx 来删除系统文件。",
+     "使用 os.path.realpath() 规范化路径后，验证路径是否在允许的目录范围内。或使用 pathlib.Path.resolve()"),
+    (re.compile(r'\.\.\/|\.\.\\\\', re.IGNORECASE),
+     "IRON-SEC-08", "路径遍历风险(../)", "high",
+     '代码中出现了 ../ 或 ..\\ 路径遍历模式，如果与用户输入拼接，存在目录穿越攻击风险。通俗解释：../ 在文件路径中表示"上一级目录"，坏人可以用它跳出你的工作目录，访问到不该访问的文件。',
+     "使用 os.path.realpath() 或 Path.resolve() 规范化路径，验证最终路径是否在允许的基准目录内"),
+]
+
+# 弱加密算法（MD5/SHA1/RC4）- 排除 hashlib. 前缀（由 IRON-SEC-14 专门处理）
+WEAK_CRYPTO = [
+    (re.compile(r'(?<!hashlib\.)\b(?:MD5|SHA1|RC4|DES)\b', re.IGNORECASE),
+     "IRON-SEC-10", "弱加密算法", "high",
+     "使用了已知不安全的加密算法（MD5/SHA1/RC4/DES）。这些算法已被破解或不推荐使用。",
+     "使用 SHA-256 或更高级别算法替代。对于密码存储，使用 bcrypt/scrypt/argon2。"),
+]
+
+# SSRF 风险（requests.get/urllib 使用用户输入 URL）
+SSRF_PATTERNS = [
+    (re.compile(r'(?:requests|urllib|httpx)\.(?:get|post|request)\s*\([^)]*\+\s*', re.IGNORECASE),
+     "IRON-SEC-11", "SSRF风险", "high",
+     "使用字符串拼接构造 HTTP 请求 URL，攻击者可注入内网地址进行 SSRF 攻击。",
+     "对用户输入的 URL 做白名单校验，禁止访问内网地址（127.0.0.1, 10.x, 172.16-31.x, 192.168.x）"),
+]
+
+# XSS 风险（未转义的用户输入输出到 HTML）
+XSS_PATTERNS = [
+    (re.compile(r'(?:innerHTML|outerHTML|dangerouslySetInnerHTML|document\.write\s*\()', re.IGNORECASE),
+     "IRON-SEC-12", "XSS风险", "high",
+     "直接使用 innerHTML/dangerouslySetInnerHTML 设置 HTML 内容，存在 XSS 攻击风险。",
+     "使用 textContent 替代 innerHTML，或对用户输入做 HTML 实体转义"),
+]
+
+# 不安全随机数（random 模块用于安全场景）
+INSECURE_RANDOM = [
+    (re.compile(r'\brandom\.(?:random|randint|choice|sample|shuffle)\b', re.IGNORECASE),
+     "IRON-SEC-13", "不安全随机数", "medium",
+     "使用 random 模块生成随机数，不适合安全场景（可预测）。",
+     "安全场景应使用 secrets 模块（secrets.token_hex, secrets.choice）或 os.urandom()"),
+]
+
+# 弱哈希算法（用于密码存储）
+WEAK_HASH = [
+    (re.compile(r'\bhashlib\.(?:md5|sha1)\b', re.IGNORECASE),
+     "IRON-SEC-14", "弱哈希算法", "medium",
+     "使用 MD5/SHA1 哈希算法，不适合密码存储和完整性校验。",
+     "密码存储使用 bcrypt/scrypt/argon2。完整性校验使用 SHA-256 起。"),
+]
+
+# SSL/TLS 证书验证禁用
+SSL_VERIFY_DISABLED = [
+    (re.compile(r'\bverify\s*=\s*False\b', re.IGNORECASE),
+     "IRON-SEC-15", "SSL证书验证禁用", "medium",
+     "禁用了 SSL/TLS 证书验证（verify=False），容易遭受中间人攻击。",
+     "移除 verify=False，使用正确的证书链。仅在内网开发环境保留。"),
+]
+
+# 资源耗尽风险（无限制循环/递归/大文件读取）
+RESOURCE_EXHAUSTION = [
+    (re.compile(r'while\s+True\s*:', re.IGNORECASE),
+     "IRON-SEC-16", "资源耗尽风险(无限循环)", "low",
+     "检测到 while True 无限循环，缺少明确的退出条件可能导致资源耗尽。",
+     "确保循环有明确的退出条件（break/return），或使用 timeout 机制"),
+]
+
+# ===== 非 Python 文件的机密检测 =====
+# 在 .env / .yaml / .json / .toml 文件中扫描机密
+NON_PY_SECRET_EXTENSIONS = {".env", ".yaml", ".yml", ".json", ".toml", ".cfg", ".ini", ".conf"}
+
+NON_PY_SECRET_MASK_PATTERN = re.compile(
+    r'(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key|client_secret)\s*[:=]\s*["\']?([^"\'#\s]{8,})["\']?', re.IGNORECASE
+)
+
+# ===== 文档类文件（.md/.SKILL/.txt）的治理合规检测 =====
+# 治理合规盲区：SKILL.md / 文档中的明文凭据与审查绕过表述（已有真实项目缺陷验证）
+# 文档文件扩展名
+DOC_EXTENSIONS = {".md", ".markdown", ".txt", ".skill"}
+
+# 文档中的明文密钥环境变量赋值：如 SN_API_KEY=xxx、BRAND_LLM_API_KEY=xxx、KEY=xxx
+# 仅匹配密钥类环境变量名 + 赋值，避免误报普通说明文字
+DOC_SECRET_PATTERNS = [
+    (re.compile(r'\b[A-Z0-9_]+(?:_API_KEY|_APISECRET|_SECRET_KEY|_ACCESS_KEY|_PRIVATE_KEY|_CLIENT_SECRET)\b\s*=', re.IGNORECASE),
+     "IRON-SEC-01", "文档明文密钥赋值", "critical",
+     "文档中展示了密钥环境变量的明文赋值（如 *_API_KEY=...），若被用户照抄写入配置文件会造成凭据明文落盘。应改用占位符并提示从密钥管理服务获取。"),
+    (re.compile(r'\bsk-[A-Za-z0-9_\-]{8,}\b'),
+     "IRON-SEC-01", "文档明文密钥赋值", "critical",
+     "文档中出现了 sk- 开头的明文 API 密钥，可能是泄露的真实密钥。应立即撤销并改用密钥管理服务。"),
+]
+
+# 文档中引导把密钥写入凭据配置文件（.env 等）
+DOC_ENV_CRED_PATTERNS = [
+    (re.compile(r'\.env\b[^\n]*\b(?:API_KEY|SECRET|TOKEN|CREDENTIAL|[A-Z0-9_]*KEY)\b', re.IGNORECASE),
+     "IRON-SEC-01", "引导密钥写入凭据文件", "critical",
+     "文档引导/示范将密钥类环境变量（API_KEY/SECRET/TOKEN/KEY）写入 .env 凭据配置文件，属于明文凭据落盘的高风险指引。应引导使用密钥管理服务或加密存储。"),
+    (re.compile(r'(?:写入|保存|配置到|export)\s*[^\n]*\.env\b', re.IGNORECASE),
+     "IRON-SEC-01", "引导密钥写入凭据文件", "high",
+     "文档引导将配置（可能含密钥）写入 .env 凭据配置文件，若包含 API Key 属于明文凭据落盘。应避免在文档中示范密钥明文写入凭据文件。"),
+]
+
+# 文档中的审查绕过类表述（削弱合规审查严格度）
+GOV_BYPASS_PATTERNS = [
+    (re.compile(r'忽略清单'), "审查绕过(忽略清单)", "high",
+     "文档建立了'忽略清单'以跳过合规审查，属治理合规盲区。忽略清单应受审计追踪，不得静默放行。"),
+    (re.compile(r'直接放行'), "审查绕过(直接放行)", "high",
+     "文档声明对命中项'直接放行'不审查，削弱了合规审查严格度，属治理合规盲区。"),
+    (re.compile(r'一律不输出'), "审查绕过(一律不输出)", "high",
+     "文档规定'一律不输出来些风险'，隐藏了非致命但仍需记录的风险，属治理合规盲区。应保留风险日志供审计。"),
+    (re.compile(r'直接跳过[^\n]*不报告'), "审查绕过(直接跳过不报告)", "high",
+     "文档规定'直接跳过且不报告风险'，削弱了合规审查的可审计性，属治理合规盲区。"),
+]
+
+# 文档中的违禁宣称/伪科学工艺词（与 prompt_compliance 治理词表一致，防知识包示例污染）
+# 仅收录最明确的伪科学工艺词，排除"发酵工艺"等可作科学描述的术语，避免误报
+DOC_CLAIM_PATTERNS = [
+    (re.compile(r'生物合成|工业生物制造|工业生物合成|DNA重组', re.IGNORECASE),
+     "IRON-GOV-02", "文档违禁宣称(伪科学工艺词)", "medium",
+     "文档/知识包示例使用了伪科学工艺词（如'生物合成'），与库内合规自禁令冲突，会示范污染下游 prompt 生成。应删除或替换为合规表述。"),
+]
+
+# ===== 代码中密钥明文落盘（写入 .env 等凭据文件）=====
+# f-string 密钥赋值格式化进字符串（如 f"BRAND_LLM_API_KEY={self.llm.api_key}"）
+# 值来源必须为 api_key/secret/token/key 变量，确保确证性
+SECRET_PERSIST_PATTERNS = [
+    (re.compile(r'f["\'][^"\']*\b[A-Z0-9_]*(?:API|ACCESS|SECRET|PRIVATE|CLIENT)[_-]?KEY\b\s*=\s*\{[^}]*\b(?:api_key|secret|token|key)\b', re.IGNORECASE),
+     "IRON-SEC-01", "密钥明文落盘", "critical",
+     "将 API Key 以 'KEY={...}' 形式格式化进字符串（通常用于写入 .env 等凭据配置文件），属于明文凭据落盘，应改用密钥管理服务。"),
+]
+
+# 密钥落盘方法名（如 def save_env / write_env / export_env）
+SECRET_PERSIST_FUNC = re.compile(r'def\s+\w*(?:save_env|write_env|export_env|dump_env)\w*\s*\(')
+
+# 敏感信息泄露（日志/调试输出中暴露敏感变量）
+SENSITIVE_LOG = [
+    (re.compile(r'(?:print|log(?:ger)?\.(?:debug|info|warning|error)|console\.log)\s*\([^)]*\b(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)\b', re.IGNORECASE),
+     "IRON-SEC-09", "敏感信息泄露(日志输出)", "medium",
+     "调试/日志输出中包含了密码、Token、密钥等敏感信息，一旦日志泄露，攻击者可直接获取凭据。通俗解释：把密码打印到日志里，就像把银行卡密码写在快递单上——任何看到这张单子的人都能用你的卡。",
+     "移除调试输出中的敏感变量，或使用脱敏函数（如显示前2位+***）替代完整输出。生产环境日志级别应设为 INFO 以上"),
+    (re.compile(r'(?:print|log(?:ger)?\.(?:debug|info|warning|error)|console\.log)\s*\(\s*["\'][^"\']*\b(?:password|token|secret|key)\b[^"\']*["\']', re.IGNORECASE),
+     "IRON-SEC-09", "敏感信息泄露(明文输出)", "medium",
+     "日志字符串中明文包含了 'password'、'token' 等敏感词汇，可能是误将敏感信息输出。通俗解释：即使日志里没有真的密码，包含 'password' 字样也会引起攻击者的注意，让他们知道去哪找。",
+     "检查此处是否确实输出敏感信息，若是则立即移除；若为普通描述文字，建议改用更中性的措辞"),
+]
+
+# 不安全的反序列化扩展（json 无异常处理、XML 外部实体注入）
+UNSAFE_DESERIALIZE_EXTENDED = [
+    (re.compile(r'json\.loads?\s*\(', re.IGNORECASE),
+     "IRON-SEC-10", "不安全反序列化(json无异常处理)", "medium",
+     "json.loads() 未包裹在 try-except 中，遇到格式错误或恶意构造的 JSON 数据时会导致程序崩溃。通俗解释：json.loads 就像拆包裹，如果包裹里有炸弹（格式错误的数据），没有防护措施的话整个程序就会炸掉。",
+     "用 try-except json.JSONDecodeError 包裹 json.loads() 调用，并记录异常日志"),
+    (re.compile(r'(?:xml\.etree\.ElementTree|xml\.dom\.minidom|xml\.sax)\s*\.\s*parse', re.IGNORECASE),
+     "IRON-SEC-10", "不安全反序列化(XXE漏洞)", "high",
+     'XML 解析器默认允许外部实体（XXE），攻击者可通过构造恶意 XML 读取服务器文件、发起 SSRF 攻击。通俗解释：XML 解析器在处理文件时，会"听话地"去读取文件里指向的外部资源，坏人可以利用这一点偷看服务器上的文件。',
+     "使用 defusedxml 库替代标准 xml 库，或设置 parser 禁用外部实体：parser.entity = False"),
+    (re.compile(r'(?:from\s+xml\.etree|import\s+xml\.etree|from\s+xml\.dom|import\s+xml\.dom)', re.IGNORECASE),
+     "IRON-SEC-10", "不安全反序列化(XML导入)", "high",
+     "代码中导入了 xml.etree 或 xml.dom 模块。Python 标准 XML 库默认不安全，存在 XXE 和 Billion Laughs 攻击风险。通俗解释：Python 自带的 XML 处理工具就像没装杀毒软件的电脑，处理恶意 XML 文件时会被攻击。",
+     "安装并使用 defusedxml 库替代标准 xml 库：pip install defusedxml，然后 from defusedxml import ElementTree"),
+]
+
+# ─── 错题本模式 ────────────────────────────────────────────────
+
+# 空 catch / 裸 except
+PITFALL_EMPTY_EXCEPT = [
+    (re.compile(r'except\s*(?:\w+\s*)?(?:as\s+\w+\s*)?:\s*\n\s*(?:pass|continue|return\s+None)\s*$', re.MULTILINE),
+     "PITFALL-01", "空异常处理", "high",
+     "异常被静默吞噬（pass/continue），问题被隐藏。应至少记录日志或明确处理"),
+    (re.compile(r'except\s*:\s*\n\s*(?:pass|continue)', re.MULTILINE),
+     "PITFALL-01", "裸except", "high",
+     "裸 except 会捕获 KeyboardInterrupt 等系统异常。应指定具体异常类型"),
+]
+
+# 可变默认参数
+PITFALL_MUTABLE_DEFAULT = [
+    (re.compile(r'def\s+\w+\s*\([^)]*=\s*(?:\[\s*\]|\{\s*\}|set\s*\(\s*\))', re.IGNORECASE),
+     "PITFALL-02", "可变默认参数", "medium",
+     "默认参数使用了可变对象（[]/{}），多次调用会共享同一实例。应使用 None + 内部初始化"),
+]
+
+# 不安全的文件操作
+PITFALL_UNSAFE_FILE = [
+    (re.compile(r'open\s*\([^)]*\)\s*\.\s*(?:read|write|readlines)', re.IGNORECASE),
+     "PITFALL-03", "未使用上下文管理器", "medium",
+     "文件操作未使用 with 语句，可能导致资源泄漏。应使用 with open() as f:"),
+    (re.compile(r'os\.remove\s*\(|os\.rmdir\s*\(|shutil\.rmtree\s*\(', re.IGNORECASE),
+     "PITFALL-04", "危险删除操作", "medium",
+     "直接删除文件/目录，批量操作可能导致数据丢失。确认有备份机制"),
+]
+
+# 竞态条件
+PITFALL_RACE_CONDITION = [
+    (re.compile(r'os\.path\.exists\s*\([^)]+\)\s*\n.*open\s*\(', re.IGNORECASE),
+     "PITFALL-05", "TOCTOU竞态", "medium",
+     "先检查文件存在再打开，存在 TOCTOU 竞态条件。应直接尝试打开并捕获异常"),
+]
+
+# 不安全的线程操作
+PITFALL_THREAD_UNSAFE = [
+    (re.compile(r'threading\.Thread\s*\([^)]*\)\s*\.\s*start\s*\(\s*\)', re.IGNORECASE),
+     "PITFALL-06", "裸线程启动", "low",
+     "直接使用 threading.Thread 未做线程管理。建议使用 ThreadPoolExecutor 或守护线程"),
+]
+
+# I/O 反模式
+PITFALL_IO_PATTERNS = [
+    # 一次性读取整个文件到内存（不包含 with 上下文管理器中的操作）
+    (re.compile(r'open\s*\([^)]*\)\s*\.\s*(?:read|readlines)\s*\(\s*\)', re.IGNORECASE),
+     "PITFALL-07", "一次性读取整个文件", "medium",
+     "一次性读取整个文件到内存。大文件应使用逐行迭代或指定 buffering 参数"),
+    # 文件操作未使用 with 语句
+    (re.compile(r'(\w+)\s*=\s*open\s*\(', re.IGNORECASE),
+     "PITFALL-08", "文件未使用with", "medium",
+     "文件打开后未使用 with 语句管理，可能导致资源泄漏。应使用 with open() as f:"),
+]
+
+# ─── 质量铁律 ──────────────────────────────────────────────────
+
+# 函数过长（>100行）（阈值收敛到 config/settings.py）
+FUNCTION_TOO_LONG = GOVERNANCE_FUNCTION_TOO_LONG
+
+# 参数过多（>8个）
+FUNCTION_TOO_MANY_PARAMS = GOVERNANCE_FUNCTION_TOO_MANY_PARAMS
+
+# 嵌套过深（>4层）
+NESTING_TOO_DEEP = GOVERNANCE_NESTING_TOO_DEEP
+
+# ─── 架构铁律：依赖方向检测 ────────────────────────────────────
+
+# 允许的层级依赖方向（低层不应该依赖高层）
+# 注意：这是默认规则，可通过配置文件覆盖。
+# 开源项目可通过 .coderef_governance.json 自定义层级规则。
+# test 为独立测试层：测试代码引用被测代码（任意层）属正常行为，不算穿透。
+LAYER_RULES = {
+    "entry": ["core", "data", "shared", "other"],
+    "core": ["data", "shared", "other"],
+    "data": ["shared", "other"],
+    "shared": ["other"],
+    "test": ["entry", "core", "data", "shared", "other"],
+    "other": [],
+}
+
+# 层级→目录名映射（默认值，可通过 LLM 分析覆盖）
+# 开源项目不应依赖此映射，应通过 LLM 分析代码内容动态分类。
+# test 层目录名：tests/test/spec 等，避免测试文件落入 "other" 层后
+# 因白名单为空，import core.* 全部误报层级穿透。
+DEFAULT_LAYER_PATTERNS = {
+    "entry": ["route", "routes", "controller", "controllers", "handler", "handlers",
+               "api", "view", "views", "gui", "window"],
+    "core": ["service", "services", "core", "engine", "business", "logic", "domain", "agent"],
+    "data": ["model", "models", "data", "db", "database", "store", "repo",
+              "repository", "entity", "entities", "schema", "schemas"],
+    "shared": ["util", "utils", "shared", "common", "config", "helper", "helpers", "lib"],
+    "test": ["test", "tests", "testing", "spec", "specs", "__tests__"],
+}
+
+# ─── 异步函数中同步阻塞检测 ────────────────────────────────────
+
+BLOCKING_CALLS = {
+    "time.sleep", "time.sleep_ms", "time.sleep_us",
+    "requests.get", "requests.post", "requests.put", "requests.delete",
+    "requests.patch", "requests.head",
+    "urllib.request.urlopen",
+    "socket.connect", "socket.recv", "socket.send",
+    "subprocess.run", "subprocess.call", "subprocess.Popen",
+    "os.system", "os.popen",
+}
+
+# 文档密钥赋值的已知占位符值（lower 精确匹配）：示例配置的通用占位写法。
+# ollama 是本地免费模型名（README 明示无需 Key），同样按占位符处理。
+DOC_SECRET_PLACEHOLDER_VALUES = frozenset({
+    "xxx", "xxxx", "xxx-xxx", "placeholder", "example", "sample", "dummy",
+    "changeme", "change_me", "replace_me", "replace-me", "your-api-key",
+    "your_api_key", "your-key", "your_key", "your-secret", "your_token",
+    "your-token", "your-key-here", "yourkeyhere", "ollama", "test", "demo",
+    "mock", "fake",
+})
+
+
 class GovernanceAuditor:
     """
     代码治理审计器
@@ -150,406 +576,50 @@ class GovernanceAuditor:
     所有检测基于正则/AST 静态分析，不依赖 LLM。
     """
 
-    # ─── 安全铁律：高危模式 ────────────────────────────────────────
-
-    # 共享的凭据字面量值提取器：从已命中的凭据声明行提取引号内字面量值。
-    # 供 HARDCODED_SECRET_PATTERNS 命中后的占位符过滤复用，保证取值逻辑唯一。
-    CREDENTIAL_VALUE = re.compile(r'[:=]\s*([`"\'])([^`"\']{8,})[`"\']')
-
-    # 硬编码密钥/密码/Token（使用 \b 单词边界防止子串误匹配）
-    HARDCODED_SECRET_PATTERNS = [
-        # 只匹配字面值（引号内的值），不匹配变量引用/函数调用
-        (re.compile(r'\b(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)\b\s*(?::=|=)\s*["\'][^"\']{8,}["\']', re.IGNORECASE),
-         "IRON-SEC-01", "硬编码凭据", "critical",
-         "代码中直接写入了密码/Token/密钥等敏感凭据，应改用环境变量或密钥管理服务"),
-        # 自定义密钥常量：变量名含 Key/Secret/Token/Credential/Passwd/Pwd 词尾，值为 16+ 字符随机串
-        # （chatwiki code_run.go:5 const CodeRunKey = `QwXKBkHZRJ4StIYr06hvUOLVu9AemFa2`）
-        # 词尾后 (?!\w) 防止 publicKeyHash 类把 Key 当普通词中片段；:= 支持 Go 短声明。
-        # 占位符/规则串（纯字母/纯数字/重复字符）由 _is_credential_false_positive 排除。
-        # 不加 IGNORECASE：规则依赖词尾大写（CodeRunKey/apiSecret），
-        # 大小写不敏感会把 cache_key 等普通标识符误报为 critical。
-        (re.compile(r'\b(?:const\s+)?[A-Za-z_]\w*(?:Key|Secret|Token|Credential|Passwd|Pwd)(?!\w)\s*(?::=|=)\s*[`"\']([^`"\']{16,})[`"\']'),
-         "IRON-SEC-01", "硬编码凭据", "critical",
-         "代码中直接写入了自定义密钥常量（变量名含 Key/Secret/Token 等，值为长随机串），应改用环境变量或密钥管理服务"),
-    ]
-
-    # 凭据检测的排除模式（匹配后仍需要二次验证）
-    # 这些模式指示变量引用而非字面值，应排除
-    SECRET_EXCLUDE_PATTERNS = [
-        # 函数调用：token = create_access_token(...) 或 token = getToken()
-        re.compile(r'[:=]\s*\w+\s*\(', re.IGNORECASE),
-        # 对象属性访问：self.config.xxx, self.xxx
-        re.compile(r'self\.\w+', re.IGNORECASE),
-        # 配置字典访问：config["key"], config.get("key")
-        re.compile(r'(?:config|settings|cfg)\s*\[', re.IGNORECASE),
-        re.compile(r'(?:config|settings|cfg)\.get\s*\(', re.IGNORECASE),
-        # 环境变量：os.environ / os.getenv / process.env
-        re.compile(r'os\.(?:environ|getenv)', re.IGNORECASE),
-        re.compile(r'process\.env', re.IGNORECASE),
-        # .env 文件引用
-        re.compile(r'\.env\b', re.IGNORECASE),
-        # 注释（Python # 或 JS //）
-        re.compile(r'^\s*#', re.IGNORECASE),
-        re.compile(r'^\s*//', re.IGNORECASE),
-        # 错误码常量：E1001_KEY = "E1001_KEY"（全大写约定，区分大小写避免误排小写/复合凭据名）
-        re.compile(r'^[A-Z_]{4,}\s*=\s*["\'][A-Z_\d]+["\']'),
-        # 错误码/错误常量名（全大写约定；E 前缀错误码加词边界，避免误匹配值内数字串）
-        re.compile(r'MISSING_|_MISSING|ERROR_|\bE\d{3,}'),
-        # 从 localStorage/sessionStorage 获取（JS/TS）
-        re.compile(r'(?:localStorage|sessionStorage)\.(?:get|getItem)', re.IGNORECASE),
-        # 函数返回值赋值：token = get_xxx() 或 const token = getXxx()
-        re.compile(r'=\s*\w+\s*\(\s*\)', re.IGNORECASE),
-    ]
-
-    # SQL 注入风险
-    SQL_INJECTION_PATTERNS = [
-        (re.compile(r'(?:execute|cursor\.execute|\.raw)\s*\(\s*(?:f["\']|["\'].*%.*["\'])', re.IGNORECASE),
-         "IRON-SEC-02", "SQL注入风险", "critical",
-         "使用字符串拼接/f-string构造SQL，存在SQL注入风险。应使用参数化查询"),
-        (re.compile(r'(?:execute|cursor\.execute)\s*\(\s*["\'].*\{\s*\}.*["\']', re.IGNORECASE),
-         "IRON-SEC-02", "SQL注入风险", "critical",
-         "使用字符串格式化构造SQL，存在SQL注入风险。应使用参数化查询"),
-    ]
-
-    # 命令注入风险
-    COMMAND_INJECTION_PATTERNS = [
-        (re.compile(r'(?:os\.system|subprocess\.call|subprocess\.Popen|eval|exec)\s*\(\s*.*\+', re.IGNORECASE),
-         "IRON-SEC-03", "命令注入风险", "high",
-         "使用字符串拼接构造系统命令，存在命令注入风险。应使用subprocess.run(list) + shlex.quote()"),
-        (re.compile(r'(?:os\.system|subprocess\.call|subprocess\.Popen)\s*\(\s*(?:f["\'])', re.IGNORECASE),
-         "IRON-SEC-03", "命令注入风险", "high",
-         "使用f-string构造系统命令，存在命令注入风险。应使用subprocess.run(list)"),
-    ]
-
-    # 不安全的反序列化
-    UNSAFE_DESERIALIZE = [
-        (re.compile(r'pickle\.(?:load|loads)\s*\(', re.IGNORECASE),
-         "IRON-SEC-04", "不安全反序列化", "high",
-         "pickle.load/loads 可被利用执行任意代码。应使用 json 或安全的序列化格式",
-         "改用 json 或安全的序列化格式（如 msgpack）"),
-        (re.compile(r'yaml\.(?:load|full_load)\s*\(', re.IGNORECASE),
-         "IRON-SEC-04", "不安全反序列化", "high",
-         "yaml.load 可被利用执行任意代码。应使用 yaml.safe_load()",
-         "改用 yaml.safe_load()"),
-        (re.compile(r'\bunserialize\s*\(', re.IGNORECASE),
-         "IRON-SEC-04", "不安全反序列化(PHP)", "high",
-         "PHP 的 unserialize() 可被利用触发对象注入/任意代码执行，若数据来自用户输入（$_POST/$_COOKIE）风险极高。",
-         "避免对不可信输入使用 unserialize()；改用 json_decode() 或对反序列化对象做白名单校验"),
-    ]
-
-    # 硬编码 URL/端口
-    HARDCODED_NETWORK = [
-        (re.compile(r'(?:url|host|endpoint|base_url|api_url)\s*[:=]\s*["\']https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', re.IGNORECASE),
-         "IRON-SEC-05", "硬编码内网地址", "medium",
-         "代码中硬编码了IP地址，部署时容易遗漏修改。应使用配置文件或环境变量"),
-    ]
-
-    # 危险协议/函数检测（marshal、eval、exec 等可执行任意代码的函数）
-    DANGEROUS_FUNCTIONS = [
-        (re.compile(r'marshal\.loads?\s*\(', re.IGNORECASE),
-         "IRON-SEC-06", "危险函数调用(marshal)", "critical",
-         "marshal.load/loads 可被恶意构造的数据触发任意代码执行。通俗解释：marshal 就像把压缩包解压后自动运行里面的程序，坏人可以伪造压缩包让你的电脑执行恶意代码。",
-         "改用 json.loads() 或 msgpack 等安全的序列化格式，并始终用 try-except 包裹"),
-        (re.compile(r'\beval\s*\(', re.IGNORECASE),
-         "IRON-SEC-06", "危险函数调用(eval)", "critical",
-         "eval() 会将字符串当作代码执行，攻击者可通过输入注入恶意代码。通俗解释：eval 就像让别人直接在你的电脑上敲命令，你不知道对方会敲什么。",
-         "使用 ast.literal_eval() 替代 eval()，或完全避免动态执行。如果必须使用，对输入做严格白名单校验"),
-        (re.compile(r'(?<!\.)\bexec\s*\(', re.IGNORECASE),
-         "IRON-SEC-06", "危险函数调用(exec)", "critical",
-         "exec() 会执行任意 Python 代码，是最高危的函数之一。通俗解释：exec 比 eval 更危险，相当于把家门钥匙和保险柜密码一起给了陌生人。",
-         "几乎永远不应该使用 exec()。如果确需动态代码执行，考虑使用受限的沙箱环境"),
-    ]
-
-    # 跨语言危险命令执行（Go/PHP/Java/Node 等）—— 多语言适配（证据审计缺陷 7）
-    # 原有规则只覆盖 Python（subprocess/os.system/eval/exec），对 Go/PHP/Java/JS
-    # 项目的系统命令执行"看不见"。这里补充主流后端语言的命令执行函数检测，
-    # 作为审计关注点提示（确认命令与参数来源可信），避免非 Python 项目致命漏洞静默漏检。
-    CROSS_LANG_COMMAND_EXEC = [
-        (re.compile(r'exec\.Command\s*\(', re.IGNORECASE),   # Go
-         "IRON-SEC-17", "系统命令执行(exec.Command)", "high",
-         "调用 exec.Command 执行系统命令，若命令或参数可被外部输入影响，存在命令注入风险。",
-         "确认命令与参数均来自可信来源；对用户输入做白名单校验，避免拼接成命令"),
-        (re.compile(r'(?<!os\.)\b(?:shell_exec|system|passthru|pcntl_exec|proc_open)\s*\(', re.IGNORECASE),  # PHP
-         "IRON-SEC-17", "系统命令执行(PHP)", "high",
-         "PHP 调用 system/shell_exec 等执行系统命令，若参数来自用户输入（$_GET/$_POST/$_REQUEST），存在远程命令执行风险。",
-         "避免使用命令执行函数；改用安全的库，或对输入做严格白名单校验"),
-        (re.compile(r'Runtime\s*\.\s*getRuntime\s*\(\)\s*\.\s*exec|ProcessBuilder\s*\(', re.IGNORECASE),  # Java
-         "IRON-SEC-17", "系统命令执行(Java)", "high",
-         "调用 Runtime.exec / ProcessBuilder 执行系统命令，若参数可被外部输入影响，存在命令注入风险。",
-         "确认命令与参数来源可信；对用户输入做白名单校验"),
-        (re.compile(r'child_process\s*\.\s*(?:exec|execSync|spawn|spawnSync)\s*\(', re.IGNORECASE),  # Node
-         "IRON-SEC-17", "系统命令执行(Node)", "high",
-         "调用 child_process.exec/spawn 执行系统命令，若参数可被外部输入影响，存在命令注入风险。",
-         "优先使用 spawn 的数组参数形式；对用户输入做白名单校验"),
-    ]
-
-    # 不安全的子进程调用（shell=True 未校验参数）
-    UNSAFE_SUBPROCESS = [
-        (re.compile(r'subprocess\.(?:call|Popen|run)\s*\([^)]*shell\s*=\s*True', re.IGNORECASE),
-         "IRON-SEC-07", "不安全的子进程调用(shell=True)", "high",
-         "shell=True 会启动系统 shell 解释命令字符串，攻击者可注入额外命令（如 ; rm -rf /）。通俗解释：shell=True 就像把命令写在纸条上交给一个不检查内容的人去执行，坏人可以在纸条上加料。",
-         "去掉 shell=True，改用列表形式传递参数：subprocess.run(['cmd', 'arg1', 'arg2'])。如果必须用 shell，使用 shlex.quote() 转义所有用户输入"),
-        (re.compile(r'os\.system\s*\([^)]*\+', re.IGNORECASE),
-         "IRON-SEC-07", "不安全的子进程调用(os.system)", "high",
-         "os.system() 直接调用系统 shell，且通过字符串拼接构造命令，极易被注入。通俗解释：os.system 是直接对操作系统喊话，如果喊的内容里混入了用户输入，坏人可以让系统执行任意命令。",
-         "使用 subprocess.run() 替代 os.system()，参数以列表形式传递"),
-    ]
-
-    # 不安全的文件操作（路径遍历风险）
-    PATH_TRAVERSAL = [
-        (re.compile(r'os\.(?:remove|unlink|rmdir)\s*\([^)]*\+', re.IGNORECASE),
-         "IRON-SEC-08", "路径遍历风险(拼接删除)", "high",
-         "使用字符串拼接构造文件删除路径，攻击者可通过 ../ 跳出预期目录，删除系统关键文件。通俗解释：如果让用户输入文件名然后直接删除，坏人可以输入 ../../windows/system32/xxx 来删除系统文件。",
-         "使用 os.path.realpath() 规范化路径后，验证路径是否在允许的目录范围内。或使用 pathlib.Path.resolve()"),
-        (re.compile(r'\.\.\/|\.\.\\\\', re.IGNORECASE),
-         "IRON-SEC-08", "路径遍历风险(../)", "high",
-         '代码中出现了 ../ 或 ..\\ 路径遍历模式，如果与用户输入拼接，存在目录穿越攻击风险。通俗解释：../ 在文件路径中表示"上一级目录"，坏人可以用它跳出你的工作目录，访问到不该访问的文件。',
-         "使用 os.path.realpath() 或 Path.resolve() 规范化路径，验证最终路径是否在允许的基准目录内"),
-    ]
-
-    # 弱加密算法（MD5/SHA1/RC4）- 排除 hashlib. 前缀（由 IRON-SEC-14 专门处理）
-    WEAK_CRYPTO = [
-        (re.compile(r'(?<!hashlib\.)\b(?:MD5|SHA1|RC4|DES)\b', re.IGNORECASE),
-         "IRON-SEC-10", "弱加密算法", "high",
-         "使用了已知不安全的加密算法（MD5/SHA1/RC4/DES）。这些算法已被破解或不推荐使用。",
-         "使用 SHA-256 或更高级别算法替代。对于密码存储，使用 bcrypt/scrypt/argon2。"),
-    ]
-
-    # SSRF 风险（requests.get/urllib 使用用户输入 URL）
-    SSRF_PATTERNS = [
-        (re.compile(r'(?:requests|urllib|httpx)\.(?:get|post|request)\s*\([^)]*\+\s*', re.IGNORECASE),
-         "IRON-SEC-11", "SSRF风险", "high",
-         "使用字符串拼接构造 HTTP 请求 URL，攻击者可注入内网地址进行 SSRF 攻击。",
-         "对用户输入的 URL 做白名单校验，禁止访问内网地址（127.0.0.1, 10.x, 172.16-31.x, 192.168.x）"),
-    ]
-
-    # XSS 风险（未转义的用户输入输出到 HTML）
-    XSS_PATTERNS = [
-        (re.compile(r'(?:innerHTML|outerHTML|dangerouslySetInnerHTML|document\.write\s*\()', re.IGNORECASE),
-         "IRON-SEC-12", "XSS风险", "high",
-         "直接使用 innerHTML/dangerouslySetInnerHTML 设置 HTML 内容，存在 XSS 攻击风险。",
-         "使用 textContent 替代 innerHTML，或对用户输入做 HTML 实体转义"),
-    ]
-
-    # 不安全随机数（random 模块用于安全场景）
-    INSECURE_RANDOM = [
-        (re.compile(r'\brandom\.(?:random|randint|choice|sample|shuffle)\b', re.IGNORECASE),
-         "IRON-SEC-13", "不安全随机数", "medium",
-         "使用 random 模块生成随机数，不适合安全场景（可预测）。",
-         "安全场景应使用 secrets 模块（secrets.token_hex, secrets.choice）或 os.urandom()"),
-    ]
-
-    # 弱哈希算法（用于密码存储）
-    WEAK_HASH = [
-        (re.compile(r'\bhashlib\.(?:md5|sha1)\b', re.IGNORECASE),
-         "IRON-SEC-14", "弱哈希算法", "medium",
-         "使用 MD5/SHA1 哈希算法，不适合密码存储和完整性校验。",
-         "密码存储使用 bcrypt/scrypt/argon2。完整性校验使用 SHA-256 起。"),
-    ]
-
-    # SSL/TLS 证书验证禁用
-    SSL_VERIFY_DISABLED = [
-        (re.compile(r'\bverify\s*=\s*False\b', re.IGNORECASE),
-         "IRON-SEC-15", "SSL证书验证禁用", "medium",
-         "禁用了 SSL/TLS 证书验证（verify=False），容易遭受中间人攻击。",
-         "移除 verify=False，使用正确的证书链。仅在内网开发环境保留。"),
-    ]
-
-    # 资源耗尽风险（无限制循环/递归/大文件读取）
-    RESOURCE_EXHAUSTION = [
-        (re.compile(r'while\s+True\s*:', re.IGNORECASE),
-         "IRON-SEC-16", "资源耗尽风险(无限循环)", "low",
-         "检测到 while True 无限循环，缺少明确的退出条件可能导致资源耗尽。",
-         "确保循环有明确的退出条件（break/return），或使用 timeout 机制"),
-    ]
-
-    # ===== 非 Python 文件的机密检测 =====
-    # 在 .env / .yaml / .json / .toml 文件中扫描机密
-    NON_PY_SECRET_EXTENSIONS = {".env", ".yaml", ".yml", ".json", ".toml", ".cfg", ".ini", ".conf"}
-    NON_PY_SECRET_MASK_PATTERN = re.compile(
-        r'(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key|client_secret)\s*[:=]\s*["\']?([^"\'#\s]{8,})["\']?', re.IGNORECASE
-    )
-
-    # ===== 文档类文件（.md/.SKILL/.txt）的治理合规检测 =====
-    # 治理合规盲区：SKILL.md / 文档中的明文凭据与审查绕过表述（已有真实项目缺陷验证）
-    # 文档文件扩展名
-    DOC_EXTENSIONS = {".md", ".markdown", ".txt", ".skill"}
-
-    # 文档中的明文密钥环境变量赋值：如 SN_API_KEY=xxx、BRAND_LLM_API_KEY=xxx、KEY=xxx
-    # 仅匹配密钥类环境变量名 + 赋值，避免误报普通说明文字
-    DOC_SECRET_PATTERNS = [
-        (re.compile(r'\b[A-Z0-9_]+(?:_API_KEY|_APISECRET|_SECRET_KEY|_ACCESS_KEY|_PRIVATE_KEY|_CLIENT_SECRET)\b\s*=', re.IGNORECASE),
-         "IRON-SEC-01", "文档明文密钥赋值", "critical",
-         "文档中展示了密钥环境变量的明文赋值（如 *_API_KEY=...），若被用户照抄写入配置文件会造成凭据明文落盘。应改用占位符并提示从密钥管理服务获取。"),
-        (re.compile(r'\bsk-[A-Za-z0-9_\-]{8,}\b'),
-         "IRON-SEC-01", "文档明文密钥赋值", "critical",
-         "文档中出现了 sk- 开头的明文 API 密钥，可能是泄露的真实密钥。应立即撤销并改用密钥管理服务。"),
-    ]
-
-    # 文档中引导把密钥写入凭据配置文件（.env 等）
-    DOC_ENV_CRED_PATTERNS = [
-        (re.compile(r'\.env\b[^\n]*\b(?:API_KEY|SECRET|TOKEN|CREDENTIAL|[A-Z0-9_]*KEY)\b', re.IGNORECASE),
-         "IRON-SEC-01", "引导密钥写入凭据文件", "critical",
-         "文档引导/示范将密钥类环境变量（API_KEY/SECRET/TOKEN/KEY）写入 .env 凭据配置文件，属于明文凭据落盘的高风险指引。应引导使用密钥管理服务或加密存储。"),
-        (re.compile(r'(?:写入|保存|配置到|export)\s*[^\n]*\.env\b', re.IGNORECASE),
-         "IRON-SEC-01", "引导密钥写入凭据文件", "high",
-         "文档引导将配置（可能含密钥）写入 .env 凭据配置文件，若包含 API Key 属于明文凭据落盘。应避免在文档中示范密钥明文写入凭据文件。"),
-    ]
-
-    # 文档中的审查绕过类表述（削弱合规审查严格度）
-    GOV_BYPASS_PATTERNS = [
-        (re.compile(r'忽略清单'), "审查绕过(忽略清单)", "high",
-         "文档建立了'忽略清单'以跳过合规审查，属治理合规盲区。忽略清单应受审计追踪，不得静默放行。"),
-        (re.compile(r'直接放行'), "审查绕过(直接放行)", "high",
-         "文档声明对命中项'直接放行'不审查，削弱了合规审查严格度，属治理合规盲区。"),
-        (re.compile(r'一律不输出'), "审查绕过(一律不输出)", "high",
-         "文档规定'一律不输出来些风险'，隐藏了非致命但仍需记录的风险，属治理合规盲区。应保留风险日志供审计。"),
-        (re.compile(r'直接跳过[^\n]*不报告'), "审查绕过(直接跳过不报告)", "high",
-         "文档规定'直接跳过且不报告风险'，削弱了合规审查的可审计性，属治理合规盲区。"),
-    ]
-
-    # 文档中的违禁宣称/伪科学工艺词（与 prompt_compliance 治理词表一致，防知识包示例污染）
-    # 仅收录最明确的伪科学工艺词，排除"发酵工艺"等可作科学描述的术语，避免误报
-    DOC_CLAIM_PATTERNS = [
-        (re.compile(r'生物合成|工业生物制造|工业生物合成|DNA重组', re.IGNORECASE),
-         "IRON-GOV-02", "文档违禁宣称(伪科学工艺词)", "medium",
-         "文档/知识包示例使用了伪科学工艺词（如'生物合成'），与库内合规自禁令冲突，会示范污染下游 prompt 生成。应删除或替换为合规表述。"),
-    ]
-
-    # ===== 代码中密钥明文落盘（写入 .env 等凭据文件）=====
-    # f-string 密钥赋值格式化进字符串（如 f"BRAND_LLM_API_KEY={self.llm.api_key}"）
-    # 值来源必须为 api_key/secret/token/key 变量，确保确证性
-    SECRET_PERSIST_PATTERNS = [
-        (re.compile(r'f["\'][^"\']*\b[A-Z0-9_]*(?:API|ACCESS|SECRET|PRIVATE|CLIENT)[_-]?KEY\b\s*=\s*\{[^}]*\b(?:api_key|secret|token|key)\b', re.IGNORECASE),
-         "IRON-SEC-01", "密钥明文落盘", "critical",
-         "将 API Key 以 'KEY={...}' 形式格式化进字符串（通常用于写入 .env 等凭据配置文件），属于明文凭据落盘，应改用密钥管理服务。"),
-    ]
-
-    # 密钥落盘方法名（如 def save_env / write_env / export_env）
-    SECRET_PERSIST_FUNC = re.compile(r'def\s+\w*(?:save_env|write_env|export_env|dump_env)\w*\s*\(')
-
-    # 敏感信息泄露（日志/调试输出中暴露敏感变量）
-    SENSITIVE_LOG = [
-        (re.compile(r'(?:print|log(?:ger)?\.(?:debug|info|warning|error)|console\.log)\s*\([^)]*\b(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)\b', re.IGNORECASE),
-         "IRON-SEC-09", "敏感信息泄露(日志输出)", "medium",
-         "调试/日志输出中包含了密码、Token、密钥等敏感信息，一旦日志泄露，攻击者可直接获取凭据。通俗解释：把密码打印到日志里，就像把银行卡密码写在快递单上——任何看到这张单子的人都能用你的卡。",
-         "移除调试输出中的敏感变量，或使用脱敏函数（如显示前2位+***）替代完整输出。生产环境日志级别应设为 INFO 以上"),
-        (re.compile(r'(?:print|log(?:ger)?\.(?:debug|info|warning|error)|console\.log)\s*\(\s*["\'][^"\']*\b(?:password|token|secret|key)\b[^"\']*["\']', re.IGNORECASE),
-         "IRON-SEC-09", "敏感信息泄露(明文输出)", "medium",
-         "日志字符串中明文包含了 'password'、'token' 等敏感词汇，可能是误将敏感信息输出。通俗解释：即使日志里没有真的密码，包含 'password' 字样也会引起攻击者的注意，让他们知道去哪找。",
-         "检查此处是否确实输出敏感信息，若是则立即移除；若为普通描述文字，建议改用更中性的措辞"),
-    ]
-
-    # 不安全的反序列化扩展（json 无异常处理、XML 外部实体注入）
-    UNSAFE_DESERIALIZE_EXTENDED = [
-        (re.compile(r'json\.loads?\s*\(', re.IGNORECASE),
-         "IRON-SEC-10", "不安全反序列化(json无异常处理)", "medium",
-         "json.loads() 未包裹在 try-except 中，遇到格式错误或恶意构造的 JSON 数据时会导致程序崩溃。通俗解释：json.loads 就像拆包裹，如果包裹里有炸弹（格式错误的数据），没有防护措施的话整个程序就会炸掉。",
-         "用 try-except json.JSONDecodeError 包裹 json.loads() 调用，并记录异常日志"),
-        (re.compile(r'(?:xml\.etree\.ElementTree|xml\.dom\.minidom|xml\.sax)\s*\.\s*parse', re.IGNORECASE),
-         "IRON-SEC-10", "不安全反序列化(XXE漏洞)", "high",
-         'XML 解析器默认允许外部实体（XXE），攻击者可通过构造恶意 XML 读取服务器文件、发起 SSRF 攻击。通俗解释：XML 解析器在处理文件时，会"听话地"去读取文件里指向的外部资源，坏人可以利用这一点偷看服务器上的文件。',
-         "使用 defusedxml 库替代标准 xml 库，或设置 parser 禁用外部实体：parser.entity = False"),
-        (re.compile(r'(?:from\s+xml\.etree|import\s+xml\.etree|from\s+xml\.dom|import\s+xml\.dom)', re.IGNORECASE),
-         "IRON-SEC-10", "不安全反序列化(XML导入)", "high",
-         "代码中导入了 xml.etree 或 xml.dom 模块。Python 标准 XML 库默认不安全，存在 XXE 和 Billion Laughs 攻击风险。通俗解释：Python 自带的 XML 处理工具就像没装杀毒软件的电脑，处理恶意 XML 文件时会被攻击。",
-         "安装并使用 defusedxml 库替代标准 xml 库：pip install defusedxml，然后 from defusedxml import ElementTree"),
-    ]
-
-    # ─── 错题本模式 ────────────────────────────────────────────────
-
-    # 空 catch / 裸 except
-    PITFALL_EMPTY_EXCEPT = [
-        (re.compile(r'except\s*(?:\w+\s*)?(?:as\s+\w+\s*)?:\s*\n\s*(?:pass|continue|return\s+None)\s*$', re.MULTILINE),
-         "PITFALL-01", "空异常处理", "high",
-         "异常被静默吞噬（pass/continue），问题被隐藏。应至少记录日志或明确处理"),
-        (re.compile(r'except\s*:\s*\n\s*(?:pass|continue)', re.MULTILINE),
-         "PITFALL-01", "裸except", "high",
-         "裸 except 会捕获 KeyboardInterrupt 等系统异常。应指定具体异常类型"),
-    ]
-
-    # 可变默认参数
-    PITFALL_MUTABLE_DEFAULT = [
-        (re.compile(r'def\s+\w+\s*\([^)]*=\s*(?:\[\s*\]|\{\s*\}|set\s*\(\s*\))', re.IGNORECASE),
-         "PITFALL-02", "可变默认参数", "medium",
-         "默认参数使用了可变对象（[]/{}），多次调用会共享同一实例。应使用 None + 内部初始化"),
-    ]
-
-    # 不安全的文件操作
-    PITFALL_UNSAFE_FILE = [
-        (re.compile(r'open\s*\([^)]*\)\s*\.\s*(?:read|write|readlines)', re.IGNORECASE),
-         "PITFALL-03", "未使用上下文管理器", "medium",
-         "文件操作未使用 with 语句，可能导致资源泄漏。应使用 with open() as f:"),
-        (re.compile(r'os\.remove\s*\(|os\.rmdir\s*\(|shutil\.rmtree\s*\(', re.IGNORECASE),
-         "PITFALL-04", "危险删除操作", "medium",
-         "直接删除文件/目录，批量操作可能导致数据丢失。确认有备份机制"),
-    ]
-
-    # 竞态条件
-    PITFALL_RACE_CONDITION = [
-        (re.compile(r'os\.path\.exists\s*\([^)]+\)\s*\n.*open\s*\(', re.IGNORECASE),
-         "PITFALL-05", "TOCTOU竞态", "medium",
-         "先检查文件存在再打开，存在 TOCTOU 竞态条件。应直接尝试打开并捕获异常"),
-    ]
-
-    # 不安全的线程操作
-    PITFALL_THREAD_UNSAFE = [
-        (re.compile(r'threading\.Thread\s*\([^)]*\)\s*\.\s*start\s*\(\s*\)', re.IGNORECASE),
-         "PITFALL-06", "裸线程启动", "low",
-         "直接使用 threading.Thread 未做线程管理。建议使用 ThreadPoolExecutor 或守护线程"),
-    ]
-
-    # I/O 反模式
-    PITFALL_IO_PATTERNS = [
-        # 一次性读取整个文件到内存（不包含 with 上下文管理器中的操作）
-        (re.compile(r'open\s*\([^)]*\)\s*\.\s*(?:read|readlines)\s*\(\s*\)', re.IGNORECASE),
-         "PITFALL-07", "一次性读取整个文件", "medium",
-         "一次性读取整个文件到内存。大文件应使用逐行迭代或指定 buffering 参数"),
-        # 文件操作未使用 with 语句
-        (re.compile(r'(\w+)\s*=\s*open\s*\(', re.IGNORECASE),
-         "PITFALL-08", "文件未使用with", "medium",
-         "文件打开后未使用 with 语句管理，可能导致资源泄漏。应使用 with open() as f:"),
-    ]
-
-    # ─── 质量铁律 ──────────────────────────────────────────────────
-
-    # 函数过长（>100行）（阈值收敛到 config/settings.py）
-    FUNCTION_TOO_LONG = GOVERNANCE_FUNCTION_TOO_LONG
-
-    # 参数过多（>8个）
-    FUNCTION_TOO_MANY_PARAMS = GOVERNANCE_FUNCTION_TOO_MANY_PARAMS
-
-    # 嵌套过深（>4层）
-    NESTING_TOO_DEEP = GOVERNANCE_NESTING_TOO_DEEP
-
-    # ─── 架构铁律：依赖方向检测 ────────────────────────────────────
-
-    # 允许的层级依赖方向（低层不应该依赖高层）
-    # 注意：这是默认规则，可通过配置文件覆盖。
-    # 开源项目可通过 .coderef_governance.json 自定义层级规则。
-    # test 为独立测试层：测试代码引用被测代码（任意层）属正常行为，不算穿透。
-    LAYER_RULES = {
-        "entry": ["core", "data", "shared", "other"],
-        "core": ["data", "shared", "other"],
-        "data": ["shared", "other"],
-        "shared": ["other"],
-        "test": ["entry", "core", "data", "shared", "other"],
-        "other": [],
-    }
-
-    # 层级→目录名映射（默认值，可通过 LLM 分析覆盖）
-    # 开源项目不应依赖此映射，应通过 LLM 分析代码内容动态分类。
-    # test 层目录名：tests/test/spec 等，避免测试文件落入 "other" 层后
-    # 因白名单为空，import core.* 全部误报层级穿透。
-    DEFAULT_LAYER_PATTERNS = {
-        "entry": ["route", "routes", "controller", "controllers", "handler", "handlers",
-                   "api", "view", "views", "gui", "window"],
-        "core": ["service", "services", "core", "engine", "business", "logic", "domain", "agent"],
-        "data": ["model", "models", "data", "db", "database", "store", "repo",
-                  "repository", "entity", "entities", "schema", "schemas"],
-        "shared": ["util", "utils", "shared", "common", "config", "helper", "helpers", "lib"],
-        "test": ["test", "tests", "testing", "spec", "specs", "__tests__"],
-    }
+    # 拆分说明：以下规则常量表已整体移至模块级常量区（本文件上方），
+    # 此处保留同名类属性引用，兼容 GovernanceAuditor.XXX 与 self.XXX 的既有访问。
+    CREDENTIAL_VALUE = CREDENTIAL_VALUE
+    HARDCODED_SECRET_PATTERNS = HARDCODED_SECRET_PATTERNS
+    SECRET_EXCLUDE_PATTERNS = SECRET_EXCLUDE_PATTERNS
+    SQL_INJECTION_PATTERNS = SQL_INJECTION_PATTERNS
+    COMMAND_INJECTION_PATTERNS = COMMAND_INJECTION_PATTERNS
+    UNSAFE_DESERIALIZE = UNSAFE_DESERIALIZE
+    HARDCODED_NETWORK = HARDCODED_NETWORK
+    DANGEROUS_FUNCTIONS = DANGEROUS_FUNCTIONS
+    CROSS_LANG_COMMAND_EXEC = CROSS_LANG_COMMAND_EXEC
+    UNSAFE_SUBPROCESS = UNSAFE_SUBPROCESS
+    PATH_TRAVERSAL = PATH_TRAVERSAL
+    WEAK_CRYPTO = WEAK_CRYPTO
+    SSRF_PATTERNS = SSRF_PATTERNS
+    XSS_PATTERNS = XSS_PATTERNS
+    INSECURE_RANDOM = INSECURE_RANDOM
+    WEAK_HASH = WEAK_HASH
+    SSL_VERIFY_DISABLED = SSL_VERIFY_DISABLED
+    RESOURCE_EXHAUSTION = RESOURCE_EXHAUSTION
+    NON_PY_SECRET_EXTENSIONS = NON_PY_SECRET_EXTENSIONS
+    NON_PY_SECRET_MASK_PATTERN = NON_PY_SECRET_MASK_PATTERN
+    DOC_EXTENSIONS = DOC_EXTENSIONS
+    DOC_SECRET_PATTERNS = DOC_SECRET_PATTERNS
+    DOC_ENV_CRED_PATTERNS = DOC_ENV_CRED_PATTERNS
+    GOV_BYPASS_PATTERNS = GOV_BYPASS_PATTERNS
+    DOC_CLAIM_PATTERNS = DOC_CLAIM_PATTERNS
+    SECRET_PERSIST_PATTERNS = SECRET_PERSIST_PATTERNS
+    SECRET_PERSIST_FUNC = SECRET_PERSIST_FUNC
+    SENSITIVE_LOG = SENSITIVE_LOG
+    UNSAFE_DESERIALIZE_EXTENDED = UNSAFE_DESERIALIZE_EXTENDED
+    PITFALL_EMPTY_EXCEPT = PITFALL_EMPTY_EXCEPT
+    PITFALL_MUTABLE_DEFAULT = PITFALL_MUTABLE_DEFAULT
+    PITFALL_UNSAFE_FILE = PITFALL_UNSAFE_FILE
+    PITFALL_RACE_CONDITION = PITFALL_RACE_CONDITION
+    PITFALL_THREAD_UNSAFE = PITFALL_THREAD_UNSAFE
+    PITFALL_IO_PATTERNS = PITFALL_IO_PATTERNS
+    FUNCTION_TOO_LONG = FUNCTION_TOO_LONG
+    FUNCTION_TOO_MANY_PARAMS = FUNCTION_TOO_MANY_PARAMS
+    NESTING_TOO_DEEP = NESTING_TOO_DEEP
+    LAYER_RULES = LAYER_RULES
+    DEFAULT_LAYER_PATTERNS = DEFAULT_LAYER_PATTERNS
+    BLOCKING_CALLS = BLOCKING_CALLS
+    DOC_SECRET_PLACEHOLDER_VALUES = DOC_SECRET_PLACEHOLDER_VALUES
 
     def __init__(self):
         pass
@@ -649,1210 +719,1251 @@ class GovernanceAuditor:
 
         return self._generate_report(report)
 
-    def _get_docstring_lines(self, lines: List[str]) -> set:
-        """委托给 SharedFilter"""
-        return _sf.get_docstring_lines(lines)
+    def _check_security(self, cf):
+        """拆分说明：实现已移至模块级 _check_security，此处保留方法签名做委托"""
+        return _check_security(cf)
 
-    def _is_credential_false_positive(self, line: str) -> bool:
-        """判断硬编码凭据匹配是否为误报"""
-        # 1. 如果行是正则模式（包含 r' 或 r"），跳过
-        #    注意：需要覆盖所有关键词，不只是 password
-        if re.search(r"""r['"].*(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)""", line, re.IGNORECASE):
-            return True
-        # 2. 如果行是函数定义或 lambda，匹配的是参数名而非值
-        if re.search(r'def\s+\w+\s*\(', line) or re.search(r'lambda\s+', line):
-            return True
-        # 3. 如果行包含 self.config、self._config、os.environ、os.getenv
-        if re.search(r'self\.(?:config|_config|settings|_settings|cfg)|os\.environ|os\.getenv|getenv\(', line):
-            return True
-        # 3b. 如果行是配置对象的属性访问（cfg.xxx、config.xxx、settings.xxx）
-        if re.search(r'\b(?:cfg|config|settings)\.\w+', line):
-            return True
-        # 3c. 如果行是函数调用且参数名与值相同（api_key=api_key, base_url=base_url）
-        if re.search(r'\b(api_key|apikey|secret|token|password|passwd|pwd|base_url|access_key|private_key)\s*=\s*\1\b', line, re.IGNORECASE):
-            return True
-        # 4. 如果行是注释（以 # 开头）
-        stripped = line.strip()
-        if stripped.startswith('#'):
-            return True
-        # 5. 如果行是类型注解或接口定义（不含实际赋值字面量）
-        if re.match(r'^\s*\w+\s*:\s*(Optional|str|Dict|List|Tuple|Any|Union)', line) \
-                and not re.search(r'[:=]\s*[`"\']', line):
-            return True
-        # 6. 如果行是文档字符串的一部分
-        if stripped.startswith('"""') or stripped.startswith("'''"):
-            return True
-        # 7. 如果值是纯变量名引用（非字符串字面量），排除
-        #    例如: api_key=env_key, token=my_token
-        if re.search(r'\b(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)\b\s*=\s*([a-zA-Z_]\w*)\s*[,)]?\s*$', line, re.IGNORECASE):
-            return True
-        # 8. GUI 组件创建（如 QLineEdit()）
-        if re.search(r'=\s*Q\w+\(\)', line):
-            return True
-        # 9. 值是对象属性访问（如 request.api_key, cfg.xxx）
-        if re.search(r'\b(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)\b\s*=\s*\w+\.\w+', line, re.IGNORECASE):
-            return True
-        # 10. 自定义密钥常量（变量名含 Key/Secret/Token/Pwd 等词尾）的值是
-        #     占位符/示例/规则串：复用 CREDENTIAL_VALUE 提取的值，排除
-        #     your_xxx/changeme/REPLACE 等占位符，以及纯字母/纯数字/重复字符等
-        #     非随机串，避免把普通标识符常量误报为密钥。
-        if re.search(r'\b(?:Key|Secret|Token|Credential|Passwd|Pwd)\w*\s*[:=]\s*[`"\']', line, re.IGNORECASE):
-            m = self.CREDENTIAL_VALUE.search(line)
-            if m:
-                v = m.group(2)
-                if re.search(r'(?i)(your_|your-|xxx+|changeme|replace|example|placeholder|dummy|sample|todo|fixme|<|>|demo|fake|mock|password)', v):
-                    return True
-                if re.fullmatch(r'[a-z]+', v) or re.fullmatch(r'[A-Z]+', v) \
-                        or re.fullmatch(r'\d+', v) or re.fullmatch(r'(.)\1{15,}', v):
-                    return True
+    def _check_pitfalls(self, cf):
+        """拆分说明：实现已移至模块级 _check_pitfalls，此处保留方法签名做委托"""
+        return _check_pitfalls(cf)
+
+    def _check_async_blocking(self, cf):
+        """拆分说明：实现已移至模块级 _check_async_blocking，此处保留方法签名做委托"""
+        return _check_async_blocking(cf)
+
+    def _check_quality(self, cf):
+        """拆分说明：实现已移至模块级 _check_quality，此处保留方法签名做委托"""
+        return _check_quality(cf)
+
+    def _scan_non_py_secrets(self, project_path: str):
+        """拆分说明：实现已移至模块级 _scan_non_py_secrets，此处保留方法签名做委托"""
+        return _scan_non_py_secrets(project_path)
+
+    def _scan_doc_secrets(self, project_path: str):
+        """拆分说明：实现已移至模块级 _scan_doc_secrets，此处保留方法签名做委托"""
+        return _scan_doc_secrets(project_path)
+
+    def _scan_crossregion_conflicts(self, project_path: str):
+        """拆分说明：实现已移至模块级 _scan_crossregion_conflicts，此处保留方法签名做委托"""
+        return _scan_crossregion_conflicts(project_path)
+
+    def _check_secret_persistence(self, cf):
+        """拆分说明：实现已移至模块级 _check_secret_persistence，此处保留方法签名做委托"""
+        return _check_secret_persistence(cf)
+
+    def _check_architecture(self, analysis):
+        """拆分说明：实现已移至模块级 _check_architecture，此处保留方法签名做委托"""
+        return _check_architecture(analysis)
+
+    def _generate_report(self, report: GovernanceReport):
+        """拆分说明：实现已移至模块级 _generate_report，此处保留方法签名做委托"""
+        return _generate_report(report)
+
+# ==================== 模块级检测函数（自 GovernanceAuditor 提取，纯静态检测逻辑） ====================
+def _get_docstring_lines(lines: List[str]) -> set:
+    """委托给 SharedFilter"""
+    return _sf.get_docstring_lines(lines)
+
+
+def _is_credential_false_positive(line: str) -> bool:
+    """判断硬编码凭据匹配是否为误报"""
+    # 1. 如果行是正则模式（包含 r' 或 r"），跳过
+    #    注意：需要覆盖所有关键词，不只是 password
+    if re.search(r"""r['"].*(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)""", line, re.IGNORECASE):
+        return True
+    # 2. 如果行是函数定义或 lambda，匹配的是参数名而非值
+    if re.search(r'def\s+\w+\s*\(', line) or re.search(r'lambda\s+', line):
+        return True
+    # 3. 如果行包含 self.config、self._config、os.environ、os.getenv
+    if re.search(r'self\.(?:config|_config|settings|_settings|cfg)|os\.environ|os\.getenv|getenv\(', line):
+        return True
+    # 3b. 如果行是配置对象的属性访问（cfg.xxx、config.xxx、settings.xxx）
+    if re.search(r'\b(?:cfg|config|settings)\.\w+', line):
+        return True
+    # 3c. 如果行是函数调用且参数名与值相同（api_key=api_key, base_url=base_url）
+    if re.search(r'\b(api_key|apikey|secret|token|password|passwd|pwd|base_url|access_key|private_key)\s*=\s*\1\b', line, re.IGNORECASE):
+        return True
+    # 4. 如果行是注释（以 # 开头）
+    stripped = line.strip()
+    if stripped.startswith('#'):
+        return True
+    # 5. 如果行是类型注解或接口定义（不含实际赋值字面量）
+    if re.match(r'^\s*\w+\s*:\s*(Optional|str|Dict|List|Tuple|Any|Union)', line) \
+            and not re.search(r'[:=]\s*[`"\']', line):
+        return True
+    # 6. 如果行是文档字符串的一部分
+    if stripped.startswith('"""') or stripped.startswith("'''"):
+        return True
+    # 7. 如果值是纯变量名引用（非字符串字面量），排除
+    #    例如: api_key=env_key, token=my_token
+    if re.search(r'\b(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)\b\s*=\s*([a-zA-Z_]\w*)\s*[,)]?\s*$', line, re.IGNORECASE):
+        return True
+    # 8. GUI 组件创建（如 QLineEdit()）
+    if re.search(r'=\s*Q\w+\(\)', line):
+        return True
+    # 9. 值是对象属性访问（如 request.api_key, cfg.xxx）
+    if re.search(r'\b(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|private_key)\b\s*=\s*\w+\.\w+', line, re.IGNORECASE):
+        return True
+    # 10. 自定义密钥常量（变量名含 Key/Secret/Token/Pwd 等词尾）的值是
+    #     占位符/示例/规则串：复用 CREDENTIAL_VALUE 提取的值，排除
+    #     your_xxx/changeme/REPLACE 等占位符，以及纯字母/纯数字/重复字符等
+    #     非随机串，避免把普通标识符常量误报为密钥。
+    if re.search(r'\b(?:Key|Secret|Token|Credential|Passwd|Pwd)\w*\s*[:=]\s*[`"\']', line, re.IGNORECASE):
+        m = CREDENTIAL_VALUE.search(line)
+        if m:
+            v = m.group(2)
+            if re.search(r'(?i)(your_|your-|xxx+|changeme|replace|example|placeholder|dummy|sample|todo|fixme|<|>|demo|fake|mock|password)', v):
+                return True
+            if re.fullmatch(r'[a-z]+', v) or re.fullmatch(r'[A-Z]+', v) \
+                    or re.fullmatch(r'\d+', v) or re.fullmatch(r'(.)\1{15,}', v):
+                return True
+    return False
+
+
+def _is_pattern_def_line(line: str) -> bool:
+    """委托给 SharedFilter"""
+    return _sf.is_pattern_def_line(line)
+
+
+def _is_sensitive_log_false_positive(line: str) -> bool:
+    """判断敏感日志匹配是否为误报（仅描述性提到 API Key，非实际泄露）"""
+    stripped = line.strip()
+    # 日志消息中仅包含 "API Key" 作为描述性文字（如 "未设置API Key"）
+    if re.search(r'(?:logger\.|print\s*\()\s*[^,)]*["\'][^"\']*(?:未设置|占位符|暂不可用|not\s+(?:set|available|configured)|empty|placeholder|skip|跳过)[^"\']*["\']', stripped, re.IGNORECASE):
+        return True
+    # 日志消息中提到 "api_key" 字样但只是描述状态
+    if re.search(r'logger\.(?:debug|info|warning|error)\s*\(\s*f?["\'].*\b(?:api_key|API\s*Key)\b.*(?:占位符|跳过|空|暂不可用|not\s+(?:set|available|configured))', stripped, re.IGNORECASE):
+        return True
+    return False
+
+
+def _is_command_injection_false_positive(line: str) -> bool:
+    """判断命令注入匹配是否为误报（参数是内部路径而非用户输入）"""
+    stripped = line.strip()
+    # Popen/explorer 打开内部路径（self.xxx, 非用户输入）
+    if re.search(r'self\.\w+', stripped, re.IGNORECASE):
+        return True
+    # Popen 中使用 os.path 构造的路径
+    if re.search(r'os\.path\.\w+', stripped, re.IGNORECASE):
+        return True
+    return False
+
+
+def _is_json_in_try_block(lines: List[str], line_idx: int) -> bool:
+    """委托给 SharedFilter"""
+    return _sf.is_in_try_block(lines, line_idx)
+
+
+def _is_static_html_generator(content: str) -> bool:
+    """判断文件是否是"生成静态 HTML 报告/可视化页面"的代码。
+
+    用于 IRON-SEC-12 XSS 降级：这类文件的 innerHTML 注入目标是本地
+    查看页面，渲染数据是分析器自产的结构化产物而非用户输入，无对外
+    攻击面（仅理论二阶注入）。判据从简且保守——文件需含 HTML 写文件
+    特征才认定；面向用户输入渲染的 Web 服务代码不含这些特征，保持 high。
+    """
+    if not content:
         return False
+    hints = (
+        r'\.html["\']',        # .html 文件名字符串（写入 HTML 报告/可视化文件）
+        r'\bHTML_TEMPLATE\b',  # HTML 模板常量（内嵌静态页面模板）
+    )
+    return any(re.search(h, content) for h in hints)
 
-    def _is_pattern_def_line(self, line: str) -> bool:
-        """委托给 SharedFilter"""
-        return _sf.is_pattern_def_line(line)
 
-    def _is_sensitive_log_false_positive(self, line: str) -> bool:
-        """判断敏感日志匹配是否为误报（仅描述性提到 API Key，非实际泄露）"""
-        stripped = line.strip()
-        # 日志消息中仅包含 "API Key" 作为描述性文字（如 "未设置API Key"）
-        if re.search(r'(?:logger\.|print\s*\()\s*[^,)]*["\'][^"\']*(?:未设置|占位符|暂不可用|not\s+(?:set|available|configured)|empty|placeholder|skip|跳过)[^"\']*["\']', stripped, re.IGNORECASE):
-            return True
-        # 日志消息中提到 "api_key" 字样但只是描述状态
-        if re.search(r'logger\.(?:debug|info|warning|error)\s*\(\s*f?["\'].*\b(?:api_key|API\s*Key)\b.*(?:占位符|跳过|空|暂不可用|not\s+(?:set|available|configured))', stripped, re.IGNORECASE):
-            return True
-        return False
+def _get_call_string(node) -> str:
+    """从 AST Call 节点获取完整调用字符串"""
+    import ast
+    parts = []
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    elif isinstance(func, ast.Attribute):
+        current = func
+        attr_parts = []
+        while isinstance(current, ast.Attribute):
+            attr_parts.append(current.attr)
+            current = current.value
+        if isinstance(current, ast.Name):
+            attr_parts.append(current.id)
+        attr_parts.reverse()
+        return ".".join(attr_parts)
+    return ""
 
-    def _is_command_injection_false_positive(self, line: str) -> bool:
-        """判断命令注入匹配是否为误报（参数是内部路径而非用户输入）"""
-        stripped = line.strip()
-        # Popen/explorer 打开内部路径（self.xxx, 非用户输入）
-        if re.search(r'self\.\w+', stripped, re.IGNORECASE):
-            return True
-        # Popen 中使用 os.path 构造的路径
-        if re.search(r'os\.path\.\w+', stripped, re.IGNORECASE):
-            return True
-        return False
 
-    def _is_json_in_try_block(self, lines: List[str], line_idx: int) -> bool:
-        """委托给 SharedFilter"""
-        return _sf.is_in_try_block(lines, line_idx)
+def _doc_value_is_placeholder(value: str) -> bool:
+    """判断密钥赋值语句的值侧是否为已知占位符（不区分大小写）。
 
-    @staticmethod
-    def _is_static_html_generator(content: str) -> bool:
-        """判断文件是否是"生成静态 HTML 报告/可视化页面"的代码。
+    保守实现：仅按常见占位词/包裹形式精确匹配，不做熵计算。
+    宁可漏掉少见占位符，也不放过真密钥——高熵长随机串、sk- 后跟
+    20+ 字符的真密钥格式均不在占位清单内，仍会正常报出。
+    """
+    v = value.strip()
+    # 去包裹引号/反引号（"your-api-key" → your-api-key）
+    while len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"', '`'):
+        v = v[1:-1].strip()
+    if not v:
+        return True
+    lv = v.lower()
+    # 变量引用/角括号占位：<your-api-key> / ${VAR} / $VAR / {{VAR}}
+    if re.fullmatch(r'<[^<>]*>|\$\{[^}]*\}|\$[A-Za-z_]\w*|\{\{[^}]*\}\}', v):
+        return True
+    # 已知占位词精确匹配
+    if lv in DOC_SECRET_PLACEHOLDER_VALUES:
+        return True
+    # your-xxx / your_xxx / sk-xxx / sk-your 等短占位前缀（限长 24，
+    # 确保不会误吞长随机真密钥）
+    if len(lv) <= 24 and re.fullmatch(r'(?:your[-_][a-z0-9_-]*|sk-(?:x+|your[-_a-z]*))', lv):
+        return True
+    return False
 
-        用于 IRON-SEC-12 XSS 降级：这类文件的 innerHTML 注入目标是本地
-        查看页面，渲染数据是分析器自产的结构化产物而非用户输入，无对外
-        攻击面（仅理论二阶注入）。判据从简且保守——文件需含 HTML 写文件
-        特征才认定；面向用户输入渲染的 Web 服务代码不含这些特征，保持 high。
-        """
-        if not content:
-            return False
-        hints = (
-            r'\.html["\']',        # .html 文件名字符串（写入 HTML 报告/可视化文件）
-            r'\bHTML_TEMPLATE\b',  # HTML 模板常量（内嵌静态页面模板）
-        )
-        return any(re.search(h, content) for h in hints)
 
-    def _check_security(self, cf) -> List[GovernanceViolation]:
-        """检测安全铁律违规"""
-        violations = []
-        lines = cf.raw_content.splitlines() if cf.raw_content else []
+def _doc_placeholder(line: str) -> bool:
+    """判断文档行是否仅为占位符/示例配置，避免把示例密钥误报为明文泄露。
 
-        # 预解析文档字符串范围，跳过其中的所有安全检测
-        docstring_lines = self._get_docstring_lines(lines)
+    复用 _scan_non_py_secrets 的占位符思路（your_key_here/changeme/xxx 等），
+    并覆盖角括号占位符（= <your_key>），供文档类扫描过滤 guidance 用。
+    """
+    # 值侧占位符识别：提取行内最后一个 = 后的赋值值（去引号）做占位判断。
+    # export CODEREF_API_KEY="your-api-key" 这类值包在引号内的占位写法，
+    # 下方行尾正则匹配不到（占位词后有引号收尾），必须取值侧判断。
+    m = re.search(r'=([^=]*)$', line.strip())
+    if m and _doc_value_is_placeholder(m.group(1)):
+        return True
+    if re.search(r'(?i)(your_|your-|your\s+key|your\s+secret|your\s+token|'
+                 r'changeme|replace_me|replace\s+me|xxx|placeholder|\be\.?g\.?\b|'
+                 r'example|dummy|sample|todo|fixme|<[A-Za-z_>-]+>|`<[^`]+>`)\s*$', line.strip()):
+        return True
+    return False
 
-        # XSS 降级预判：该文件是否为生成静态 HTML 报告/可视化的代码
-        is_static_html_gen = self._is_static_html_generator(cf.raw_content or "")
 
-        for i, line in enumerate(lines, 1):
-            line_stripped = line.strip()
+def _doc_violation(rule_id, rule_name, severity, detail, fpath, lineno, line) -> GovernanceViolation:
+    """构造文档类违规项"""
+    return GovernanceViolation(
+        rule_id=rule_id, rule_name=rule_name, category="security",
+        severity=severity, file_path=fpath, line_number=lineno,
+        line_content=line.strip()[:120], detail=detail,
+        suggestion="将凭据改为占位符并从密钥管理服务读取；审查绕过/忽略清单应受审计追踪，不得静默放行",
+    )
 
-            # 跳过文档字符串行（所有检测）
-            if i in docstring_lines:
-                continue
 
-            # 跳过注释行（所有检测）
-            if line_stripped.startswith("#") or line_stripped.startswith("//"):
-                continue
+def _get_module_name(file_path: str) -> str:
+    """从文件路径提取模块名"""
+    return os.path.splitext(os.path.basename(file_path))[0]
 
-            # 跳过安全检测规则定义行（字符串中的代码模式）
-            is_pattern_def = self._is_pattern_def_line(line_stripped)
 
-            # 硬编码凭据
-            for pattern, rule_id, rule_name, severity, detail in self.HARDCODED_SECRET_PATTERNS:
-                if pattern.search(line_stripped):
-                    # 排除配置读取、环境变量、注释
-                    if any(ep.search(line_stripped) for ep in self.SECRET_EXCLUDE_PATTERNS):
-                        continue
-                    # 上下文过滤：排除正则模式、函数参数、配置读取等误报
-                    if self._is_credential_false_positive(line_stripped):
-                        continue
-                    violations.append(GovernanceViolation(
-                        rule_id=rule_id, rule_name=rule_name, category="security",
-                        severity=severity, file_path=cf.file_path, line_number=i,
-                        line_content=line_stripped[:120],
-                        detail=detail,
-                        suggestion="将凭据移到环境变量或密钥管理服务（如 Vault/AWS Secrets Manager）",
-                    ))
+def _classify_layer(file_path: str, code_content: str = "") -> str:
+    """
+    根据文件路径和代码内容分类层级
+    
+    优先使用 LLM 分析代码内容确定层级（通用方案），
+    LLM 不可用时使用默认目录名模式匹配（降级方案）。
+    
+    开源项目建议：通过 LLM 分析代码内容而非目录名来确定层级，
+    这样可以适应任意项目结构。
+    """
+    fp_lower = file_path.replace("\\", "/").lower()
+    parts = fp_lower.split("/")
 
-            # SQL 注入
-            for pattern, rule_id, rule_name, severity, detail in self.SQL_INJECTION_PATTERNS:
-                if pattern.search(line_stripped):
-                    violations.append(GovernanceViolation(
-                        rule_id=rule_id, rule_name=rule_name, category="security",
-                        severity=severity, file_path=cf.file_path, line_number=i,
-                        line_content=line_stripped[:120],
-                        detail=detail,
-                        suggestion="使用参数化查询（如 ? 占位符 + 参数元组）",
-                    ))
-
-            # 命令注入
-            for pattern, rule_id, rule_name, severity, detail in self.COMMAND_INJECTION_PATTERNS:
-                if pattern.search(line_stripped):
-                    if self._is_command_injection_false_positive(line_stripped):
-                        continue
-                    violations.append(GovernanceViolation(
-                        rule_id=rule_id, rule_name=rule_name, category="security",
-                        severity=severity, file_path=cf.file_path, line_number=i,
-                        line_content=line_stripped[:120],
-                        detail=detail,
-                        suggestion="使用 subprocess.run([cmd, arg1, arg2]) + shlex.quote()",
-                    ))
-
-            # 不安全反序列化
-            if not is_pattern_def:
-                for pattern, rule_id, rule_name, severity, detail, suggestion in self.UNSAFE_DESERIALIZE:
-                    if pattern.search(line_stripped):
-                        violations.append(GovernanceViolation(
-                            rule_id=rule_id, rule_name=rule_name, category="security",
-                            severity=severity, file_path=cf.file_path, line_number=i,
-                            line_content=line_stripped[:120],
-                            detail=detail,
-                            suggestion=suggestion,
-                        ))
-
-            # 硬编码网络地址
-            for pattern, rule_id, rule_name, severity, detail in self.HARDCODED_NETWORK:
-                if pattern.search(line_stripped):
-                    violations.append(GovernanceViolation(
-                        rule_id=rule_id, rule_name=rule_name, category="security",
-                        severity=severity, file_path=cf.file_path, line_number=i,
-                        line_content=line_stripped[:120],
-                        detail=detail,
-                        suggestion="将 IP 地址移到配置文件或环境变量中",
-                    ))
-
-            # 危险函数调用（marshal、eval、exec）
-            if not is_pattern_def:
-                for pattern, rule_id, rule_name, severity, detail, suggestion in self.DANGEROUS_FUNCTIONS:
-                    if pattern.search(line_stripped):
-                        violations.append(GovernanceViolation(
-                            rule_id=rule_id, rule_name=rule_name, category="security",
-                            severity=severity, file_path=cf.file_path, line_number=i,
-                            line_content=line_stripped[:120],
-                            detail=detail,
-                            suggestion=suggestion,
-                        ))
-
-            # 不安全的子进程调用（shell=True）
-            for pattern, rule_id, rule_name, severity, detail, suggestion in self.UNSAFE_SUBPROCESS:
-                if pattern.search(line_stripped):
-                    violations.append(GovernanceViolation(
-                        rule_id=rule_id, rule_name=rule_name, category="security",
-                        severity=severity, file_path=cf.file_path, line_number=i,
-                        line_content=line_stripped[:120],
-                        detail=detail,
-                        suggestion=suggestion,
-                    ))
-
-            # 跨语言系统命令执行（Go/PHP/Java/Node）—— 缺陷 7：非 Python 项目危险命令漏检
-            for pattern, rule_id, rule_name, severity, detail, suggestion in self.CROSS_LANG_COMMAND_EXEC:
-                if pattern.search(line_stripped):
-                    violations.append(GovernanceViolation(
-                        rule_id=rule_id, rule_name=rule_name, category="security",
-                        severity=severity, file_path=cf.file_path, line_number=i,
-                        line_content=line_stripped[:120],
-                        detail=detail,
-                        suggestion=suggestion,
-                    ))
-
-            # 空鉴权中间件（Go）：func XxxAuth() gin.HandlerFunc { return func(...) { return } }
-            # chatwiki permission.go:9 CasbinAuth() 返回的闭包直接 return，不校验任何权限
-            if (not is_pattern_def
-                    and re.search(r'func\s+\w*[Aa]uth\w*\s*\(\s*\)\s*\w+\.(?:HandlerFunc|MiddlewareFunc)\s*\{',
-                                  line_stripped)):
-                window = "\n".join(lines[i:i + 6])
-                if re.search(r'return\s+func\s*\([^)]*\)\s*\{\s*\n\s*return\s*\n\s*\}', window):
-                    violations.append(GovernanceViolation(
-                        rule_id="IRON-SEC-18", rule_name="空鉴权中间件", category="security",
-                        severity="critical", file_path=cf.file_path, line_number=i,
-                        line_content=line_stripped[:120],
-                        detail="鉴权中间件函数返回的闭包直接 return，不执行任何权限校验，可被任意请求绕过鉴权。",
-                        suggestion="在闭包内实现真实的权限校验（token 解析/角色检查），并挂载到受保护路由。",
-                    ))
-
-            # 路径遍历风险
-            if not is_pattern_def:
-                for pattern, rule_id, rule_name, severity, detail, suggestion in self.PATH_TRAVERSAL:
-                    if pattern.search(line_stripped):
-                        violations.append(GovernanceViolation(
-                            rule_id=rule_id, rule_name=rule_name, category="security",
-                            severity=severity, file_path=cf.file_path, line_number=i,
-                            line_content=line_stripped[:120],
-                            detail=detail,
-                            suggestion=suggestion,
-                        ))
-
-            # 弱加密算法
-            if not is_pattern_def:
-                for pattern, rule_id, rule_name, severity, detail, suggestion in self.WEAK_CRYPTO:
-                    if pattern.search(line_stripped):
-                        violations.append(GovernanceViolation(
-                            rule_id=rule_id, rule_name=rule_name, category="security",
-                            severity=severity, file_path=cf.file_path, line_number=i,
-                            line_content=line_stripped[:120],
-                            detail=detail,
-                            suggestion=suggestion,
-                        ))
-
-            # SSRF
-            if not is_pattern_def:
-                for pattern, rule_id, rule_name, severity, detail, suggestion in self.SSRF_PATTERNS:
-                    if pattern.search(line_stripped):
-                        violations.append(GovernanceViolation(
-                            rule_id=rule_id, rule_name=rule_name, category="security",
-                            severity=severity, file_path=cf.file_path, line_number=i,
-                            line_content=line_stripped[:120],
-                            detail=detail,
-                            suggestion=suggestion,
-                        ))
-
-            # XSS
-            if not is_pattern_def:
-                for pattern, rule_id, rule_name, severity, detail, suggestion in self.XSS_PATTERNS:
-                    if pattern.search(line_stripped):
-                        eff_severity, eff_detail = severity, detail
-                        # 本地静态查看页面降级：命中文件是生成静态 HTML 报告/
-                        # 可视化的代码（数据为自产分析产物，无对外攻击面）时
-                        # 降为 low，仅提示理论二阶注入；面向用户输入渲染的
-                        # Web 服务保持 high
-                        if is_static_html_gen:
-                            eff_severity = "low"
-                            eff_detail = (detail
-                                          + "（降级说明：本地静态查看页面，数据为自产"
-                                            "分析产物，理论二阶注入）")
-                        violations.append(GovernanceViolation(
-                            rule_id=rule_id, rule_name=rule_name, category="security",
-                            severity=eff_severity, file_path=cf.file_path, line_number=i,
-                            line_content=line_stripped[:120],
-                            detail=eff_detail,
-                            suggestion=suggestion,
-                        ))
-
-            # 不安全随机数
-            if not is_pattern_def:
-                for pattern, rule_id, rule_name, severity, detail, suggestion in self.INSECURE_RANDOM:
-                    if pattern.search(line_stripped):
-                        violations.append(GovernanceViolation(
-                            rule_id=rule_id, rule_name=rule_name, category="security",
-                            severity=severity, file_path=cf.file_path, line_number=i,
-                            line_content=line_stripped[:120],
-                            detail=detail,
-                            suggestion=suggestion,
-                        ))
-
-            # 弱哈希算法
-            if not is_pattern_def:
-                for pattern, rule_id, rule_name, severity, detail, suggestion in self.WEAK_HASH:
-                    if pattern.search(line_stripped):
-                        violations.append(GovernanceViolation(
-                            rule_id=rule_id, rule_name=rule_name, category="security",
-                            severity=severity, file_path=cf.file_path, line_number=i,
-                            line_content=line_stripped[:120],
-                            detail=detail,
-                            suggestion=suggestion,
-                        ))
-
-            # SSL 证书验证禁用
-            if not is_pattern_def:
-                for pattern, rule_id, rule_name, severity, detail, suggestion in self.SSL_VERIFY_DISABLED:
-                    if pattern.search(line_stripped):
-                        violations.append(GovernanceViolation(
-                            rule_id=rule_id, rule_name=rule_name, category="security",
-                            severity=severity, file_path=cf.file_path, line_number=i,
-                            line_content=line_stripped[:120],
-                            detail=detail,
-                            suggestion=suggestion,
-                        ))
-
-            # 资源耗尽
-            if not is_pattern_def:
-                for pattern, rule_id, rule_name, severity, detail, suggestion in self.RESOURCE_EXHAUSTION:
-                    if pattern.search(line_stripped):
-                        violations.append(GovernanceViolation(
-                            rule_id=rule_id, rule_name=rule_name, category="security",
-                            severity=severity, file_path=cf.file_path, line_number=i,
-                            line_content=line_stripped[:120],
-                            detail=detail,
-                            suggestion=suggestion,
-                        ))
-
-            # 敏感信息泄露（日志/调试输出）
-            if not is_pattern_def:
-                for pattern, rule_id, rule_name, severity, detail, suggestion in self.SENSITIVE_LOG:
-                    if pattern.search(line_stripped):
-                        # 过滤：仅包含 "api_key" / "API Key" 作为描述性文字的日志
-                        if self._is_sensitive_log_false_positive(line_stripped):
-                            continue
-                        violations.append(GovernanceViolation(
-                            rule_id=rule_id, rule_name=rule_name, category="security",
-                            severity=severity, file_path=cf.file_path, line_number=i,
-                            line_content=line_stripped[:120],
-                            detail=detail,
-                            suggestion=suggestion,
-                        ))
-
-            # 不安全反序列化扩展（json 无异常处理、XML XXE）
-            if not is_pattern_def:
-                for pattern, rule_id, rule_name, severity, detail, suggestion in self.UNSAFE_DESERIALIZE_EXTENDED:
-                    if pattern.search(line_stripped):
-                        # json.load/json.loads 跨行 try-except 检测
-                        if 'json.load' in line_stripped and self._is_json_in_try_block(lines, i - 1):
-                            continue
-                        violations.append(GovernanceViolation(
-                            rule_id=rule_id, rule_name=rule_name, category="security",
-                            severity=severity, file_path=cf.file_path, line_number=i,
-                            line_content=line_stripped[:120],
-                            detail=detail,
-                            suggestion=suggestion,
-                        ))
-
-        # 过滤 cache 白名单（用户标记为可接受的安全规则命中）
-        violations = [
-            v for v in violations
-            if not SharedFilter.is_security_whitelisted(v.rule_id, v.file_path, v.line_number)
-        ]
-
-        return violations
-
-    def _check_pitfalls(self, cf) -> List[GovernanceViolation]:
-        """检测错题本模式"""
-        violations = []
-        lines = cf.raw_content.splitlines() if cf.raw_content else []
-        content = cf.raw_content if cf.raw_content else ""
-
-        # 空异常处理 / 裸 except
-        for pattern, rule_id, rule_name, severity, detail in self.PITFALL_EMPTY_EXCEPT:
-            for m in pattern.finditer(content):
-                lineno = content[:m.start()].count("\n") + 1
-                line = lines[lineno - 1] if lineno <= len(lines) else ""
-                # 降级：except Exception: continue 在遍历/初始化场景中属于合理容错
-                actual_severity = severity
-                exc_line = line.strip()
-                if rule_id == "PITFALL-01":
-                    # except <Type>: continue → 降级为 low
-                    if re.search(r'except\s+\w+\s*:\s*continue', exc_line):
-                        actual_severity = "low"
-                    # except Empty: → 队列超时，降级为 low
-                    if re.search(r'except\s+Empty\s*:', exc_line):
-                        actual_severity = "low"
-                    # except: return None → 降级为 medium（初始化降级场景）
-                    if re.search(r'except\s*:\s*return\s+None', exc_line):
-                        actual_severity = "medium"
-                violations.append(GovernanceViolation(
-                    rule_id=rule_id, rule_name=rule_name, category="pitfall",
-                    severity=actual_severity, file_path=cf.file_path, line_number=lineno,
-                    line_content=line.strip()[:120],
-                    detail=detail,
-                    suggestion="至少记录异常日志 logger.exception()，或 re-raise",
-                    pattern=rule_name,
-                ))
-
-        # 可变默认参数
-        for pattern, rule_id, rule_name, severity, detail in self.PITFALL_MUTABLE_DEFAULT:
-            for i, line in enumerate(lines, 1):
-                if pattern.search(line):
-                    if line.strip().startswith("#"):
-                        continue
-                    violations.append(GovernanceViolation(
-                        rule_id=rule_id, rule_name=rule_name, category="pitfall",
-                        severity=severity, file_path=cf.file_path, line_number=i,
-                        line_content=line.strip()[:120],
-                        detail=detail,
-                        suggestion="使用 None 作为默认值，函数内部做 if x is None: x = []",
-                        pattern=rule_name,
-                    ))
-
-        # 不安全的文件操作
-        for pattern, rule_id, rule_name, severity, detail in self.PITFALL_UNSAFE_FILE:
-            for i, line in enumerate(lines, 1):
-                if pattern.search(line):
-                    if line.strip().startswith("#"):
-                        continue
-                    violations.append(GovernanceViolation(
-                        rule_id=rule_id, rule_name=rule_name, category="pitfall",
-                        severity=severity, file_path=cf.file_path, line_number=i,
-                        line_content=line.strip()[:120],
-                        detail=detail,
-                        suggestion="使用 with 语句确保资源正确释放" if rule_id == "PITFALL-03" else "确认有备份机制，操作前做二次确认",
-                        pattern=rule_name,
-                    ))
-
-        # 竞态条件（TOCTOU）
-        for pattern, rule_id, rule_name, severity, detail in self.PITFALL_RACE_CONDITION:
-            for m in pattern.finditer(content):
-                lineno = content[:m.start()].count("\n") + 1
-                line = lines[lineno - 1] if lineno <= len(lines) else ""
-                violations.append(GovernanceViolation(
-                    rule_id=rule_id, rule_name=rule_name, category="pitfall",
-                    severity=severity, file_path=cf.file_path, line_number=lineno,
-                    line_content=line.strip()[:120],
-                    detail=detail,
-                    suggestion="直接尝试操作并捕获 FileNotFoundError/PermissionError",
-                    pattern=rule_name,
-                ))
-
-        # 裸线程
-        for pattern, rule_id, rule_name, severity, detail in self.PITFALL_THREAD_UNSAFE:
-            for i, line in enumerate(lines, 1):
-                if pattern.search(line):
-                    if line.strip().startswith("#"):
-                        continue
-                    violations.append(GovernanceViolation(
-                        rule_id=rule_id, rule_name=rule_name, category="pitfall",
-                        severity=severity, file_path=cf.file_path, line_number=i,
-                        line_content=line.strip()[:120],
-                        detail=detail,
-                        suggestion="使用 concurrent.futures.ThreadPoolExecutor 管理线程生命周期",
-                        pattern=rule_name,
-                    ))
-
-        # I/O 反模式
-        for pattern, rule_id, rule_name, severity, detail in self.PITFALL_IO_PATTERNS:
-            for i, line in enumerate(lines, 1):
-                if pattern.search(line):
-                    if line.strip().startswith("#"):
-                        continue
-                    suggestions = {
-                        "PITFALL-07": "对大型文件使用 for line in f: 逐行迭代，避免全部加载到内存",
-                        "PITFALL-08": "使用 with open() as f: 确保文件正确关闭",
-                    }
-                    violations.append(GovernanceViolation(
-                        rule_id=rule_id, rule_name=rule_name, category="pitfall",
-                        severity=severity, file_path=cf.file_path, line_number=i,
-                        line_content=line.strip()[:120],
-                        detail=detail,
-                        suggestion=suggestions.get(rule_id, "优化 I/O 操作模式"),
-                        pattern=rule_name,
-                    ))
-
-        return violations
-
-    # ─── 异步函数中同步阻塞检测 ────────────────────────────────────
-
-    BLOCKING_CALLS = {
-        "time.sleep", "time.sleep_ms", "time.sleep_us",
-        "requests.get", "requests.post", "requests.put", "requests.delete",
-        "requests.patch", "requests.head",
-        "urllib.request.urlopen",
-        "socket.connect", "socket.recv", "socket.send",
-        "subprocess.run", "subprocess.call", "subprocess.Popen",
-        "os.system", "os.popen",
-    }
-
-    def _check_async_blocking(self, cf) -> List[GovernanceViolation]:
-        """使用 AST 检测异步函数中的同步阻塞调用"""
-        violations = []
-        if cf.language not in ("Python", "python"):
-            return violations
-        if not cf.file_path.endswith(".py"):
-            return violations
+    # 尝试用 LLM 分析代码内容确定层级
+    if code_content and len(code_content) > 30:
         try:
-            import ast
-            with open(cf.file_path, "r", encoding="utf-8", errors="ignore") as f:
-                source = f.read()
-            tree = ast.parse(source)
-        except (SyntaxError, OSError):
-            return violations
+            # 检查代码内容中的关键模式（通用检测，不依赖目录名）
+            # 真正的 web 入口一定带路由装饰器；仅出现框架名（如检测器自身
+            # 内容含 "FastAPI"/"Flask" 字符串）不代表入口，不应据此判 entry，
+            # 否则会把"检测框架名的检测器"误分类为入口层造成层级穿透误报。
+            # 移除裸 'def get(' 等模式（cache.get() 等普通方法会被误判为入口），
+            # 仅保留装饰器模式与框架类名；类继承视图改为下方正则检测
+            if any(kw in code_content for kw in ['@app.route', '@app.get', '@app.post',
+                                                   '@app.put', '@app.delete', '@router.',
+                                                   'Blueprint', 'APIView',
+                                                   'JSONResponse']):
+                return "entry"
+            # 检测视图类子类中的 HTTP 方法定义（Django REST / Tornado 等），
+            # 仅当类继承自 APIView/Resource/RequestHandler/ViewSet/Controller 时
+            # 才将 def get/post 等视为入口
+            if re.search(r'class\s+\w+\s*\([^)]*(?:APIView|Resource|RequestHandler|ViewSet|Controller)[^)]*\)',
+                         code_content) and \
+               re.search(r'def\s+(?:get|post|put|delete|patch)\s*\(', code_content):
+                return "entry"
+            # 如果包含 ORM 模型定义 → data
+            if any(kw in code_content for kw in ['class Meta:', 'db.Model', 'BaseModel', 'Table(',
+                                                   'Column(', 'session.query', '__tablename__',
+                                                   'SQLAlchemy', 'declarative_base']):
+                return "data"
+            # 如果包含核心业务逻辑特征 → core
+            if re.search(r'class\s+\w*(Service|Engine|Manager|Handler|Agent|Processor)', code_content):
+                return "core"
+        except Exception:
+            pass
 
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.AsyncFunctionDef):
+    # 降级：按目录名精确匹配（使用可配置的 DEFAULT_LAYER_PATTERNS）
+    for part in reversed(parts):
+        for layer, patterns in DEFAULT_LAYER_PATTERNS.items():
+            if part in patterns:
+                return layer
+
+    return "other"
+
+
+def _extract_import(line: str) -> Optional[str]:
+    """从代码行提取导入路径"""
+    line = line.strip()
+    # Python import
+    m = re.match(r'(?:from|import)\s+([\w.]+)', line)
+    if m:
+        return m.group(1)
+    # JS/TS import
+    m = re.match(r'import\s+.*\s+from\s+["\']([^"\']+)["\']', line)
+    if m:
+        return m.group(1)
+    # JS/TS require
+    m = re.match(r'(?:const|let|var)\s+\w+\s*=\s*require\s*\(\s*["\']([^"\']+)["\']', line)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _match_import_to_file(imp: str, all_files: List[str]) -> List[str]:
+    """将导入路径匹配到实际文件（严格后缀匹配，避免子串误报）"""
+    matched = []
+    imp_normalized = imp.replace(".", "/").replace("\\", "/")
+    imp_parts = imp_normalized.split("/")
+    # 至少需要2级路径才算有效匹配
+    if len(imp_parts) < 1:
+        return matched
+
+    # 规则：导入路径的最后 N 段必须与文件路径的最后 N 段严格匹配
+    for f in all_files:
+        f_normalized = f.replace("\\", "/")
+        f_parts = f_normalized.split("/")
+        # 去掉文件扩展名比较
+        f_last = f_parts[-1]
+        if "." in f_last:
+            f_last = f_last.rsplit(".", 1)[0]
+            f_parts[-1] = f_last
+
+        # 方法1：导入路径的最后2段与文件路径的最后2段严格相等
+        if len(imp_parts) >= 2 and len(f_parts) >= 2:
+            if imp_parts[-1] == f_parts[-1] and imp_parts[-2] == f_parts[-2]:
+                matched.append(f)
                 continue
 
-            # 查找 async 函数体内的同步阻塞调用
-            for child in ast.walk(node):
-                if isinstance(child, ast.Call):
-                    func_str = self._get_call_string(child)
-                    if func_str in self.BLOCKING_CALLS:
-                        violations.append(GovernanceViolation(
-                            rule_id="PITFALL-09", rule_name="异步函数中同步阻塞",
-                            category="pitfall", severity="high",
-                            file_path=cf.file_path, line_number=child.lineno,
-                            line_content=ast.unparse(child)[:120],
-                            detail=f"在 async 函数 {node.name}() 中调用了同步阻塞操作 {func_str}，会阻塞事件循环",
-                            suggestion=f"使用异步替代：{func_str.replace('requests.', 'httpx.AsyncClient.').replace('time.sleep', 'asyncio.sleep')}",
-                            pattern="异步函数中同步阻塞",
-                        ))
-        return violations
+        # 方法2：导入路径的最后1段与文件路径的最后1段严格相等（仅当导入路径只有1段时）
+        if len(imp_parts) == 1 and len(f_parts) >= 1:
+            if imp_parts[0] == f_parts[-1]:
+                matched.append(f)
+                continue
 
-    @staticmethod
-    def _get_call_string(node) -> str:
-        """从 AST Call 节点获取完整调用字符串"""
-        import ast
-        parts = []
-        func = node.func
-        if isinstance(func, ast.Name):
-            return func.id
-        elif isinstance(func, ast.Attribute):
-            current = func
-            attr_parts = []
-            while isinstance(current, ast.Attribute):
-                attr_parts.append(current.attr)
-                current = current.value
-            if isinstance(current, ast.Name):
-                attr_parts.append(current.id)
-            attr_parts.reverse()
-            return ".".join(attr_parts)
-        return ""
+    return matched
 
-    def _check_quality(self, cf) -> List[GovernanceViolation]:
-        """检测质量铁律违规"""
-        violations = []
-        lines = cf.raw_content.splitlines() if cf.raw_content else []
 
-        # 函数过长
-        for func in cf.functions:
-            func_lines = func.end_line - func.start_line + 1
-            if func_lines > self.FUNCTION_TOO_LONG:
+def _check_security(cf) -> List[GovernanceViolation]:
+    """检测安全铁律违规"""
+    violations = []
+    lines = cf.raw_content.splitlines() if cf.raw_content else []
+
+    # 预解析文档字符串范围，跳过其中的所有安全检测
+    docstring_lines = _get_docstring_lines(lines)
+
+    # XSS 降级预判：该文件是否为生成静态 HTML 报告/可视化的代码
+    is_static_html_gen = _is_static_html_generator(cf.raw_content or "")
+
+    for i, line in enumerate(lines, 1):
+        line_stripped = line.strip()
+
+        # 跳过文档字符串行（所有检测）
+        if i in docstring_lines:
+            continue
+
+        # 跳过注释行（所有检测）
+        if line_stripped.startswith("#") or line_stripped.startswith("//"):
+            continue
+
+        # 跳过安全检测规则定义行（字符串中的代码模式）
+        is_pattern_def = _is_pattern_def_line(line_stripped)
+
+        # 硬编码凭据
+        for pattern, rule_id, rule_name, severity, detail in HARDCODED_SECRET_PATTERNS:
+            if pattern.search(line_stripped):
+                # 排除配置读取、环境变量、注释
+                if any(ep.search(line_stripped) for ep in SECRET_EXCLUDE_PATTERNS):
+                    continue
+                # 上下文过滤：排除正则模式、函数参数、配置读取等误报
+                if _is_credential_false_positive(line_stripped):
+                    continue
                 violations.append(GovernanceViolation(
-                    rule_id="IRON-QUAL-01", rule_name="函数过长",
-                    category="quality", severity="medium",
-                    file_path=cf.file_path, line_number=func.start_line,
-                    line_content=f"{func.name}() — {func_lines}行",
-                    detail=f"函数 {func.name}() 有 {func_lines} 行，超过 {self.FUNCTION_TOO_LONG} 行阈值。过长函数难以理解和测试。",
-                    suggestion=f"拆分为多个职责单一的小函数，每个函数不超过 {self.FUNCTION_TOO_LONG} 行",
+                    rule_id=rule_id, rule_name=rule_name, category="security",
+                    severity=severity, file_path=cf.file_path, line_number=i,
+                    line_content=line_stripped[:120],
+                    detail=detail,
+                    suggestion="将凭据移到环境变量或密钥管理服务（如 Vault/AWS Secrets Manager）",
                 ))
 
-            # 参数过多
-            param_count = len(func.parameters) if func.parameters else 0
-            if param_count > self.FUNCTION_TOO_MANY_PARAMS:
+        # SQL 注入
+        for pattern, rule_id, rule_name, severity, detail in SQL_INJECTION_PATTERNS:
+            if pattern.search(line_stripped):
                 violations.append(GovernanceViolation(
-                    rule_id="IRON-QUAL-02", rule_name="参数过多",
-                    category="quality", severity="medium",
-                    file_path=cf.file_path, line_number=func.start_line,
-                    line_content=f"{func.name}({param_count}个参数)",
-                    detail=f"函数 {func.name}() 有 {param_count} 个参数，超过 {self.FUNCTION_TOO_MANY_PARAMS} 个阈值。过多参数降低可读性。",
-                    suggestion="使用数据类/配置对象封装相关参数，或拆分为多个方法",
+                    rule_id=rule_id, rule_name=rule_name, category="security",
+                    severity=severity, file_path=cf.file_path, line_number=i,
+                    line_content=line_stripped[:120],
+                    detail=detail,
+                    suggestion="使用参数化查询（如 ? 占位符 + 参数元组）",
                 ))
 
-        # 嵌套过深
-        for i, line in enumerate(lines, 1):
-            stripped = line.rstrip()
-            indent = len(line) - len(stripped)
-            # 缩进级别（4空格=1级）
-            indent_level = indent // 4
-            if indent_level > self.NESTING_TOO_DEEP and stripped and not stripped.startswith(("#", "//", "/*", "*", "'''", '"""')):
-                # 检查是否是真正的嵌套（不是对齐的续行）
-                if stripped[0] not in (")", "}", "]", ")", ".", ","):
+        # 命令注入
+        for pattern, rule_id, rule_name, severity, detail in COMMAND_INJECTION_PATTERNS:
+            if pattern.search(line_stripped):
+                if _is_command_injection_false_positive(line_stripped):
+                    continue
+                violations.append(GovernanceViolation(
+                    rule_id=rule_id, rule_name=rule_name, category="security",
+                    severity=severity, file_path=cf.file_path, line_number=i,
+                    line_content=line_stripped[:120],
+                    detail=detail,
+                    suggestion="使用 subprocess.run([cmd, arg1, arg2]) + shlex.quote()",
+                ))
+
+        # 不安全反序列化
+        if not is_pattern_def:
+            for pattern, rule_id, rule_name, severity, detail, suggestion in UNSAFE_DESERIALIZE:
+                if pattern.search(line_stripped):
                     violations.append(GovernanceViolation(
-                        rule_id="IRON-QUAL-03", rule_name="嵌套过深",
-                        category="quality", severity="low",
-                        file_path=cf.file_path, line_number=i,
-                        line_content=stripped[:120],
-                        detail=f"嵌套深度 {indent_level} 层，超过 {self.NESTING_TOO_DEEP} 层阈值。深层嵌套降低可读性。",
-                        suggestion="使用 early return / guard clause 减少嵌套，或提取为子函数",
+                        rule_id=rule_id, rule_name=rule_name, category="security",
+                        severity=severity, file_path=cf.file_path, line_number=i,
+                        line_content=line_stripped[:120],
+                        detail=detail,
+                        suggestion=suggestion,
                     ))
-                    # 只报告每个文件的第一处过深嵌套
-                    break
 
-        return violations
+        # 硬编码网络地址
+        for pattern, rule_id, rule_name, severity, detail in HARDCODED_NETWORK:
+            if pattern.search(line_stripped):
+                violations.append(GovernanceViolation(
+                    rule_id=rule_id, rule_name=rule_name, category="security",
+                    severity=severity, file_path=cf.file_path, line_number=i,
+                    line_content=line_stripped[:120],
+                    detail=detail,
+                    suggestion="将 IP 地址移到配置文件或环境变量中",
+                ))
 
-    def _scan_non_py_secrets(self, project_path: str) -> List[GovernanceViolation]:
-        """扫描非 Python 文件中的机密（.env/.yaml/.json/.toml）"""
-        violations = []
-        for root, dirs, files in os.walk(project_path):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
-                "__pycache__", "node_modules", ".git", "venv", ".venv", "data",
-                "third_party", ".gitnexus", "docs", "reports",
-            )]
-            for f in files:
-                ext = os.path.splitext(f)[1].lower()
-                if ext not in self.NON_PY_SECRET_EXTENSIONS:
+        # 危险函数调用（marshal、eval、exec）
+        if not is_pattern_def:
+            for pattern, rule_id, rule_name, severity, detail, suggestion in DANGEROUS_FUNCTIONS:
+                if pattern.search(line_stripped):
+                    violations.append(GovernanceViolation(
+                        rule_id=rule_id, rule_name=rule_name, category="security",
+                        severity=severity, file_path=cf.file_path, line_number=i,
+                        line_content=line_stripped[:120],
+                        detail=detail,
+                        suggestion=suggestion,
+                    ))
+
+        # 不安全的子进程调用（shell=True）
+        for pattern, rule_id, rule_name, severity, detail, suggestion in UNSAFE_SUBPROCESS:
+            if pattern.search(line_stripped):
+                violations.append(GovernanceViolation(
+                    rule_id=rule_id, rule_name=rule_name, category="security",
+                    severity=severity, file_path=cf.file_path, line_number=i,
+                    line_content=line_stripped[:120],
+                    detail=detail,
+                    suggestion=suggestion,
+                ))
+
+        # 跨语言系统命令执行（Go/PHP/Java/Node）—— 缺陷 7：非 Python 项目危险命令漏检
+        for pattern, rule_id, rule_name, severity, detail, suggestion in CROSS_LANG_COMMAND_EXEC:
+            if pattern.search(line_stripped):
+                violations.append(GovernanceViolation(
+                    rule_id=rule_id, rule_name=rule_name, category="security",
+                    severity=severity, file_path=cf.file_path, line_number=i,
+                    line_content=line_stripped[:120],
+                    detail=detail,
+                    suggestion=suggestion,
+                ))
+
+        # 空鉴权中间件（Go）：func XxxAuth() gin.HandlerFunc { return func(...) { return } }
+        # chatwiki permission.go:9 CasbinAuth() 返回的闭包直接 return，不校验任何权限
+        if (not is_pattern_def
+                and re.search(r'func\s+\w*[Aa]uth\w*\s*\(\s*\)\s*\w+\.(?:HandlerFunc|MiddlewareFunc)\s*\{',
+                              line_stripped)):
+            window = "\n".join(lines[i:i + 6])
+            if re.search(r'return\s+func\s*\([^)]*\)\s*\{\s*\n\s*return\s*\n\s*\}', window):
+                violations.append(GovernanceViolation(
+                    rule_id="IRON-SEC-18", rule_name="空鉴权中间件", category="security",
+                    severity="critical", file_path=cf.file_path, line_number=i,
+                    line_content=line_stripped[:120],
+                    detail="鉴权中间件函数返回的闭包直接 return，不执行任何权限校验，可被任意请求绕过鉴权。",
+                    suggestion="在闭包内实现真实的权限校验（token 解析/角色检查），并挂载到受保护路由。",
+                ))
+
+        # 路径遍历风险
+        if not is_pattern_def:
+            for pattern, rule_id, rule_name, severity, detail, suggestion in PATH_TRAVERSAL:
+                if pattern.search(line_stripped):
+                    violations.append(GovernanceViolation(
+                        rule_id=rule_id, rule_name=rule_name, category="security",
+                        severity=severity, file_path=cf.file_path, line_number=i,
+                        line_content=line_stripped[:120],
+                        detail=detail,
+                        suggestion=suggestion,
+                    ))
+
+        # 弱加密算法
+        if not is_pattern_def:
+            for pattern, rule_id, rule_name, severity, detail, suggestion in WEAK_CRYPTO:
+                if pattern.search(line_stripped):
+                    violations.append(GovernanceViolation(
+                        rule_id=rule_id, rule_name=rule_name, category="security",
+                        severity=severity, file_path=cf.file_path, line_number=i,
+                        line_content=line_stripped[:120],
+                        detail=detail,
+                        suggestion=suggestion,
+                    ))
+
+        # SSRF
+        if not is_pattern_def:
+            for pattern, rule_id, rule_name, severity, detail, suggestion in SSRF_PATTERNS:
+                if pattern.search(line_stripped):
+                    violations.append(GovernanceViolation(
+                        rule_id=rule_id, rule_name=rule_name, category="security",
+                        severity=severity, file_path=cf.file_path, line_number=i,
+                        line_content=line_stripped[:120],
+                        detail=detail,
+                        suggestion=suggestion,
+                    ))
+
+        # XSS
+        if not is_pattern_def:
+            for pattern, rule_id, rule_name, severity, detail, suggestion in XSS_PATTERNS:
+                if pattern.search(line_stripped):
+                    eff_severity, eff_detail = severity, detail
+                    # 本地静态查看页面降级：命中文件是生成静态 HTML 报告/
+                    # 可视化的代码（数据为自产分析产物，无对外攻击面）时
+                    # 降为 low，仅提示理论二阶注入；面向用户输入渲染的
+                    # Web 服务保持 high
+                    if is_static_html_gen:
+                        eff_severity = "low"
+                        eff_detail = (detail
+                                      + "（降级说明：本地静态查看页面，数据为自产"
+                                        "分析产物，理论二阶注入）")
+                    violations.append(GovernanceViolation(
+                        rule_id=rule_id, rule_name=rule_name, category="security",
+                        severity=eff_severity, file_path=cf.file_path, line_number=i,
+                        line_content=line_stripped[:120],
+                        detail=eff_detail,
+                        suggestion=suggestion,
+                    ))
+
+        # 不安全随机数
+        if not is_pattern_def:
+            for pattern, rule_id, rule_name, severity, detail, suggestion in INSECURE_RANDOM:
+                if pattern.search(line_stripped):
+                    violations.append(GovernanceViolation(
+                        rule_id=rule_id, rule_name=rule_name, category="security",
+                        severity=severity, file_path=cf.file_path, line_number=i,
+                        line_content=line_stripped[:120],
+                        detail=detail,
+                        suggestion=suggestion,
+                    ))
+
+        # 弱哈希算法
+        if not is_pattern_def:
+            for pattern, rule_id, rule_name, severity, detail, suggestion in WEAK_HASH:
+                if pattern.search(line_stripped):
+                    violations.append(GovernanceViolation(
+                        rule_id=rule_id, rule_name=rule_name, category="security",
+                        severity=severity, file_path=cf.file_path, line_number=i,
+                        line_content=line_stripped[:120],
+                        detail=detail,
+                        suggestion=suggestion,
+                    ))
+
+        # SSL 证书验证禁用
+        if not is_pattern_def:
+            for pattern, rule_id, rule_name, severity, detail, suggestion in SSL_VERIFY_DISABLED:
+                if pattern.search(line_stripped):
+                    violations.append(GovernanceViolation(
+                        rule_id=rule_id, rule_name=rule_name, category="security",
+                        severity=severity, file_path=cf.file_path, line_number=i,
+                        line_content=line_stripped[:120],
+                        detail=detail,
+                        suggestion=suggestion,
+                    ))
+
+        # 资源耗尽
+        if not is_pattern_def:
+            for pattern, rule_id, rule_name, severity, detail, suggestion in RESOURCE_EXHAUSTION:
+                if pattern.search(line_stripped):
+                    violations.append(GovernanceViolation(
+                        rule_id=rule_id, rule_name=rule_name, category="security",
+                        severity=severity, file_path=cf.file_path, line_number=i,
+                        line_content=line_stripped[:120],
+                        detail=detail,
+                        suggestion=suggestion,
+                    ))
+
+        # 敏感信息泄露（日志/调试输出）
+        if not is_pattern_def:
+            for pattern, rule_id, rule_name, severity, detail, suggestion in SENSITIVE_LOG:
+                if pattern.search(line_stripped):
+                    # 过滤：仅包含 "api_key" / "API Key" 作为描述性文字的日志
+                    if _is_sensitive_log_false_positive(line_stripped):
+                        continue
+                    violations.append(GovernanceViolation(
+                        rule_id=rule_id, rule_name=rule_name, category="security",
+                        severity=severity, file_path=cf.file_path, line_number=i,
+                        line_content=line_stripped[:120],
+                        detail=detail,
+                        suggestion=suggestion,
+                    ))
+
+        # 不安全反序列化扩展（json 无异常处理、XML XXE）
+        if not is_pattern_def:
+            for pattern, rule_id, rule_name, severity, detail, suggestion in UNSAFE_DESERIALIZE_EXTENDED:
+                if pattern.search(line_stripped):
+                    # json.load/json.loads 跨行 try-except 检测
+                    if 'json.load' in line_stripped and _is_json_in_try_block(lines, i - 1):
+                        continue
+                    violations.append(GovernanceViolation(
+                        rule_id=rule_id, rule_name=rule_name, category="security",
+                        severity=severity, file_path=cf.file_path, line_number=i,
+                        line_content=line_stripped[:120],
+                        detail=detail,
+                        suggestion=suggestion,
+                    ))
+
+    # 过滤 cache 白名单（用户标记为可接受的安全规则命中）
+    violations = [
+        v for v in violations
+        if not SharedFilter.is_security_whitelisted(v.rule_id, v.file_path, v.line_number)
+    ]
+
+    return violations
+
+
+def _check_pitfalls(cf) -> List[GovernanceViolation]:
+    """检测错题本模式"""
+    violations = []
+    lines = cf.raw_content.splitlines() if cf.raw_content else []
+    content = cf.raw_content if cf.raw_content else ""
+
+    # 空异常处理 / 裸 except
+    for pattern, rule_id, rule_name, severity, detail in PITFALL_EMPTY_EXCEPT:
+        for m in pattern.finditer(content):
+            lineno = content[:m.start()].count("\n") + 1
+            line = lines[lineno - 1] if lineno <= len(lines) else ""
+            # 降级：except Exception: continue 在遍历/初始化场景中属于合理容错
+            actual_severity = severity
+            exc_line = line.strip()
+            if rule_id == "PITFALL-01":
+                # except <Type>: continue → 降级为 low
+                if re.search(r'except\s+\w+\s*:\s*continue', exc_line):
+                    actual_severity = "low"
+                # except Empty: → 队列超时，降级为 low
+                if re.search(r'except\s+Empty\s*:', exc_line):
+                    actual_severity = "low"
+                # except: return None → 降级为 medium（初始化降级场景）
+                if re.search(r'except\s*:\s*return\s+None', exc_line):
+                    actual_severity = "medium"
+            violations.append(GovernanceViolation(
+                rule_id=rule_id, rule_name=rule_name, category="pitfall",
+                severity=actual_severity, file_path=cf.file_path, line_number=lineno,
+                line_content=line.strip()[:120],
+                detail=detail,
+                suggestion="至少记录异常日志 logger.exception()，或 re-raise",
+                pattern=rule_name,
+            ))
+
+    # 可变默认参数
+    for pattern, rule_id, rule_name, severity, detail in PITFALL_MUTABLE_DEFAULT:
+        for i, line in enumerate(lines, 1):
+            if pattern.search(line):
+                if line.strip().startswith("#"):
                     continue
-                fpath = os.path.join(root, f)
-                try:
-                    with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
-                        for lineno, line in enumerate(fh, 1):
-                            m = self.NON_PY_SECRET_MASK_PATTERN.search(line)
-                            if not m:
-                                continue
-                            value = m.group(1)
-                            # 跳过占位符/示例值
-                            if value.lower() in ("placeholder", "your_key", "your_token", "xxx", "example",
-                                                  "changeme", "replace_me", "your_api_key", "your_secret"):
-                                continue
-                            # 跳过空值/variable ref
-                            if re.match(r'^[\$\{].*[\}\}]$', value):
-                                continue
-                            violations.append(GovernanceViolation(
-                                rule_id="IRON-SEC-01", rule_name="硬编码凭据",
-                                category="security", severity="critical",
-                                file_path=fpath, line_number=lineno,
-                                line_content=line.strip()[:120],
-                                detail=f"非代码文件中发现硬编码凭据：{m.group(0)[:60]}",
-                                suggestion="将凭据移到环境变量中，或使用 .env.example 作为模板",
-                            ))
-                except (OSError, IOError, UnicodeDecodeError):
-                    pass
-        return violations
+                violations.append(GovernanceViolation(
+                    rule_id=rule_id, rule_name=rule_name, category="pitfall",
+                    severity=severity, file_path=cf.file_path, line_number=i,
+                    line_content=line.strip()[:120],
+                    detail=detail,
+                    suggestion="使用 None 作为默认值，函数内部做 if x is None: x = []",
+                    pattern=rule_name,
+                ))
 
-    def _scan_doc_secrets(self, project_path: str) -> List[GovernanceViolation]:
-        """
-        扫描文档类文件（.md/.SKILL/.txt）中的治理合规缺陷：
-        1. 明文密钥环境变量赋值（如 SN_API_KEY=xxx）
-        2. 引导/示范把密钥写入凭据配置文件（.env 等）
-        3. 审查绕过类表述（忽略清单/白名单/直接放行/一律不输出）
-        """
-        violations = []
-        for root, dirs, files in os.walk(project_path):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
-                "__pycache__", "node_modules", ".git", "venv", ".venv", "data",
-                "third_party", ".gitnexus", "docs", "reports",
-            )]
-            for f in files:
-                ext = os.path.splitext(f)[1].lower()
-                if ext not in self.DOC_EXTENSIONS:
+    # 不安全的文件操作
+    for pattern, rule_id, rule_name, severity, detail in PITFALL_UNSAFE_FILE:
+        for i, line in enumerate(lines, 1):
+            if pattern.search(line):
+                if line.strip().startswith("#"):
                     continue
-                fpath = os.path.join(root, f)
-                try:
-                    with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
-                        for lineno, line in enumerate(fh, 1):
-                            for pattern, rule_id, rule_name, severity, detail in self.DOC_SECRET_PATTERNS:
-                                if pattern.search(line):
-                                    # 占位符/示例配置（=your_key_here）=<your_key> 等不报
-                                    if self._doc_placeholder(line):
-                                        continue
-                                    violations.append(self._doc_violation(
-                                        rule_id, rule_name, severity, detail, fpath, lineno, line))
-                            for pattern, rule_id, rule_name, severity, detail in self.DOC_ENV_CRED_PATTERNS:
-                                if pattern.search(line):
-                                    if self._doc_placeholder(line):
-                                        continue
-                                    violations.append(self._doc_violation(
-                                        rule_id, rule_name, severity, detail, fpath, lineno, line))
-                            for pattern, rule_name, severity, detail in self.GOV_BYPASS_PATTERNS:
-                                if pattern.search(line):
-                                    violations.append(self._doc_violation(
-                                        "IRON-GOV-01", rule_name, severity, detail, fpath, lineno, line))
-                            for pattern, rule_id, rule_name, severity, detail in self.DOC_CLAIM_PATTERNS:
-                                if pattern.search(line):
-                                    violations.append(self._doc_violation(
-                                        rule_id, rule_name, severity, detail, fpath, lineno, line))
-                except (OSError, IOError, UnicodeDecodeError):
-                    pass
+                violations.append(GovernanceViolation(
+                    rule_id=rule_id, rule_name=rule_name, category="pitfall",
+                    severity=severity, file_path=cf.file_path, line_number=i,
+                    line_content=line.strip()[:120],
+                    detail=detail,
+                    suggestion="使用 with 语句确保资源正确释放" if rule_id == "PITFALL-03" else "确认有备份机制，操作前做二次确认",
+                    pattern=rule_name,
+                ))
+
+    # 竞态条件（TOCTOU）
+    for pattern, rule_id, rule_name, severity, detail in PITFALL_RACE_CONDITION:
+        for m in pattern.finditer(content):
+            lineno = content[:m.start()].count("\n") + 1
+            line = lines[lineno - 1] if lineno <= len(lines) else ""
+            violations.append(GovernanceViolation(
+                rule_id=rule_id, rule_name=rule_name, category="pitfall",
+                severity=severity, file_path=cf.file_path, line_number=lineno,
+                line_content=line.strip()[:120],
+                detail=detail,
+                suggestion="直接尝试操作并捕获 FileNotFoundError/PermissionError",
+                pattern=rule_name,
+            ))
+
+    # 裸线程
+    for pattern, rule_id, rule_name, severity, detail in PITFALL_THREAD_UNSAFE:
+        for i, line in enumerate(lines, 1):
+            if pattern.search(line):
+                if line.strip().startswith("#"):
+                    continue
+                violations.append(GovernanceViolation(
+                    rule_id=rule_id, rule_name=rule_name, category="pitfall",
+                    severity=severity, file_path=cf.file_path, line_number=i,
+                    line_content=line.strip()[:120],
+                    detail=detail,
+                    suggestion="使用 concurrent.futures.ThreadPoolExecutor 管理线程生命周期",
+                    pattern=rule_name,
+                ))
+
+    # I/O 反模式
+    for pattern, rule_id, rule_name, severity, detail in PITFALL_IO_PATTERNS:
+        for i, line in enumerate(lines, 1):
+            if pattern.search(line):
+                if line.strip().startswith("#"):
+                    continue
+                suggestions = {
+                    "PITFALL-07": "对大型文件使用 for line in f: 逐行迭代，避免全部加载到内存",
+                    "PITFALL-08": "使用 with open() as f: 确保文件正确关闭",
+                }
+                violations.append(GovernanceViolation(
+                    rule_id=rule_id, rule_name=rule_name, category="pitfall",
+                    severity=severity, file_path=cf.file_path, line_number=i,
+                    line_content=line.strip()[:120],
+                    detail=detail,
+                    suggestion=suggestions.get(rule_id, "优化 I/O 操作模式"),
+                    pattern=rule_name,
+                ))
+
+    return violations
+
+
+def _check_async_blocking(cf) -> List[GovernanceViolation]:
+    """使用 AST 检测异步函数中的同步阻塞调用"""
+    violations = []
+    if cf.language not in ("Python", "python"):
+        return violations
+    if not cf.file_path.endswith(".py"):
+        return violations
+    try:
+        import ast
+        with open(cf.file_path, "r", encoding="utf-8", errors="ignore") as f:
+            source = f.read()
+        tree = ast.parse(source)
+    except (SyntaxError, OSError):
         return violations
 
-    # 文档密钥赋值的已知占位符值（lower 精确匹配）：示例配置的通用占位写法。
-    # ollama 是本地免费模型名（README 明示无需 Key），同样按占位符处理。
-    DOC_SECRET_PLACEHOLDER_VALUES = frozenset({
-        "xxx", "xxxx", "xxx-xxx", "placeholder", "example", "sample", "dummy",
-        "changeme", "change_me", "replace_me", "replace-me", "your-api-key",
-        "your_api_key", "your-key", "your_key", "your-secret", "your_token",
-        "your-token", "your-key-here", "yourkeyhere", "ollama", "test", "demo",
-        "mock", "fake",
-    })
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef):
+            continue
 
-    @staticmethod
-    def _doc_value_is_placeholder(value: str) -> bool:
-        """判断密钥赋值语句的值侧是否为已知占位符（不区分大小写）。
+        # 查找 async 函数体内的同步阻塞调用
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call):
+                func_str = _get_call_string(child)
+                if func_str in BLOCKING_CALLS:
+                    violations.append(GovernanceViolation(
+                        rule_id="PITFALL-09", rule_name="异步函数中同步阻塞",
+                        category="pitfall", severity="high",
+                        file_path=cf.file_path, line_number=child.lineno,
+                        line_content=ast.unparse(child)[:120],
+                        detail=f"在 async 函数 {node.name}() 中调用了同步阻塞操作 {func_str}，会阻塞事件循环",
+                        suggestion=f"使用异步替代：{func_str.replace('requests.', 'httpx.AsyncClient.').replace('time.sleep', 'asyncio.sleep')}",
+                        pattern="异步函数中同步阻塞",
+                    ))
+    return violations
 
-        保守实现：仅按常见占位词/包裹形式精确匹配，不做熵计算。
-        宁可漏掉少见占位符，也不放过真密钥——高熵长随机串、sk- 后跟
-        20+ 字符的真密钥格式均不在占位清单内，仍会正常报出。
-        """
-        v = value.strip()
-        # 去包裹引号/反引号（"your-api-key" → your-api-key）
-        while len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"', '`'):
-            v = v[1:-1].strip()
-        if not v:
-            return True
-        lv = v.lower()
-        # 变量引用/角括号占位：<your-api-key> / ${VAR} / $VAR / {{VAR}}
-        if re.fullmatch(r'<[^<>]*>|\$\{[^}]*\}|\$[A-Za-z_]\w*|\{\{[^}]*\}\}', v):
-            return True
-        # 已知占位词精确匹配
-        if lv in GovernanceAuditor.DOC_SECRET_PLACEHOLDER_VALUES:
-            return True
-        # your-xxx / your_xxx / sk-xxx / sk-your 等短占位前缀（限长 24，
-        # 确保不会误吞长随机真密钥）
-        if len(lv) <= 24 and re.fullmatch(r'(?:your[-_][a-z0-9_-]*|sk-(?:x+|your[-_a-z]*))', lv):
-            return True
-        return False
 
-    @staticmethod
-    def _doc_placeholder(line: str) -> bool:
-        """判断文档行是否仅为占位符/示例配置，避免把示例密钥误报为明文泄露。
+def _check_quality(cf) -> List[GovernanceViolation]:
+    """检测质量铁律违规"""
+    violations = []
+    lines = cf.raw_content.splitlines() if cf.raw_content else []
 
-        复用 _scan_non_py_secrets 的占位符思路（your_key_here/changeme/xxx 等），
-        并覆盖角括号占位符（= <your_key>），供文档类扫描过滤 guidance 用。
-        """
-        # 值侧占位符识别：提取行内最后一个 = 后的赋值值（去引号）做占位判断。
-        # export CODEREF_API_KEY="your-api-key" 这类值包在引号内的占位写法，
-        # 下方行尾正则匹配不到（占位词后有引号收尾），必须取值侧判断。
-        m = re.search(r'=([^=]*)$', line.strip())
-        if m and GovernanceAuditor._doc_value_is_placeholder(m.group(1)):
-            return True
-        if re.search(r'(?i)(your_|your-|your\s+key|your\s+secret|your\s+token|'
-                     r'changeme|replace_me|replace\s+me|xxx|placeholder|\be\.?g\.?\b|'
-                     r'example|dummy|sample|todo|fixme|<[A-Za-z_>-]+>|`<[^`]+>`)\s*$', line.strip()):
-            return True
-        return False
+    # 函数过长
+    for func in cf.functions:
+        func_lines = func.end_line - func.start_line + 1
+        if func_lines > FUNCTION_TOO_LONG:
+            violations.append(GovernanceViolation(
+                rule_id="IRON-QUAL-01", rule_name="函数过长",
+                category="quality", severity="medium",
+                file_path=cf.file_path, line_number=func.start_line,
+                line_content=f"{func.name}() — {func_lines}行",
+                detail=f"函数 {func.name}() 有 {func_lines} 行，超过 {FUNCTION_TOO_LONG} 行阈值。过长函数难以理解和测试。",
+                suggestion=f"拆分为多个职责单一的小函数，每个函数不超过 {FUNCTION_TOO_LONG} 行",
+            ))
 
-    def _doc_violation(self, rule_id, rule_name, severity, detail, fpath, lineno, line) -> GovernanceViolation:
-        """构造文档类违规项"""
-        return GovernanceViolation(
-            rule_id=rule_id, rule_name=rule_name, category="security",
-            severity=severity, file_path=fpath, line_number=lineno,
-            line_content=line.strip()[:120], detail=detail,
-            suggestion="将凭据改为占位符并从密钥管理服务读取；审查绕过/忽略清单应受审计追踪，不得静默放行",
-        )
+        # 参数过多
+        param_count = len(func.parameters) if func.parameters else 0
+        if param_count > FUNCTION_TOO_MANY_PARAMS:
+            violations.append(GovernanceViolation(
+                rule_id="IRON-QUAL-02", rule_name="参数过多",
+                category="quality", severity="medium",
+                file_path=cf.file_path, line_number=func.start_line,
+                line_content=f"{func.name}({param_count}个参数)",
+                detail=f"函数 {func.name}() 有 {param_count} 个参数，超过 {FUNCTION_TOO_MANY_PARAMS} 个阈值。过多参数降低可读性。",
+                suggestion="使用数据类/配置对象封装相关参数，或拆分为多个方法",
+            ))
 
-    def _scan_crossregion_conflicts(self, project_path: str) -> List[GovernanceViolation]:
-        """跨地区合规条款矛盾检测（IRON-GOV-03/04）：
-        1. 领土主权表述冲突：一个地区规则文件把某地区视为独立主权主体（如"台湾被视为
-           他国"、"标注台湾为主体"），另一地区文件/SKILL 却禁止领土主权争议，同一审查
-           工具给出互相矛盾的领土主权立场。
-        2. 版本差异污染：同一文档内多套执法/统计数据并存且年份、口径（互联网 vs 全部、
-           查处 vs 查办）混杂、无版本标注，引用时易误导审查置信度。
-        """
-        violations = []
-        doc_files = []
-        for root, dirs, files in os.walk(project_path):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
-                "__pycache__", "node_modules", ".git", "venv", ".venv", "data",
-                "third_party", ".gitnexus", "reports",
-            )]
-            for f in files:
-                if os.path.splitext(f)[1].lower() in self.DOC_EXTENSIONS:
-                    doc_files.append(os.path.join(root, f))
+    # 嵌套过深
+    for i, line in enumerate(lines, 1):
+        stripped = line.rstrip()
+        indent = len(line) - len(stripped)
+        # 缩进级别（4空格=1级）
+        indent_level = indent // 4
+        if indent_level > NESTING_TOO_DEEP and stripped and not stripped.startswith(("#", "//", "/*", "*", "'''", '"""')):
+            # 检查是否是真正的嵌套（不是对齐的续行）
+            if stripped[0] not in (")", "}", "]", ")", ".", ","):
+                violations.append(GovernanceViolation(
+                    rule_id="IRON-QUAL-03", rule_name="嵌套过深",
+                    category="quality", severity="low",
+                    file_path=cf.file_path, line_number=i,
+                    line_content=stripped[:120],
+                    detail=f"嵌套深度 {indent_level} 层，超过 {NESTING_TOO_DEEP} 层阈值。深层嵌套降低可读性。",
+                    suggestion="使用 early return / guard clause 减少嵌套，或提取为子函数",
+                ))
+                # 只报告每个文件的第一处过深嵌套
+                break
 
-        # 1. 领土主权表述冲突（跨文件对比）
-        sovereignty_claims = []    # 独立主体表述
-        sovereignty_redlines = []  # 领土主权红线
-        for fpath in doc_files:
+    return violations
+
+
+def _scan_non_py_secrets(project_path: str) -> List[GovernanceViolation]:
+    """扫描非 Python 文件中的机密（.env/.yaml/.json/.toml）"""
+    violations = []
+    for root, dirs, files in os.walk(project_path):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
+            "__pycache__", "node_modules", ".git", "venv", ".venv", "data",
+            "third_party", ".gitnexus", "docs", "reports",
+        )]
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext not in NON_PY_SECRET_EXTENSIONS:
+                continue
+            fpath = os.path.join(root, f)
             try:
                 with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
                     for lineno, line in enumerate(fh, 1):
-                        if re.search(r'被视为他国|标注.{0,8}为主体|视为独立.{0,6}(主权|国家)|独立主权', line):
-                            # 排除禁止/否定/示例/假设语境：如"禁止标注台湾为主体""不得将其视为
-                            # 他国""例如标注台湾为主体"，这些是合规红线/政策举例，并非本文件实际
-                            # 主张的独立主体立场；误归入 sovereignty_claims 会与同文件红线自相
-                            # 矛盾，对同一合规文档产生 IRON-GOV-03 误报。
-                            banned = re.search(
-                                r'(禁止|严禁|不得|不应|不能|避免|切勿|诸如|例如|比如|示例|举例|'
-                                r'假设|假如|若|如果|不应.{0,6}认为|不可).{0,16}'
-                                r'(被视为他国|标注.{0,8}为主体|视为独立.{0,6}(主权|国家)|独立主权)',
-                                line)
-                            if not banned:
-                                sovereignty_claims.append((fpath, lineno, line.strip()))
-                        if re.search(r'禁止涉及领土主权|领土主权.{0,8}(红线|争议)|不得.{0,8}主权|主权.{0,4}红线', line):
-                            sovereignty_redlines.append((fpath, lineno, line.strip()))
+                        m = NON_PY_SECRET_MASK_PATTERN.search(line)
+                        if not m:
+                            continue
+                        value = m.group(1)
+                        # 跳过占位符/示例值
+                        if value.lower() in ("placeholder", "your_key", "your_token", "xxx", "example",
+                                              "changeme", "replace_me", "your_api_key", "your_secret"):
+                            continue
+                        # 跳过空值/variable ref
+                        if re.match(r'^[\$\{].*[\}\}]$', value):
+                            continue
+                        violations.append(GovernanceViolation(
+                            rule_id="IRON-SEC-01", rule_name="硬编码凭据",
+                            category="security", severity="critical",
+                            file_path=fpath, line_number=lineno,
+                            line_content=line.strip()[:120],
+                            detail=f"非代码文件中发现硬编码凭据：{m.group(0)[:60]}",
+                            suggestion="将凭据移到环境变量中，或使用 .env.example 作为模板",
+                        ))
             except (OSError, IOError, UnicodeDecodeError):
                 pass
-        if sovereignty_claims and sovereignty_redlines:
-            for fpath, lineno, line in sovereignty_claims:
-                redline_desc = "; ".join(
-                    f"{os.path.relpath(rf, project_path)}:{rl}"
-                    for rf, rl, _ in sovereignty_redlines[:3])
-                violations.append(GovernanceViolation(
-                    rule_id="IRON-GOV-03", rule_name="跨地区领土主权表述冲突",
-                    category="security", severity="high",
-                    file_path=fpath, line_number=lineno,
-                    line_content=line[:120],
-                    detail=(f"本文件将某地区表述为独立主权主体，与项目内领土主权红线"
-                            f"（{redline_desc}）直接冲突，同一审查工具给出互相矛盾的领土主权立场"),
-                    suggestion="统一领土主权立场：任何地区均为中国领土不可分割的一部分，删除独立主体表述",
-                ))
+    return violations
 
-        # 2. 版本差异污染（单文件多套统计并存）
-        # 仅当并存的多套统计均缺乏来源/范围/版本标注时才报违规。年度趋势报告常含多个年份，
-        # 但每个年份通常带明确来源（"数据来源：XX"）、范围（"互联网领域"）与时间/版本标签
-        # （"2022年全年""截至2023年底"），属合规文档而非版本污染；裸统计（无任何元数据）
-        # 并存才构成污染，避免对合规趋势报告产生 IRON-GOV-04 误报。
-        stat_re = re.compile(
-            r'20\d{2}年(?:前[一二三]季度|全年|上半年|下半年)?[^。\n]{0,40}?'
-            r'(\d+(?:\.\d+)?万?件)')
-        stat_meta_re = re.compile(
-            r'(数据来源|来源|据\S*|统计|报告|公报|发布|口径|范围|领域|行业|'
-            r'全年|季度|上半年|下半年|截至|同比|环比|年均|全国|全区|全网|年度)')
-        for fpath in doc_files:
+
+def _scan_doc_secrets(project_path: str) -> List[GovernanceViolation]:
+    """
+    扫描文档类文件（.md/.SKILL/.txt）中的治理合规缺陷：
+    1. 明文密钥环境变量赋值（如 SN_API_KEY=xxx）
+    2. 引导/示范把密钥写入凭据配置文件（.env 等）
+    3. 审查绕过类表述（忽略清单/白名单/直接放行/一律不输出）
+    """
+    violations = []
+    for root, dirs, files in os.walk(project_path):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
+            "__pycache__", "node_modules", ".git", "venv", ".venv", "data",
+            "third_party", ".gitnexus", "docs", "reports",
+        )]
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext not in DOC_EXTENSIONS:
+                continue
+            fpath = os.path.join(root, f)
             try:
                 with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
-                    content = fh.read()
+                    for lineno, line in enumerate(fh, 1):
+                        for pattern, rule_id, rule_name, severity, detail in DOC_SECRET_PATTERNS:
+                            if pattern.search(line):
+                                # 占位符/示例配置（=your_key_here）=<your_key> 等不报
+                                if _doc_placeholder(line):
+                                    continue
+                                violations.append(_doc_violation(
+                                    rule_id, rule_name, severity, detail, fpath, lineno, line))
+                        for pattern, rule_id, rule_name, severity, detail in DOC_ENV_CRED_PATTERNS:
+                            if pattern.search(line):
+                                if _doc_placeholder(line):
+                                    continue
+                                violations.append(_doc_violation(
+                                    rule_id, rule_name, severity, detail, fpath, lineno, line))
+                        for pattern, rule_name, severity, detail in GOV_BYPASS_PATTERNS:
+                            if pattern.search(line):
+                                violations.append(_doc_violation(
+                                    "IRON-GOV-01", rule_name, severity, detail, fpath, lineno, line))
+                        for pattern, rule_id, rule_name, severity, detail in DOC_CLAIM_PATTERNS:
+                            if pattern.search(line):
+                                violations.append(_doc_violation(
+                                    rule_id, rule_name, severity, detail, fpath, lineno, line))
             except (OSError, IOError, UnicodeDecodeError):
-                continue
-            matches = list(stat_re.finditer(content))
-            if len(matches) < 2:
-                continue
-            years = {m.group(0)[:4] for m in matches}
-            if len(years) < 2:
-                continue
-            # 检测并存统计是否带来源/范围/版本标注：任一匹配附近（前后 40 字符窗口）含
-            # 元数据词，即视为有明确来源口径的合规趋势数据，跳过不报违规。
-            if any(stat_meta_re.search(content[max(0, m.start() - 40):m.end() + 40])
-                   for m in matches):
-                continue
-            first_line = content[:matches[0].start()].count("\n") + 1
-            stats_desc = "; ".join(
-                f"L{content[:m.start()].count(chr(10)) + 1}:{m.group(0).strip()}"
-                for m in matches[:3])
-            violations.append(GovernanceViolation(
-                rule_id="IRON-GOV-04", rule_name="版本差异污染（统计数据多版本并存）",
-                category="quality", severity="medium",
-                file_path=fpath, line_number=first_line,
-                line_content=matches[0].group(0).strip()[:120],
-                detail=(f"同一文档并存 {len(matches)} 套执法/统计数据（{stats_desc}），"
-                        f"年份/口径（互联网 vs 全部、查处 vs 查办）混杂且无版本标注，"
-                        f"引用时易误导审查置信度"),
-                suggestion="统一统计口径与时间版本，标注数据来源与统计范围，仅保留单一权威版本",
-            ))
-        return violations
-
-    def _check_secret_persistence(self, cf) -> List[GovernanceViolation]:
-        """检测代码中把密钥明文落盘到 .env 等凭据文件（如 def save_env 写入 API_KEY）"""
-        violations = []
-        lines = cf.raw_content.splitlines() if cf.raw_content else []
-        total = len(lines)
-
-        # 1) 行级 f-string 密钥赋值落盘（如 f"BRAND_LLM_API_KEY={self.llm.api_key}"）
-        for i, line in enumerate(lines, 1):
-            ls = line.strip()
-            if ls.startswith("#") or ls.startswith("//"):
-                continue
-            # 跳过检测器自身正则规则定义行（SECRET_PERSIST_PATTERNS 的 re.compile(...)），
-            # 避免审计 Coderef 自身时把规则定义当真实落盘误报。真实落盘代码不含 re.compile(。
-            if "re.compile(" in ls:
-                continue
-            for pattern, rule_id, rule_name, severity, detail in self.SECRET_PERSIST_PATTERNS:
-                if pattern.search(ls):
-                    violations.append(GovernanceViolation(
-                        rule_id=rule_id, rule_name=rule_name, category="security",
-                        severity=severity, file_path=cf.file_path, line_number=i,
-                        line_content=ls[:120], detail=detail,
-                        suggestion="改用密钥管理服务或加密存储，避免 API Key 明文落盘到 .env 等凭据文件",
-                    ))
-
-        # 2) 方法级：save_env/write_env 类方法，且方法体内含密钥变量 + .env 写入
-        for i, line in enumerate(lines):
-            if self.SECRET_PERSIST_FUNC.search(line):
-                body = [line]
-                base_indent = len(line) - len(line.lstrip())
-                j = i + 1
-                while j < total:
-                    nxt = lines[j]
-                    # 仅当 def/class 与原方法同级（缩进深度一致）时才视为方法体结束；
-                    # 嵌套在方法内的子定义（缩进更深）仍属于本方法体，继续保留，
-                    # 以免内部的 .env 写入被提前截断漏检。
-                    if (re.match(r'^\s*(?:def|class)\s+', nxt)
-                            and len(nxt) - len(nxt.lstrip()) == base_indent):
-                        break
-                    body.append(nxt)
-                    j += 1
-                bodytext = "\n".join(body)
-                if re.search(r'\b(?:api_key|API_KEY|secret|token|SECRET_KEY)\b', bodytext) and \
-                   re.search(r'\.env\b|write_text|\.write\s*\(', bodytext):
-                    violations.append(GovernanceViolation(
-                        rule_id="IRON-SEC-01", rule_name="密钥明文落盘",
-                        category="security", severity="critical",
-                        file_path=cf.file_path, line_number=i + 1,
-                        line_content=line.strip()[:120],
-                        detail=f"方法 {line.strip()[:40]} 将 API Key 明文写入 .env 凭据文件，属明文凭据落盘。",
-                        suggestion="改用密钥管理服务或加密存储，避免 API Key 明文落盘到 .env",
-                    ))
-        return violations
-
-    def _check_architecture(self, analysis) -> List[GovernanceViolation]:
-        """检测架构铁律违规"""
-        violations = []
-
-        # 构建模块依赖图
-        deps = defaultdict(set)  # file -> set of imported files
-        modules = {}  # file -> layer
-
-        for cf in analysis.files:
-            module = self._get_module_name(cf.file_path)
-            # 传递代码内容以支持 LLM 驱动的层级分类
-            raw_content = cf.raw_content if cf.raw_content else ""
-            layer = self._classify_layer(cf.file_path, code_content=raw_content[:2000])
-            modules[cf.file_path] = layer
-
-            # 提取导入
-            flines = cf.raw_content.splitlines() if cf.raw_content else []
-            for line in flines:
-                imp = self._extract_import(line)
-                if imp:
-                    deps[cf.file_path].add(imp)
-
-        # 检查层级穿透
-        for file_path, layer in modules.items():
-            for dep in deps.get(file_path, set()):
-                # 尝试匹配导入路径
-                matched = self._match_import_to_file(dep, modules.keys())
-                for target_file in matched:
-                    target_layer = modules.get(target_file, "other")
-                    if target_layer == layer:
-                        continue
-                    allowed = self.LAYER_RULES.get(layer, ["other"])
-                    if target_layer not in allowed and target_layer != "other":
-                        violations.append(GovernanceViolation(
-                            rule_id="IRON-ARCH-01", rule_name="层级穿透",
-                            category="architecture", severity="high",
-                            file_path=file_path, line_number=0,
-                            line_content=f"{layer} → {target_layer} ({dep})",
-                            detail=f"{layer} 层直接依赖了 {target_layer} 层，违反了依赖方向规则。{layer} 层只能依赖: {allowed}",
-                            suggestion=f"将 {target_layer} 层的逻辑下沉到 {layer} 允许依赖的层级，或通过接口反转依赖",
-                        ))
-
-        # 检查循环依赖（简单检测：A imports B and B imports A）
-        checked = set()
-        for a_file, a_deps in deps.items():
-            for b_file in a_deps:
-                pair = tuple(sorted([a_file, b_file]))
-                if pair in checked:
-                    continue
-                checked.add(pair)
-                b_deps = deps.get(b_file, set())
-                if a_file in b_deps:
-                    violations.append(GovernanceViolation(
-                        rule_id="IRON-ARCH-02", rule_name="循环依赖",
-                        category="architecture", severity="high",
-                        file_path=a_file, line_number=0,
-                        line_content=f"{os.path.basename(a_file)} ↔ {os.path.basename(b_file)}",
-                        detail=f"检测到循环依赖：{os.path.basename(a_file)} 和 {os.path.basename(b_file)} 互相导入",
-                        suggestion="提取共同依赖到第三个模块，或使用依赖注入打破循环",
-                    ))
-
-        return violations
-
-    def _get_module_name(self, file_path: str) -> str:
-        """从文件路径提取模块名"""
-        return os.path.splitext(os.path.basename(file_path))[0]
-
-    def _classify_layer(self, file_path: str, code_content: str = "") -> str:
-        """
-        根据文件路径和代码内容分类层级
-        
-        优先使用 LLM 分析代码内容确定层级（通用方案），
-        LLM 不可用时使用默认目录名模式匹配（降级方案）。
-        
-        开源项目建议：通过 LLM 分析代码内容而非目录名来确定层级，
-        这样可以适应任意项目结构。
-        """
-        fp_lower = file_path.replace("\\", "/").lower()
-        parts = fp_lower.split("/")
-
-        # 尝试用 LLM 分析代码内容确定层级
-        if code_content and len(code_content) > 30:
-            try:
-                # 检查代码内容中的关键模式（通用检测，不依赖目录名）
-                # 真正的 web 入口一定带路由装饰器；仅出现框架名（如检测器自身
-                # 内容含 "FastAPI"/"Flask" 字符串）不代表入口，不应据此判 entry，
-                # 否则会把"检测框架名的检测器"误分类为入口层造成层级穿透误报。
-                # 移除裸 'def get(' 等模式（cache.get() 等普通方法会被误判为入口），
-                # 仅保留装饰器模式与框架类名；类继承视图改为下方正则检测
-                if any(kw in code_content for kw in ['@app.route', '@app.get', '@app.post',
-                                                       '@app.put', '@app.delete', '@router.',
-                                                       'Blueprint', 'APIView',
-                                                       'JSONResponse']):
-                    return "entry"
-                # 检测视图类子类中的 HTTP 方法定义（Django REST / Tornado 等），
-                # 仅当类继承自 APIView/Resource/RequestHandler/ViewSet/Controller 时
-                # 才将 def get/post 等视为入口
-                if re.search(r'class\s+\w+\s*\([^)]*(?:APIView|Resource|RequestHandler|ViewSet|Controller)[^)]*\)',
-                             code_content) and \
-                   re.search(r'def\s+(?:get|post|put|delete|patch)\s*\(', code_content):
-                    return "entry"
-                # 如果包含 ORM 模型定义 → data
-                if any(kw in code_content for kw in ['class Meta:', 'db.Model', 'BaseModel', 'Table(',
-                                                       'Column(', 'session.query', '__tablename__',
-                                                       'SQLAlchemy', 'declarative_base']):
-                    return "data"
-                # 如果包含核心业务逻辑特征 → core
-                if re.search(r'class\s+\w*(Service|Engine|Manager|Handler|Agent|Processor)', code_content):
-                    return "core"
-            except Exception:
                 pass
+    return violations
 
-        # 降级：按目录名精确匹配（使用可配置的 DEFAULT_LAYER_PATTERNS）
-        for part in reversed(parts):
-            for layer, patterns in self.DEFAULT_LAYER_PATTERNS.items():
-                if part in patterns:
-                    return layer
 
-        return "other"
+def _scan_crossregion_conflicts(project_path: str) -> List[GovernanceViolation]:
+    """跨地区合规条款矛盾检测（IRON-GOV-03/04）：
+    1. 领土主权表述冲突：一个地区规则文件把某地区视为独立主权主体（如"台湾被视为
+       他国"、"标注台湾为主体"），另一地区文件/SKILL 却禁止领土主权争议，同一审查
+       工具给出互相矛盾的领土主权立场。
+    2. 版本差异污染：同一文档内多套执法/统计数据并存且年份、口径（互联网 vs 全部、
+       查处 vs 查办）混杂、无版本标注，引用时易误导审查置信度。
+    """
+    violations = []
+    doc_files = []
+    for root, dirs, files in os.walk(project_path):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
+            "__pycache__", "node_modules", ".git", "venv", ".venv", "data",
+            "third_party", ".gitnexus", "reports",
+        )]
+        for f in files:
+            if os.path.splitext(f)[1].lower() in DOC_EXTENSIONS:
+                doc_files.append(os.path.join(root, f))
 
-    def _extract_import(self, line: str) -> Optional[str]:
-        """从代码行提取导入路径"""
-        line = line.strip()
-        # Python import
-        m = re.match(r'(?:from|import)\s+([\w.]+)', line)
-        if m:
-            return m.group(1)
-        # JS/TS import
-        m = re.match(r'import\s+.*\s+from\s+["\']([^"\']+)["\']', line)
-        if m:
-            return m.group(1)
-        # JS/TS require
-        m = re.match(r'(?:const|let|var)\s+\w+\s*=\s*require\s*\(\s*["\']([^"\']+)["\']', line)
-        if m:
-            return m.group(1)
-        return None
+    # 1. 领土主权表述冲突（跨文件对比）
+    sovereignty_claims = []    # 独立主体表述
+    sovereignty_redlines = []  # 领土主权红线
+    for fpath in doc_files:
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
+                for lineno, line in enumerate(fh, 1):
+                    if re.search(r'被视为他国|标注.{0,8}为主体|视为独立.{0,6}(主权|国家)|独立主权', line):
+                        # 排除禁止/否定/示例/假设语境：如"禁止标注台湾为主体""不得将其视为
+                        # 他国""例如标注台湾为主体"，这些是合规红线/政策举例，并非本文件实际
+                        # 主张的独立主体立场；误归入 sovereignty_claims 会与同文件红线自相
+                        # 矛盾，对同一合规文档产生 IRON-GOV-03 误报。
+                        banned = re.search(
+                            r'(禁止|严禁|不得|不应|不能|避免|切勿|诸如|例如|比如|示例|举例|'
+                            r'假设|假如|若|如果|不应.{0,6}认为|不可).{0,16}'
+                            r'(被视为他国|标注.{0,8}为主体|视为独立.{0,6}(主权|国家)|独立主权)',
+                            line)
+                        if not banned:
+                            sovereignty_claims.append((fpath, lineno, line.strip()))
+                    if re.search(r'禁止涉及领土主权|领土主权.{0,8}(红线|争议)|不得.{0,8}主权|主权.{0,4}红线', line):
+                        sovereignty_redlines.append((fpath, lineno, line.strip()))
+        except (OSError, IOError, UnicodeDecodeError):
+            pass
+    if sovereignty_claims and sovereignty_redlines:
+        for fpath, lineno, line in sovereignty_claims:
+            redline_desc = "; ".join(
+                f"{os.path.relpath(rf, project_path)}:{rl}"
+                for rf, rl, _ in sovereignty_redlines[:3])
+            violations.append(GovernanceViolation(
+                rule_id="IRON-GOV-03", rule_name="跨地区领土主权表述冲突",
+                category="security", severity="high",
+                file_path=fpath, line_number=lineno,
+                line_content=line[:120],
+                detail=(f"本文件将某地区表述为独立主权主体，与项目内领土主权红线"
+                        f"（{redline_desc}）直接冲突，同一审查工具给出互相矛盾的领土主权立场"),
+                suggestion="统一领土主权立场：任何地区均为中国领土不可分割的一部分，删除独立主体表述",
+            ))
 
-    def _match_import_to_file(self, imp: str, all_files: List[str]) -> List[str]:
-        """将导入路径匹配到实际文件（严格后缀匹配，避免子串误报）"""
-        matched = []
-        imp_normalized = imp.replace(".", "/").replace("\\", "/")
-        imp_parts = imp_normalized.split("/")
-        # 至少需要2级路径才算有效匹配
-        if len(imp_parts) < 1:
-            return matched
+    # 2. 版本差异污染（单文件多套统计并存）
+    # 仅当并存的多套统计均缺乏来源/范围/版本标注时才报违规。年度趋势报告常含多个年份，
+    # 但每个年份通常带明确来源（"数据来源：XX"）、范围（"互联网领域"）与时间/版本标签
+    # （"2022年全年""截至2023年底"），属合规文档而非版本污染；裸统计（无任何元数据）
+    # 并存才构成污染，避免对合规趋势报告产生 IRON-GOV-04 误报。
+    stat_re = re.compile(
+        r'20\d{2}年(?:前[一二三]季度|全年|上半年|下半年)?[^。\n]{0,40}?'
+        r'(\d+(?:\.\d+)?万?件)')
+    stat_meta_re = re.compile(
+        r'(数据来源|来源|据\S*|统计|报告|公报|发布|口径|范围|领域|行业|'
+        r'全年|季度|上半年|下半年|截至|同比|环比|年均|全国|全区|全网|年度)')
+    for fpath in doc_files:
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
+                content = fh.read()
+        except (OSError, IOError, UnicodeDecodeError):
+            continue
+        matches = list(stat_re.finditer(content))
+        if len(matches) < 2:
+            continue
+        years = {m.group(0)[:4] for m in matches}
+        if len(years) < 2:
+            continue
+        # 检测并存统计是否带来源/范围/版本标注：任一匹配附近（前后 40 字符窗口）含
+        # 元数据词，即视为有明确来源口径的合规趋势数据，跳过不报违规。
+        if any(stat_meta_re.search(content[max(0, m.start() - 40):m.end() + 40])
+               for m in matches):
+            continue
+        first_line = content[:matches[0].start()].count("\n") + 1
+        stats_desc = "; ".join(
+            f"L{content[:m.start()].count(chr(10)) + 1}:{m.group(0).strip()}"
+            for m in matches[:3])
+        violations.append(GovernanceViolation(
+            rule_id="IRON-GOV-04", rule_name="版本差异污染（统计数据多版本并存）",
+            category="quality", severity="medium",
+            file_path=fpath, line_number=first_line,
+            line_content=matches[0].group(0).strip()[:120],
+            detail=(f"同一文档并存 {len(matches)} 套执法/统计数据（{stats_desc}），"
+                    f"年份/口径（互联网 vs 全部、查处 vs 查办）混杂且无版本标注，"
+                    f"引用时易误导审查置信度"),
+            suggestion="统一统计口径与时间版本，标注数据来源与统计范围，仅保留单一权威版本",
+        ))
+    return violations
 
-        # 规则：导入路径的最后 N 段必须与文件路径的最后 N 段严格匹配
-        for f in all_files:
-            f_normalized = f.replace("\\", "/")
-            f_parts = f_normalized.split("/")
-            # 去掉文件扩展名比较
-            f_last = f_parts[-1]
-            if "." in f_last:
-                f_last = f_last.rsplit(".", 1)[0]
-                f_parts[-1] = f_last
 
-            # 方法1：导入路径的最后2段与文件路径的最后2段严格相等
-            if len(imp_parts) >= 2 and len(f_parts) >= 2:
-                if imp_parts[-1] == f_parts[-1] and imp_parts[-2] == f_parts[-2]:
-                    matched.append(f)
+def _check_secret_persistence(cf) -> List[GovernanceViolation]:
+    """检测代码中把密钥明文落盘到 .env 等凭据文件（如 def save_env 写入 API_KEY）"""
+    violations = []
+    lines = cf.raw_content.splitlines() if cf.raw_content else []
+    total = len(lines)
+
+    # 1) 行级 f-string 密钥赋值落盘（如 f"BRAND_LLM_API_KEY={self.llm.api_key}"）
+    for i, line in enumerate(lines, 1):
+        ls = line.strip()
+        if ls.startswith("#") or ls.startswith("//"):
+            continue
+        # 跳过检测器自身正则规则定义行（SECRET_PERSIST_PATTERNS 的 re.compile(...)），
+        # 避免审计 Coderef 自身时把规则定义当真实落盘误报。真实落盘代码不含 re.compile(。
+        if "re.compile(" in ls:
+            continue
+        for pattern, rule_id, rule_name, severity, detail in SECRET_PERSIST_PATTERNS:
+            if pattern.search(ls):
+                violations.append(GovernanceViolation(
+                    rule_id=rule_id, rule_name=rule_name, category="security",
+                    severity=severity, file_path=cf.file_path, line_number=i,
+                    line_content=ls[:120], detail=detail,
+                    suggestion="改用密钥管理服务或加密存储，避免 API Key 明文落盘到 .env 等凭据文件",
+                ))
+
+    # 2) 方法级：save_env/write_env 类方法，且方法体内含密钥变量 + .env 写入
+    for i, line in enumerate(lines):
+        if SECRET_PERSIST_FUNC.search(line):
+            body = [line]
+            base_indent = len(line) - len(line.lstrip())
+            j = i + 1
+            while j < total:
+                nxt = lines[j]
+                # 仅当 def/class 与原方法同级（缩进深度一致）时才视为方法体结束；
+                # 嵌套在方法内的子定义（缩进更深）仍属于本方法体，继续保留，
+                # 以免内部的 .env 写入被提前截断漏检。
+                if (re.match(r'^\s*(?:def|class)\s+', nxt)
+                        and len(nxt) - len(nxt.lstrip()) == base_indent):
+                    break
+                body.append(nxt)
+                j += 1
+            bodytext = "\n".join(body)
+            if re.search(r'\b(?:api_key|API_KEY|secret|token|SECRET_KEY)\b', bodytext) and \
+               re.search(r'\.env\b|write_text|\.write\s*\(', bodytext):
+                violations.append(GovernanceViolation(
+                    rule_id="IRON-SEC-01", rule_name="密钥明文落盘",
+                    category="security", severity="critical",
+                    file_path=cf.file_path, line_number=i + 1,
+                    line_content=line.strip()[:120],
+                    detail=f"方法 {line.strip()[:40]} 将 API Key 明文写入 .env 凭据文件，属明文凭据落盘。",
+                    suggestion="改用密钥管理服务或加密存储，避免 API Key 明文落盘到 .env",
+                ))
+    return violations
+
+
+def _check_architecture(analysis) -> List[GovernanceViolation]:
+    """检测架构铁律违规"""
+    violations = []
+
+    # 构建模块依赖图
+    deps = defaultdict(set)  # file -> set of imported files
+    modules = {}  # file -> layer
+
+    for cf in analysis.files:
+        module = _get_module_name(cf.file_path)
+        # 传递代码内容以支持 LLM 驱动的层级分类
+        raw_content = cf.raw_content if cf.raw_content else ""
+        layer = _classify_layer(cf.file_path, code_content=raw_content[:2000])
+        modules[cf.file_path] = layer
+
+        # 提取导入
+        flines = cf.raw_content.splitlines() if cf.raw_content else []
+        for line in flines:
+            imp = _extract_import(line)
+            if imp:
+                deps[cf.file_path].add(imp)
+
+    # 检查层级穿透
+    for file_path, layer in modules.items():
+        for dep in deps.get(file_path, set()):
+            # 尝试匹配导入路径
+            matched = _match_import_to_file(dep, modules.keys())
+            for target_file in matched:
+                target_layer = modules.get(target_file, "other")
+                if target_layer == layer:
                     continue
+                allowed = LAYER_RULES.get(layer, ["other"])
+                if target_layer not in allowed and target_layer != "other":
+                    violations.append(GovernanceViolation(
+                        rule_id="IRON-ARCH-01", rule_name="层级穿透",
+                        category="architecture", severity="high",
+                        file_path=file_path, line_number=0,
+                        line_content=f"{layer} → {target_layer} ({dep})",
+                        detail=f"{layer} 层直接依赖了 {target_layer} 层，违反了依赖方向规则。{layer} 层只能依赖: {allowed}",
+                        suggestion=f"将 {target_layer} 层的逻辑下沉到 {layer} 允许依赖的层级，或通过接口反转依赖",
+                    ))
 
-            # 方法2：导入路径的最后1段与文件路径的最后1段严格相等（仅当导入路径只有1段时）
-            if len(imp_parts) == 1 and len(f_parts) >= 1:
-                if imp_parts[0] == f_parts[-1]:
-                    matched.append(f)
-                    continue
-
-        return matched
-
-    def _generate_report(self, report: GovernanceReport) -> str:
-        """生成 Markdown 治理审计报告"""
-        # 按严重程度排序
-        violations = sorted(report.violations,
-                            key=lambda v: (SEVERITY_ORDER.get(v.severity, 9), v.file_path, v.line_number))
-
-        # 分类统计
-        cat_counts = defaultdict(int)
-        sev_counts = defaultdict(int)
-        for v in violations:
-            cat_counts[v.category] += 1
-            sev_counts[v.severity] += 1
-
-        # 健康分颜色（无代码文件时 clean_score 为 None → 显示 N/A）
-        if report.clean_score is not None:
-            if report.clean_score >= 80:
-                score_emoji = "🟢"
-            elif report.clean_score >= 50:
-                score_emoji = "🟡"
-            else:
-                score_emoji = "🔴"
-            score_text = f"{score_emoji} **{report.clean_score}/100**"
-        else:
-            score_text = "⚪ **N/A**（未发现可分析代码文件）"
-
-        lines = []
-        lines.append(f"# 🔍 代码治理审计报告")
-        lines.append(f"")
-        lines.append(f"**项目路径**: `{report.project_path}`  ")
-        lines.append(f"**扫描范围**: {report.total_files} 个文件, {report.total_lines} 行  ")
-        lines.append(f"**治理健康分**: {score_text}  ")
-        lines.append(f"")
-
-        # 总览
-        lines.append(f"## 📊 违规总览")
-        lines.append(f"")
-        lines.append(f"| 严重程度 | 数量 |")
-        lines.append(f"|---------|------|")
-        lines.append(f"| 🔴 Critical | {report.critical_count} |")
-        lines.append(f"| 🟠 High | {report.high_count} |")
-        lines.append(f"| 🟡 Medium | {report.medium_count} |")
-        lines.append(f"| ⚪ Low | {report.low_count} |")
-        lines.append(f"| **总计** | **{report.total_violations}** |")
-        lines.append(f"")
-
-        lines.append(f"| 分类 | 数量 |")
-        lines.append(f"|------|------|")
-        for cat in ["security", "architecture", "pitfall", "quality"]:
-            if cat_counts.get(cat, 0) > 0:
-                cat_names = {"security": "安全铁律", "architecture": "架构铁律", "pitfall": "错题本模式", "quality": "质量铁律"}
-                lines.append(f"| {cat_names.get(cat, cat)} | {cat_counts[cat]} |")
-        lines.append(f"")
-
-        if not violations:
-            lines.append(f"✅ **未发现违规项，项目治理状况良好。**")
-            return "\n".join(lines)
-
-        # 分类明细
-        for cat in ["security", "architecture", "pitfall", "quality"]:
-            cat_violations = [v for v in violations if v.category == cat]
-            if not cat_violations:
+    # 检查循环依赖（简单检测：A imports B and B imports A）
+    checked = set()
+    for a_file, a_deps in deps.items():
+        for b_file in a_deps:
+            pair = tuple(sorted([a_file, b_file]))
+            if pair in checked:
                 continue
+            checked.add(pair)
+            b_deps = deps.get(b_file, set())
+            if a_file in b_deps:
+                violations.append(GovernanceViolation(
+                    rule_id="IRON-ARCH-02", rule_name="循环依赖",
+                    category="architecture", severity="high",
+                    file_path=a_file, line_number=0,
+                    line_content=f"{os.path.basename(a_file)} ↔ {os.path.basename(b_file)}",
+                    detail=f"检测到循环依赖：{os.path.basename(a_file)} 和 {os.path.basename(b_file)} 互相导入",
+                    suggestion="提取共同依赖到第三个模块，或使用依赖注入打破循环",
+                ))
 
-            cat_names = {
-                "security": "🛡️ 安全铁律",
-                "architecture": "🏗️ 架构铁律",
-                "pitfall": "📋 错题本模式",
-                "quality": "📏 质量铁律",
-            }
+    return violations
 
-            lines.append(f"## {cat_names.get(cat, cat)}（{len(cat_violations)} 项）")
+
+def _generate_report(report: GovernanceReport) -> str:
+    """生成 Markdown 治理审计报告"""
+    # 按严重程度排序
+    violations = sorted(report.violations,
+                        key=lambda v: (SEVERITY_ORDER.get(v.severity, 9), v.file_path, v.line_number))
+
+    # 分类统计
+    cat_counts = defaultdict(int)
+    sev_counts = defaultdict(int)
+    for v in violations:
+        cat_counts[v.category] += 1
+        sev_counts[v.severity] += 1
+
+    # 健康分颜色（无代码文件时 clean_score 为 None → 显示 N/A）
+    if report.clean_score is not None:
+        if report.clean_score >= 80:
+            score_emoji = "🟢"
+        elif report.clean_score >= 50:
+            score_emoji = "🟡"
+        else:
+            score_emoji = "🔴"
+        score_text = f"{score_emoji} **{report.clean_score}/100**"
+    else:
+        score_text = "⚪ **N/A**（未发现可分析代码文件）"
+
+    lines = []
+    lines.append(f"# 🔍 代码治理审计报告")
+    lines.append(f"")
+    lines.append(f"**项目路径**: `{report.project_path}`  ")
+    lines.append(f"**扫描范围**: {report.total_files} 个文件, {report.total_lines} 行  ")
+    lines.append(f"**治理健康分**: {score_text}  ")
+    lines.append(f"")
+
+    # 总览
+    lines.append(f"## 📊 违规总览")
+    lines.append(f"")
+    lines.append(f"| 严重程度 | 数量 |")
+    lines.append(f"|---------|------|")
+    lines.append(f"| 🔴 Critical | {report.critical_count} |")
+    lines.append(f"| 🟠 High | {report.high_count} |")
+    lines.append(f"| 🟡 Medium | {report.medium_count} |")
+    lines.append(f"| ⚪ Low | {report.low_count} |")
+    lines.append(f"| **总计** | **{report.total_violations}** |")
+    lines.append(f"")
+
+    lines.append(f"| 分类 | 数量 |")
+    lines.append(f"|------|------|")
+    for cat in ["security", "architecture", "pitfall", "quality"]:
+        if cat_counts.get(cat, 0) > 0:
+            cat_names = {"security": "安全铁律", "architecture": "架构铁律", "pitfall": "错题本模式", "quality": "质量铁律"}
+            lines.append(f"| {cat_names.get(cat, cat)} | {cat_counts[cat]} |")
+    lines.append(f"")
+
+    if not violations:
+        lines.append(f"✅ **未发现违规项，项目治理状况良好。**")
+        return "\n".join(lines)
+
+    # 分类明细
+    for cat in ["security", "architecture", "pitfall", "quality"]:
+        cat_violations = [v for v in violations if v.category == cat]
+        if not cat_violations:
+            continue
+
+        cat_names = {
+            "security": "🛡️ 安全铁律",
+            "architecture": "🏗️ 架构铁律",
+            "pitfall": "📋 错题本模式",
+            "quality": "📏 质量铁律",
+        }
+
+        lines.append(f"## {cat_names.get(cat, cat)}（{len(cat_violations)} 项）")
+        lines.append(f"")
+
+        # 每类最多展示 100 条，避免报告过大
+        display_count = min(len(cat_violations), 100)
+        for v in cat_violations[:display_count]:
+            sev_icon = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "⚪"}.get(v.severity, "⚪")
+            lines.append(f"### {sev_icon} [{v.rule_id}] {v.rule_name}")
+            lines.append(f"")
+            lines.append(f"- **文件**: `{v.file_path}`")
+            if v.line_number > 0:
+                lines.append(f"- **行号**: L{v.line_number}")
+            lines.append(f"- **代码**: `{v.line_content}`")
+            lines.append(f"- **说明**: {v.detail}")
+            lines.append(f"- **建议**: {v.suggestion}")
+            if v.pattern:
+                lines.append(f"- **错题本模式**: {v.pattern}")
             lines.append(f"")
 
-            # 每类最多展示 100 条，避免报告过大
-            display_count = min(len(cat_violations), 100)
-            for v in cat_violations[:display_count]:
-                sev_icon = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "⚪"}.get(v.severity, "⚪")
-                lines.append(f"### {sev_icon} [{v.rule_id}] {v.rule_name}")
-                lines.append(f"")
-                lines.append(f"- **文件**: `{v.file_path}`")
-                if v.line_number > 0:
-                    lines.append(f"- **行号**: L{v.line_number}")
-                lines.append(f"- **代码**: `{v.line_content}`")
-                lines.append(f"- **说明**: {v.detail}")
-                lines.append(f"- **建议**: {v.suggestion}")
-                if v.pattern:
-                    lines.append(f"- **错题本模式**: {v.pattern}")
-                lines.append(f"")
+        if len(cat_violations) > display_count:
+            lines.append(f"*... 还有 {len(cat_violations) - display_count} 条未展示，请优化匹配规则后重新扫描*")
+            lines.append(f"")
 
-            if len(cat_violations) > display_count:
-                lines.append(f"*... 还有 {len(cat_violations) - display_count} 条未展示，请优化匹配规则后重新扫描*")
-                lines.append(f"")
+    # 修复优先级建议
+    lines.append(f"---")
+    lines.append(f"")
+    lines.append(f"## 🎯 修复优先级建议")
+    lines.append(f"")
+    if report.critical_count > 0:
+        lines.append(f"1. **立即修复** ({report.critical_count} 项 critical): 硬编码凭据、SQL注入等安全漏洞必须立即处理")
+    if report.high_count > 0:
+        lines.append(f"2. **本周修复** ({report.high_count} 项 high): 命令注入、空异常处理、层级穿透、循环依赖")
+    if report.medium_count > 0:
+        lines.append(f"3. **下个迭代** ({report.medium_count} 项 medium): 函数过长、参数过多、可变默认参数")
+    if report.low_count > 0:
+        lines.append(f"4. **技术债务** ({report.low_count} 项 low): 嵌套过深、裸线程等可逐步优化")
 
-        # 修复优先级建议
-        lines.append(f"---")
-        lines.append(f"")
-        lines.append(f"## 🎯 修复优先级建议")
-        lines.append(f"")
-        if report.critical_count > 0:
-            lines.append(f"1. **立即修复** ({report.critical_count} 项 critical): 硬编码凭据、SQL注入等安全漏洞必须立即处理")
-        if report.high_count > 0:
-            lines.append(f"2. **本周修复** ({report.high_count} 项 high): 命令注入、空异常处理、层级穿透、循环依赖")
-        if report.medium_count > 0:
-            lines.append(f"3. **下个迭代** ({report.medium_count} 项 medium): 函数过长、参数过多、可变默认参数")
-        if report.low_count > 0:
-            lines.append(f"4. **技术债务** ({report.low_count} 项 low): 嵌套过深、裸线程等可逐步优化")
+    lines.append(f"")
+    lines.append(f"---")
+    lines.append(f"*报告由 CodeRef-AI GovernanceAuditor v1.0 生成*")
+    lines.append(f"")
+    lines.append("> **LLM 复查提示**：此报告可能包含误报。审查每条结果后，调用 `coderef_cache_whitelist` 工具将误报自动加入白名单，然后重新扫描。")
 
-        lines.append(f"")
-        lines.append(f"---")
-        lines.append(f"*报告由 CodeRef-AI GovernanceAuditor v1.0 生成*")
-        lines.append(f"")
-        lines.append("> **LLM 复查提示**：此报告可能包含误报。审查每条结果后，调用 `coderef_cache_whitelist` 工具将误报自动加入白名单，然后重新扫描。")
+    return "\n".join(lines)
 
-        return "\n".join(lines)
+

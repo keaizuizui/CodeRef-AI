@@ -56,6 +56,137 @@ class MaturityReport:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 报告渲染辅助（模块级纯函数，从 ProjectMaturityChecker.to_report 提取）
+# ═══════════════════════════════════════════════════════════════════
+
+# 检查类别 → 中文名称
+CATEGORY_LABELS = {
+    "testing": "测试设施",
+    "cicd": "CI/CD 流水线",
+    "monitoring": "线上监控",
+    "config": "配置管理",
+    "error_handling": "错误处理",
+    "deps": "依赖管理",
+    "quality": "代码质量",
+    "docs": "文档",
+}
+
+# 检查类别 → 通俗说明
+CATEGORY_DESCRIPTIONS = {
+    "testing": "自动化测试帮你确认代码改动不会破坏已有功能",
+    "cicd": "自动化流水线帮你自动测试和部署，不用每次手动操作",
+    "monitoring": "日志和监控帮你在出问题时第一时间发现和定位",
+    "config": "配置管理防止敏感信息泄露，方便在不同环境切换",
+    "error_handling": "错误处理防止程序崩溃时用户看到不友好的报错",
+    "deps": "依赖管理确保项目在不同环境能正常运行",
+    "quality": "代码质量工具在提交代码前自动检查问题",
+    "docs": "文档帮助他人（和未来的你）理解项目",
+}
+
+# 报告展示的类别顺序
+CATEGORY_ORDER = ["testing", "cicd", "monitoring", "config", "error_handling", "deps", "quality", "docs"]
+
+
+def _render_score_section(lines: List[str], report: MaturityReport) -> None:
+    """渲染成熟度评分表与总体评语"""
+    passed = sum(1 for c in report.checks if c.status == "pass")
+    failed = sum(1 for c in report.checks if c.status == "fail")
+    warn = sum(1 for c in report.checks if c.status == "warn")
+    total = len(report.checks)
+
+    grade_icon = {"A": "🟢", "B": "🔵", "C": "🟡", "D": "🟠", "F": "🔴"}.get(report.grade, "⚪")
+
+    lines.append("## 成熟度评分")
+    lines.append("")
+    lines.append(f"| 评分 | 等级 | 通过 | 警告 | 缺失 | 总计 |")
+    lines.append(f"|------|------|------|------|------|------|")
+    lines.append(f"| **{report.score}/100** | {grade_icon} **{report.grade}** | {passed} | {warn} | {failed} | {total} |")
+    lines.append("")
+
+    if report.score >= 90:
+        lines.append("✅ 项目成熟度很高，已具备专业软件开发的大部分要素。")
+    elif report.score >= 75:
+        lines.append("⚠️ 项目基本成熟，但还有几个关键缺失需要补上。")
+    elif report.score >= 60:
+        lines.append("⚠️ 项目处于及格线，建议优先解决下面标记为「缺失」的检查项。")
+    elif report.score >= 40:
+        lines.append("🔴 项目成熟度较低，缺少多个专业开发要素，建议尽快补齐。")
+    else:
+        lines.append("🔴 项目成熟度很低，缺少大量专业开发基础。别担心，下面每一项都给了通俗的改进建议。")
+
+    lines.append("")
+
+
+def _render_category_summary(lines: List[str], by_category: Dict[str, List[MaturityCheck]]) -> None:
+    """渲染类别汇总表"""
+    lines.append("## 类别汇总")
+    lines.append("")
+
+    for cat_key in CATEGORY_ORDER:
+        cat_checks = by_category.get(cat_key, [])
+        if not cat_checks:
+            continue
+        cat_passed = sum(1 for c in cat_checks if c.status == "pass")
+        cat_total = len(cat_checks)
+        cat_icon = "✅" if cat_passed == cat_total else "⚠️" if cat_passed > 0 else "❌"
+        lines.append(f"| {cat_icon} {CATEGORY_LABELS.get(cat_key, cat_key)} | {cat_passed}/{cat_total} | {CATEGORY_DESCRIPTIONS.get(cat_key, '')} |")
+
+    lines.append("")
+
+
+def _render_detail_checks(lines: List[str], by_category: Dict[str, List[MaturityCheck]]) -> None:
+    """渲染按类别分组的详细检查结果表"""
+    lines.append("## 详细检查结果")
+    lines.append("")
+
+    for cat_key in CATEGORY_ORDER:
+        cat_checks = by_category.get(cat_key, [])
+        if not cat_checks:
+            continue
+        lines.append(f"### {CATEGORY_LABELS.get(cat_key, cat_key)}")
+        lines.append("")
+        lines.append("| 状态 | 检查项 | 详情 | 建议 |")
+        lines.append("|------|--------|------|------|")
+
+        for c in cat_checks:
+            if c.status == "pass":
+                icon = "✅"
+            elif getattr(c, "kind", "") == "suggestion":
+                icon = "💡 建议"
+            elif c.status == "fail":
+                icon = "❌ 缺失"
+            else:
+                icon = "⚠️ 警告"
+
+            detail = c.detail[:100]
+            if c.evidence and c.status == "pass":
+                detail += f"（{c.evidence}）"
+
+            suggestion = c.suggestion[:120] if c.suggestion else "-"
+
+            lines.append(f"| {icon} | {c.name} | {detail} | {suggestion} |")
+
+        lines.append("")
+
+
+def _render_suggestion_summary(lines: List[str], report: MaturityReport) -> None:
+    """渲染工程化改进建议（非缺陷）独立汇总段"""
+    suggestions = [c for c in report.checks if getattr(c, "kind", "") == "suggestion"]
+    if suggestions:
+        lines.append("### 💡 工程化改进建议（非缺陷）")
+        lines.append("")
+        lines.append("以下为可选的工程化改进建议，并非缺陷。项目已具备核心功能与代码，这些是可锦上添花的优化项：")
+        lines.append("")
+        lines.append("| 检查项 | 详情 | 建议 |")
+        lines.append("|--------|------|------|")
+        for c in suggestions:
+            detail = c.detail[:100]
+            suggestion = c.suggestion[:120] if c.suggestion else "-"
+            lines.append(f"| {c.name} | {detail} | {suggestion} |")
+        lines.append("")
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 检查器
 # ═══════════════════════════════════════════════════════════════════
 
@@ -664,7 +795,11 @@ class ProjectMaturityChecker:
     # ─── 报告生成 ───
 
     def to_report(self, report: MaturityReport) -> str:
-        """生成 Markdown 格式的成熟度审计报告"""
+        """生成 Markdown 格式的成熟度审计报告
+
+        拆分说明：头部/评分/类别汇总/详细结果/建议汇总分段渲染，
+        各段逻辑提取为模块级 _render_* 纯函数，本方法仅做编排。
+        """
         lines = [
             f"# 项目成熟度审计",
             f"",
@@ -680,121 +815,15 @@ class ProjectMaturityChecker:
 
         lines.append("")
 
-        # 评分
+        # 按类别分组（评分段之后的各段共用）
         by_category = defaultdict(list)
         for c in report.checks:
             by_category[c.category].append(c)
 
-        passed = sum(1 for c in report.checks if c.status == "pass")
-        failed = sum(1 for c in report.checks if c.status == "fail")
-        warn = sum(1 for c in report.checks if c.status == "warn")
-        total = len(report.checks)
-
-        grade_icon = {"A": "🟢", "B": "🔵", "C": "🟡", "D": "🟠", "F": "🔴"}.get(report.grade, "⚪")
-
-        lines.append("## 成熟度评分")
-        lines.append("")
-        lines.append(f"| 评分 | 等级 | 通过 | 警告 | 缺失 | 总计 |")
-        lines.append(f"|------|------|------|------|------|------|")
-        lines.append(f"| **{report.score}/100** | {grade_icon} **{report.grade}** | {passed} | {warn} | {failed} | {total} |")
-        lines.append("")
-
-        if report.score >= 90:
-            lines.append("✅ 项目成熟度很高，已具备专业软件开发的大部分要素。")
-        elif report.score >= 75:
-            lines.append("⚠️ 项目基本成熟，但还有几个关键缺失需要补上。")
-        elif report.score >= 60:
-            lines.append("⚠️ 项目处于及格线，建议优先解决下面标记为「缺失」的检查项。")
-        elif report.score >= 40:
-            lines.append("🔴 项目成熟度较低，缺少多个专业开发要素，建议尽快补齐。")
-        else:
-            lines.append("🔴 项目成熟度很低，缺少大量专业开发基础。别担心，下面每一项都给了通俗的改进建议。")
-
-        lines.append("")
-
-        # 类别汇总
-        lines.append("## 类别汇总")
-        lines.append("")
-
-        cat_labels = {
-            "testing": "测试设施",
-            "cicd": "CI/CD 流水线",
-            "monitoring": "线上监控",
-            "config": "配置管理",
-            "error_handling": "错误处理",
-            "deps": "依赖管理",
-            "quality": "代码质量",
-            "docs": "文档",
-        }
-        cat_descriptions = {
-            "testing": "自动化测试帮你确认代码改动不会破坏已有功能",
-            "cicd": "自动化流水线帮你自动测试和部署，不用每次手动操作",
-            "monitoring": "日志和监控帮你在出问题时第一时间发现和定位",
-            "config": "配置管理防止敏感信息泄露，方便在不同环境切换",
-            "error_handling": "错误处理防止程序崩溃时用户看到不友好的报错",
-            "deps": "依赖管理确保项目在不同环境能正常运行",
-            "quality": "代码质量工具在提交代码前自动检查问题",
-            "docs": "文档帮助他人（和未来的你）理解项目",
-        }
-
-        for cat_key in ["testing", "cicd", "monitoring", "config", "error_handling", "deps", "quality", "docs"]:
-            cat_checks = by_category.get(cat_key, [])
-            if not cat_checks:
-                continue
-            cat_passed = sum(1 for c in cat_checks if c.status == "pass")
-            cat_total = len(cat_checks)
-            cat_icon = "✅" if cat_passed == cat_total else "⚠️" if cat_passed > 0 else "❌"
-            lines.append(f"| {cat_icon} {cat_labels.get(cat_key, cat_key)} | {cat_passed}/{cat_total} | {cat_descriptions.get(cat_key, '')} |")
-
-        lines.append("")
-
-        # 详细检查结果
-        lines.append("## 详细检查结果")
-        lines.append("")
-
-        for cat_key in ["testing", "cicd", "monitoring", "config", "error_handling", "deps", "quality", "docs"]:
-            cat_checks = by_category.get(cat_key, [])
-            if not cat_checks:
-                continue
-            lines.append(f"### {cat_labels.get(cat_key, cat_key)}")
-            lines.append("")
-            lines.append("| 状态 | 检查项 | 详情 | 建议 |")
-            lines.append("|------|--------|------|------|")
-
-            for c in cat_checks:
-                if c.status == "pass":
-                    icon = "✅"
-                elif getattr(c, "kind", "") == "suggestion":
-                    icon = "💡 建议"
-                elif c.status == "fail":
-                    icon = "❌ 缺失"
-                else:
-                    icon = "⚠️ 警告"
-
-                detail = c.detail[:100]
-                if c.evidence and c.status == "pass":
-                    detail += f"（{c.evidence}）"
-
-                suggestion = c.suggestion[:120] if c.suggestion else "-"
-
-                lines.append(f"| {icon} | {c.name} | {detail} | {suggestion} |")
-
-            lines.append("")
-
-        # 工程化改进建议（非缺陷）独立汇总，与缺陷项明确区分
-        suggestions = [c for c in report.checks if getattr(c, "kind", "") == "suggestion"]
-        if suggestions:
-            lines.append("### 💡 工程化改进建议（非缺陷）")
-            lines.append("")
-            lines.append("以下为可选的工程化改进建议，并非缺陷。项目已具备核心功能与代码，这些是可锦上添花的优化项：")
-            lines.append("")
-            lines.append("| 检查项 | 详情 | 建议 |")
-            lines.append("|--------|------|------|")
-            for c in suggestions:
-                detail = c.detail[:100]
-                suggestion = c.suggestion[:120] if c.suggestion else "-"
-                lines.append(f"| {c.name} | {detail} | {suggestion} |")
-            lines.append("")
+        _render_score_section(lines, report)
+        _render_category_summary(lines, by_category)
+        _render_detail_checks(lines, by_category)
+        _render_suggestion_summary(lines, report)
 
         lines.append("---")
         lines.append("")

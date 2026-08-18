@@ -67,6 +67,131 @@ class KGQueryResult:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 模块级纯函数 —— CodeKnowledgeGraph._build_from_analysis 拆分出的
+# 节点构造与 id 预收集逻辑（不依赖 self 状态）
+# ═══════════════════════════════════════════════════════════════════
+
+def _collect_analysis_ids(analysis):
+    """预收集项目内模块节点 id 与「类名→类节点 id」映射。
+
+    mod_ids 供 IMPORTS 边过滤：仅当 import 目标是项目内真实存在的模块才建边，
+    排除标准库/第三方导入，避免 memory_quality 把 `import os` 这类指向不存在
+    节点的边反复报为孤儿边。
+    class_ids_by_name 供 INHERITS 边做与 IMPORTS 一致的目标存在性过滤：仅当
+    基类是项目内已注册的类才建边，排除 str/Enum/unittest.TestCase/HTMLParser
+    等标准库或第三方基类，避免指向不存在节点的孤儿 INHERITS 边。
+    """
+    mod_ids = {
+        f"mod:{os.path.splitext(os.path.basename(getattr(cf, 'file_path', '')))[0]}"
+        for cf in getattr(analysis, "files", [])
+        if getattr(cf, "file_path", "")
+    }
+    class_ids_by_name: Dict[str, str] = {}
+    for cf in getattr(analysis, "files", []):
+        _rel = getattr(cf, "file_path", "")
+        if not _rel:
+            continue
+        _mod = os.path.splitext(os.path.basename(_rel))[0]
+        for _cls in getattr(cf, "classes", []):
+            class_ids_by_name.setdefault(
+                _cls.name, f"class:{_mod}:{_cls.name}")
+    return mod_ids, class_ids_by_name
+
+
+def _kg_module_node(cf, rel: str, module_name: str) -> KGNode:
+    """构造模块节点（mod:<文件名>）"""
+    return KGNode(
+        id=f"mod:{module_name}", type="module", name=module_name,
+        file_path=rel, props={"language": getattr(cf, "language", "")})
+
+
+def _kg_function_node(rel: str, module_name: str, func) -> KGNode:
+    """构造函数节点（func:<模块>:<函数名>）"""
+    fid = f"func:{module_name}:{func.name}"
+    return KGNode(
+        id=fid, type="function", name=func.name,
+        file_path=rel,
+        start_line=getattr(func, "start_line", 0),
+        end_line=getattr(func, "end_line", 0),
+        props={"params": getattr(func, "parameters", []),
+               "doc": (getattr(func, "docstring", "") or "")[:200],
+               "return_type": getattr(func, "return_type", "") or ""})
+
+
+def _kg_class_node(rel: str, module_name: str, cls) -> KGNode:
+    """构造类节点（class:<模块>:<类名>）"""
+    cid = f"class:{module_name}:{cls.name}"
+    return KGNode(
+        id=cid, type="class", name=cls.name,
+        file_path=rel,
+        start_line=getattr(cls, "start_line", 0),
+        end_line=getattr(cls, "end_line", 0),
+        props={"bases": getattr(cls, "base_classes", []),
+               "doc": (getattr(cls, "docstring", "") or "")[:200]})
+
+
+def _kg_method_node(rel: str, module_name: str, cls, m) -> KGNode:
+    """构造方法节点（method:<模块>:<类名>.<方法名>）"""
+    mid = f"method:{module_name}:{cls.name}.{m.name}"
+    return KGNode(
+        id=mid, type="method", name=f"{cls.name}.{m.name}",
+        file_path=rel,
+        start_line=getattr(m, "start_line", 0),
+        end_line=getattr(m, "end_line", 0),
+        props={"params": getattr(m, "parameters", []),
+               "doc": (getattr(m, "docstring", "") or "")[:200]})
+
+
+def _resolve_import_target(imp: str, mod_ids: set) -> str:
+    """解析 import 语句的项目内目标模块 id；未命中返回空串。
+
+    依次尝试完整点分路径的每一段（从后往前），命中项目内模块即建边。
+    例如 `from core.code_review import parse_diff` 会依次尝试
+    `mod:code_review`、`mod:core`，命中项目内真实模块才建边，
+    避免标准库/第三方导入产生孤儿边。
+    """
+    for seg in reversed(imp.split(".")):
+        if f"mod:{seg}" in mod_ids:
+            return f"mod:{seg}"
+    return ""
+
+
+def _go_receiver_type(recv: str) -> str:
+    """解析 Go 方法定义的 Receiver 类型名（如 Indexer）；无 Receiver 返回空串。
+
+    value receiver 形如 `(i Indexer)`（含右括号），需允许尾部 `)` 才能正确
+    取到 `Indexer`；pointer receiver `(*Recv)` 走第一分支。
+    """
+    if not recv:
+        return ""
+    rm = re.search(
+        r'\*\s*([A-Za-z_]\w*)\s*\)?\s*$'
+        r'|(?:^|\s)([A-Za-z_]\w*)\s*\)?\s*$',
+        recv.strip())
+    if rm:
+        return rm.group(1) or rm.group(2)
+    return ""
+
+
+def _go_func_kgnode(fp: str, module_name: str, node_name: str,
+                    start_line: int, end_line: int, params, body: str) -> KGNode:
+    """构造 Go 函数节点（gofunc:<模块>:<名称>），函数体截断存入 props['doc']"""
+    nid = f"gofunc:{module_name}:{node_name}"
+    return KGNode(
+        id=nid, type="go_func", name=node_name,
+        file_path=fp, start_line=start_line, end_line=end_line,
+        props={"language": "go", "params": params, "doc": body[:1000]})
+
+
+def _go_calls_edge(nid: str, tgt: str, start_line: int, body: str, cm) -> KGEdge:
+    """构造 Go 函数体内调用的 CALLS 边（line 为调用点在原文件中的行号）"""
+    return KGEdge(
+        source=nid, target=tgt, type="CALLS",
+        props={"line": start_line - 1 + body[:cm.start()].count('\n'),
+               "full_name": cm.group(0).rstrip('(')})
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 知识图谱引擎
 # ═══════════════════════════════════════════════════════════════════
 
@@ -239,28 +364,13 @@ class CodeKnowledgeGraph:
     # ─── 从 CodeAnalyzer 构建 ───
 
     def _build_from_analysis(self, analysis, stats: dict):
-        """从 CodeAnalyzer.analyze_project() 的 ProjectAnalysis 构建节点"""
-        # 预收集项目内所有模块节点 id（mod:<文件名>），供 IMPORTS 边过滤：
-        # 仅当 import 目标是项目内真实存在的模块才建边，排除标准库/第三方导入，
-        # 避免 memory_quality 把 `import os` 这类指向不存在节点的边反复报为孤儿边。
-        mod_ids = {
-            f"mod:{os.path.splitext(os.path.basename(getattr(cf, 'file_path', '')))[0]}"
-            for cf in getattr(analysis, "files", [])
-            if getattr(cf, "file_path", "")
-        }
-        # 预收集项目内所有类的「类名→类节点 id」映射（class:<模块>:<类名>），
-        # 供 INHERITS 边做与 IMPORTS 一致的目标存在性过滤：仅当基类是项目内
-        # 已注册的类才建边，排除 str/Enum/unittest.TestCase/HTMLParser 等
-        # 标准库或第三方基类，避免指向不存在节点的孤儿 INHERITS 边。
-        class_ids_by_name: Dict[str, str] = {}
-        for cf in getattr(analysis, "files", []):
-            _rel = getattr(cf, "file_path", "")
-            if not _rel:
-                continue
-            _mod = os.path.splitext(os.path.basename(_rel))[0]
-            for _cls in getattr(cf, "classes", []):
-                class_ids_by_name.setdefault(
-                    _cls.name, f"class:{_mod}:{_cls.name}")
+        """从 CodeAnalyzer.analyze_project() 的 ProjectAnalysis 构建节点
+
+        拆分说明：id 预收集与各类节点构造提取为模块级 _collect_analysis_ids /
+        _kg_*_node / _resolve_import_target 纯函数，本方法仅作编排，
+        节点/边内容与建边过滤语义与拆分前逐字段一致。
+        """
+        mod_ids, class_ids_by_name = _collect_analysis_ids(analysis)
         n = 0
         for cf in getattr(analysis, "files", []):
             rel = getattr(cf, "file_path", "")
@@ -270,49 +380,26 @@ class CodeKnowledgeGraph:
             # 模块节点
             module_name = os.path.splitext(os.path.basename(rel))[0]
             module_id = f"mod:{module_name}"
-            self._upsert_node(KGNode(
-                id=module_id, type="module", name=module_name,
-                file_path=rel, props={"language": getattr(cf, "language", "")}))
+            self._upsert_node(_kg_module_node(cf, rel, module_name))
             n += 1
 
-            # 函数节点
+            # 函数节点 + CONTAINS 边
             for func in getattr(cf, "functions", []):
                 fid = f"func:{module_name}:{func.name}"
-                self._upsert_node(KGNode(
-                    id=fid, type="function", name=func.name,
-                    file_path=rel,
-                    start_line=getattr(func, "start_line", 0),
-                    end_line=getattr(func, "end_line", 0),
-                    props={"params": getattr(func, "parameters", []),
-                           "doc": (getattr(func, "docstring", "") or "")[:200],
-                           "return_type": getattr(func, "return_type", "") or ""}))
+                self._upsert_node(_kg_function_node(rel, module_name, func))
                 n += 1
-                # CONTAINS 边
                 self._upsert_edge(KGEdge(source=module_id, target=fid, type="CONTAINS"))
 
-            # 类节点
+            # 类节点 + 方法节点 + CONTAINS/INHERITS 边
             for cls in getattr(cf, "classes", []):
                 cid = f"class:{module_name}:{cls.name}"
-                self._upsert_node(KGNode(
-                    id=cid, type="class", name=cls.name,
-                    file_path=rel,
-                    start_line=getattr(cls, "start_line", 0),
-                    end_line=getattr(cls, "end_line", 0),
-                    props={"bases": getattr(cls, "base_classes", []),
-                           "doc": (getattr(cls, "docstring", "") or "")[:200]}))
+                self._upsert_node(_kg_class_node(rel, module_name, cls))
                 n += 1
                 self._upsert_edge(KGEdge(source=module_id, target=cid, type="CONTAINS"))
 
-                # 方法节点
                 for m in getattr(cls, "methods", []):
                     mid = f"method:{module_name}:{cls.name}.{m.name}"
-                    self._upsert_node(KGNode(
-                        id=mid, type="method", name=f"{cls.name}.{m.name}",
-                        file_path=rel,
-                        start_line=getattr(m, "start_line", 0),
-                        end_line=getattr(m, "end_line", 0),
-                        props={"params": getattr(m, "parameters", []),
-                               "doc": (getattr(m, "docstring", "") or "")[:200]}))
+                    self._upsert_node(_kg_method_node(rel, module_name, cls, m))
                     n += 1
                     self._upsert_edge(KGEdge(source=cid, target=mid, type="CONTAINS"))
 
@@ -325,17 +412,9 @@ class CodeKnowledgeGraph:
                         continue
                     self._upsert_edge(KGEdge(source=cid, target=base_id, type="INHERITS"))
 
-            # 导入边
+            # 导入边：仅当 import 目标是项目内真实存在的模块才建边
             for imp in getattr(cf, "imports", []):
-                # 依次尝试完整点分路径的每一段（从后往前），命中项目内模块即建边。
-                # 例如 `from core.code_review import parse_diff` 会依次尝试
-                # `mod:code_review`、`mod:core`，命中项目内真实模块才建边，
-                # 避免标准库/第三方导入产生孤儿边。
-                target_mod = ""
-                for seg in reversed(imp.split(".")):
-                    if f"mod:{seg}" in mod_ids:
-                        target_mod = f"mod:{seg}"
-                        break
+                target_mod = _resolve_import_target(imp, mod_ids)
                 if not target_mod:
                     continue
                 self._upsert_edge(KGEdge(
@@ -444,26 +523,14 @@ class CodeKnowledgeGraph:
                                 if i + 1 < len(funcs) else len(lines))
                     body = "\n".join(lines[start_line - 1:end_line])
                     # 节点名：方法带 Receiver 类型前缀，如 Indexer.FullRebuild
-                    recv_type = ""
-                    if recv:
-                        # value receiver 形如 `(i Indexer)`（含右括号），需允许尾部 `)`
-                        # 才能正确取到 `Indexer`；pointer receiver `(*Recv)` 走第一支
-                        rm = re.search(
-                            r'\*\s*([A-Za-z_]\w*)\s*\)?\s*$'
-                            r'|(?:^|\s)([A-Za-z_]\w*)\s*\)?\s*$',
-                            recv.strip())
-                        if rm:
-                            recv_type = rm.group(1) or rm.group(2)
+                    recv_type = _go_receiver_type(recv)
                     node_name = f"{recv_type}.{name}" if recv_type else name
-                    nid = f"gofunc:{module_name}:{node_name}"
-                    self._upsert_node(KGNode(
-                        id=nid, type="go_func", name=node_name,
-                        file_path=fp, start_line=start_line, end_line=end_line,
-                        props={"language": "go",
-                               "params": self._go_params(content, m.end()),
-                               "doc": body[:1000]}))
+                    go_node = _go_func_kgnode(
+                        fp, module_name, node_name, start_line, end_line,
+                        self._go_params(content, m.end()), body)
+                    self._upsert_node(go_node)
                     n_nodes += 1
-                    go_calls.append((nid, body, start_line))
+                    go_calls.append((go_node.id, body, start_line))
         # 第二趟：所有 go_func 节点已注册，再解析函数体内调用 → CALLS 边
         for nid, body, start_line in go_calls:
             for cm in self._GO_CALL_RE.finditer(body):
@@ -473,11 +540,7 @@ class CodeKnowledgeGraph:
                     continue
                 tgt = self._find_go_callee(callee)
                 if tgt and tgt != nid:
-                    self._upsert_edge(KGEdge(
-                        source=nid, target=tgt, type="CALLS",
-                        props={"line": start_line - 1 +
-                               body[:cm.start()].count('\n'),
-                               "full_name": cm.group(0).rstrip('(')}))
+                    self._upsert_edge(_go_calls_edge(nid, tgt, start_line, body, cm))
                     n_edges += 1
         stats["nodes"] += n_nodes
         stats["edges"] += n_edges
