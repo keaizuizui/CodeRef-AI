@@ -35,45 +35,99 @@ from typing import Dict, List, Optional
 # ═══════════════════════════════════════════════════════════════════
 
 _FENCE_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+_MD_CODEBLOCK_PLACEHOLDER_RE = re.compile(r"^\x00CODEBLOCK(\d+)\x00$")
+_MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
+_MD_UL_ITEM_RE = re.compile(r"^[-*]\s+")
+_MD_OL_ITEM_RE = re.compile(r"^\d+\.\s+(.+)$")
+_MD_HR_DASH_RE = re.compile(r"^-{3,}$")
+_MD_HR_STAR_RE = re.compile(r"^\*{3,}$")
+_MD_TABLE_SEP_CELL_RE = re.compile(r":?-{2,}:?")
 
 
-def md_to_html(md_text: str) -> str:
-    """把 markdown 子集转成 HTML（HTML 转义处理，防止注入）。"""
-    if not md_text:
-        return "<p class='empty'>（空文档）</p>"
-
-    # 1. 提取围栏代码块，占位保护
+def _extract_code_blocks(md_text: str) -> tuple:
+    """提取围栏代码块并替换为占位符，返回 (占位文本, 代码块列表)。"""
     blocks: List[str] = []
+
     def _hold(m):
         blocks.append(m.group(2))
         return f"\x00CODEBLOCK{len(blocks)-1}\x00"
-    text = _FENCE_RE.sub(_hold, md_text)
 
+    text = _FENCE_RE.sub(_hold, md_text)
+    return text, blocks
+
+
+def _md_flush_table(out_lines: List[str], table_rows: List[list]) -> None:
+    """把累计的表格行渲染成 <table>（不足 2 行时丢弃，保持原逻辑）。"""
+    if not table_rows:
+        return
+    rows = table_rows[:]
+    table_rows.clear()
+    if len(rows) < 2:
+        return
+    head = rows[0]
+    body = rows[1:]
+    out_lines.append("<table>")
+    out_lines.append("<thead><tr>{}</tr></thead>".format(
+        "".join(f"<th>{_esc(c.strip())}</th>" for c in head)))
+    out_lines.append("<tbody>")
+    for row in body:
+        out_lines.append("<tr>{}</tr>".format(
+            "".join(f"<td>{_inline(c.strip())}</td>" for c in row)))
+    out_lines.append("</tbody></table>")
+
+
+def _md_consume_table_line(stripped: str, i: int, table_rows: List[list]) -> int:
+    """消费一行表格行，返回推进后的行号。
+
+    分隔行 |---|---|：丢弃该行，保留表头行继续累计，
+    等表体行到达后与表头一起 flush（避免表头被提前丢弃）。
+    """
+    cells = [c for c in stripped.strip("|").split("|")]
+    if all(_MD_TABLE_SEP_CELL_RE.fullmatch(c.strip()) for c in cells if c.strip()):
+        return i + 1
+    table_rows.append(cells)
+    return i + 1
+
+
+def _md_render_plain_line(stripped: str, out_lines: List[str]) -> bool:
+    """渲染标题/引用/列表/分割线等单行结构；命中返回 True。"""
+    # 标题
+    hm = _MD_HEADING_RE.match(stripped)
+    if hm:
+        lvl = len(hm.group(1))
+        out_lines.append(f"<h{lvl}>{_inline(hm.group(2))}</h{lvl}>")
+        return True
+
+    # 引用
+    if stripped.startswith(">"):
+        out_lines.append("<blockquote>{}</blockquote>".format(_inline(stripped[1:].strip())))
+        return True
+
+    # 无序列表
+    if _MD_UL_ITEM_RE.match(stripped):
+        out_lines.append("<li class='ul'>{}</li>".format(_inline(re.sub(r"^[-*]\s+", "", stripped))))
+        return True
+
+    # 有序列表
+    om = _MD_OL_ITEM_RE.match(stripped)
+    if om:
+        out_lines.append("<li class='ol'>{}</li>".format(_inline(om.group(1))))
+        return True
+
+    # 分割线
+    if _MD_HR_DASH_RE.match(stripped) or _MD_HR_STAR_RE.match(stripped):
+        out_lines.append("<hr>")
+        return True
+
+    return False
+
+
+def _md_render_lines(text: str, blocks: List[str]) -> List[str]:
+    """逐行渲染占位文本，返回 HTML 行列表（表格状态在内部维护）。"""
     out_lines: List[str] = []
     i = 0
     lines = text.splitlines()
-    in_table = False
-    table_rows: List[str] = []
-
-    def _flush_table():
-        nonlocal in_table, table_rows
-        if not in_table:
-            return
-        in_table = False
-        rows = table_rows[:]
-        table_rows = []
-        if len(rows) < 2:
-            return
-        head = rows[0]
-        body = rows[1:]
-        out_lines.append("<table>")
-        out_lines.append("<thead><tr>{}</tr></thead>".format(
-            "".join(f"<th>{_esc(c.strip())}</th>" for c in head)))
-        out_lines.append("<tbody>")
-        for row in body:
-            out_lines.append("<tr>{}</tr>".format(
-                "".join(f"<td>{_inline(c.strip())}</td>" for c in row)))
-        out_lines.append("</tbody></table>")
+    table_rows: List[list] = []
 
     while i < len(lines):
         raw = lines[i]
@@ -81,9 +135,9 @@ def md_to_html(md_text: str) -> str:
         stripped = line.strip()
 
         # 围栏代码块占位还原
-        m = re.match(r"^\x00CODEBLOCK(\d+)\x00$", stripped)
+        m = _MD_CODEBLOCK_PLACEHOLDER_RE.match(stripped)
         if m:
-            _flush_table()
+            _md_flush_table(out_lines, table_rows)
             code = blocks[int(m.group(1))]
             out_lines.append("<pre><code>{}</code></pre>".format(_esc(code)))
             i += 1
@@ -91,52 +145,12 @@ def md_to_html(md_text: str) -> str:
 
         # 表格
         if stripped.startswith("|"):
-            cells = [c for c in stripped.strip("|").split("|")]
-            # 分隔行 |---|---|：丢弃该行，保留表头行继续累计，
-            # 等表体行到达后与表头一起 flush（避免表头被提前丢弃）
-            if all(re.fullmatch(r":?-{2,}:?", c.strip()) for c in cells if c.strip()):
-                i += 1
-                continue
-            if not in_table:
-                _flush_table()
-                in_table = True
-                table_rows = []
-            table_rows.append(cells)
-            i += 1
+            i = _md_consume_table_line(stripped, i, table_rows)
             continue
 
-        _flush_table()
+        _md_flush_table(out_lines, table_rows)
 
-        # 标题
-        hm = re.match(r"^(#{1,6})\s+(.+)$", stripped)
-        if hm:
-            lvl = len(hm.group(1))
-            out_lines.append(f"<h{lvl}>{_inline(hm.group(2))}</h{lvl}>")
-            i += 1
-            continue
-
-        # 引用
-        if stripped.startswith(">"):
-            out_lines.append("<blockquote>{}</blockquote>".format(_inline(stripped[1:].strip())))
-            i += 1
-            continue
-
-        # 无序列表
-        if re.match(r"^[-*]\s+", stripped):
-            out_lines.append("<li class='ul'>{}</li>".format(_inline(re.sub(r"^[-*]\s+", "", stripped))))
-            i += 1
-            continue
-
-        # 有序列表
-        om = re.match(r"^\d+\.\s+(.+)$", stripped)
-        if om:
-            out_lines.append("<li class='ol'>{}</li>".format(_inline(om.group(1))))
-            i += 1
-            continue
-
-        # 分割线
-        if re.match(r"^-{3,}$", stripped) or re.match(r"^\*{3,}$", stripped):
-            out_lines.append("<hr>")
+        if _md_render_plain_line(stripped, out_lines):
             i += 1
             continue
 
@@ -149,10 +163,12 @@ def md_to_html(md_text: str) -> str:
         out_lines.append("<p>{}</p>".format(_inline(stripped)))
         i += 1
 
-    _flush_table()
+    _md_flush_table(out_lines, table_rows)
+    return out_lines
 
-    # 把连续同类 <li> 分别包进 <ul>（无序）/ <ol>（有序）
-    html_body = "\n".join(out_lines)
+
+def _wrap_list_items(html_body: str) -> str:
+    """把连续同类 <li> 分别包进 <ul>（无序）/ <ol>（有序）。"""
     html_body = re.sub(
         r"((?:<li class='ol'>.*?</li>\n?)+)",
         lambda m: "<ol>" + re.sub(r"<li class='ol'>(.*?)</li>", r"<li>\1</li>", m.group(1)) + "</ol>",
@@ -162,6 +178,22 @@ def md_to_html(md_text: str) -> str:
         lambda m: "<ul>" + re.sub(r"<li class='ul'>(.*?)</li>", r"<li>\1</li>", m.group(1)) + "</ul>",
         html_body)
     return html_body
+
+
+def md_to_html(md_text: str) -> str:
+    """把 markdown 子集转成 HTML（HTML 转义处理，防止注入）。"""
+    if not md_text:
+        return "<p class='empty'>（空文档）</p>"
+
+    # 1. 提取围栏代码块，占位保护
+    text, blocks = _extract_code_blocks(md_text)
+
+    # 2. 逐行渲染（标题/引用/列表/表格/分割线/段落）
+    out_lines = _md_render_lines(text, blocks)
+
+    # 3. 把连续同类 <li> 分别包进 <ul>（无序）/ <ol>（有序）
+    html_body = "\n".join(out_lines)
+    return _wrap_list_items(html_body)
 
 
 def _esc(s: str) -> str:

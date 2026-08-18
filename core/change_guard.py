@@ -119,17 +119,24 @@ class CapabilitySignature:
         }
 
 
-def extract_signature(file_path: str, content: str) -> CapabilitySignature:
-    """从文件内容提取能力签名（Python 标准库 ast + 轻量关键词统计）。"""
-    sig = CapabilitySignature(file_path)
-    if not content:
-        return sig
+# raise 校验异常的异常名集合（AST 防御性校验判定）
+_RAISE_VALIDATION_EXCS = ("ValueError", "TypeError", "AssertionError",
+                          "KeyError", "IndexError")
 
-    # 限制行数，避免超长文件拖慢
-    content = "\n".join(content.splitlines()[:MAX_SIGNATURE_LINES])
-    content_lower = content.lower()
 
-    # ── ast 解析：函数名 + 异常处理 + 校验语句 ──
+def _is_raise_validation(node: ast.Raise) -> bool:
+    """判断 raise 是否为校验类异常（raise ValueError/TypeError/...）。"""
+    exc = node.exc
+    return (isinstance(exc, ast.Call) and isinstance(exc.func, ast.Name)
+            and exc.func.id in _RAISE_VALIDATION_EXCS)
+
+
+def _ast_scan_signals(sig: CapabilitySignature, content: str) -> tuple:
+    """AST 解析：函数名/异常处理/超时写入 sig，返回三个校验标志。
+
+    Returns:
+        (found_raise_validation, found_isinstance_guard, found_assert_stmt)
+    """
     found_raise_validation = False   # raise ValueError/TypeError/AssertionError
     found_isinstance_guard = False   # isinstance 防御性校验
     found_assert_stmt = False        # assert 语句
@@ -146,16 +153,12 @@ def extract_signature(file_path: str, content: str) -> CapabilitySignature:
             if isinstance(node, ast.Assert):
                 found_assert_stmt = True
             # raise 校验异常
-            if isinstance(node, ast.Raise):
-                exc = node.exc
-                if isinstance(exc, ast.Call) and isinstance(exc.func, ast.Name):
-                    if exc.func.id in ("ValueError", "TypeError", "AssertionError",
-                                       "KeyError", "IndexError"):
-                        found_raise_validation = True
+            if isinstance(node, ast.Raise) and _is_raise_validation(node):
+                found_raise_validation = True
             # isinstance 防御性校验
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                if node.func.id == "isinstance":
-                    found_isinstance_guard = True
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                    and node.func.id == "isinstance":
+                found_isinstance_guard = True
             # 超时：检测 timeout= 关键字参数
             if isinstance(node, ast.Call):
                 for kw in node.keywords:
@@ -163,15 +166,40 @@ def extract_signature(file_path: str, content: str) -> CapabilitySignature:
                         sig.has_timeout = True
     except SyntaxError as e:
         logger.debug(f"AST 解析失败（跳过函数级签名）: {e}")
+    return found_raise_validation, found_isinstance_guard, found_assert_stmt
+
+
+def _has_validation_chain(content_lower: str, sig: CapabilitySignature,
+                          found_raise_validation: bool,
+                          found_isinstance_guard: bool,
+                          found_assert_stmt: bool) -> bool:
+    """校验链判定：AST 防御性校验 + 关键词统计。"""
+    return (found_raise_validation or found_isinstance_guard or found_assert_stmt
+            or content_lower.count("validate") >= 1
+            or sig.validation_count >= VALIDATE_CHAIN_THRESHOLD)
+
+
+def extract_signature(file_path: str, content: str) -> CapabilitySignature:
+    """从文件内容提取能力签名（Python 标准库 ast + 轻量关键词统计）。"""
+    sig = CapabilitySignature(file_path)
+    if not content:
+        return sig
+
+    # 限制行数，避免超长文件拖慢
+    content = "\n".join(content.splitlines()[:MAX_SIGNATURE_LINES])
+    content_lower = content.lower()
+
+    # ── ast 解析：函数名 + 异常处理 + 校验语句 ──
+    found_raise_validation, found_isinstance_guard, found_assert_stmt = \
+        _ast_scan_signals(sig, content)
 
     # ── 校验链判定：AST 防御性校验 + 关键词统计 ──
     sig.validation_count = sum(
         content_lower.count(kw) for kw in VALIDATE_KW
     ) + int(found_raise_validation) + int(found_assert_stmt)
-    if (found_raise_validation or found_isinstance_guard or found_assert_stmt
-            or content_lower.count("validate") >= 1
-            or sig.validation_count >= VALIDATE_CHAIN_THRESHOLD):
-        sig.has_validation_chain = True
+    sig.has_validation_chain = _has_validation_chain(
+        content_lower, sig, found_raise_validation, found_isinstance_guard,
+        found_assert_stmt)
 
     # 重试逻辑
     sig.has_retry = any(kw in content_lower for kw in RETRY_KW)

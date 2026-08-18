@@ -430,6 +430,127 @@ class ReplicateEngine:
 
     # ─── 复刻落地（4.6 新增） ────────────────────────────────────
 
+    @staticmethod
+    def _safe_apply_dest(name: str, kind: str, out_dir: str,
+                         conflicts: List[Dict[str, Any]]) -> Optional[str]:
+        """把相对文件名解析为 out_dir 内的安全绝对路径；越界（绝对路径 / 父级穿越）返回 None 并记冲突。"""
+        # 拒绝绝对路径与含父级穿越（..）的路径，避免落地文件逃逸出集中落地目录
+        if os.path.isabs(name) or ".." in name.split(os.sep):
+            conflicts.append({
+                "kind": kind,
+                "dest": name,
+                "reason": f"文件名 {name!r} 含绝对路径或父级穿越（..），已拒绝落地以留在落地目录内。",
+            })
+            return None
+        dest = os.path.normpath(os.path.join(out_dir, name))
+        # 双重校验：realpath 后仍须在 out_dir 之内（防符号链接/平台归一绕过）
+        real_out = os.path.realpath(out_dir)
+        real_dest = os.path.realpath(os.path.dirname(dest))
+        if not (real_dest == real_out or real_dest.startswith(real_out + os.sep)):
+            conflicts.append({
+                "kind": kind,
+                "dest": dest,
+                "reason": f"目标 {dest!r} 在落地目录之外，已拒绝写入。",
+            })
+            return None
+        return dest
+
+    @staticmethod
+    def _write_apply_file(dest: str, content: str) -> None:
+        """写入落地文件（自动创建父目录）。"""
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    def _apply_template_code(self, asset: Dict[str, Any], filename: str,
+                             out_dir: str, overwrite: bool,
+                             written: List[Dict[str, Any]],
+                             conflicts: List[Dict[str, Any]],
+                             missing_optional: List[str]) -> None:
+        """1. 落地 template_code（确定性可给，且不覆盖已有文件）。"""
+        template_code = asset.get("template_code") or ""
+        if not (template_code or "").strip():
+            missing_optional.append("template_code")
+            return
+        default_name = filename or DEFAULT_TEMPLATE_FILENAME
+        dest = self._safe_apply_dest(default_name, "template_code", out_dir, conflicts)
+        if dest is None:
+            return
+        if os.path.exists(dest) and not overwrite:
+            conflicts.append({
+                "kind": "template_code",
+                "dest": dest,
+                "reason": "目标文件已存在（不覆盖）。如需覆盖请设置 overwrite=true。",
+            })
+        else:
+            self._write_apply_file(dest, template_code)
+            written.append({"kind": "template_code", "dest": dest})
+
+    def _apply_doc_fields(self, asset: Dict[str, Any], resolved: str,
+                          out_dir: str, overwrite: bool,
+                          written: List[Dict[str, Any]],
+                          conflicts: List[Dict[str, Any]],
+                          missing_optional: List[str]) -> None:
+        """2. 落地 patch_suggestion / migration_guide（若存在，作为说明文档）。"""
+        for kind, value in (("patch_suggestion", asset.get("patch_suggestion")),
+                            ("migration_guide", asset.get("migration_guide"))):
+            if not (value or "").strip():
+                missing_optional.append(kind)
+                continue
+            ext = "_patch.md" if kind == "patch_suggestion" else "_migration.md"
+            dest = self._safe_apply_dest(f"{resolved}{ext}", kind, out_dir, conflicts)
+            if dest is None:
+                continue
+            if os.path.exists(dest) and not overwrite:
+                conflicts.append({"kind": kind, "dest": dest, "reason": "目标文件已存在（不覆盖）。"})
+            else:
+                self._write_apply_file(dest, str(value))
+                written.append({"kind": kind, "dest": dest})
+
+    @staticmethod
+    def _write_apply_manifest(resolved: str, asset: Dict[str, Any], out_dir: str,
+                              written: List[Dict[str, Any]],
+                              conflicts: List[Dict[str, Any]],
+                              missing_optional: List[str],
+                              overwrite: bool) -> str:
+        """3. 生成落地清单 manifest（每次覆盖写：它记录本次落地状态，非既有源文件）。"""
+        manifest = {
+            "canonical": resolved,
+            "asset": {
+                "category": asset.get("category", ""),
+                "description": asset.get("description", ""),
+                "intent": asset.get("intent", ""),
+                "adoption_count": asset.get("adoption_count", 0),
+            },
+            "entry_points": (asset.get("blueprint") or {}).get("entry_points", []),
+            "target_dir": out_dir,
+            "written": written,
+            "conflicts": conflicts,
+            "missing_optional": missing_optional,
+            "overwrite": overwrite,
+            "applied_at": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "note": (
+                "落地文件为复刻骨架与说明，不自动接入目标项目源码；"
+                "请依据 entry_points 与蓝图 steps 由对方 AI 完成接入。"
+            ),
+        }
+        manifest_fp = os.path.join(out_dir, APPLY_MANIFEST_FILENAME)
+        with open(manifest_fp, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        return manifest_fp
+
+    @staticmethod
+    def _apply_summary(resolved: str, out_dir: str,
+                       written: List[Dict[str, Any]],
+                       conflicts: List[Dict[str, Any]]) -> str:
+        """落地结果摘要文案。"""
+        return (
+            f"复刻落地完成：资产「{resolved}」骨架已生成到 {out_dir}（写 {len(written)} 个文件）。"
+            + (f" 有 {len(conflicts)} 项冲突未写入：{'；'.join(c['reason'] for c in conflicts[:3])}。"
+               if conflicts else " 无冲突。")
+            + " 落地文件为复刻骨架，不自动接入源码；接入请依据蓝图 steps 与 entry_points。"
+        )
+
     def apply(
         self,
         project_path: str,
@@ -468,100 +589,15 @@ class ReplicateEngine:
         conflicts: List[Dict[str, Any]] = []
         missing_optional: List[str] = []  # 资产未提供的可选内容（不算写入冲突）
 
-        def _safe_dest(name: str, kind: str) -> Optional[str]:
-            """把相对文件名解析为 out_dir 内的安全绝对路径；越界（绝对路径 / 父级穿越）返回 None 并记冲突。"""
-            # 拒绝绝对路径与含父级穿越（..）的路径，避免落地文件逃逸出集中落地目录
-            if os.path.isabs(name) or ".." in name.split(os.sep):
-                conflicts.append({
-                    "kind": kind,
-                    "dest": name,
-                    "reason": f"文件名 {name!r} 含绝对路径或父级穿越（..），已拒绝落地以留在落地目录内。",
-                })
-                return None
-            dest = os.path.normpath(os.path.join(out_dir, name))
-            # 双重校验：realpath 后仍须在 out_dir 之内（防符号链接/平台归一绕过）
-            real_out = os.path.realpath(out_dir)
-            real_dest = os.path.realpath(os.path.dirname(dest))
-            if not (real_dest == real_out or real_dest.startswith(real_out + os.sep)):
-                conflicts.append({
-                    "kind": kind,
-                    "dest": dest,
-                    "reason": f"目标 {dest!r} 在落地目录之外，已拒绝写入。",
-                })
-                return None
-            return dest
-
-        # 1. 落地 template_code（确定性可给，且不覆盖已有文件）
-        template_code = asset.get("template_code") or ""
-        if (template_code or "").strip():
-            default_name = filename or DEFAULT_TEMPLATE_FILENAME
-            dest = _safe_dest(default_name, "template_code")
-            if dest is not None:
-                if os.path.exists(dest) and not overwrite:
-                    conflicts.append({
-                        "kind": "template_code",
-                        "dest": dest,
-                        "reason": "目标文件已存在（不覆盖）。如需覆盖请设置 overwrite=true。",
-                    })
-                else:
-                    os.makedirs(os.path.dirname(dest), exist_ok=True)
-                    with open(dest, "w", encoding="utf-8") as f:
-                        f.write(template_code)
-                    written.append({"kind": "template_code", "dest": dest})
-        else:
-            missing_optional.append("template_code")
-
-        # 2. 落地 patch_suggestion / migration_guide（若存在，作为说明文档）
-        for kind, value in (("patch_suggestion", asset.get("patch_suggestion")),
-                            ("migration_guide", asset.get("migration_guide"))):
-            if not (value or "").strip():
-                missing_optional.append(kind)
-                continue
-            ext = "_patch.md" if kind == "patch_suggestion" else "_migration.md"
-            dest = _safe_dest(f"{resolved}{ext}", kind)
-            if dest is None:
-                continue
-            if os.path.exists(dest) and not overwrite:
-                conflicts.append({"kind": kind, "dest": dest, "reason": "目标文件已存在（不覆盖）。"})
-            else:
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
-                with open(dest, "w", encoding="utf-8") as f:
-                    f.write(str(value))
-                written.append({"kind": kind, "dest": dest})
-
-        # 3. 生成落地清单 manifest
-        manifest = {
-            "canonical": resolved,
-            "asset": {
-                "category": asset.get("category", ""),
-                "description": asset.get("description", ""),
-                "intent": asset.get("intent", ""),
-                "adoption_count": asset.get("adoption_count", 0),
-            },
-            "entry_points": (asset.get("blueprint") or {}).get("entry_points", []),
-            "target_dir": out_dir,
-            "written": written,
-            "conflicts": conflicts,
-            "missing_optional": missing_optional,
-            "overwrite": overwrite,
-            "applied_at": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "note": (
-                "落地文件为复刻骨架与说明，不自动接入目标项目源码；"
-                "请依据 entry_points 与蓝图 steps 由对方 AI 完成接入。"
-            ),
-        }
-        manifest_fp = os.path.join(out_dir, APPLY_MANIFEST_FILENAME)
-        # manifest 每次覆盖（它记录本次落地状态，非既有源文件）
-        with open(manifest_fp, "w", encoding="utf-8") as f:
-            json.dump(manifest, f, ensure_ascii=False, indent=2)
-
+        self._apply_template_code(asset, filename, out_dir, overwrite,
+                                  written, conflicts, missing_optional)
+        self._apply_doc_fields(asset, resolved, out_dir, overwrite,
+                               written, conflicts, missing_optional)
+        manifest_fp = self._write_apply_manifest(resolved, asset, out_dir,
+                                                 written, conflicts,
+                                                 missing_optional, overwrite)
         ok = not conflicts
-        summary = (
-            f"复刻落地完成：资产「{resolved}」骨架已生成到 {out_dir}（写 {len(written)} 个文件）。"
-            + (f" 有 {len(conflicts)} 项冲突未写入：{'；'.join(c['reason'] for c in conflicts[:3])}。"
-               if conflicts else " 无冲突。")
-            + " 落地文件为复刻骨架，不自动接入源码；接入请依据蓝图 steps 与 entry_points。"
-        )
+        summary = self._apply_summary(resolved, out_dir, written, conflicts)
         return {
             "ok": ok,
             "tool": "coderef_replicate_apply",

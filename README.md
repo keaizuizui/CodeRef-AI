@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.9.4** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.9.6** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -427,6 +427,21 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 | **4.0** | 通过四个引擎和四个支柱，增强工具的功能覆盖，形成逻辑闭环 |
 
 ## 更新日志
+
+### v4.9.6 — 存量复杂度债清零（4.9.x 系列最终闭环）
+
+- **目标**：自审计（TechDebtDetector）暴露的全部 26 条 high 级复杂度/大类存量债在本版清零，5.0 不背技术债
+- **高复杂度函数拆分**：A/B/C 三组并行重构 14 文件 18 函数（wiki_ir / wiki_compare / wiki_cross_verify / pipeline_runner / sca_checker / code_review / verify_findings / ast_signals / flow_verify / arch_detector / change_guard / memory_layer / replicate_engine / report_renderer），圈复杂度 21-28 → ≤8，认知复杂度 25-42 → ≤15
+- **大类模块级化瘦身**（方法平移至模块级 + 类内委托壳，公开接口零变化）：Pipe 1749→588、CodeAnalyzer 1812→600、Server 1049→528、BusinessAnalyzer 2716→503、WikiGenerator 2737→332；AgentSecurityAuditor / GovernanceAudit / WikiIR 重构后已无 300 行以上大类
+- **附带修复**：BusinessAnalyzer 评估质量分母 5→6；委托壳默认参数值批量还原（docs_read/render_report/_wiki 等 10 处）；staticmethod 壳 self 残留与模块级函数 self 引用清理
+- **验证**：TechDebtDetector 全量重扫 351 条（high 0 / medium 54 / low 292 / info 5，high 明细为空）；回归 85/86（唯一失败 `test_screen_available_without_llm_returns_empty` 为环境基线：本机 config.json 配置了 llm_api_key，"无 LLM"前提不成立，与重构无关）；coderef-src 测试镜像同步 29 文件后编译与 21 模块导入冒烟全过
+- 版本号：4.9.4 → 4.9.6（v4.9.5 两次提交时版本文件未同步，本次一并补齐）
+
+### v4.9.5 — CodeRef 自审闭环修复 + CodeRabbit 复审修复
+
+- **自审闭环**：37 个 MCP 工具全量自测；聚合层按 detector + severity 双维分组，修复高严重度结果掩盖低严重度问题；`arch_audit` 拆分（find_sccs 圈复杂度 16→4）；`code_simplifier` 死代码检测 AST 化（排除 CJK 注释与 `type: ignore`，消除 110 条误报）；SEC-08/58 排除 `.md`/`config.json` 与 CLI 参数；tests/ 目录排除死类检测（修复 3 个 TestCase 误报）
+- **结果完整性**：`mcp_server` findings 序列化保留 count/locations/line_start/line_end；`pipeline_runner` 相邻行合并时累计 count（修复 40 处计数丢失）
+- **CodeRabbit 复审**：1 major + 4 minor（空壳校验 / 去重维度 / 导入解析 / 叙述边界 / 文案）
 
 ### v4.9.4 — CodeRabbit 全量审查（67 条）修复闭环（4.X 系列收尾）
 

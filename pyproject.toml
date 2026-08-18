@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coderef-ai"
-version = "4.9.4"
+version = "4.9.6"
 description = "静态图驱动的 LLM 代码审计工具 —— 非编程人员也可验证 AI 项目是否按期望执行、架构是否健康、文档是否可信"
 readme = "README.md"
 license = { text = "MIT" }

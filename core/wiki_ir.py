@@ -205,6 +205,50 @@ def _repair_truncated_json(text: str) -> str:
     return "".join(out)
 
 
+def _parse_whole_text(text: str) -> tuple:
+    """整体解析（步骤 1）：返回 (已成功解析, dict 结果)。
+
+    解析失败 → (False, None)，调用方继续降级策略；
+    解析成功且顶层为 dict → (True, dict)；
+    解析成功但顶层非 dict → (True, None)，调用方直接返回 None 不再降级。
+    """
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return False, None
+    if isinstance(data, dict):
+        return True, data
+    return True, None
+
+
+def _load_json_dict(text: str) -> Optional[dict]:
+    """解析并要求顶层为 dict：失败或顶层非 dict 时返回 None。"""
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _extract_first_json_dict(text: str) -> Optional[dict]:
+    """截取平衡片段（步骤 2）：以更靠前的结构分隔符作为优先顶层类型。"""
+    i_open = text.find('[')
+    i_brace = text.find('{')
+    if i_open < 0:
+        i_open = len(text) + 1
+    if i_brace < 0:
+        i_brace = len(text) + 1
+    order = ('[', '{') if i_open < i_brace else ('{', '[')
+    for open_char in order:
+        close_char = ']' if open_char == '[' else '}'
+        fragment = _extract_balanced_json_fragment(text, open_char, close_char)
+        if fragment:
+            data = _load_json_dict(fragment)
+            if data is not None:
+                return data
+    return None
+
+
 def parse_llm_json(text: str) -> Optional[dict]:
     """容错解析 LLM 输出的 JSON 对象（IR 期望顶层为 dict）。
 
@@ -221,37 +265,17 @@ def parse_llm_json(text: str) -> Optional[dict]:
     if stripped != text:
         text = stripped
     # 1. 整体解析
-    try:
-        data = json.loads(text)
-        return data if isinstance(data, dict) else None
-    except (json.JSONDecodeError, ValueError):
-        pass
-    # 2. 截取平衡片段。以更靠前的结构分隔符作为优先顶层类型。
-    i_open = text.find('[')
-    i_brace = text.find('{')
-    if i_open < 0:
-        i_open = len(text) + 1
-    if i_brace < 0:
-        i_brace = len(text) + 1
-    order = ('[', '{') if i_open < i_brace else ('{', '[')
-    for open_char, close_char in ((c, ']' if c == '[' else '}') for c in order):
-        fragment = _extract_balanced_json_fragment(text, open_char, close_char)
-        if fragment:
-            try:
-                data = json.loads(fragment)
-                if isinstance(data, dict):
-                    return data
-            except (json.JSONDecodeError, ValueError):
-                continue
+    parsed, data = _parse_whole_text(text)
+    if parsed:
+        return data
+    # 2. 截取平衡片段
+    data = _extract_first_json_dict(text)
+    if data is not None:
+        return data
     # 3. 修复截断值后重试
     repaired = _repair_truncated_json(text)
     if repaired and repaired != text:
-        try:
-            data = json.loads(repaired)
-            if isinstance(data, dict):
-                return data
-        except (json.JSONDecodeError, ValueError):
-            pass
+        return _load_json_dict(repaired)
     return None
 
 
@@ -259,41 +283,38 @@ def parse_llm_json(text: str) -> Optional[dict]:
 # IR 校验
 # ═══════════════════════════════════════════════════════════════════
 
-def validate_ir(ir: dict) -> dict:
-    """校验 IR 是否符合 schema，返回 {"ok", "errors", "warnings"}。
+# 节点可选字段（出现时必须是字符串）与必填字段（缺失即报错）
+_IR_NODE_STR_FIELDS = ("name", "type", "role", "file_path", "trust_boundary")
+_IR_NODE_REQUIRED_FIELDS = ("name", "file_path")
 
-    errors 每项为 {"code": str, "field": str, "message": str}，
-    code 为稳定错误码（见模块顶部 IR_* 常量），供上层程序化定位。
-    """
-    errors: List[dict] = []
-    if not isinstance(ir, dict):
-        return {"ok": False,
-                "errors": [{"code": IR_MISSING_FIELD, "field": "$root",
-                            "message": "IR 顶层必须是 JSON 对象"}],
-                "warnings": []}
 
-    # 1. 必需字段
+def _validate_ir_fields(ir: dict, errors: List[dict]) -> None:
+    """必需字段 + schema_version 校验（就地追加 errors）。"""
     for f in IR_REQUIRED_FIELDS:
         if f not in ir:
             errors.append({"code": IR_MISSING_FIELD, "field": f,
                            "message": f"缺少必需字段: {f}"})
-
-    # 2. schema_version
     if ir.get("schema_version") != WIKI_IR_SCHEMA_VERSION:
         errors.append({"code": IR_SCHEMA_VERSION, "field": "schema_version",
                        "message": f"schema_version 应为 {WIKI_IR_SCHEMA_VERSION}，"
                                   f"实际为 {ir.get('schema_version')!r}"})
 
-    nodes = ir.get("nodes")
-    if not isinstance(nodes, list):
-        errors.append({"code": IR_NODE_FIELD_TYPE, "field": "nodes",
-                       "message": "nodes 必须是数组"})
-        nodes = []
-    if not nodes:
-        errors.append({"code": IR_NODES_EMPTY, "field": "nodes",
-                       "message": "nodes 不能为空（至少需要一个节点）"})
 
-    # 3. 节点 id 唯一性 + 字段类型
+def _as_error_flagged_list(ir: dict, key: str, errors: List[dict]) -> list:
+    """取 ir[key] 并要求其为数组：非数组时记错并降级为空数组。"""
+    val = ir.get(key)
+    if not isinstance(val, list):
+        errors.append({"code": IR_NODE_FIELD_TYPE, "field": key,
+                       "message": f"{key} 必须是数组"})
+        return []
+    return val
+
+
+def _validate_ir_nodes(nodes: list, errors: List[dict]) -> Dict[str, int]:
+    """节点逐项校验：非对象 / 缺 id / id 重复 / 字段类型 / 必填字段。
+
+    返回 {node_id: 首次出现下标}，供边与入口点的引用完整性校验复用。
+    """
     seen_ids: Dict[str, int] = {}
     for idx, node in enumerate(nodes):
         if not isinstance(node, dict):
@@ -310,7 +331,7 @@ def validate_ir(ir: dict) -> dict:
                            "message": f"节点 id 重复: {nid}（首次出现在 nodes[{seen_ids[nid]}]）"})
         else:
             seen_ids[nid] = idx
-        for f in ("name", "type", "role", "file_path", "trust_boundary"):
+        for f in _IR_NODE_STR_FIELDS:
             v = node.get(f)
             if v is not None and not isinstance(v, str):
                 errors.append({"code": IR_NODE_FIELD_TYPE,
@@ -318,18 +339,17 @@ def validate_ir(ir: dict) -> dict:
                                "message": f"nodes[{idx}].{f} 应为字符串"})
 
         # 必填字段：name 与 file_path 缺失 → 结构化纠正而非静默 ok
-        for f in ("name", "file_path"):
+        for f in _IR_NODE_REQUIRED_FIELDS:
             if not isinstance(node.get(f), str) or not node.get(f):
                 errors.append({"code": IR_MISSING_FIELD,
                                "field": f"nodes[{idx}].{f}",
                                "message": f"nodes[{idx}] 缺少必填字段 {f}"})
+    return seen_ids
 
-    # 4. 边引用完整性
-    edges = ir.get("edges")
-    if not isinstance(edges, list):
-        errors.append({"code": IR_NODE_FIELD_TYPE, "field": "edges",
-                       "message": "edges 必须是数组"})
-        edges = []
+
+def _validate_ir_edges(edges: list, seen_ids: Dict[str, int],
+                       errors: List[dict]) -> None:
+    """边引用完整性：source / target 必须指向已存在的节点 id。"""
     for idx, edge in enumerate(edges):
         if not isinstance(edge, dict):
             errors.append({"code": IR_NODE_FIELD_TYPE, "field": f"edges[{idx}]",
@@ -345,17 +365,49 @@ def validate_ir(ir: dict) -> dict:
                                "field": f"edges[{idx}].{label}",
                                "message": f"edges[{idx}].{label} 引用了不存在的节点: {ref!r}"})
 
-    # 5. 入口点引用完整性
-    entry_points = ir.get("entry_points")
-    if not isinstance(entry_points, list):
-        errors.append({"code": IR_NODE_FIELD_TYPE, "field": "entry_points",
-                       "message": "entry_points 必须是数组"})
-        entry_points = []
+
+def _validate_ir_entries(entry_points: list, seen_ids: Dict[str, int],
+                         errors: List[dict]) -> None:
+    """入口点引用完整性：每个入口必须指向已存在的节点 id。"""
     for ep in entry_points:
         # ep 来自 LLM 输出，可能是 list/dict，先做类型检查避免成员测试崩溃
         if not isinstance(ep, str) or ep not in seen_ids:
             errors.append({"code": IR_ENTRY_UNKNOWN, "field": "entry_points",
                            "message": f"入口点引用了不存在的节点: {ep!r}"})
+
+
+def validate_ir(ir: dict) -> dict:
+    """校验 IR 是否符合 schema，返回 {"ok", "errors", "warnings"}。
+
+    errors 每项为 {"code": str, "field": str, "message": str}，
+    code 为稳定错误码（见模块顶部 IR_* 常量），供上层程序化定位。
+    """
+    if not isinstance(ir, dict):
+        return {"ok": False,
+                "errors": [{"code": IR_MISSING_FIELD, "field": "$root",
+                            "message": "IR 顶层必须是 JSON 对象"}],
+                "warnings": []}
+
+    errors: List[dict] = []
+    # 1. 必需字段 + schema_version
+    _validate_ir_fields(ir, errors)
+
+    # 2. nodes 类型护栏 + 空检查
+    nodes = _as_error_flagged_list(ir, "nodes", errors)
+    if not nodes:
+        errors.append({"code": IR_NODES_EMPTY, "field": "nodes",
+                       "message": "nodes 不能为空（至少需要一个节点）"})
+
+    # 3. 节点 id 唯一性 + 字段类型
+    seen_ids = _validate_ir_nodes(nodes, errors)
+
+    # 4. 边引用完整性
+    edges = _as_error_flagged_list(ir, "edges", errors)
+    _validate_ir_edges(edges, seen_ids, errors)
+
+    # 5. 入口点引用完整性
+    entry_points = _as_error_flagged_list(ir, "entry_points", errors)
+    _validate_ir_entries(entry_points, seen_ids, errors)
 
     return {"ok": not errors, "errors": errors, "warnings": []}
 
@@ -363,6 +415,66 @@ def validate_ir(ir: dict) -> dict:
 # ═══════════════════════════════════════════════════════════════════
 # IR → 渲染
 # ═══════════════════════════════════════════════════════════════════
+
+def _mermaid_id_to_name(nodes: list) -> Dict[str, str]:
+    """构造 {节点 id: 节点名} 映射，供把边端点从 id 映射回 name。
+
+    node id 可能来自 LLM 输出为 list/dict（不可哈希），构造 dict 前先过滤，
+    只接受 str 作 key，避免 `{n.get("id"): ...}` 抛 TypeError: unhashable type
+    """
+    id_to_name: Dict[str, str] = {}
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        nid = n.get("id")
+        if isinstance(nid, str):
+            id_to_name[nid] = n.get("name", "")
+    return id_to_name
+
+
+def _mermaid_dg_nodes(nodes: list) -> List[dict]:
+    """把 IR 节点转换为渲染层节点（name / filePath，非法类型降级为字符串）。"""
+    dg_nodes = []
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        nm = n.get("name", "")
+        dg_nodes.append({"name": nm if isinstance(nm, str) else (str(nm) if nm is not None else ""),
+                         "filePath": n.get("file_path", "") if isinstance(n.get("file_path", ""), str) else ""})
+    return dg_nodes
+
+
+def _resolve_endpoint(ref: Any, id_to_name: Dict[str, str]) -> str:
+    """把边端点解析为可安全渲染的节点名。
+
+    source/target 可能为 list/dict，id_to_name.get 以不可哈希值作 key 会崩，
+    非 str 一律转成可安全渲染的字符串（str(list) 而非直接透传原始对象，
+    否则渲染层对 list 做 len()/sanitize 会抛 TypeError）
+    """
+    if isinstance(ref, str):
+        return id_to_name.get(ref, ref)
+    return str(ref) if ref is not None else ""
+
+
+def _mermaid_dg_edges(edges, id_to_name: Dict[str, str]) -> List[dict]:
+    """把 IR 边转换为渲染层边（端点 id 映射回节点名）。"""
+    dg_edges = []
+    for e in edges or []:
+        if not isinstance(e, dict):
+            continue
+        dg_edges.append({"source": _resolve_endpoint(e.get("source"), id_to_name),
+                         "target": _resolve_endpoint(e.get("target"), id_to_name),
+                         "relation_type": e.get("relation", "calls")})
+    return dg_edges
+
+
+def _mermaid_entry(ir: dict, id_to_name: Dict[str, str]) -> str:
+    """取首个入口点并映射为节点名（无入口点时返回空串）。"""
+    eps = ir.get("entry_points")
+    if isinstance(eps, list) and eps:
+        return _resolve_endpoint(eps[0], id_to_name)
+    return ""
+
 
 def ir_to_mermaid(ir: dict) -> str:
     """把合法 IR 转成 Mermaid flowchart（复用 diagram_generator.generate_mermaid）。
@@ -379,46 +491,10 @@ def ir_to_mermaid(ir: dict) -> str:
     nodes = ir.get("nodes")
     if not isinstance(nodes, list):
         nodes = []
-    # node id 可能来自 LLM 输出为 list/dict（不可哈希），构造 dict 前先过滤，
-    # 只接受 str 作 key，避免 `{n.get("id"): ...}` 抛 TypeError: unhashable type
-    id_to_name: Dict[str, str] = {}
-    for n in nodes:
-        if not isinstance(n, dict):
-            continue
-        nid = n.get("id")
-        if isinstance(nid, str):
-            id_to_name[nid] = n.get("name", "")
-    dg_nodes = []
-    for n in nodes:
-        if not isinstance(n, dict):
-            continue
-        nm = n.get("name", "")
-        dg_nodes.append({"name": nm if isinstance(nm, str) else (str(nm) if nm is not None else ""),
-                         "filePath": n.get("file_path", "") if isinstance(n.get("file_path", ""), str) else ""})
-    dg_edges = []
-    for e in ir.get("edges") or []:
-        if not isinstance(e, dict):
-            continue
-        src = e.get("source")
-        tgt = e.get("target")
-        # source/target 可能为 list/dict，id_to_name.get 以不可哈希值作 key 会崩，
-        # 非 str 一律转成可安全渲染的字符串（str(list) 而非直接透传原始对象，
-        # 否则渲染层对 list 做 len()/sanitize 会抛 TypeError）
-        if isinstance(src, str):
-            src_name = id_to_name.get(src, src)
-        else:
-            src_name = str(src) if src is not None else ""
-        if isinstance(tgt, str):
-            tgt_name = id_to_name.get(tgt, tgt)
-        else:
-            tgt_name = str(tgt) if tgt is not None else ""
-        dg_edges.append({"source": src_name, "target": tgt_name,
-                         "relation_type": e.get("relation", "calls")})
-    entry = ""
-    eps = ir.get("entry_points")
-    if isinstance(eps, list) and eps:
-        ep0 = eps[0]
-        entry = id_to_name.get(ep0, ep0) if isinstance(ep0, str) else (str(ep0) if ep0 is not None else "")
+    id_to_name = _mermaid_id_to_name(nodes)
+    dg_nodes = _mermaid_dg_nodes(nodes)
+    dg_edges = _mermaid_dg_edges(ir.get("edges"), id_to_name)
+    entry = _mermaid_entry(ir, id_to_name)
     title = ir.get("project_name") or "Architecture Overview"
     return generate_mermaid(dg_nodes, dg_edges, entry_point=entry, title=title)
 
@@ -514,28 +590,22 @@ def _module_of(node: Optional[dict]) -> Optional[str]:
     return f"mod:{base}"
 
 
-def extract_ir_from_kg(project_path: str,
-                       entry_points: Optional[List[str]] = None) -> Optional[dict]:
-    """从知识图谱确定性提取 IR（LLM 不可用时的静态兜底）。
-
-    节点 = 图谱中的模块节点（type='module'），
-    边   = 函数级 CALLS 边聚合到模块级（跨模块调用才保留），
-    入口 = 可配置；未提供时自动探测 main/app/run 模块。
-
-    知识图谱缺失 / 无模块节点时返回 None（优雅降级，不抛异常）。
-    """
+def _load_kg_for_ir(project_path: str):
+    """加载知识图谱：返回 (nodes, adj)，定位 / 加载失败时返回 None。"""
     try:
         from core.wiki_cross_verify import locate_kg_db
         from core.graph_closure import load_graph
         db = locate_kg_db(project_path)
         if not db:
             return None
-        nodes, adj = load_graph(db)
+        return load_graph(db)
     except Exception as e:
         logger.warning(f"加载知识图谱失败，返回 None: {e}")
         return None
 
-    # 模块节点 → IR 节点
+
+def _kg_module_nodes(nodes: dict) -> dict:
+    """图谱 module 节点 → IR 节点（跳过无有效 file_path 的模块节点）。"""
     mod_nodes = {}
     for nid, n in nodes.items():
         if n.get("type") != "module":
@@ -552,10 +622,11 @@ def extract_ir_from_kg(project_path: str,
             "file_path": fp,
             "trust_boundary": _infer_trust_boundary(fp),
         }
-    if not mod_nodes:
-        return None
+    return mod_nodes
 
-    # 函数级 CALLS 边 → 模块级边（去重）
+
+def _kg_module_edges(nodes: dict, adj: dict, mod_nodes: dict) -> set:
+    """函数级 CALLS 边聚合到模块级（跨模块调用才保留），返回去重边集合。"""
     edge_set = set()
     for src, targets in adj.items():
         src_mod = _module_of(nodes.get(src))
@@ -565,24 +636,50 @@ def extract_ir_from_kg(project_path: str,
             tgt_mod = _module_of(nodes.get(tgt))
             if tgt_mod in mod_nodes and tgt_mod != src_mod:
                 edge_set.add((src_mod, tgt_mod))
+    return edge_set
+
+
+def _kg_entry_points(mod_nodes: dict, entry_points: Optional[List[str]]) -> List[str]:
+    """入口点：显式提供时过滤到已存在模块；未提供时自动探测 main/app/run（至多 1 个）。"""
+    if entry_points is not None:
+        return [ep for ep in entry_points if ep in mod_nodes]
+    entry_points = []
+    for nid in mod_nodes:
+        name = nid.lower()
+        if any(kw in name for kw in ("main", "app", "run")):
+            entry_points.append(nid)
+    return entry_points[:1]
+
+
+def extract_ir_from_kg(project_path: str,
+                       entry_points: Optional[List[str]] = None) -> Optional[dict]:
+    """从知识图谱确定性提取 IR（LLM 不可用时的静态兜底）。
+
+    节点 = 图谱中的模块节点（type='module'），
+    边   = 函数级 CALLS 边聚合到模块级（跨模块调用才保留），
+    入口 = 可配置；未提供时自动探测 main/app/run 模块。
+
+    知识图谱缺失 / 无模块节点时返回 None（优雅降级，不抛异常）。
+    """
+    kg = _load_kg_for_ir(project_path)
+    if kg is None:
+        return None
+    nodes, adj = kg
+
+    # 模块节点 → IR 节点
+    mod_nodes = _kg_module_nodes(nodes)
+    if not mod_nodes:
+        return None
+
+    # 函数级 CALLS 边 → 模块级边（去重）
+    edge_set = _kg_module_edges(nodes, adj, mod_nodes)
     ir_edges = [{"source": s, "target": t, "relation": "calls"}
                 for s, t in sorted(edge_set)]
-
-    # 入口点
-    if entry_points is None:
-        entry_points = []
-        for nid in mod_nodes:
-            name = nid.lower()
-            if any(kw in name for kw in ("main", "app", "run")):
-                entry_points.append(nid)
-        entry_points = entry_points[:1]
-    else:
-        entry_points = [ep for ep in entry_points if ep in mod_nodes]
 
     return {
         "schema_version": WIKI_IR_SCHEMA_VERSION,
         "project_name": os.path.basename(project_path.rstrip(os.sep)),
         "nodes": list(mod_nodes.values()),
         "edges": ir_edges,
-        "entry_points": entry_points,
+        "entry_points": _kg_entry_points(mod_nodes, entry_points),
     }

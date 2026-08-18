@@ -215,6 +215,93 @@ def _llm_available(llm: LLMIntegration) -> bool:
 # parse_diff —— git diff 解析
 # ═══════════════════════════════════════════════════════════════════════
 
+def _diff_new_unit(line: str) -> Dict[str, Any]:
+    """diff --git 行 → 新变更单元（从 b/ 路径取新文件名）。"""
+    unit = {"file": "", "hunks": [], "changed_lines": set()}
+    m = re.match(r"diff --git\s+a/(.+?)\s+b/(.+)$", line)
+    if m:
+        unit["file"] = m.group(2).strip()
+    return unit
+
+
+def _diff_apply_file_marker(line: str, current: Dict[str, Any]) -> None:
+    """+++ b/xxx 行：更新单元文件路径。/dev/null 与空值忽略，保留原路径。"""
+    f = line[4:].strip()
+    # 去掉 "b/" 前缀（git 默认新版路径前缀）
+    if f.startswith("b/"):
+        f = f[2:]
+    if f and f != "/dev/null":
+        current["file"] = f
+
+
+def _diff_parse_hunk_header(line: str) -> Tuple[Dict[str, Any], int]:
+    """@@ 头 → (hunk, 起始新行号)。
+
+    解析失败的行不会使整个解析崩溃，而是回退为 new_start=1、new_count=0。
+    """
+    m = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
+    try:
+        new_start = int(m.group(1))
+        new_count = int(m.group(2)) if m.group(2) else 1
+    except (AttributeError, TypeError, ValueError):
+        new_start, new_count = 1, 0
+    new_line = new_start
+    new_end = new_start + new_count - 1 if new_count > 0 else new_start - 1
+    hunk = {
+        "new_start": new_start,
+        "new_end": new_end,
+        "changes": [],
+    }
+    return hunk, new_line
+
+
+def _diff_apply_content_line(line: str, current: Dict[str, Any],
+                             current_hunk: Dict[str, Any], new_line: int) -> int:
+    """变更内容行：按 +/-/空格 前缀归类并推进新行号；其余行忽略。"""
+    if line.startswith("+"):
+        current_hunk["changes"].append(
+            {"new_line": new_line, "text": line[1:], "type": "add"}
+        )
+        current["changed_lines"].add(new_line)
+        new_line += 1
+    elif line.startswith("-"):
+        current_hunk["changes"].append(
+            {"new_line": None, "text": line[1:], "type": "del"}
+        )
+    elif line.startswith(" "):
+        current_hunk["changes"].append(
+            {"new_line": new_line, "text": line[1:], "type": "context"}
+        )
+        new_line += 1
+    return new_line
+
+
+def _diff_is_file_marker(current_hunk, line: str) -> bool:
+    """是否文件路径头（+++ b/xxx）。仅在尚未进入 hunk body 时成立，
+    避免 hunk 中以 "++" 开头的添加行被误判为路径头。"""
+    return current_hunk is None and line.startswith("+++ ")
+
+
+def _diff_filter_units(units: List[Dict[str, Any]],
+                       current: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """收尾最后一个单元并过滤无实际变更或路径为空的单元。
+
+    注意：纯删除（如 AI 删掉校验链）也是真实变更，须保留。
+    保留条件：有新增行，或任意 hunk 内有增删变更。
+    """
+    if current is not None:
+        units.append(current)
+    result = [
+        u for u in units
+        if u.get("file") and (
+            u.get("changed_lines")
+            or any(h.get("changes") for h in u.get("hunks", []))
+        )
+    ]
+    logger.info(f"parse_diff 解析完成：共 {len(result)} 个变更单元")
+    return result
+
+
 def parse_diff(diff_text: str) -> List[Dict[str, Any]]:
     """解析 git diff 文本，返回变更单元列表。
 
@@ -251,81 +338,31 @@ def parse_diff(diff_text: str) -> List[Dict[str, Any]]:
         if line.startswith("diff --git"):
             if current is not None:
                 units.append(current)
-            current = {"file": "", "hunks": [], "changed_lines": set()}
+            current = _diff_new_unit(line)
             current_hunk = None
-            m = re.match(r"diff --git\s+a/(.+?)\s+b/(.+)$", line)
-            if m:
-                current["file"] = m.group(2).strip()
             continue
 
         if current is None:
             continue
 
         # 新文件路径（+++ b/xxx），/dev/null 表示删除文件
-        # 仅在尚未进入 hunk body 时检查，避免 hunk 中以 "++" 开头的添加行被误判为路径头
-        if current_hunk is None and line.startswith("+++ "):
-            f = line[4:].strip()
-            # 去掉 "b/" 前缀（git 默认新版路径前缀）
-            if f.startswith("b/"):
-                f = f[2:]
-            if f and f != "/dev/null":
-                current["file"] = f
+        if _diff_is_file_marker(current_hunk, line):
+            _diff_apply_file_marker(line, current)
             continue
 
         # 变更块头
         if line.startswith("@@"):
-            m = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
-            try:
-                new_start = int(m.group(1))
-                new_count = int(m.group(2)) if m.group(2) else 1
-            except (AttributeError, TypeError, ValueError):
-                new_start, new_count = 1, 0
-            new_line = new_start
-            new_end = new_start + new_count - 1 if new_count > 0 else new_start - 1
-            current_hunk = {
-                "new_start": new_start,
-                "new_end": new_end,
-                "changes": [],
-            }
+            current_hunk, new_line = _diff_parse_hunk_header(line)
             current["hunks"].append(current_hunk)
             continue
 
         if current_hunk is None:
             continue
 
-        # 变更内容行
-        if line.startswith("+"):
-            current_hunk["changes"].append(
-                {"new_line": new_line, "text": line[1:], "type": "add"}
-            )
-            current["changed_lines"].add(new_line)
-            new_line += 1
-        elif line.startswith("-"):
-            current_hunk["changes"].append(
-                {"new_line": None, "text": line[1:], "type": "del"}
-            )
-        elif line.startswith(" "):
-            current_hunk["changes"].append(
-                {"new_line": new_line, "text": line[1:], "type": "context"}
-            )
-            new_line += 1
-        # 其余行（如 "\ No newline at end of file"、非变更内容）忽略
+        # 变更内容行（其余行如 "\ No newline at end of file" 忽略）
+        new_line = _diff_apply_content_line(line, current, current_hunk, new_line)
 
-    if current is not None:
-        units.append(current)
-
-    # 过滤无实际变更或路径为空的单元。
-    # 注意：纯删除（如 AI 删掉校验链）也是真实变更，须保留。
-    # 保留条件：有新增行，或任意 hunk 内有增删变更。
-    result = [
-        u for u in units
-        if u.get("file") and (
-            u.get("changed_lines")
-            or any(h.get("changes") for h in u.get("hunks", []))
-        )
-    ]
-    logger.info(f"parse_diff 解析完成：共 {len(result)} 个变更单元")
-    return result
+    return _diff_filter_units(units, current)
 
 
 # ═══════════════════════════════════════════════════════════════════════

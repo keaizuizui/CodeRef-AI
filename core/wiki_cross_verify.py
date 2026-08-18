@@ -45,6 +45,72 @@ def locate_kg_db(project_path: str) -> Optional[str]:
 # Mermaid 自愈（R9）
 # ═══════════════════════════════════════════════════════════════════
 
+# 括号配对检查用的闭合→开启映射
+_MERMAID_BRACKET_PAIRS = {')': '(', ']': '[', '}': '{'}
+
+
+def _strip_mermaid_fence(code: str, errors: list) -> str:
+    """检查并剥离 mermaid fence：未闭合时记 MERMAID_FENCE_UNCLOSED。
+
+    裸代码（无 fence）原样返回。
+    """
+    if not code.startswith("```"):
+        return code
+    if not code.endswith("```"):
+        errors.append({"code": "MERMAID_FENCE_UNCLOSED",
+                       "message": "Mermaid fence 未闭合（缺少结尾 ```）"})
+    lines = code.splitlines()
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _check_mermaid_node_ids(code: str, errors: list) -> None:
+    """节点 id 合法性：`id[...]` / `id(...)` / `id{...}` 的 id 必须为合法标识符。"""
+    for line in code.splitlines():
+        line = line.strip()
+        # 先捕获原始 token（允许任意非分隔/非空白字符），再校验是否
+        # 是合法 Mermaid id——避免用预过滤后的字符类做二次匹配（那样永远成立）。
+        # 覆盖普通节点 "id[label]" 与 subgraph 头 "subgraph id[标题]" 两种形态。
+        m = re.match(r'^(?:subgraph\s+)?((?:[^\s\[({"]+)|(?:<[^>]*>))\s*[\[({]', line)
+        if m:
+            nid = m.group(1)
+            if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', nid):
+                errors.append({"code": "MERMAID_NODE_ID_INVALID",
+                               "message": f"非法节点 id: {nid}"})
+
+
+def _check_mermaid_brackets(code: str, errors: list) -> None:
+    """括号配对：`[](){}` 在字符串字面量外必须配对闭合。"""
+    stack = []
+    in_string = False
+    escape = False
+    for ch in code:
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in '([{':
+            stack.append(ch)
+        elif ch in ')]}':
+            if not stack or stack[-1] != _MERMAID_BRACKET_PAIRS[ch]:
+                errors.append({"code": "MERMAID_BRACKET_MISMATCH",
+                               "message": f"括号不配对: {ch}"})
+                break
+            stack.pop()
+    if stack:
+        errors.append({"code": "MERMAID_BRACKET_UNCLOSED",
+                       "message": "存在未闭合括号"})
+
+
 def verify_mermaid(mermaid_code: str) -> dict:
     """对 Mermaid 代码做基础校验。
 
@@ -65,58 +131,12 @@ def verify_mermaid(mermaid_code: str) -> dict:
     code = mermaid_code.strip()
     errors = []
 
-    # 1. fence 完整性
-    if code.startswith("```"):
-        if not code.endswith("```"):
-            errors.append({"code": "MERMAID_FENCE_UNCLOSED",
-                           "message": "Mermaid fence 未闭合（缺少结尾 ```）"})
-        lines = code.splitlines()
-        if lines and lines[0].strip().startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        code = "\n".join(lines).strip()
-
+    # 1. fence 完整性（检查 + 剥离，后续检查针对剥离后的代码）
+    code = _strip_mermaid_fence(code, errors)
     # 2. 节点 id 合法性
-    for line in code.splitlines():
-        line = line.strip()
-        # 先捕获原始 token（允许任意非分隔/非空白字符），再校验是否
-        # 是合法 Mermaid id——避免用预过滤后的字符类做二次匹配（那样永远成立）。
-        # 覆盖普通节点 "id[label]" 与 subgraph 头 "subgraph id[标题]" 两种形态。
-        m = re.match(r'^(?:subgraph\s+)?((?:[^\s\[({"]+)|(?:<[^>]*>))\s*[\[({]', line)
-        if m:
-            nid = m.group(1)
-            if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', nid):
-                errors.append({"code": "MERMAID_NODE_ID_INVALID",
-                               "message": f"非法节点 id: {nid}"})
-
-    # 3. 括号配对（跳过字符串字面量）
-    stack = []
-    pairs = {')': '(', ']': '[', '}': '{'}
-    in_string = False
-    escape = False
-    for ch in code:
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == '\\':
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch in '([{':
-            stack.append(ch)
-        elif ch in ')]}':
-            if not stack or stack[-1] != pairs[ch]:
-                errors.append({"code": "MERMAID_BRACKET_MISMATCH",
-                               "message": f"括号不配对: {ch}"})
-                break
-            stack.pop()
-    if stack:
-        errors.append({"code": "MERMAID_BRACKET_UNCLOSED",
-                       "message": "存在未闭合括号"})
+    _check_mermaid_node_ids(code, errors)
+    # 3. 括号配对
+    _check_mermaid_brackets(code, errors)
 
     return {"ok": not errors, "errors": errors, "fallback": bool(errors)}
 

@@ -274,189 +274,117 @@ class CacheManager:
         """
         加载项目专属的硬编码优化数据到内存。
         每次扫描前调用，确保使用最新的缓存。
+
+        拆分说明：各白名单的 JSON 读取与分组重建提取为 _load_whitelist_json /
+        _reload_grouped / _reload_flat / _load_magic_pattern_whitelist 步骤方法，
+        本方法仅作编排；"先 clear 再按最新缓存重建"与 JSON 读取异常传播的语义
+        与拆分前一致。
         """
         d = self.get_hardcoded_dir(project_path)
         self._current_hash = self.compute_project_hash(project_path)
 
         # 加载魔法数字白名单
-        magic_file = d / "magic_numbers.json"
-        self._magic_whitelist.clear()
-        if magic_file.exists():
-            with open(magic_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for entry in data.get("entries", []):
-                val = str(entry["value"])
-                pat = entry.get("file_pattern", "*.py")
-                if val not in self._magic_whitelist:
-                    self._magic_whitelist[val] = set()
-                self._magic_whitelist[val].add(pat)
+        self._reload_grouped(self._magic_whitelist, d, "magic_numbers.json",
+                             key_of=lambda e: str(e["value"]),
+                             value_of=lambda e: e.get("file_pattern", "*.py"))
 
-        # 加载魔法数字模式白名单
-        magic_pattern_file = d / "magic_number_patterns.json"
-        self._magic_pattern_whitelist.clear()
-        if magic_pattern_file.exists():
-            with open(magic_pattern_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for entry in data.get("entries", []):
-                try:
-                    compiled = re.compile(entry["value_pattern"])
-                    file_glob = entry.get("file_pattern", "*.py")
-                    reason = entry.get("reason", "")
-                    self._magic_pattern_whitelist.append((compiled, file_glob, reason))
-                except re.error:
-                    continue
+        # 加载魔法数字模式白名单（正则编译，结构特殊单独处理）
+        self._load_magic_pattern_whitelist(d)
 
         # 加载安全规则白名单
-        sec_file = d / "security_whitelist.json"
-        self._security_whitelist.clear()
-        if sec_file.exists():
-            with open(sec_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for entry in data.get("entries", []):
-                rid = entry["rule_id"]
-                key = (entry.get("file", ""), entry.get("line", 0))
-                if rid not in self._security_whitelist:
-                    self._security_whitelist[rid] = set()
-                self._security_whitelist[rid].add(key)
+        self._reload_grouped(self._security_whitelist, d, "security_whitelist.json",
+                             key_of=lambda e: e["rule_id"],
+                             value_of=lambda e: (e.get("file", ""), e.get("line", 0)))
 
         # 加载复杂度豁免
-        cc_file = d / "complexity_exemptions.json"
-        self._complexity_exemptions.clear()
-        if cc_file.exists():
-            with open(cc_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for entry in data.get("entries", []):
-                func = entry["function"]
-                key = (entry.get("file", ""),)
-                if func not in self._complexity_exemptions:
-                    self._complexity_exemptions[func] = set()
-                self._complexity_exemptions[func].add(key)
+        self._reload_grouped(self._complexity_exemptions, d, "complexity_exemptions.json",
+                             key_of=lambda e: e["function"],
+                             value_of=lambda e: (e.get("file", ""),))
 
-        # 加载命名豁免
-        naming_file = d / "naming_exemptions.json"
-        self._naming_exemptions.clear()
-        if naming_file.exists():
-            with open(naming_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for entry in data.get("entries", []):
-                self._naming_exemptions.add(entry["name"])
+        # 加载命名豁免（扁平 set，无分组）
+        self._reload_flat(self._naming_exemptions, d, "naming_exemptions.json",
+                           value_of=lambda e: e["name"])
 
         # 加载完整性检查白名单
-        integrity_file = d / "integrity_whitelist.json"
-        self._integrity_whitelist.clear()
-        if integrity_file.exists():
-            with open(integrity_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for entry in data.get("entries", []):
-                cat = entry["category"]
-                key = (entry.get("file", ""), entry.get("line", 0))
-                if cat not in self._integrity_whitelist:
-                    self._integrity_whitelist[cat] = set()
-                self._integrity_whitelist[cat].add(key)
+        self._reload_grouped(self._integrity_whitelist, d, "integrity_whitelist.json",
+                             key_of=lambda e: e["category"],
+                             value_of=lambda e: (e.get("file", ""), e.get("line", 0)))
 
         # 加载资源缺口白名单
-        resource_gap_file = d / "resource_gap_whitelist.json"
-        self._resource_gap_whitelist.clear()
-        if resource_gap_file.exists():
-            with open(resource_gap_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for entry in data.get("entries", []):
-                cat = entry["category"]
-                key = (entry.get("item", ""), entry.get("file", ""))
-                if cat not in self._resource_gap_whitelist:
-                    self._resource_gap_whitelist[cat] = set()
-                self._resource_gap_whitelist[cat].add(key)
+        self._reload_grouped(self._resource_gap_whitelist, d, "resource_gap_whitelist.json",
+                             key_of=lambda e: e["category"],
+                             value_of=lambda e: (e.get("item", ""), e.get("file", "")))
 
         # 加载盲区检测白名单
-        blind_spot_file = d / "blind_spot_whitelist.json"
-        self._blind_spot_whitelist.clear()
-        if blind_spot_file.exists():
-            with open(blind_spot_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for entry in data.get("entries", []):
-                cat = entry["category"]
-                key = (entry.get("item", ""), entry.get("file", ""))
-                if cat not in self._blind_spot_whitelist:
-                    self._blind_spot_whitelist[cat] = set()
-                self._blind_spot_whitelist[cat].add(key)
+        self._reload_grouped(self._blind_spot_whitelist, d, "blind_spot_whitelist.json",
+                             key_of=lambda e: e["category"],
+                             value_of=lambda e: (e.get("item", ""), e.get("file", "")))
 
         # 加载项目分析白名单
-        analysis_file = d / "analysis_whitelist.json"
-        self._analysis_whitelist.clear()
-        if analysis_file.exists():
-            with open(analysis_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for entry in data.get("entries", []):
-                cat = entry["category"]
-                fname = entry.get("file", "")
-                if cat not in self._analysis_whitelist:
-                    self._analysis_whitelist[cat] = set()
-                self._analysis_whitelist[cat].add(fname)
+        self._reload_grouped(self._analysis_whitelist, d, "analysis_whitelist.json",
+                             key_of=lambda e: e["category"],
+                             value_of=lambda e: e.get("file", ""))
 
         # 加载简化建议白名单
-        simplify_file = d / "simplify_whitelist.json"
-        self._simplify_whitelist.clear()
-        if simplify_file.exists():
-            with open(simplify_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for entry in data.get("entries", []):
-                cat = entry["category"]
-                key = (entry.get("function", ""), entry.get("file", ""))
-                if cat not in self._simplify_whitelist:
-                    self._simplify_whitelist[cat] = set()
-                self._simplify_whitelist[cat].add(key)
+        self._reload_grouped(self._simplify_whitelist, d, "simplify_whitelist.json",
+                             key_of=lambda e: e["category"],
+                             value_of=lambda e: (e.get("function", ""), e.get("file", "")))
 
         # 加载垃圾文件白名单
-        junk_file = d / "junk_whitelist.json"
-        self._junk_whitelist.clear()
-        if junk_file.exists():
-            with open(junk_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for entry in data.get("entries", []):
-                cat = entry["category"]
-                fname = entry.get("file", "")
-                if cat not in self._junk_whitelist:
-                    self._junk_whitelist[cat] = set()
-                self._junk_whitelist[cat].add(fname)
+        self._reload_grouped(self._junk_whitelist, d, "junk_whitelist.json",
+                             key_of=lambda e: e["category"],
+                             value_of=lambda e: e.get("file", ""))
 
         # 加载SCA扫描白名单
-        sca_file = d / "sca_whitelist.json"
-        self._sca_whitelist.clear()
-        if sca_file.exists():
-            with open(sca_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for entry in data.get("entries", []):
-                pkg = entry["package"]
-                cve = entry.get("cve_id", "")
-                if pkg not in self._sca_whitelist:
-                    self._sca_whitelist[pkg] = set()
-                self._sca_whitelist[pkg].add(cve)
+        self._reload_grouped(self._sca_whitelist, d, "sca_whitelist.json",
+                             key_of=lambda e: e["package"],
+                             value_of=lambda e: e.get("cve_id", ""))
 
         # 加载业务分析白名单
-        business_analysis_file = d / "business_analysis_whitelist.json"
-        self._business_analysis_whitelist.clear()
-        if business_analysis_file.exists():
-            with open(business_analysis_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for entry in data.get("entries", []):
-                etype = entry["entity_type"]
-                name = entry.get("name", "")
-                if etype not in self._business_analysis_whitelist:
-                    self._business_analysis_whitelist[etype] = set()
-                self._business_analysis_whitelist[etype].add(name)
+        self._reload_grouped(self._business_analysis_whitelist, d, "business_analysis_whitelist.json",
+                             key_of=lambda e: e["entity_type"],
+                             value_of=lambda e: e.get("name", ""))
 
         # 加载创新缺口白名单
-        innovation_gap_file = d / "innovation_gap_whitelist.json"
-        self._innovation_gap_whitelist.clear()
-        if innovation_gap_file.exists():
-            with open(innovation_gap_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for entry in data.get("entries", []):
-                mod = entry["module"]
-                pat = entry.get("pattern", "")
-                if mod not in self._innovation_gap_whitelist:
-                    self._innovation_gap_whitelist[mod] = set()
-                self._innovation_gap_whitelist[mod].add(pat)
+        self._reload_grouped(self._innovation_gap_whitelist, d, "innovation_gap_whitelist.json",
+                             key_of=lambda e: e["module"],
+                             value_of=lambda e: e.get("pattern", ""))
+
+    @staticmethod
+    def _load_whitelist_json(d, filename: str) -> list:
+        """读取白名单 JSON 的 entries 列表；文件不存在返回 []（读取异常照常传播）"""
+        f = d / filename
+        if not f.exists():
+            return []
+        with open(f, "r", encoding="utf-8") as fh:
+            return json.load(fh).get("entries", [])
+
+    def _reload_grouped(self, container: dict, d, filename: str, key_of, value_of):
+        """清空容器并从白名单 JSON 重建分组（dict[key] -> set[value] 语义）"""
+        container.clear()
+        for entry in self._load_whitelist_json(d, filename):
+            k = key_of(entry)
+            if k not in container:
+                container[k] = set()
+            container[k].add(value_of(entry))
+
+    def _reload_flat(self, container: set, d, filename: str, value_of):
+        """清空扁平集合并从白名单 JSON 重建（set[value] 语义）"""
+        container.clear()
+        for entry in self._load_whitelist_json(d, filename):
+            container.add(value_of(entry))
+
+    def _load_magic_pattern_whitelist(self, d):
+        """加载魔法数字模式白名单（正则编译，非法正则条目跳过）"""
+        self._magic_pattern_whitelist.clear()
+        for entry in self._load_whitelist_json(d, "magic_number_patterns.json"):
+            try:
+                compiled = re.compile(entry["value_pattern"])
+                file_glob = entry.get("file_pattern", "*.py")
+                reason = entry.get("reason", "")
+                self._magic_pattern_whitelist.append((compiled, file_glob, reason))
+            except re.error:
+                continue
 
     # ─── 硬编码优化：查询 ───
 

@@ -83,6 +83,320 @@ class GitNexusEnrichment:
     error: str = ""
 
 
+# ==================== 模块级解析/索引辅助函数（自 GitNexusMCPClient 提取，纯逻辑无状态） ====================
+
+def _parse_cypher_result(result: Any) -> List[Dict]:
+    """解析 Cypher 查询结果"""
+    symbols = []
+    if isinstance(result, list):
+        for item in result:
+            if isinstance(item, dict):
+                s = {
+                    "name": item.get("n.name", item.get("name", "")),
+                    "filePath": item.get("n.filePath", item.get("filePath", "")),
+                    "type": item.get("n.type", item.get("type", "")),
+                    "startLine": item.get("n.startLine", item.get("startLine", 0)),
+                    "language": item.get("n.language", ""),
+                }
+                if s["name"]:
+                    symbols.append(s)
+            elif isinstance(item, list) and len(item) >= 2:
+                symbols.append({
+                    "name": str(item[0]),
+                    "filePath": str(item[1]) if len(item) > 1 else "",
+                })
+    elif isinstance(result, dict):
+        # 尝试各种可能的键名
+        for key in ["data", "rows", "records", "results", "nodes"]:
+            data = result.get(key, [])
+            if isinstance(data, list):
+                return _parse_cypher_result(data)
+    return symbols
+
+
+def _parse_cypher_pairs(result: Any) -> List[tuple]:
+    """解析 Cypher 返回的调用关系对"""
+    pairs = []
+    if isinstance(result, list):
+        for item in result:
+            if isinstance(item, dict):
+                caller = item.get("a.name", item.get("caller", item.get("source", "")))
+                callee = item.get("b.name", item.get("callee", item.get("target", "")))
+                rel_type = item.get("type(r)", item.get("relation", ""))
+                if caller and callee:
+                    pairs.append((caller, callee, rel_type))
+            elif isinstance(item, list) and len(item) >= 2:
+                pairs.append((str(item[0]), str(item[1]), str(item[2]) if len(item) > 2 else "CALLS"))
+    elif isinstance(result, dict):
+        for key in ["data", "rows", "records", "edges", "relationships"]:
+            data = result.get(key, [])
+            if isinstance(data, list):
+                return _parse_cypher_pairs(data)
+    return pairs
+
+
+def _parse_markdown_table(result: Any, columns: List[str]) -> List[Dict]:
+    """
+    解析 GitNexus Cypher 查询返回的 Markdown 表格格式
+
+    GitNexus 的 Cypher 返回格式:
+    {'markdown': '| col1 | col2 |\\n| --- | --- |\\n| val1 | val2 |\\n...', 'row_count': N}
+    """
+    if not isinstance(result, dict):
+        # 如果不是 dict，回退到旧解析器
+        return _parse_cypher_result(result)
+
+    md = result.get('markdown', '')
+    if not md:
+        # 如果没有 markdown 字段，也回退
+        return _parse_cypher_result(result)
+
+    lines = md.strip().split('\n')
+    if len(lines) < 3:
+        return []
+
+    # 跳过表头和分隔行
+    data_lines = [l for l in lines if l.strip() and '| ---' not in l]
+    if not data_lines:
+        return []
+    data_lines = data_lines[1:]  # 去掉表头行
+
+    parsed = []
+    for line in data_lines:
+        cells = [c.strip() for c in line.split('|') if c.strip()]
+        if len(cells) < len(columns):
+            continue
+        row = {}
+        for i, col in enumerate(columns):
+            if i < len(cells):
+                val = cells[i]
+                row[col] = val if val and val != 'null' and val != 'undefined' else ''
+        if row.get(columns[0]):  # 至少第一个字段非空
+            parsed.append(row)
+
+    return parsed
+
+
+def _parse_markdown_pairs(result: Any, columns: List[str]) -> List[tuple]:
+    """
+    解析 Markdown 表格为二元组列表（调用关系对）
+
+    Returns:
+        [(caller, callee, relation_type), ...]
+    """
+    rows = _parse_markdown_table(result, columns)
+    pairs = []
+    for row in rows:
+        caller = row.get(columns[0], '').strip()
+        callee = row.get(columns[1], '').strip()
+        if caller and callee and caller != callee:
+            pairs.append((caller, callee, 'CALLS'))
+    return pairs
+
+
+def _build_file_symbol_index(symbols: List[Dict]) -> Dict[str, List[Dict]]:
+    """构建 文件路径 → [符号列表] 索引"""
+    index = {}
+    for s in symbols:
+        fp = s.get("filePath", s.get("file_path", ""))
+        if not fp:
+            continue
+        index.setdefault(fp.replace('\\', '/'), []).append(s)
+    return index
+
+
+def _build_call_index(pairs: List[tuple]) -> tuple:
+    """构建 caller/callee 双向索引"""
+    caller_idx = {}  # callee → [callers...]
+    callee_idx = {}  # caller → [callees...]
+    for caller, callee, rel in pairs:
+        callee_idx.setdefault(caller, []).append(callee)
+        caller_idx.setdefault(callee, []).append(caller)
+    return caller_idx, callee_idx
+
+
+def _normalize_search_results(result: Any) -> List[Dict]:
+    """归一化搜索结果到统一格式"""
+    items = []
+    if isinstance(result, list):
+        for item in result:
+            if isinstance(item, dict):
+                items.append(item)
+            elif isinstance(item, str):
+                items.append({"name": item})
+    elif isinstance(result, dict):
+        for key in ["results", "data", "matches", "items", "symbols"]:
+            data = result.get(key, [])
+            if isinstance(data, list):
+                return _normalize_search_results(data)
+                break
+    return items
+
+
+def _discover_entry_points(enrichment: 'GitNexusEnrichment') -> List[str]:
+    """
+    发现核心入口点：
+    - 被最多其他符号调用的函数 = 核心入口
+    - 名为 main/run/start/entry 的函数
+    """
+    # 按被调用次数排序
+    call_count = {}
+    for caller, callees in enrichment.callee_index.items():
+        for callee in callees:
+            call_count[callee] = call_count.get(callee, 0) + 1
+
+    # 找出调用次数最多的符号
+    sorted_by_refs = sorted(call_count.items(), key=lambda x: -x[1])
+
+    entry_points = []
+    # 高引用符号作为入口
+    for name, count in sorted_by_refs:
+        if count >= 2:
+            entry_points.append(name)
+        if len(entry_points) >= 10:
+            break
+
+    # 补充常见入口名
+    common_entry_keywords = ["main", "run", "start", "entry", "index", "setup", "init"]
+    for s in enrichment.all_symbols:
+        if any(kw in s.get("name", "").lower() for kw in common_entry_keywords):
+            name = s.get("name", "")
+            if name and name not in entry_points:
+                entry_points.append(name)
+
+    return entry_points[:15]
+
+
+def _subgraph_from_context(subgraph: Subgraph, context: Any, entry: str):
+    """子图步骤1：从 context 响应提取上游/下游/进程/节点元数据"""
+    if isinstance(context, dict):
+        # 提取进程信息
+        processes = context.get("processes", [])
+        if isinstance(processes, list):
+            subgraph.processes = processes
+
+        # V2.1: GitNexus 返回 incoming/outgoing 结构
+        # incoming.imports = 调用此符号的上游
+        # outgoing.calls = 此符号调用的下游
+        incoming = context.get("incoming", {})
+        outgoing = context.get("outgoing", {})
+
+        # 从 incoming 的所有分类中提取上游
+        if not subgraph.upstream:
+            for category in ["imports", "callers", "upstream", "references"]:
+                items = incoming.get(category, [])
+                if isinstance(items, list):
+                    for c in items:
+                        name = c.get("name", c) if isinstance(c, dict) else str(c)
+                        if name and name not in subgraph.upstream:
+                            subgraph.upstream.append(name)
+
+        # 从 outgoing 的所有分类中提取下游
+        if not subgraph.downstream:
+            for category in ["calls", "callees", "downstream", "has_method"]:
+                items = outgoing.get(category, [])
+                if isinstance(items, list):
+                    for c in items:
+                        name = c.get("name", c) if isinstance(c, dict) else str(c)
+                        if name and name not in subgraph.downstream:
+                            subgraph.downstream.append(name)
+
+        # 兼容旧格式: callers/callees 顶层字段
+        if not subgraph.upstream:
+            callers = context.get("callers", context.get("upstream", []))
+            if isinstance(callers, list):
+                subgraph.upstream = [
+                    c.get("name", c) if isinstance(c, dict) else str(c)
+                    for c in callers
+                ]
+        if not subgraph.downstream:
+            callees = context.get("callees", context.get("downstream", []))
+            if isinstance(callees, list):
+                subgraph.downstream = [
+                    c.get("name", c) if isinstance(c, dict) else str(c)
+                    for c in callees
+                ]
+
+        # 填充节点元数据
+        sym = context.get("symbol")
+        if isinstance(sym, dict):
+            for node in subgraph.nodes:
+                if node.name == entry:
+                    node.qualified_name = sym.get("uid", "")
+                    node.file_path = sym.get("filePath", "")
+                    node.node_type = sym.get("kind", "")
+                    node.start_line = sym.get("startLine", 0)
+                    node.end_line = sym.get("endLine", 0)
+                    break
+
+
+def _subgraph_from_impact(subgraph: Subgraph, impact: Any, entry: str):
+    """子图步骤2：从 impact 响应提取风险摘要与上下游补充"""
+    if isinstance(impact, dict):
+        # V2.1: GitNexus 返回 risk 字段（非 risk_summary）
+        risk = impact.get("risk_summary", impact.get("risk", ""))
+        if risk:
+            subgraph.risk_summary = risk if isinstance(risk, str) else str(risk)
+
+        # V2.1: 从 affected_processes 提取上下游
+        if not subgraph.upstream or not subgraph.downstream:
+            affected = impact.get("affected_processes", [])
+            if isinstance(affected, list):
+                for proc in affected:
+                    if isinstance(proc, dict):
+                        name = proc.get("name", "")
+                        fp = proc.get("filePath", "")
+                        if name and name != entry:
+                            if name not in subgraph.downstream and name not in subgraph.upstream:
+                                subgraph.downstream.append(name)
+
+        # 兼容旧格式
+        if not subgraph.upstream:
+            upstream = impact.get("upstream", impact.get("callers", []))
+            if isinstance(upstream, list):
+                subgraph.upstream = [
+                    u.get("name", u) if isinstance(u, dict) else str(u)
+                    for u in upstream
+                ]
+        if not subgraph.downstream:
+            downstream = impact.get("downstream", impact.get("callees", []))
+            if isinstance(downstream, list):
+                subgraph.downstream = [
+                    d.get("name", d) if isinstance(d, dict) else str(d)
+                    for d in downstream
+                ]
+
+
+def _build_subgraph_nodes_edges(subgraph: Subgraph, entry: str):
+    """子图步骤3：根据上游/下游名称构建节点与 CALLS 边"""
+    all_names = set()
+    all_names.add(entry)
+    all_names.update(subgraph.upstream)
+    all_names.update(subgraph.downstream)
+
+    for name in all_names:
+        subgraph.nodes.append(GraphNode(
+            id=name,
+            name=name,
+        ))
+
+    # 上游边
+    for caller in subgraph.upstream:
+        subgraph.edges.append(GraphEdge(
+            source=caller,
+            target=entry,
+            relation_type="CALLS"
+        ))
+
+    # 下游边
+    for callee in subgraph.downstream:
+        subgraph.edges.append(GraphEdge(
+            source=entry,
+            target=callee,
+            relation_type="CALLS"
+        ))
+
+
 class GitNexusMCPClient:
     """通过MCP协议(JSON-RPC over stdio)连接GitNexus的客户端
 
@@ -427,72 +741,14 @@ class GitNexusMCPClient:
         Returns:
             Subgraph 包含节点、边、上下游关系
         """
+        # 拆分说明：原内联的三大段解析逻辑提取为模块级步骤函数，本方法仅做编排
         subgraph = Subgraph(entry_point=entry)
 
         # 1. 获取上下文（调用者/被调用者/进程）
         try:
             context = self.get_context(entry)
             subgraph.raw_context = context if isinstance(context, dict) else {}
-
-            if isinstance(context, dict):
-                # 提取进程信息
-                processes = context.get("processes", [])
-                if isinstance(processes, list):
-                    subgraph.processes = processes
-
-                # V2.1: GitNexus 返回 incoming/outgoing 结构
-                # incoming.imports = 调用此符号的上游
-                # outgoing.calls = 此符号调用的下游
-                incoming = context.get("incoming", {})
-                outgoing = context.get("outgoing", {})
-
-                # 从 incoming 的所有分类中提取上游
-                if not subgraph.upstream:
-                    for category in ["imports", "callers", "upstream", "references"]:
-                        items = incoming.get(category, [])
-                        if isinstance(items, list):
-                            for c in items:
-                                name = c.get("name", c) if isinstance(c, dict) else str(c)
-                                if name and name not in subgraph.upstream:
-                                    subgraph.upstream.append(name)
-
-                # 从 outgoing 的所有分类中提取下游
-                if not subgraph.downstream:
-                    for category in ["calls", "callees", "downstream", "has_method"]:
-                        items = outgoing.get(category, [])
-                        if isinstance(items, list):
-                            for c in items:
-                                name = c.get("name", c) if isinstance(c, dict) else str(c)
-                                if name and name not in subgraph.downstream:
-                                    subgraph.downstream.append(name)
-
-                # 兼容旧格式: callers/callees 顶层字段
-                if not subgraph.upstream:
-                    callers = context.get("callers", context.get("upstream", []))
-                    if isinstance(callers, list):
-                        subgraph.upstream = [
-                            c.get("name", c) if isinstance(c, dict) else str(c)
-                            for c in callers
-                        ]
-                if not subgraph.downstream:
-                    callees = context.get("callees", context.get("downstream", []))
-                    if isinstance(callees, list):
-                        subgraph.downstream = [
-                            c.get("name", c) if isinstance(c, dict) else str(c)
-                            for c in callees
-                        ]
-
-                # 填充节点元数据
-                sym = context.get("symbol")
-                if isinstance(sym, dict):
-                    for node in subgraph.nodes:
-                        if node.name == entry:
-                            node.qualified_name = sym.get("uid", "")
-                            node.file_path = sym.get("filePath", "")
-                            node.node_type = sym.get("kind", "")
-                            node.start_line = sym.get("startLine", 0)
-                            node.end_line = sym.get("endLine", 0)
-                            break
+            _subgraph_from_context(subgraph, context, entry)
         except Exception as e:
             logger.warning(f"[GitNexus] context查询失败: {e}")
 
@@ -500,70 +756,12 @@ class GitNexusMCPClient:
         try:
             impact = self.get_impact(entry)
             subgraph.raw_impact = impact if isinstance(impact, dict) else {}
-
-            if isinstance(impact, dict):
-                # V2.1: GitNexus 返回 risk 字段（非 risk_summary）
-                risk = impact.get("risk_summary", impact.get("risk", ""))
-                if risk:
-                    subgraph.risk_summary = risk if isinstance(risk, str) else str(risk)
-
-                # V2.1: 从 affected_processes 提取上下游
-                if not subgraph.upstream or not subgraph.downstream:
-                    affected = impact.get("affected_processes", [])
-                    if isinstance(affected, list):
-                        for proc in affected:
-                            if isinstance(proc, dict):
-                                name = proc.get("name", "")
-                                fp = proc.get("filePath", "")
-                                if name and name != entry:
-                                    if name not in subgraph.downstream and name not in subgraph.upstream:
-                                        subgraph.downstream.append(name)
-
-                # 兼容旧格式
-                if not subgraph.upstream:
-                    upstream = impact.get("upstream", impact.get("callers", []))
-                    if isinstance(upstream, list):
-                        subgraph.upstream = [
-                            u.get("name", u) if isinstance(u, dict) else str(u)
-                            for u in upstream
-                        ]
-                if not subgraph.downstream:
-                    downstream = impact.get("downstream", impact.get("callees", []))
-                    if isinstance(downstream, list):
-                        subgraph.downstream = [
-                            d.get("name", d) if isinstance(d, dict) else str(d)
-                            for d in downstream
-                        ]
+            _subgraph_from_impact(subgraph, impact, entry)
         except Exception as e:
             logger.warning(f"[GitNexus] impact查询失败: {e}")
 
         # 3. 构建节点和边
-        all_names = set()
-        all_names.add(entry)
-        all_names.update(subgraph.upstream)
-        all_names.update(subgraph.downstream)
-
-        for name in all_names:
-            subgraph.nodes.append(GraphNode(
-                id=name,
-                name=name,
-            ))
-
-        # 上游边
-        for caller in subgraph.upstream:
-            subgraph.edges.append(GraphEdge(
-                source=caller,
-                target=entry,
-                relation_type="CALLS"
-            ))
-
-        # 下游边
-        for callee in subgraph.downstream:
-            subgraph.edges.append(GraphEdge(
-                source=entry,
-                target=callee,
-                relation_type="CALLS"
-            ))
+        _build_subgraph_nodes_edges(subgraph, entry)
 
         return subgraph
 
@@ -673,7 +871,7 @@ class GitNexusMCPClient:
             logger.info(f"[GitNexusEnrich] 获取到 {len(enrichment.all_symbols)} 个符号")
             
             # 3. 构建文件→符号索引
-            enrichment.file_symbols = self._build_file_symbol_index(enrichment.all_symbols)
+            enrichment.file_symbols = _build_file_symbol_index(enrichment.all_symbols)
             
             # 4. 获取调用图
             enrichment.call_pairs = self._fetch_call_graph(repo_name)
@@ -681,13 +879,13 @@ class GitNexusMCPClient:
             
             # 5. 构建 caller/callee 索引
             enrichment.caller_index, enrichment.callee_index = \
-                self._build_call_index(enrichment.call_pairs)
+                _build_call_index(enrichment.call_pairs)
             
             # 6. 批量搜索业务关键词
             enrichment.search_results = self._batch_business_search(repo_name)
             
             # 7. 发现入口点（被最多调用的函数 = 核心入口）
-            enrichment.entry_points = self._discover_entry_points(enrichment)
+            enrichment.entry_points = _discover_entry_points(enrichment)
             
             enrichment.available = True
             logger.info(f"[GitNexusEnrich] 增强完成: {len(enrichment.file_symbols)} 个文件, "
@@ -728,7 +926,7 @@ class GitNexusMCPClient:
                 "MATCH (n) RETURN n.name, n.filePath LIMIT 3000",
                 repo
             )
-            symbols = self._parse_markdown_table(result, ['name', 'filePath'])
+            symbols = _parse_markdown_table(result, ['name', 'filePath'])
             if symbols:
                 logger.info(f"[GitNexus] Cypher 获取到 {len(symbols)} 个符号")
                 return symbols
@@ -746,7 +944,7 @@ class GitNexusMCPClient:
                    "Tool", "Plugin", "Model", "View", "Window", "Dialog"]:
             try:
                 results = self.search(kw, repo)
-                items = self._normalize_search_results(results)
+                items = _normalize_search_results(results)
                 for item in items:
                     name = item.get("name", item.get("symbol", ""))
                     if name and name not in [s.get("name") for s in discovered]:
@@ -768,7 +966,7 @@ class GitNexusMCPClient:
                 "MATCH (a)-[r]->(b) RETURN a.name, b.name LIMIT 3000",
                 repo
             )
-            pairs = self._parse_markdown_pairs(result, ['caller', 'callee'])
+            pairs = _parse_markdown_pairs(result, ['caller', 'callee'])
             if pairs:
                 logger.info(f"[GitNexus] Cypher 获取到 {len(pairs)} 条调用关系")
                 return pairs
@@ -776,135 +974,12 @@ class GitNexusMCPClient:
             logger.debug(f"[GitNexus] Cypher 调用图查询失败: {e}")
         
         return []
-    
-    def _parse_cypher_result(self, result: Any) -> List[Dict]:
-        """解析 Cypher 查询结果"""
-        symbols = []
-        if isinstance(result, list):
-            for item in result:
-                if isinstance(item, dict):
-                    s = {
-                        "name": item.get("n.name", item.get("name", "")),
-                        "filePath": item.get("n.filePath", item.get("filePath", "")),
-                        "type": item.get("n.type", item.get("type", "")),
-                        "startLine": item.get("n.startLine", item.get("startLine", 0)),
-                        "language": item.get("n.language", ""),
-                    }
-                    if s["name"]:
-                        symbols.append(s)
-                elif isinstance(item, list) and len(item) >= 2:
-                    symbols.append({
-                        "name": str(item[0]),
-                        "filePath": str(item[1]) if len(item) > 1 else "",
-                    })
-        elif isinstance(result, dict):
-            # 尝试各种可能的键名
-            for key in ["data", "rows", "records", "results", "nodes"]:
-                data = result.get(key, [])
-                if isinstance(data, list):
-                    return self._parse_cypher_result(data)
-        return symbols
-    
-    def _parse_cypher_pairs(self, result: Any) -> List[tuple]:
-        """解析 Cypher 返回的调用关系对"""
-        pairs = []
-        if isinstance(result, list):
-            for item in result:
-                if isinstance(item, dict):
-                    caller = item.get("a.name", item.get("caller", item.get("source", "")))
-                    callee = item.get("b.name", item.get("callee", item.get("target", "")))
-                    rel_type = item.get("type(r)", item.get("relation", ""))
-                    if caller and callee:
-                        pairs.append((caller, callee, rel_type))
-                elif isinstance(item, list) and len(item) >= 2:
-                    pairs.append((str(item[0]), str(item[1]), str(item[2]) if len(item) > 2 else "CALLS"))
-        elif isinstance(result, dict):
-            for key in ["data", "rows", "records", "edges", "relationships"]:
-                data = result.get(key, [])
-                if isinstance(data, list):
-                    return self._parse_cypher_pairs(data)
-        return pairs
-    
+
     def parse_markdown_table(self, result: Any, columns: List[str]) -> List[Dict]:
         """公共接口：解析 GitNexus Cypher 查询返回的 Markdown 表格格式。"""
-        return self._parse_markdown_table(result, columns)
+        # 拆分说明：解析实现已移至模块级 _parse_markdown_table，此处仅保留公共签名
+        return _parse_markdown_table(result, columns)
 
-    def _parse_markdown_table(self, result: Any, columns: List[str]) -> List[Dict]:
-        """
-        解析 GitNexus Cypher 查询返回的 Markdown 表格格式
-        
-        GitNexus 的 Cypher 返回格式:
-        {'markdown': '| col1 | col2 |\\n| --- | --- |\\n| val1 | val2 |\\n...', 'row_count': N}
-        """
-        if not isinstance(result, dict):
-            # 如果不是 dict，回退到旧解析器
-            return self._parse_cypher_result(result)
-        
-        md = result.get('markdown', '')
-        if not md:
-            # 如果没有 markdown 字段，也回退
-            return self._parse_cypher_result(result)
-        
-        lines = md.strip().split('\n')
-        if len(lines) < 3:
-            return []
-        
-        # 跳过表头和分隔行
-        data_lines = [l for l in lines if l.strip() and '| ---' not in l]
-        if not data_lines:
-            return []
-        data_lines = data_lines[1:]  # 去掉表头行
-        
-        parsed = []
-        for line in data_lines:
-            cells = [c.strip() for c in line.split('|') if c.strip()]
-            if len(cells) < len(columns):
-                continue
-            row = {}
-            for i, col in enumerate(columns):
-                if i < len(cells):
-                    val = cells[i]
-                    row[col] = val if val and val != 'null' and val != 'undefined' else ''
-            if row.get(columns[0]):  # 至少第一个字段非空
-                parsed.append(row)
-        
-        return parsed
-
-    def _parse_markdown_pairs(self, result: Any, columns: List[str]) -> List[tuple]:
-        """
-        解析 Markdown 表格为二元组列表（调用关系对）
-        
-        Returns:
-            [(caller, callee, relation_type), ...]
-        """
-        rows = self._parse_markdown_table(result, columns)
-        pairs = []
-        for row in rows:
-            caller = row.get(columns[0], '').strip()
-            callee = row.get(columns[1], '').strip()
-            if caller and callee and caller != callee:
-                pairs.append((caller, callee, 'CALLS'))
-        return pairs
-
-    def _build_file_symbol_index(self, symbols: List[Dict]) -> Dict[str, List[Dict]]:
-        """构建 文件路径 → [符号列表] 索引"""
-        index = {}
-        for s in symbols:
-            fp = s.get("filePath", s.get("file_path", ""))
-            if not fp:
-                continue
-            index.setdefault(fp.replace('\\', '/'), []).append(s)
-        return index
-    
-    def _build_call_index(self, pairs: List[tuple]) -> tuple:
-        """构建 caller/callee 双向索引"""
-        caller_idx = {}  # callee → [callers...]
-        callee_idx = {}  # caller → [callees...]
-        for caller, callee, rel in pairs:
-            callee_idx.setdefault(caller, []).append(callee)
-            caller_idx.setdefault(callee, []).append(caller)
-        return caller_idx, callee_idx
-    
     def _batch_business_search(self, repo: str = "") -> Dict[str, List[Dict]]:
         """批量搜索业务关键词"""
         keywords = ["api", "route", "service", "handler", "process", "flow",
@@ -914,63 +989,13 @@ class GitNexusMCPClient:
         for kw in keywords:
             try:
                 r = self.search(kw, repo)
-                items = self._normalize_search_results(r)
+                items = _normalize_search_results(r)
                 if items:
                     results[kw] = items[:10]
             except Exception as e:
                 logger.warning(f"GitNexus 关键词搜索失败，跳过关键词 {kw}: {e}")
                 continue
         return results
-    
-    def _normalize_search_results(self, result: Any) -> List[Dict]:
-        """归一化搜索结果到统一格式"""
-        items = []
-        if isinstance(result, list):
-            for item in result:
-                if isinstance(item, dict):
-                    items.append(item)
-                elif isinstance(item, str):
-                    items.append({"name": item})
-        elif isinstance(result, dict):
-            for key in ["results", "data", "matches", "items", "symbols"]:
-                data = result.get(key, [])
-                if isinstance(data, list):
-                    return self._normalize_search_results(data)
-                    break
-        return items
-    
-    def _discover_entry_points(self, enrichment: 'GitNexusEnrichment') -> List[str]:
-        """
-        发现核心入口点：
-        - 被最多其他符号调用的函数 = 核心入口
-        - 名为 main/run/start/entry 的函数
-        """
-        # 按被调用次数排序
-        call_count = {}
-        for caller, callees in enrichment.callee_index.items():
-            for callee in callees:
-                call_count[callee] = call_count.get(callee, 0) + 1
-        
-        # 找出调用次数最多的符号
-        sorted_by_refs = sorted(call_count.items(), key=lambda x: -x[1])
-        
-        entry_points = []
-        # 高引用符号作为入口
-        for name, count in sorted_by_refs:
-            if count >= 2:
-                entry_points.append(name)
-            if len(entry_points) >= 10:
-                break
-        
-        # 补充常见入口名
-        common_entry_keywords = ["main", "run", "start", "entry", "index", "setup", "init"]
-        for s in enrichment.all_symbols:
-            if any(kw in s.get("name", "").lower() for kw in common_entry_keywords):
-                name = s.get("name", "")
-                if name and name not in entry_points:
-                    entry_points.append(name)
-        
-        return entry_points[:15]
 
     @staticmethod
     def is_cli_available() -> bool:

@@ -23,8 +23,9 @@
 
 import os
 import re
+import ast
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from collections import defaultdict
 
@@ -164,6 +165,693 @@ EXPLANATION_TEMPLATES = {
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 报告渲染（模块级纯函数，从 TechDebtDetector._generate_report 提取）
+# ═══════════════════════════════════════════════════════════════════
+
+def _render_td_overview(lines: List[str], debts: List[TechDebt], analysis) -> None:
+    """渲染报告头部统计与总览表（严重程度/分类分布 + 债务健康分）"""
+    # 统计
+    cat_counts = defaultdict(int)
+    sev_counts = defaultdict(int)
+    for d in debts:
+        cat_counts[d.category] += 1
+        sev_counts[d.severity] += 1
+
+    # 债务严重度评分
+    score_penalty = (
+        sev_counts.get("critical", 0) * 10 +
+        sev_counts.get("high", 0) * 5 +
+        sev_counts.get("medium", 0) * 2 +
+        sev_counts.get("low", 0) * 0.5
+    )
+    max_penalty = max(analysis.total_files, 1) * 5
+    debt_score = max(0, min(100, 100 - int(score_penalty / max(max_penalty, 1) * 100)))
+
+    if debt_score >= 80:
+        score_level = "良好"
+    elif debt_score >= 50:
+        score_level = "一般"
+    else:
+        score_level = "较差"
+
+    # 头部
+    lines.append("# 技术债务检测报告")
+    lines.append("")
+    lines.append(f"> 项目: `{analysis.project_path}`")
+    lines.append(f"> 扫描文件数: {analysis.total_files} | 总行数: {analysis.total_lines:,}")
+    lines.append(f"> 发现问题: {len(debts)} 条")
+    lines.append(f"> 债务健康分: **{debt_score}/100** ({score_level})")
+    lines.append(f"> 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    # 总览
+    lines.append("## 技术债务总览")
+    lines.append("")
+
+    lines.append("### 按严重程度分布")
+    lines.append("")
+    lines.append("| 严重程度 | 数量 | 说明 |")
+    lines.append("|---------|------|------|")
+    sev_desc = {
+        "critical": "必须立即处理",
+        "high": "应尽快处理",
+        "medium": "建议处理",
+        "low": "可逐步处理",
+        "info": "仅供参考",
+    }
+    for sev in ["critical", "high", "medium", "low", "info"]:
+        count = sev_counts.get(sev, 0)
+        if count > 0:
+            lines.append(f"| {SEVERITY_LABELS[sev]} | {count} | {sev_desc.get(sev, '')} |")
+    lines.append("")
+
+    lines.append("### 按分类统计")
+    lines.append("")
+    lines.append("| 分类 | 数量 | 为什么重要 |")
+    lines.append("|------|------|-----------|")
+    importance = {
+        "todo_comment": "未完成的工作积累会拖慢项目进度",
+        "comment_quality": "缺少注释的代码难以理解和维护",
+        "high_complexity": "复杂代码容易产生 Bug，难以维护",
+        "cognitive_complexity": "认知复杂度高意味着代码读起来困难",
+        "long_function": "长函数难以理解和测试",
+        "deep_nesting": "深层嵌套降低代码可读性",
+        "magic_value": "硬编码值导致配置变更困难",
+        "commented_code": "废弃代码让文件混乱，误导开发者",
+        "naming_convention": "不规范的命名降低协作效率",
+    }
+    for cat in ["todo_comment", "comment_quality", "high_complexity", "cognitive_complexity", "long_function", "deep_nesting", "magic_value", "commented_code", "naming_convention"]:
+        count = cat_counts.get(cat, 0)
+        if count > 0:
+            lines.append(f"| {CATEGORY_LABELS[cat]} | {count} | {importance.get(cat, '')} |")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+
+def _render_td_todo_list(lines: List[str], todo_debts: List[TechDebt]) -> None:
+    """渲染 TODO/FIXME 清单（按标签优先级排序）"""
+    # 按标签优先级排序
+    def todo_sort_key(d):
+        for tag, pri in TAG_PRIORITY.items():
+            if tag in d.description.upper():
+                return pri
+        return 99
+
+    todo_debts.sort(key=lambda d: (todo_sort_key(d), d.file_path, d.line))
+
+    lines.append("## TODO/FIXME 清单")
+    lines.append("")
+    lines.append("> 以下按优先级排列：FIXME/BUG > HACK > TODO > XXX")
+    lines.append("")
+    lines.append("| 优先级 | 标记 | 文件 | 行号 | 内容 | 所在位置 |")
+    lines.append("|--------|------|------|------|------|----------|")
+    for d in todo_debts:
+        tag = "?"
+        for t in ["BUG", "FIXME", "HACK", "TODO", "XXX"]:
+            if t in d.description.upper():
+                tag = t
+                break
+        file_short = os.path.basename(d.file_path)
+        desc_short = d.description[:50] + "..." if len(d.description) > 50 else d.description
+        lines.append(f"| {tag} | {SEVERITY_LABELS.get(d.severity, '')} | `{file_short}` | {d.line} | {desc_short} | {d.context} |")
+    lines.append("")
+
+    # 面向不懂代码的用户的解释
+    lines.append("### 对非技术人员的解释")
+    lines.append("")
+    sample = todo_debts[0]
+    lines.append(sample.explanation if sample.explanation else EXPLANATION_TEMPLATES["todo_comment"])
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+
+def _render_td_complexity_list(lines: List[str], complexity_debts: List[TechDebt]) -> None:
+    """渲染圈复杂度过高的函数列表"""
+    lines.append("## 圈复杂度过高的函数")
+    lines.append("")
+    lines.append("| 严重程度 | 文件 | 行号 | 函数 | 分支数 |")
+    lines.append("|---------|------|------|------|--------|")
+    for d in complexity_debts:
+        file_short = os.path.basename(d.file_path)
+        # 提取分支数
+        branch_match = re.search(r'圈复杂度为 (\d+)', d.description)
+        branch_count = branch_match.group(1) if branch_match else "?"
+        func_name = d.context.replace("函数 ", "").replace("()", "")
+        lines.append(f"| {SEVERITY_LABELS.get(d.severity, '')} | `{file_short}` | {d.line} | {func_name}() | {branch_count} |")
+    lines.append("")
+
+    lines.append("### 对非技术人员的解释")
+    lines.append("")
+    lines.append(complexity_debts[0].explanation if complexity_debts[0].explanation else EXPLANATION_TEMPLATES["high_complexity"])
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+
+def _render_td_long_func_list(lines: List[str], long_func_debts: List[TechDebt]) -> None:
+    """渲染过长函数列表"""
+    lines.append("## 过长函数列表")
+    lines.append("")
+    lines.append("| 严重程度 | 文件 | 行号 | 函数 | 行数 |")
+    lines.append("|---------|------|------|------|------|")
+    for d in long_func_debts:
+        file_short = os.path.basename(d.file_path)
+        line_match = re.search(r'共 (\d+) 行', d.description)
+        line_count = line_match.group(1) if line_match else "?"
+        func_name = d.context.replace("函数 ", "").replace("()", "")
+        lines.append(f"| {SEVERITY_LABELS.get(d.severity, '')} | `{file_short}` | {d.line} | {func_name}() | {line_count} |")
+    lines.append("")
+
+    lines.append("### 对非技术人员的解释")
+    lines.append("")
+    lines.append(long_func_debts[0].explanation if long_func_debts[0].explanation else EXPLANATION_TEMPLATES["long_function"])
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+
+def _render_td_nesting_list(lines: List[str], nesting_debts: List[TechDebt]) -> None:
+    """渲染嵌套过深列表"""
+    lines.append("## 嵌套过深列表")
+    lines.append("")
+    lines.append("| 文件 | 行号 | 嵌套深度 | 所在位置 |")
+    lines.append("|------|------|----------|----------|")
+    for d in nesting_debts:
+        file_short = os.path.basename(d.file_path)
+        depth_match = re.search(r'嵌套深度 (\d+) 层', d.description)
+        depth = depth_match.group(1) if depth_match else "?"
+        lines.append(f"| `{file_short}` | {d.line} | {depth} 层 | {d.context} |")
+    lines.append("")
+
+    lines.append("### 对非技术人员的解释")
+    lines.append("")
+    lines.append(nesting_debts[0].explanation if nesting_debts[0].explanation else EXPLANATION_TEMPLATES["deep_nesting"])
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+
+def _render_td_magic_list(lines: List[str], magic_debts: List[TechDebt]) -> None:
+    """渲染魔法数字/硬编码列表"""
+    lines.append("## 魔法数字/硬编码列表")
+    lines.append("")
+    lines.append("| 严重程度 | 文件 | 行号 | 类型 | 值 | 所在位置 |")
+    lines.append("|---------|------|------|------|-----|----------|")
+    for d in magic_debts:
+        file_short = os.path.basename(d.file_path)
+        # 提取类型和值
+        desc = d.description.replace("硬编码 ", "")
+        lines.append(f"| {SEVERITY_LABELS.get(d.severity, '')} | `{file_short}` | {d.line} | {desc} | {d.context} |")
+    lines.append("")
+
+    lines.append("### 对非技术人员的解释")
+    lines.append("")
+    lines.append(magic_debts[0].explanation if magic_debts[0].explanation else EXPLANATION_TEMPLATES["magic_value"])
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+
+def _render_td_commented_list(lines: List[str], commented_debts: List[TechDebt]) -> None:
+    """渲染被注释掉的代码块列表"""
+    lines.append("## 被注释掉的代码块列表")
+    lines.append("")
+    lines.append("| 文件 | 行号 | 行数 | 位置 |")
+    lines.append("|------|------|------|------|")
+    for d in commented_debts:
+        file_short = os.path.basename(d.file_path)
+        line_match = re.search(r'共 (\d+) 行', d.description)
+        line_count = line_match.group(1) if line_match else "?"
+        lines.append(f"| `{file_short}` | {d.line} | {line_count} | {d.context} |")
+    lines.append("")
+
+    lines.append("### 对非技术人员的解释")
+    lines.append("")
+    lines.append(commented_debts[0].explanation if commented_debts[0].explanation else EXPLANATION_TEMPLATES["commented_code"])
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+
+def _render_td_comment_quality_list(lines: List[str], cq_debts: List[TechDebt]) -> None:
+    """渲染注释质量问题列表"""
+    lines.append("## 注释质量不足")
+    lines.append("")
+    lines.append("| 严重程度 | 文件 | 行号 | 问题 | 位置 |")
+    lines.append("|---------|------|------|------|------|")
+    for d in cq_debts:
+        file_short = os.path.basename(d.file_path)
+        lines.append(f"| {SEVERITY_LABELS.get(d.severity, '')} | `{file_short}` | {d.line} | {d.description} | {d.context} |")
+    lines.append("")
+    lines.append("### 对非技术人员的解释")
+    lines.append("")
+    lines.append(cq_debts[0].explanation if cq_debts[0].explanation else EXPLANATION_TEMPLATES["comment_quality"])
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+
+def _render_td_naming_list(lines: List[str], naming_debts: List[TechDebt]) -> None:
+    """渲染命名规范问题列表"""
+    lines.append("## 命名规范问题")
+    lines.append("")
+    lines.append("| 严重程度 | 文件 | 行号 | 问题 | 建议 |")
+    lines.append("|---------|------|------|------|------|")
+    for d in naming_debts:
+        file_short = os.path.basename(d.file_path)
+        lines.append(f"| {SEVERITY_LABELS.get(d.severity, '')} | `{file_short}` | {d.line} | {d.description} | {d.suggestion[:60]} |")
+    lines.append("")
+    lines.append("### 对非技术人员的解释")
+    lines.append("")
+    lines.append(naming_debts[0].explanation if naming_debts[0].explanation else EXPLANATION_TEMPLATES["naming_convention"])
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+
+def _render_td_priority_advice(lines: List[str]) -> None:
+    """渲染修复优先级建议与结尾说明"""
+    lines.append("## 修复优先级建议")
+    lines.append("")
+    lines.append("| 优先级 | 债务类型 | 建议行动 |")
+    lines.append("|--------|---------|----------|")
+    lines.append("| 1（立即） | FIXME/BUG 标记 | 修复已知 Bug，消除安全隐患 |")
+    lines.append("| 2（本周） | 圈复杂度过高 | 重构复杂函数，降低 Bug 风险 |")
+    lines.append("| 3（本周） | 过长函数 | 拆分长函数，提高可测试性 |")
+    lines.append("| 4（本月） | 魔法数字/硬编码 | 提取配置，支持不同环境部署 |")
+    lines.append("| 5（本月） | 注释质量不足 | 补充公开接口的 docstring |")
+    lines.append("| 6（本月） | TODO/HACK 标记 | 逐一处理或纳入迭代计划 |")
+    lines.append("| 7（下月） | 嵌套过深 | 使用 early return 优化代码结构 |")
+    lines.append("| 8（下月） | 命名规范问题 | 统一命名风格，提高可读性 |")
+    lines.append("| 9（下月） | 注释掉的代码 | 清理废弃代码，保持代码库整洁 |")
+    lines.append("")
+    lines.append("> 建议每次迭代处理 1-2 类债务，逐步改善代码质量。")
+    lines.append("> 不要试图一次性修复所有债务，那样容易引入新的 Bug。")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    lines.append("*报告由 CodeRef-AI TechDebtDetector v1.0 生成*\n")
+    lines.append("")
+    lines.append("> **LLM 复查提示**：此报告可能包含误报。审查每条结果后，调用 `coderef_cache_whitelist` 工具将误报自动加入白名单，然后重新扫描。")
+
+
+def _debts_of(debts: List[TechDebt], category: str) -> List[TechDebt]:
+    """筛选指定类别的债务"""
+    return [d for d in debts if d.category == category]
+
+
+def _generate_debt_report(debts: List[TechDebt], analysis) -> str:
+    """生成 Markdown 格式的技术债务报告（编排各 _render_td_* 段落）"""
+    lines: List[str] = []
+    _render_td_overview(lines, debts, analysis)
+
+    if not debts:
+        lines.append("**未发现技术债务，项目代码质量良好。**")
+        return "\n".join(lines)
+
+    # ─── 详细清单 ───
+
+    # 1. TODO/FIXME 清单（按优先级：FIXME/BUG > HACK > TODO > XXX）
+    todo_debts = _debts_of(debts, "todo_comment")
+    if todo_debts:
+        _render_td_todo_list(lines, todo_debts)
+
+    # 2. 复杂度高的函数列表
+    complexity_debts = _debts_of(debts, "high_complexity")
+    if complexity_debts:
+        _render_td_complexity_list(lines, complexity_debts)
+
+    # 3. 过长函数列表
+    long_func_debts = _debts_of(debts, "long_function")
+    if long_func_debts:
+        _render_td_long_func_list(lines, long_func_debts)
+
+    # 4. 嵌套过深列表
+    nesting_debts = _debts_of(debts, "deep_nesting")
+    if nesting_debts:
+        _render_td_nesting_list(lines, nesting_debts)
+
+    # 5. 魔法数字/字符串列表
+    magic_debts = _debts_of(debts, "magic_value")
+    if magic_debts:
+        _render_td_magic_list(lines, magic_debts)
+
+    # 6. 被注释掉的代码块列表
+    commented_debts = _debts_of(debts, "commented_code")
+    if commented_debts:
+        _render_td_commented_list(lines, commented_debts)
+
+    # 7. 注释质量问题
+    comment_quality_debts = _debts_of(debts, "comment_quality")
+    if comment_quality_debts:
+        _render_td_comment_quality_list(lines, comment_quality_debts)
+
+    # 8. 命名规范问题
+    naming_debts = _debts_of(debts, "naming_convention")
+    if naming_debts:
+        _render_td_naming_list(lines, naming_debts)
+
+    # 修复建议
+    _render_td_priority_advice(lines)
+
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 检测辅助（模块级纯函数，从 TechDebtDetector 检测方法提取）
+# ═══════════════════════════════════════════════════════════════════
+
+# Python 保留字和常见合理缩写（单字母变量白名单）
+COMMON_SINGLE_OK = {"x", "y", "z", "i", "j", "k", "n", "m", "f", "s", "e", "a", "b", "c", "d", "t", "p", "q", "r", "v", "w", "h", "l", "_"}
+
+
+def _build_symbol_ranges(cf) -> Tuple[Dict[int, str], Dict[int, str]]:
+    """构建行号 → 函数名/类名 的范围映射"""
+    func_ranges = {}  # line -> func_name
+    class_ranges = {}  # line -> class_name
+
+    for func in cf.functions:
+        for lineno in range(func.start_line, func.end_line + 1):
+            func_ranges[lineno] = func.name
+
+    for cls in cf.classes:
+        for lineno in range(cls.start_line, cls.end_line + 1):
+            class_ranges[lineno] = cls.name
+
+    return func_ranges, class_ranges
+
+
+def _classify_todo_severity(tag: str) -> str:
+    """按 TODO 标签优先级映射严重程度"""
+    if tag in ("BUG", "FIXME"):
+        return "high"
+    elif tag == "HACK":
+        return "medium"
+    elif tag == "TODO":
+        return "medium"
+    else:
+        return "low"
+
+
+def _corrected_func_end_line(func, cf, raw_lines: List[str]) -> int:
+    """修正函数 end_line。
+
+    CodeAnalyzer 对最后一个函数的 end_line 可能错误地设为文件总行数；
+    若 end_line 超过下一个函数/类的 start_line，则通过缩进回归
+    找到函数体的真实结束行（最后一个非空行）。
+    """
+    file_total_lines = len(raw_lines)
+    end_line = func.end_line
+    if end_line > file_total_lines:
+        end_line = file_total_lines
+
+    if func.start_line > file_total_lines:
+        return end_line
+
+    # 收集所有函数和类的起始行
+    boundary_lines = sorted(set(
+        [f.start_line for f in cf.functions if f is not func] +
+        [c.start_line for c in cf.classes]
+    ))
+    # 找到当前函数之后的第一个边界
+    next_boundary = None
+    for bl in boundary_lines:
+        if bl > func.start_line:
+            next_boundary = bl
+            break
+    if next_boundary and end_line >= next_boundary:
+        # 从 func.start_line 到 next_boundary-1 之间，
+        # 找到最后一个非空、非纯注释的行
+        for check_line in range(next_boundary - 1, func.start_line, -1):
+            if check_line <= file_total_lines:
+                line_text = raw_lines[check_line - 1].rstrip()
+                if line_text:  # 非空行
+                    end_line = check_line
+                    break
+    return end_line
+
+
+def _should_skip_magic_line(stripped: str, in_docstring: bool) -> Tuple[bool, bool]:
+    """判断魔法值扫描是否跳过该行；返回 (skip, 新的 in_docstring 状态)"""
+    if stripped.startswith("#"):
+        return True, in_docstring
+    # 跳过 import 行
+    if stripped.startswith("import ") or stripped.startswith("from "):
+        return True, in_docstring
+    # 跟踪多行 docstring 上下文
+    if stripped.startswith('"""') or stripped.startswith("'''"):
+        return True, not in_docstring
+    if in_docstring:
+        return True, in_docstring  # 多行 docstring 的内部行
+    return False, in_docstring
+
+
+def _is_version_or_special_number(line: str, label: str, matched_text: str) -> bool:
+    """版本号/CWE/OWASP/常量赋值等编号类误报"""
+    # 排除版本号字符串
+    if label == "魔法数字" and re.search(r'version|__version__|VERSION', line, re.IGNORECASE):
+        return True
+    # 排除注释中的 URL
+    if label == "硬编码 URL" and line.strip().startswith("#"):
+        return True
+    # 排除 CWE 编号（如 CWE-798, CWE-502）
+    if label == "魔法数字" and re.search(r'CWE[-\s]?\d+', line, re.IGNORECASE):
+        return True
+    # 排除 OWASP 年份编号（如 A07:2021）
+    if label == "魔法数字" and re.search(r'A\d{2}:\d{4}', line):
+        return True
+    # 排除类常量/阈值变量赋值（如 THRESHOLD = 100, MAX_TOKENS = 4096）
+    if label == "魔法数字" and re.search(
+        r'(?:_THRESHOLD|_threshold|_LIMIT|_limit|_MAX|_max|_MIN|_min|_SIZE|_size)\s*[:=]\s*\d+',
+        line, re.IGNORECASE
+    ):
+        return True
+    # 排除版本号如 3.14 等（被魔法数字误匹配）
+    if label == "魔法数字" and re.match(r'^\d{3,}$', matched_text):
+        if re.search(rf'\.{matched_text}\b', line):
+            return True  # 看起来像版本号的小数部分
+    return False
+
+
+def _is_common_int_constant(n: int) -> bool:
+    """常见标准整数常量（HTTP 状态码/时间常量/2 的幂/整十整百）"""
+    # 小于 100 的整数通常是循环次数、分页大小、默认值
+    if n < 100:
+        return True
+    if n in (100, 200, 201, 202, 204, 400, 401, 403, 404, 500, 502, 503):
+        return True  # HTTP 状态码
+    if n in (3600, 86400, 604800):
+        return True  # 时间常量（小时、天、周）
+    if n in (1024, 2048, 4096, 8192, 16384, 32768, 65536):
+        return True  # 2的幂（内存/缓冲区大小）
+    if n in (1000, 10000, 100000):
+        return True  # 常见整十整百整千
+    return False
+
+
+def _is_common_constant(line: str, label: str, matched_text: str, file_path: str) -> bool:
+    """常见小型常量/测试与配置文件/注释中的数字等启发式误报"""
+    # 1. 常见小型常量（循环次数、分页大小、默认值、超时等）
+    if label == "魔法数字" and matched_text.isdigit():
+        if _is_common_int_constant(int(matched_text)):
+            return True
+
+    # 2. 0 和 1 是布尔值/索引/默认值
+    if label == "魔法数字" and matched_text in ("0", "1"):
+        return True
+
+    # 3. 测试文件中的数字（测试数据）
+    if "test" in os.path.basename(file_path).lower():
+        return True
+
+    # 4. 配置/常量文件中的数字
+    cfg_fname = os.path.basename(file_path).lower()
+    if any(kw in cfg_fname for kw in ("config", "settings", "constants", "const")):
+        return True
+
+    # 5. docstring 或注释中的数字
+    if line.startswith("#") or line.startswith('"""') or line.startswith("'''"):
+        return True
+
+    return False
+
+
+def _is_false_positive_magic(line: str, label: str, matched_text: str, file_path: str = "") -> bool:
+    """判断魔法数字是否为误报（编号类与常见常量类启发式拆分判定）"""
+    if _is_version_or_special_number(line, label, matched_text):
+        return True
+    # localhost 也是硬编码，应该报告（提前排除后续启发式过滤）
+    if label == "IP 地址" and matched_text in ("127.0.0.1", "0.0.0.0"):
+        return False
+    return _is_common_constant(line, label, matched_text, file_path)
+
+
+def _is_commented_code_line(stripped: str, indicators) -> bool:
+    """判断单行注释是否是被注释掉的代码"""
+    if not stripped.startswith("#"):
+        return False
+    after_hash = stripped[1:].strip()
+    if not after_hash:
+        return False
+    for indicator in indicators:
+        if after_hash.startswith(indicator):
+            return True
+    return False
+
+
+def _append_commented_block(
+    debts: List[TechDebt],
+    file_path: str,
+    block_start: int,
+    block_end: int,
+    block_lines: int,
+) -> None:
+    """追加一条被注释代码块债务"""
+    debts.append(TechDebt(
+        category="commented_code",
+        severity="low",
+        file_path=file_path,
+        line=block_start,
+        description=f"被注释掉的代码块，共 {block_lines} 行 "
+                    f"（第 {block_start}-{block_end} 行）",
+        suggestion="如果不再需要，直接删除；Git 历史已保留旧版本",
+        context=f"第 {block_start}-{block_end} 行",
+        explanation=EXPLANATION_TEMPLATES["commented_code"],
+    ))
+
+
+def _parse_py_ast(file_path: str):
+    """安全读取并解析 Python 文件 AST；失败返回 None"""
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        return ast.parse(content)
+    except (SyntaxError, OSError):
+        return None
+
+
+def _check_class_docstring(node: ast.ClassDef, file_path: str) -> List[TechDebt]:
+    """检查公开类 docstring 缺失/过短"""
+    debts: List[TechDebt] = []
+    if node.name.startswith("_"):
+        return debts
+    doc = ast.get_docstring(node)
+    if not doc:
+        debts.append(TechDebt(
+            category="comment_quality",
+            severity="medium",
+            file_path=file_path,
+            line=node.lineno,
+            description=f"公开类 {node.name} 缺少 docstring",
+            suggestion="为类添加简要说明，包括用途、使用示例",
+            context=f"类 {node.name}",
+            explanation=EXPLANATION_TEMPLATES["comment_quality"],
+        ))
+    elif len(doc.strip()) < 10:
+        debts.append(TechDebt(
+            category="comment_quality",
+            severity="low",
+            file_path=file_path,
+            line=node.lineno,
+            description=f"类 {node.name} 的 docstring 过短（{len(doc.strip())} 字符）",
+            suggestion="补充更详细的说明，至少包含用途和使用方式",
+            context=f"类 {node.name}",
+            explanation=EXPLANATION_TEMPLATES["comment_quality"],
+        ))
+    return debts
+
+
+def _check_function_docstring(node: ast.FunctionDef, file_path: str) -> List[TechDebt]:
+    """检查公开函数 docstring 缺失（豁免简单 getter/setter）"""
+    debts: List[TechDebt] = []
+    if not (not node.name.startswith("_") or node.name == "__init__"):
+        return debts
+    # 跳过简单的 getter/setter/property
+    if len(node.body) <= 2 and all(
+        isinstance(s, (ast.Return, ast.Assign, ast.Expr))
+        for s in node.body
+    ):
+        return debts
+    doc = ast.get_docstring(node)
+    if not doc:
+        debts.append(TechDebt(
+            category="comment_quality",
+            severity="low",
+            file_path=file_path,
+            line=node.lineno,
+            description=f"公开函数 {node.name}() 缺少 docstring",
+            suggestion="为函数添加简要说明，包括参数和返回值",
+            context=f"函数 {node.name}()",
+            explanation=EXPLANATION_TEMPLATES["comment_quality"],
+        ))
+    return debts
+
+
+def _check_function_naming(node: ast.FunctionDef, file_path: str) -> Optional[TechDebt]:
+    """检测函数名驼峰命名违规；无问题返回 None"""
+    if node.name.startswith("_"):
+        name = node.name.lstrip("_")
+    else:
+        name = node.name
+    # 跳过特殊方法（__xxx__）
+    if node.name.startswith("__") and node.name.endswith("__"):
+        return None
+    # 检测驼峰命名（类方法除外）
+    if re.search(r'[A-Z]', name) and not name.isupper():
+        return TechDebt(
+            category="naming_convention",
+            severity="low",
+            file_path=file_path,
+            line=node.lineno,
+            description=f"函数 {node.name}() 使用了驼峰命名，不符合 Python snake_case 规范",
+            suggestion=f"重命名为 {re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()}",
+            context=f"函数 {node.name}()",
+            explanation=EXPLANATION_TEMPLATES["naming_convention"],
+        )
+    return None
+
+
+def _check_single_letter_var(target: ast.Name, node, file_path: str, common_ok) -> Optional[TechDebt]:
+    """检测单字母变量命名（cache 豁免）；无问题返回 None"""
+    if len(target.id) == 1 and target.id not in common_ok:
+        # 检查 cache 命名豁免
+        if SharedFilter.is_naming_exempted(target.id):
+            return None
+        # 检查是否在循环/推导式中
+        return TechDebt(
+            category="naming_convention",
+            severity="info",
+            file_path=file_path,
+            line=node.lineno,
+            description=f"单字母变量 {target.id} 影响可读性",
+            suggestion="使用有意义的变量名，例如用 result 代替 r，用 error 代替 e",
+            context=f"变量 {target.id}",
+            explanation=EXPLANATION_TEMPLATES["naming_convention"],
+        )
+    return None
+
+
+def _check_class_naming(node: ast.ClassDef, file_path: str) -> Optional[TechDebt]:
+    """检测类名 PascalCase 违规；无问题返回 None"""
+    if not node.name[0].isupper() and not node.name.startswith("_"):
+        return TechDebt(
+            category="naming_convention",
+            severity="low",
+            file_path=file_path,
+            line=node.lineno,
+            description=f"类名 {node.name} 应以大写字母开头（PascalCase）",
+            suggestion=f"重命名为 {node.name[0].upper() + node.name[1:]}",
+            context=f"类 {node.name}",
+            explanation=EXPLANATION_TEMPLATES["naming_convention"],
+        )
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 技术债务检测器
 # ═══════════════════════════════════════════════════════════════════
 
@@ -292,6 +980,9 @@ class TechDebtDetector:
         """
         检测所有 .py 文件中的 TODO/FIXME/HACK/XXX/BUG 注释，
         提取所在函数/类上下文，按优先级排序。
+
+        拆分说明：行号范围映射提取为模块级 _build_symbol_ranges，
+        严重程度分级提取为模块级 _classify_todo_severity。
         """
         debts = []
 
@@ -302,16 +993,7 @@ class TechDebtDetector:
             lines = raw.split("\n")
 
             # 构建函数/类的行号范围映射
-            func_ranges = {}  # line -> func_name
-            class_ranges = {}  # line -> class_name
-
-            for func in cf.functions:
-                for lineno in range(func.start_line, func.end_line + 1):
-                    func_ranges[lineno] = func.name
-
-            for cls in cf.classes:
-                for lineno in range(cls.start_line, cls.end_line + 1):
-                    class_ranges[lineno] = cls.name
+            func_ranges, class_ranges = _build_symbol_ranges(cf)
 
             for i, line in enumerate(lines, 1):
                 m = self.TODO_TAG_PATTERN.match(line)
@@ -328,15 +1010,7 @@ class TechDebtDetector:
                 if tag == "XXX" and _sf.is_placeholder_xxx(line):
                     continue
 
-                # 确定严重程度（基于标签优先级）
-                if tag in ("BUG", "FIXME"):
-                    severity = "high"
-                elif tag == "HACK":
-                    severity = "medium"
-                elif tag == "TODO":
-                    severity = "medium"
-                else:
-                    severity = "low"
+                severity = _classify_todo_severity(tag)
 
                 # 提取上下文
                 context_parts = []
@@ -509,7 +1183,10 @@ class TechDebtDetector:
         return score
 
     def _detect_long_functions(self, analysis) -> List[TechDebt]:
-        """检测过长的函数（>100 行）"""
+        """检测过长的函数（>100 行）。
+
+        拆分说明：end_line 修正逻辑提取为模块级 _corrected_func_end_line。
+        """
         debts = []
 
         for cf in analysis.files:
@@ -517,38 +1194,11 @@ class TechDebtDetector:
                 continue
 
             raw_lines = (cf.raw_content or "").split("\n")
-            file_total_lines = len(raw_lines)
 
             for func in cf.functions:
                 # 修正 end_line：CodeAnalyzer 对最后一个函数的 end_line 可能错误地
                 # 设为文件总行数。通过检查函数代码内容或缩进回归来修正。
-                end_line = func.end_line
-                if end_line > file_total_lines:
-                    end_line = file_total_lines
-
-                # 进一步修正：如果 end_line 明显不合理（超过下一个函数/类的 start_line），
-                # 则通过缩进回归找到函数体的真实结束行
-                if func.start_line <= file_total_lines:
-                    # 收集所有函数和类的起始行
-                    boundary_lines = sorted(set(
-                        [f.start_line for f in cf.functions if f is not func] +
-                        [c.start_line for c in cf.classes]
-                    ))
-                    # 找到当前函数之后的第一个边界
-                    next_boundary = None
-                    for bl in boundary_lines:
-                        if bl > func.start_line:
-                            next_boundary = bl
-                            break
-                    if next_boundary and end_line >= next_boundary:
-                        # 从 func.start_line 到 next_boundary-1 之间，
-                        # 找到最后一个非空、非纯注释的行
-                        for check_line in range(next_boundary - 1, func.start_line, -1):
-                            if check_line <= file_total_lines:
-                                line_text = raw_lines[check_line - 1].rstrip()
-                                if line_text:  # 非空行
-                                    end_line = check_line
-                                    break
+                end_line = _corrected_func_end_line(func, cf, raw_lines)
 
                 func_lines = end_line - func.start_line + 1
                 if func_lines > self.LONG_FUNCTION_THRESHOLD:
@@ -634,6 +1284,8 @@ class TechDebtDetector:
         """
         检测硬编码的魔法数字和字符串。
         包括 IP 地址、端口号、文件路径、URL 等。
+
+        拆分说明：行级跳过判断提取为模块级 _should_skip_magic_line。
         """
         debts = []
         seen = set()  # 去重：(file_path, line, pattern_type)
@@ -647,17 +1299,9 @@ class TechDebtDetector:
             in_docstring = False
             for i, line in enumerate(lines, 1):
                 stripped = line.strip()
-                if stripped.startswith("#"):
+                skip, in_docstring = _should_skip_magic_line(stripped, in_docstring)
+                if skip:
                     continue
-                # 跳过 import 行
-                if stripped.startswith("import ") or stripped.startswith("from "):
-                    continue
-                # 跟踪多行 docstring 上下文
-                if stripped.startswith('"""') or stripped.startswith("'''"):
-                    in_docstring = not in_docstring
-                    continue
-                if in_docstring:
-                    continue  # 多行 docstring 的内部行
 
                 for pattern, label, severity in self.MAGIC_NUMBER_PATTERNS:
                     match = pattern.search(stripped)
@@ -696,73 +1340,15 @@ class TechDebtDetector:
         return debts
 
     def _is_false_positive_magic(self, line: str, label: str, matched_text: str, file_path: str = "") -> bool:
-        """判断魔法数字是否为误报"""
-        # 排除版本号字符串
-        if label == "魔法数字" and re.search(r'version|__version__|VERSION', line, re.IGNORECASE):
-            return True
-        # 排除注释中的 URL
-        if label == "硬编码 URL" and line.strip().startswith("#"):
-            return True
-        # 排除 CWE 编号（如 CWE-798, CWE-502）
-        if label == "魔法数字" and re.search(r'CWE[-\s]?\d+', line, re.IGNORECASE):
-            return True
-        # 排除 OWASP 年份编号（如 A07:2021）
-        if label == "魔法数字" and re.search(r'A\d{2}:\d{4}', line):
-            return True
-        # 排除类常量/阈值变量赋值（如 THRESHOLD = 100, MAX_TOKENS = 4096）
-        if label == "魔法数字" and re.search(
-            r'(?:_THRESHOLD|_threshold|_LIMIT|_limit|_MAX|_max|_MIN|_min|_SIZE|_size)\s*[:=]\s*\d+',
-            line, re.IGNORECASE
-        ):
-            return True
-        # 排除 localhost
-        if label == "IP 地址" and matched_text in ("127.0.0.1", "0.0.0.0"):
-            return False  # localhost 也是硬编码，应该报告
-        # 排除版本号如 3.14 等（被魔法数字误匹配）
-        if label == "魔法数字" and re.match(r'^\d{3,}$', matched_text):
-            if re.search(rf'\.{matched_text}\b', line):
-                return True  # 看起来像版本号的小数部分
-
-        # ─── 自动过滤：启发式规则减少误报 ───
-
-        # 1. 常见小型常量（循环次数、分页大小、默认值、超时等）
-        if label == "魔法数字" and matched_text.isdigit():
-            n = int(matched_text)
-            # 小于 100 的整数通常是循环次数、分页大小、默认值
-            if n < 100:
-                return True
-            # 常见标准常量值
-            if n in (100, 200, 201, 202, 204, 400, 401, 403, 404, 500, 502, 503):
-                return True  # HTTP 状态码
-            if n in (3600, 86400, 604800):
-                return True  # 时间常量（小时、天、周）
-            if n in (1024, 2048, 4096, 8192, 16384, 32768, 65536):
-                return True  # 2的幂（内存/缓冲区大小）
-            if n in (1000, 10000, 100000):
-                return True  # 常见整十整百整千
-
-        # 2. 0 和 1 是布尔值/索引/默认值
-        if label == "魔法数字" and matched_text in ("0", "1"):
-            return True
-
-        # 3. 测试文件中的数字（测试数据）
-        if "test" in os.path.basename(file_path).lower():
-            return True
-
-        # 4. 配置/常量文件中的数字
-        cfg_fname = os.path.basename(file_path).lower()
-        if any(kw in cfg_fname for kw in ("config", "settings", "constants", "const")):
-            return True
-
-        # 5. docstring 或注释中的数字
-        if line.startswith("#") or line.startswith('"""') or line.startswith("'''"):
-            return True
-
-        return False
+        """判断魔法数字是否为误报（逻辑已提取为同名模块级函数）"""
+        return _is_false_positive_magic(line, label, matched_text, file_path)
 
     def _detect_commented_code(self, analysis) -> List[TechDebt]:
         """
         检测被注释掉的代码块（连续 3 行以上被注释的代码）。
+
+        拆分说明：单行判定提取为模块级 _is_commented_code_line，
+        块债务构造提取为模块级 _append_commented_block。
         """
         debts = []
 
@@ -778,14 +1364,7 @@ class TechDebtDetector:
             for i, line in enumerate(lines, 1):
                 stripped = line.strip()
 
-                is_commented_code = False
-                if stripped.startswith("#"):
-                    after_hash = stripped[1:].strip()
-                    if after_hash:
-                        for indicator in self.COMMENTED_CODE_INDICATORS:
-                            if after_hash.startswith(indicator):
-                                is_commented_code = True
-                                break
+                is_commented_code = _is_commented_code_line(stripped, self.COMMENTED_CODE_INDICATORS)
 
                 if is_commented_code:
                     if block_start is None:
@@ -793,181 +1372,81 @@ class TechDebtDetector:
                     block_lines.append(stripped)
                 else:
                     if block_start is not None and len(block_lines) >= self.COMMENTED_CODE_MIN_LINES:
-                        debts.append(TechDebt(
-                            category="commented_code",
-                            severity="low",
-                            file_path=cf.file_path,
-                            line=block_start,
-                            description=f"被注释掉的代码块，共 {len(block_lines)} 行 "
-                                        f"（第 {block_start}-{i - 1} 行）",
-                            suggestion="如果不再需要，直接删除；Git 历史已保留旧版本",
-                            context=f"第 {block_start}-{i - 1} 行",
-                            explanation=EXPLANATION_TEMPLATES["commented_code"],
-                        ))
+                        _append_commented_block(debts, cf.file_path, block_start, i - 1, len(block_lines))
                     block_start = None
                     block_lines = []
 
             # 处理文件末尾的注释块
             if block_start is not None and len(block_lines) >= self.COMMENTED_CODE_MIN_LINES:
-                debts.append(TechDebt(
-                    category="commented_code",
-                    severity="low",
-                    file_path=cf.file_path,
-                    line=block_start,
-                    description=f"被注释掉的代码块，共 {len(block_lines)} 行 "
-                                f"（第 {block_start}-{len(lines)} 行）",
-                    suggestion="如果不再需要，直接删除；Git 历史已保留旧版本",
-                    context=f"第 {block_start}-{len(lines)} 行",
-                    explanation=EXPLANATION_TEMPLATES["commented_code"],
-                ))
+                _append_commented_block(debts, cf.file_path, block_start, len(lines), len(block_lines))
 
         return debts
 
     def _detect_comment_quality(self, analysis) -> List[TechDebt]:
-        """检测注释质量问题：公开函数/类缺少 docstring，docstring 过短"""
+        """检测注释质量问题：公开函数/类缺少 docstring，docstring 过短
+
+        拆分说明：文件解析提取为模块级 _parse_py_ast，
+        类/函数 docstring 检查提取为模块级 _check_class_docstring / _check_function_docstring。
+        """
         debts = []
-        import ast
 
         for cf in analysis.files:
             if cf.language not in ("Python", "python"):
                 continue
             if not cf.file_path.endswith(".py"):
                 continue
-            try:
-                with open(cf.file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read()
-                tree = ast.parse(content)
-            except (SyntaxError, OSError):
+            tree = _parse_py_ast(cf.file_path)
+            if tree is None:
                 continue
 
             for node in ast.iter_child_nodes(tree):
                 # 检测公开类缺少 docstring
                 if isinstance(node, ast.ClassDef):
-                    if not node.name.startswith("_"):
-                        doc = ast.get_docstring(node)
-                        if not doc:
-                            debts.append(TechDebt(
-                                category="comment_quality",
-                                severity="medium",
-                                file_path=cf.file_path,
-                                line=node.lineno,
-                                description=f"公开类 {node.name} 缺少 docstring",
-                                suggestion="为类添加简要说明，包括用途、使用示例",
-                                context=f"类 {node.name}",
-                                explanation=EXPLANATION_TEMPLATES["comment_quality"],
-                            ))
-                        elif len(doc.strip()) < 10:
-                            debts.append(TechDebt(
-                                category="comment_quality",
-                                severity="low",
-                                file_path=cf.file_path,
-                                line=node.lineno,
-                                description=f"类 {node.name} 的 docstring 过短（{len(doc.strip())} 字符）",
-                                suggestion="补充更详细的说明，至少包含用途和使用方式",
-                                context=f"类 {node.name}",
-                                explanation=EXPLANATION_TEMPLATES["comment_quality"],
-                            ))
-
+                    debts.extend(_check_class_docstring(node, cf.file_path))
                 # 检测公开函数缺少 docstring
                 elif isinstance(node, ast.FunctionDef):
-                    if not node.name.startswith("_") or node.name == "__init__":
-                        # 跳过简单的 getter/setter/property
-                        if len(node.body) <= 2 and all(
-                            isinstance(s, (ast.Return, ast.Assign, ast.Expr))
-                            for s in node.body
-                        ):
-                            continue
-                        doc = ast.get_docstring(node)
-                        if not doc:
-                            debts.append(TechDebt(
-                                category="comment_quality",
-                                severity="low",
-                                file_path=cf.file_path,
-                                line=node.lineno,
-                                description=f"公开函数 {node.name}() 缺少 docstring",
-                                suggestion="为函数添加简要说明，包括参数和返回值",
-                                context=f"函数 {node.name}()",
-                                explanation=EXPLANATION_TEMPLATES["comment_quality"],
-                            ))
+                    debts.extend(_check_function_docstring(node, cf.file_path))
 
         return debts
 
     def _detect_naming_convention(self, analysis) -> List[TechDebt]:
-        """检测命名规范问题：snake_case 违规、单字母变量、类名问题"""
-        debts = []
-        import ast
+        """检测命名规范问题：snake_case 违规、单字母变量、类名问题
 
-        # Python 保留字和常见合理缩写
-        COMMON_SINGLE_OK = {"x", "y", "z", "i", "j", "k", "n", "m", "f", "s", "e", "a", "b", "c", "d", "t", "p", "q", "r", "v", "w", "h", "l", "_"}
+        拆分说明：文件解析提取为模块级 _parse_py_ast，
+        函数/变量/类名检查分别提取为模块级 _check_function_naming /
+        _check_single_letter_var / _check_class_naming。
+        """
+        debts = []
 
         for cf in analysis.files:
             if cf.language not in ("Python", "python"):
                 continue
             if not cf.file_path.endswith(".py"):
                 continue
-            try:
-                with open(cf.file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read()
-                tree = ast.parse(content)
-            except (SyntaxError, OSError):
+            tree = _parse_py_ast(cf.file_path)
+            if tree is None:
                 continue
 
             for node in ast.walk(tree):
                 # 检测函数名：应该是 snake_case
                 if isinstance(node, ast.FunctionDef):
-                    if node.name.startswith("_"):
-                        name = node.name.lstrip("_")
-                    else:
-                        name = node.name
-                    # 跳过特殊方法（__xxx__）
-                    if node.name.startswith("__") and node.name.endswith("__"):
-                        continue
-                    # 检测驼峰命名（类方法除外）
-                    if re.search(r'[A-Z]', name) and not name.isupper():
-                        debts.append(TechDebt(
-                            category="naming_convention",
-                            severity="low",
-                            file_path=cf.file_path,
-                            line=node.lineno,
-                            description=f"函数 {node.name}() 使用了驼峰命名，不符合 Python snake_case 规范",
-                            suggestion=f"重命名为 {re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()}",
-                            context=f"函数 {node.name}()",
-                            explanation=EXPLANATION_TEMPLATES["naming_convention"],
-                        ))
+                    d = _check_function_naming(node, cf.file_path)
+                    if d:
+                        debts.append(d)
 
                 # 检测变量赋值中的单字母变量（排除常见循环变量）
                 if isinstance(node, ast.Assign):
                     for target in node.targets:
                         if isinstance(target, ast.Name):
-                            if len(target.id) == 1 and target.id not in COMMON_SINGLE_OK:
-                                # 检查 cache 命名豁免
-                                if SharedFilter.is_naming_exempted(target.id):
-                                    continue
-                                # 检查是否在循环/推导式中
-                                debts.append(TechDebt(
-                                    category="naming_convention",
-                                    severity="info",
-                                    file_path=cf.file_path,
-                                    line=node.lineno,
-                                    description=f"单字母变量 {target.id} 影响可读性",
-                                    suggestion="使用有意义的变量名，例如用 result 代替 r，用 error 代替 e",
-                                    context=f"变量 {target.id}",
-                                    explanation=EXPLANATION_TEMPLATES["naming_convention"],
-                                ))
+                            d = _check_single_letter_var(target, node, cf.file_path, COMMON_SINGLE_OK)
+                            if d:
+                                debts.append(d)
 
                 # 检测类名：应该是 PascalCase
                 if isinstance(node, ast.ClassDef):
-                    if not node.name[0].isupper() and not node.name.startswith("_"):
-                        debts.append(TechDebt(
-                            category="naming_convention",
-                            severity="low",
-                            file_path=cf.file_path,
-                            line=node.lineno,
-                            description=f"类名 {node.name} 应以大写字母开头（PascalCase）",
-                            suggestion=f"重命名为 {node.name[0].upper() + node.name[1:]}",
-                            context=f"类 {node.name}",
-                            explanation=EXPLANATION_TEMPLATES["naming_convention"],
-                        ))
+                    d = _check_class_naming(node, cf.file_path)
+                    if d:
+                        debts.append(d)
 
         return debts
 
@@ -1043,302 +1522,8 @@ class TechDebtDetector:
     # ─── 报告生成 ────────────────────────────────────────────────
 
     def _generate_report(self, debts: List[TechDebt], analysis) -> str:
-        """生成 Markdown 格式的技术债务报告"""
-        lines = []
-
-        # 统计
-        cat_counts = defaultdict(int)
-        sev_counts = defaultdict(int)
-        for d in debts:
-            cat_counts[d.category] += 1
-            sev_counts[d.severity] += 1
-
-        # 债务严重度评分
-        score_penalty = (
-            sev_counts.get("critical", 0) * 10 +
-            sev_counts.get("high", 0) * 5 +
-            sev_counts.get("medium", 0) * 2 +
-            sev_counts.get("low", 0) * 0.5
-        )
-        max_penalty = max(analysis.total_files, 1) * 5
-        debt_score = max(0, min(100, 100 - int(score_penalty / max(max_penalty, 1) * 100)))
-
-        if debt_score >= 80:
-            score_level = "良好"
-        elif debt_score >= 50:
-            score_level = "一般"
-        else:
-            score_level = "较差"
-
-        # 头部
-        lines.append("# 技术债务检测报告")
-        lines.append("")
-        lines.append(f"> 项目: `{analysis.project_path}`")
-        lines.append(f"> 扫描文件数: {analysis.total_files} | 总行数: {analysis.total_lines:,}")
-        lines.append(f"> 发现问题: {len(debts)} 条")
-        lines.append(f"> 债务健康分: **{debt_score}/100** ({score_level})")
-        lines.append(f"> 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
-
-        # 总览
-        lines.append("## 技术债务总览")
-        lines.append("")
-
-        lines.append("### 按严重程度分布")
-        lines.append("")
-        lines.append("| 严重程度 | 数量 | 说明 |")
-        lines.append("|---------|------|------|")
-        for sev in ["critical", "high", "medium", "low", "info"]:
-            count = sev_counts.get(sev, 0)
-            if count > 0:
-                sev_desc = {
-                    "critical": "必须立即处理",
-                    "high": "应尽快处理",
-                    "medium": "建议处理",
-                    "low": "可逐步处理",
-                    "info": "仅供参考",
-                }
-                lines.append(f"| {SEVERITY_LABELS[sev]} | {count} | {sev_desc.get(sev, '')} |")
-        lines.append("")
-
-        lines.append("### 按分类统计")
-        lines.append("")
-        lines.append("| 分类 | 数量 | 为什么重要 |")
-        lines.append("|------|------|-----------|")
-        for cat in ["todo_comment", "comment_quality", "high_complexity", "cognitive_complexity", "long_function", "deep_nesting", "magic_value", "commented_code", "naming_convention"]:
-            count = cat_counts.get(cat, 0)
-            if count > 0:
-                importance = {
-                    "todo_comment": "未完成的工作积累会拖慢项目进度",
-                    "comment_quality": "缺少注释的代码难以理解和维护",
-                    "high_complexity": "复杂代码容易产生 Bug，难以维护",
-                    "cognitive_complexity": "认知复杂度高意味着代码读起来困难",
-                    "long_function": "长函数难以理解和测试",
-                    "deep_nesting": "深层嵌套降低代码可读性",
-                    "magic_value": "硬编码值导致配置变更困难",
-                    "commented_code": "废弃代码让文件混乱，误导开发者",
-                    "naming_convention": "不规范的命名降低协作效率",
-                }
-                lines.append(f"| {CATEGORY_LABELS[cat]} | {count} | {importance.get(cat, '')} |")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
-
-        if not debts:
-            lines.append("**未发现技术债务，项目代码质量良好。**")
-            return "\n".join(lines)
-
-        # ─── 详细清单 ─────────────────────────────────────────────
-
-        # 1. TODO/FIXME 清单（按优先级：FIXME/BUG > HACK > TODO > XXX）
-        todo_debts = [d for d in debts if d.category == "todo_comment"]
-        if todo_debts:
-            # 按标签优先级排序
-            def todo_sort_key(d):
-                for tag, pri in TAG_PRIORITY.items():
-                    if tag in d.description.upper():
-                        return pri
-                return 99
-
-            todo_debts.sort(key=lambda d: (todo_sort_key(d), d.file_path, d.line))
-
-            lines.append("## TODO/FIXME 清单")
-            lines.append("")
-            lines.append("> 以下按优先级排列：FIXME/BUG > HACK > TODO > XXX")
-            lines.append("")
-            lines.append("| 优先级 | 标记 | 文件 | 行号 | 内容 | 所在位置 |")
-            lines.append("|--------|------|------|------|------|----------|")
-            for d in todo_debts:
-                tag = "?"
-                for t in ["BUG", "FIXME", "HACK", "TODO", "XXX"]:
-                    if t in d.description.upper():
-                        tag = t
-                        break
-                file_short = os.path.basename(d.file_path)
-                desc_short = d.description[:50] + "..." if len(d.description) > 50 else d.description
-                lines.append(f"| {tag} | {SEVERITY_LABELS.get(d.severity, '')} | `{file_short}` | {d.line} | {desc_short} | {d.context} |")
-            lines.append("")
-
-            # 面向不懂代码的用户的解释
-            lines.append("### 对非技术人员的解释")
-            lines.append("")
-            sample = todo_debts[0]
-            lines.append(sample.explanation if sample.explanation else EXPLANATION_TEMPLATES["todo_comment"])
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-
-        # 2. 复杂度高的函数列表
-        complexity_debts = [d for d in debts if d.category == "high_complexity"]
-        if complexity_debts:
-            lines.append("## 圈复杂度过高的函数")
-            lines.append("")
-            lines.append("| 严重程度 | 文件 | 行号 | 函数 | 分支数 |")
-            lines.append("|---------|------|------|------|--------|")
-            for d in complexity_debts:
-                file_short = os.path.basename(d.file_path)
-                # 提取分支数
-                branch_match = re.search(r'圈复杂度为 (\d+)', d.description)
-                branch_count = branch_match.group(1) if branch_match else "?"
-                func_name = d.context.replace("函数 ", "").replace("()", "")
-                lines.append(f"| {SEVERITY_LABELS.get(d.severity, '')} | `{file_short}` | {d.line} | {func_name}() | {branch_count} |")
-            lines.append("")
-
-            lines.append("### 对非技术人员的解释")
-            lines.append("")
-            lines.append(complexity_debts[0].explanation if complexity_debts[0].explanation else EXPLANATION_TEMPLATES["high_complexity"])
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-
-        # 3. 过长函数列表
-        long_func_debts = [d for d in debts if d.category == "long_function"]
-        if long_func_debts:
-            lines.append("## 过长函数列表")
-            lines.append("")
-            lines.append("| 严重程度 | 文件 | 行号 | 函数 | 行数 |")
-            lines.append("|---------|------|------|------|------|")
-            for d in long_func_debts:
-                file_short = os.path.basename(d.file_path)
-                line_match = re.search(r'共 (\d+) 行', d.description)
-                line_count = line_match.group(1) if line_match else "?"
-                func_name = d.context.replace("函数 ", "").replace("()", "")
-                lines.append(f"| {SEVERITY_LABELS.get(d.severity, '')} | `{file_short}` | {d.line} | {func_name}() | {line_count} |")
-            lines.append("")
-
-            lines.append("### 对非技术人员的解释")
-            lines.append("")
-            lines.append(long_func_debts[0].explanation if long_func_debts[0].explanation else EXPLANATION_TEMPLATES["long_function"])
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-
-        # 4. 嵌套过深列表
-        nesting_debts = [d for d in debts if d.category == "deep_nesting"]
-        if nesting_debts:
-            lines.append("## 嵌套过深列表")
-            lines.append("")
-            lines.append("| 文件 | 行号 | 嵌套深度 | 所在位置 |")
-            lines.append("|------|------|----------|----------|")
-            for d in nesting_debts:
-                file_short = os.path.basename(d.file_path)
-                depth_match = re.search(r'嵌套深度 (\d+) 层', d.description)
-                depth = depth_match.group(1) if depth_match else "?"
-                lines.append(f"| `{file_short}` | {d.line} | {depth} 层 | {d.context} |")
-            lines.append("")
-
-            lines.append("### 对非技术人员的解释")
-            lines.append("")
-            lines.append(nesting_debts[0].explanation if nesting_debts[0].explanation else EXPLANATION_TEMPLATES["deep_nesting"])
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-
-        # 5. 魔法数字/字符串列表
-        magic_debts = [d for d in debts if d.category == "magic_value"]
-        if magic_debts:
-            lines.append("## 魔法数字/硬编码列表")
-            lines.append("")
-            lines.append("| 严重程度 | 文件 | 行号 | 类型 | 值 | 所在位置 |")
-            lines.append("|---------|------|------|------|-----|----------|")
-            for d in magic_debts:
-                file_short = os.path.basename(d.file_path)
-                # 提取类型和值
-                desc = d.description.replace("硬编码 ", "")
-                lines.append(f"| {SEVERITY_LABELS.get(d.severity, '')} | `{file_short}` | {d.line} | {desc} | {d.context} |")
-            lines.append("")
-
-            lines.append("### 对非技术人员的解释")
-            lines.append("")
-            lines.append(magic_debts[0].explanation if magic_debts[0].explanation else EXPLANATION_TEMPLATES["magic_value"])
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-
-        # 6. 被注释掉的代码块列表
-        commented_debts = [d for d in debts if d.category == "commented_code"]
-        if commented_debts:
-            lines.append("## 被注释掉的代码块列表")
-            lines.append("")
-            lines.append("| 文件 | 行号 | 行数 | 位置 |")
-            lines.append("|------|------|------|------|")
-            for d in commented_debts:
-                file_short = os.path.basename(d.file_path)
-                line_match = re.search(r'共 (\d+) 行', d.description)
-                line_count = line_match.group(1) if line_match else "?"
-                lines.append(f"| `{file_short}` | {d.line} | {line_count} | {d.context} |")
-            lines.append("")
-
-            lines.append("### 对非技术人员的解释")
-            lines.append("")
-            lines.append(commented_debts[0].explanation if commented_debts[0].explanation else EXPLANATION_TEMPLATES["commented_code"])
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-
-        # 7. 注释质量问题
-        comment_quality_debts = [d for d in debts if d.category == "comment_quality"]
-        if comment_quality_debts:
-            lines.append("## 注释质量不足")
-            lines.append("")
-            lines.append("| 严重程度 | 文件 | 行号 | 问题 | 位置 |")
-            lines.append("|---------|------|------|------|------|")
-            for d in comment_quality_debts:
-                file_short = os.path.basename(d.file_path)
-                lines.append(f"| {SEVERITY_LABELS.get(d.severity, '')} | `{file_short}` | {d.line} | {d.description} | {d.context} |")
-            lines.append("")
-            lines.append("### 对非技术人员的解释")
-            lines.append("")
-            lines.append(comment_quality_debts[0].explanation if comment_quality_debts[0].explanation else EXPLANATION_TEMPLATES["comment_quality"])
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-
-        # 8. 命名规范问题
-        naming_debts = [d for d in debts if d.category == "naming_convention"]
-        if naming_debts:
-            lines.append("## 命名规范问题")
-            lines.append("")
-            lines.append("| 严重程度 | 文件 | 行号 | 问题 | 建议 |")
-            lines.append("|---------|------|------|------|------|")
-            for d in naming_debts:
-                file_short = os.path.basename(d.file_path)
-                lines.append(f"| {SEVERITY_LABELS.get(d.severity, '')} | `{file_short}` | {d.line} | {d.description} | {d.suggestion[:60]} |")
-            lines.append("")
-            lines.append("### 对非技术人员的解释")
-            lines.append("")
-            lines.append(naming_debts[0].explanation if naming_debts[0].explanation else EXPLANATION_TEMPLATES["naming_convention"])
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-
-        # 修复建议
-        lines.append("## 修复优先级建议")
-        lines.append("")
-        lines.append("| 优先级 | 债务类型 | 建议行动 |")
-        lines.append("|--------|---------|----------|")
-        lines.append("| 1（立即） | FIXME/BUG 标记 | 修复已知 Bug，消除安全隐患 |")
-        lines.append("| 2（本周） | 圈复杂度过高 | 重构复杂函数，降低 Bug 风险 |")
-        lines.append("| 3（本周） | 过长函数 | 拆分长函数，提高可测试性 |")
-        lines.append("| 4（本月） | 魔法数字/硬编码 | 提取配置，支持不同环境部署 |")
-        lines.append("| 5（本月） | 注释质量不足 | 补充公开接口的 docstring |")
-        lines.append("| 6（本月） | TODO/HACK 标记 | 逐一处理或纳入迭代计划 |")
-        lines.append("| 7（下月） | 嵌套过深 | 使用 early return 优化代码结构 |")
-        lines.append("| 8（下月） | 命名规范问题 | 统一命名风格，提高可读性 |")
-        lines.append("| 9（下月） | 注释掉的代码 | 清理废弃代码，保持代码库整洁 |")
-        lines.append("")
-        lines.append("> 建议每次迭代处理 1-2 类债务，逐步改善代码质量。")
-        lines.append("> 不要试图一次性修复所有债务，那样容易引入新的 Bug。")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
-        lines.append("*报告由 CodeRef-AI TechDebtDetector v1.0 生成*\n")
-        lines.append("")
-        lines.append("> **LLM 复查提示**：此报告可能包含误报。审查每条结果后，调用 `coderef_cache_whitelist` 工具将误报自动加入白名单，然后重新扫描。")
-
-        return "\n".join(lines)
+        """生成 Markdown 格式的技术债务报告（渲染逻辑已提取为模块级 _generate_debt_report）"""
+        return _generate_debt_report(debts, analysis)
 
 
 # ═══════════════════════════════════════════════════════════════════

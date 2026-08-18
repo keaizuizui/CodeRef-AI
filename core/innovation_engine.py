@@ -65,6 +65,147 @@ TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 检测步骤辅助（模块级纯函数，从 InnovationEngine.detect 提取）
+# ═══════════════════════════════════════════════════════════════════
+
+def _primary_intent(sig) -> str:
+    """根据能力签名判断模块的『主意图』（prompt/validation/retry/orchestration）。"""
+    for it in INTENT_ORDER:
+        design = INTENT_DESIGN[it]
+        tag = DESIGN_CAPABILITY_TAG.get(design)
+        if tag and tag in sig.tags:
+            return it
+    return "misc"
+
+
+def _enrich_gap_suggestions(detector, signatures, gaps) -> None:
+    """为幸存缺口生成 LLM 精建议（受类级 LLM 预算约束，与 detector.detect() 对齐）。"""
+    if not detector.is_llm_available():
+        return
+    sig_by_module = {s.module_name: s for s in signatures}
+    for g in gaps:
+        if detector.get_llm_budget() <= 0:
+            logger.warning(
+                f"[InnovationEngine] LLM 预算耗尽，剩余缺口使用结构建议"
+            )
+            break
+        target_sig = sig_by_module.get(g.target_module)
+        if target_sig is not None:
+            llm_suggestion = detector.generate_suggestion(g.pattern, target_sig)
+            if llm_suggestion.strip():
+                g.suggestion = llm_suggestion
+            detector.consume_llm_budget()
+
+
+def _build_workflow_summaries(signatures) -> List[Dict[str, Any]]:
+    """把能力签名列表转换为 workflow 摘要 dict 列表（未做意图过滤）。"""
+    workflows: List[Dict[str, Any]] = []
+    for sig in signatures:
+        adopted = [
+            d for d, tag in DESIGN_CAPABILITY_TAG.items()
+            if tag in sig.tags and d in SEED_DESIGNS
+        ]
+        wf = {
+            "wf_id": sig.module_name,
+            "intent": _primary_intent(sig),
+            "name": sig.module_name,
+            "files": [sig.file_path],
+            "adoption": adopted,
+            "adoption_rate": round(
+                len(adopted) / len(DESIGN_CAPABILITY_TAG), 4
+            ) if DESIGN_CAPABILITY_TAG else 0.0,
+        }
+        workflows.append(wf)
+    return workflows
+
+
+def _build_design_summaries(workflows, scope_total: int, min_adoption: float) -> List[Dict[str, Any]]:
+    """构建每个已知设计的采用情况摘要。"""
+    designs: List[Dict[str, Any]] = []
+    for canonical, info in SEED_DESIGNS.items():
+        adopters = [w for w in workflows if canonical in w["adoption"]]
+        adoption_n = len(adopters)
+        rate = (adoption_n / scope_total) if scope_total else 0.0
+        if min_adoption and rate < min_adoption:
+            continue
+        designs.append({
+            "canonical": canonical,
+            "category": info["category"],
+            "description": info["description"],
+            "adoption": adoption_n,
+            "adoption_rate": round(rate, 4),
+            "intent": next((k for k, v in INTENT_DESIGN.items() if v == canonical), ""),
+        })
+    return designs
+
+
+def _build_intent_analysis(workflows) -> List[Dict[str, Any]]:
+    """构建意图分析：理想清单 vs 实际实现。"""
+    intent_analysis: List[Dict[str, Any]] = []
+    for it in INTENT_ORDER:
+        ideal = [INTENT_DESIGN[it]]
+        actual = [w for w in workflows if w["intent"] == it]
+        adopted = [w for w in actual if INTENT_DESIGN[it] in w["adoption"]]
+        intent_analysis.append({
+            "intent": it,
+            "ideal": ideal,
+            "actual_workflows": [w["wf_id"] for w in actual],
+            "adopted": len(adopted),
+            "total": len(actual),
+            "coverage": round(len(adopted) / len(actual), 4) if actual else 0.0,
+        })
+    return intent_analysis
+
+
+def _build_registry_matches(workflows) -> List[Dict[str, Any]]:
+    """构建设计在注册表中的命中情况。"""
+    registry_matches: List[Dict[str, Any]] = []
+    for canonical in SEED_DESIGNS:
+        adopters = [w["wf_id"] for w in workflows if canonical in w["adoption"]]
+        registry_matches.append({
+            "canonical": canonical,
+            "matched": len(adopters) > 0,
+            "workflows": adopters,
+            "message": (
+                f"{len(adopters)} 个 workflow 采用「{canonical}」"
+                if adopters else f"暂无 workflow 采用「{canonical}」"
+            ),
+        })
+    return registry_matches
+
+
+def _build_solidifiable_assets(workflows) -> List[Dict[str, Any]]:
+    """构建达到固化阈值的可固化资产清单。
+
+    仅列出「≥ MIN_ADOPTION_FOR_SOLIDIFY 采用 + 附带 evidence（真实采用记录）」的
+    设计。本工具是审计工具，不自动生成代码，因此只给出清单与证据，由对方 AI
+    依据 description 自行补全 template_code / patch_suggestion / migration_guide，
+    再调用 coderef_asset(action="commit") 完成固化。不满足条件的不出现在清单中。
+    """
+    solidifiable_assets: List[Dict[str, Any]] = []
+    for canonical, info in SEED_DESIGNS.items():
+        adopters = [w["wf_id"] for w in workflows if canonical in w["adoption"]]
+        adoption_count = len(adopters)
+        if adoption_count < MIN_ADOPTION_FOR_SOLIDIFY:
+            continue
+        solidifiable_assets.append({
+            "canonical": canonical,
+            "category": info["category"],
+            "description": info["description"],
+            "intent": next((k for k, v in INTENT_DESIGN.items() if v == canonical), ""),
+            "adoption_count": adoption_count,
+            "adopters": adopters,
+            "solidifiable": True,
+            "commit_hint": (
+                f"已达到固化阈值（≥{MIN_ADOPTION_FOR_SOLIDIFY} 采用 + evidence）。"
+                f"请调用 coderef_asset(action='commit', canonical='{canonical}')，"
+                "补全 template_code / patch_suggestion / migration_guide 后完成固化。"
+            ),
+        })
+    return solidifiable_assets
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 数据结构
 # ═══════════════════════════════════════════════════════════════════
 
@@ -156,13 +297,8 @@ class InnovationEngine:
 
     @staticmethod
     def _primary_intent(sig) -> str:
-        """根据能力签名判断模块的『主意图』（prompt/validation/retry/orchestration）。"""
-        for it in INTENT_ORDER:
-            design = INTENT_DESIGN[it]
-            tag = DESIGN_CAPABILITY_TAG.get(design)
-            if tag and tag in sig.tags:
-                return it
-        return "misc"
+        """根据能力签名判断模块的『主意图』（委托模块级 _primary_intent）。"""
+        return _primary_intent(sig)
 
     @staticmethod
     def _gap_to_dict(g) -> Dict[str, Any]:
@@ -260,6 +396,10 @@ class InnovationEngine:
     ) -> Dict[str, Any]:
         """结构化创新识别。
 
+        拆分说明：各结果段（workflows / designs / intent_analysis /
+        registry_matches / solidifiable_assets）的构建逻辑提取为模块级
+        _build_* 纯函数，本方法仅做编排与汇总。
+
         Args:
             project_path: 项目根目录。
             intent: 若提供，仅关注该意图（prompt/validation/retry/orchestration）。
@@ -273,39 +413,10 @@ class InnovationEngine:
         total = len(signatures)
 
         # 为幸存缺口生成 LLM 精建议（受类级 LLM 预算约束，与 detector.detect() 对齐）
-        if self.detector.is_llm_available():
-            sig_by_module = {s.module_name: s for s in signatures}
-            for g in gaps:
-                if self.detector.get_llm_budget() <= 0:
-                    logger.warning(
-                        f"[InnovationEngine] LLM 预算耗尽，剩余缺口使用结构建议"
-                    )
-                    break
-                target_sig = sig_by_module.get(g.target_module)
-                if target_sig is not None:
-                    llm_suggestion = self.detector.generate_suggestion(g.pattern, target_sig)
-                    if llm_suggestion.strip():
-                        g.suggestion = llm_suggestion
-                    self.detector.consume_llm_budget()
+        _enrich_gap_suggestions(self.detector, signatures, gaps)
 
         # ── workflows ──
-        workflows: List[Dict[str, Any]] = []
-        for sig in signatures:
-            adopted = [
-                d for d, tag in DESIGN_CAPABILITY_TAG.items()
-                if tag in sig.tags and d in SEED_DESIGNS
-            ]
-            wf = {
-                "wf_id": sig.module_name,
-                "intent": self._primary_intent(sig),
-                "name": sig.module_name,
-                "files": [sig.file_path],
-                "adoption": adopted,
-                "adoption_rate": round(
-                    len(adopted) / len(DESIGN_CAPABILITY_TAG), 4
-                ) if DESIGN_CAPABILITY_TAG else 0.0,
-            }
-            workflows.append(wf)
+        workflows = _build_workflow_summaries(signatures)
 
         # 意图过滤
         if intent and intent in INTENT_ORDER:
@@ -315,77 +426,11 @@ class InnovationEngine:
         scope_total = len(workflows)
         workflow_scope_total = total  # 未过滤的完整范围，独立字段暴露，避免设计率分母被意图缩小
 
-        # ── designs（每个已知设计的采用情况） ──
-        designs: List[Dict[str, Any]] = []
-        for canonical, info in SEED_DESIGNS.items():
-            adopters = [w for w in workflows if canonical in w["adoption"]]
-            adoption_n = len(adopters)
-            rate = (adoption_n / scope_total) if scope_total else 0.0
-            if min_adoption and rate < min_adoption:
-                continue
-            designs.append({
-                "canonical": canonical,
-                "category": info["category"],
-                "description": info["description"],
-                "adoption": adoption_n,
-                "adoption_rate": round(rate, 4),
-                "intent": next((k for k, v in INTENT_DESIGN.items() if v == canonical), ""),
-            })
-
-        # ── 意图分析：理想清单 vs 实际实现 ──
-        intent_analysis: List[Dict[str, Any]] = []
-        for it in INTENT_ORDER:
-            ideal = [INTENT_DESIGN[it]]
-            actual = [w for w in workflows if w["intent"] == it]
-            adopted = [w for w in actual if INTENT_DESIGN[it] in w["adoption"]]
-            intent_analysis.append({
-                "intent": it,
-                "ideal": ideal,
-                "actual_workflows": [w["wf_id"] for w in actual],
-                "adopted": len(adopted),
-                "total": len(actual),
-                "coverage": round(len(adopted) / len(actual), 4) if actual else 0.0,
-            })
-
-        # ── registry_matches：设计在注册表中的命中情况 ──
-        registry_matches: List[Dict[str, Any]] = []
-        for canonical in SEED_DESIGNS:
-            adopters = [w["wf_id"] for w in workflows if canonical in w["adoption"]]
-            registry_matches.append({
-                "canonical": canonical,
-                "matched": len(adopters) > 0,
-                "workflows": adopters,
-                "message": (
-                    f"{len(adopters)} 个 workflow 采用「{canonical}」"
-                    if adopters else f"暂无 workflow 采用「{canonical}」"
-                ),
-            })
-
-        # ── solidifiable_assets：达到固化阈值的可固化清单 ──
-        # 仅列出「≥ MIN_ADOPTION_FOR_SOLIDIFY 采用 + 附带 evidence（真实采用记录）」的
-        # 设计。本工具是审计工具，不自动生成代码，因此只给出清单与证据，由对方 AI
-        # 依据 description 自行补全 template_code / patch_suggestion / migration_guide，
-        # 再调用 coderef_asset(action="commit") 完成固化。不满足条件的不出现在清单中。
-        solidifiable_assets: List[Dict[str, Any]] = []
-        for canonical, info in SEED_DESIGNS.items():
-            adopters = [w["wf_id"] for w in workflows if canonical in w["adoption"]]
-            adoption_count = len(adopters)
-            if adoption_count < MIN_ADOPTION_FOR_SOLIDIFY:
-                continue
-            solidifiable_assets.append({
-                "canonical": canonical,
-                "category": info["category"],
-                "description": info["description"],
-                "intent": next((k for k, v in INTENT_DESIGN.items() if v == canonical), ""),
-                "adoption_count": adoption_count,
-                "adopters": adopters,
-                "solidifiable": True,
-                "commit_hint": (
-                    f"已达到固化阈值（≥{MIN_ADOPTION_FOR_SOLIDIFY} 采用 + evidence）。"
-                    f"请调用 coderef_asset(action='commit', canonical='{canonical}')，"
-                    "补全 template_code / patch_suggestion / migration_guide 后完成固化。"
-                ),
-            })
+        # ── 各结果段 ──
+        designs = _build_design_summaries(workflows, scope_total, min_adoption)
+        intent_analysis = _build_intent_analysis(workflows)
+        registry_matches = _build_registry_matches(workflows)
+        solidifiable_assets = _build_solidifiable_assets(workflows)
 
         return {
             "ok": True,
@@ -418,6 +463,10 @@ class InnovationEngine:
     ) -> Dict[str, Any]:
         """资产化管理。
 
+        拆分说明：list / get / export / commit 四个分支分别提取为
+        _asset_list / _asset_get_export / _asset_commit 私有方法，
+        本方法仅做 action 路由。
+
         Args:
             project_path: 项目根目录。
             action: list / get / export / commit。
@@ -435,92 +484,116 @@ class InnovationEngine:
         action = (action or "").strip().lower()
 
         if action == "list":
-            return {
-                "ok": True,
-                "action": "list",
-                "registry_path": self.registry.registry_path,
-                "count": self.registry.count_assets(),
-                "assets": self.registry.list_assets(),
-            }
+            return self._asset_list()
 
         if action in ("get", "export"):
-            if not canonical:
-                # export 可省略 canonical：导出全部资产
-                if action == "export":
-                    return {
-                        "ok": True,
-                        "action": "export",
-                        "registry_path": self.registry.registry_path,
-                        "count": self.registry.count_assets(),
-                        "assets": self.registry.list_assets(),
-                    }
-                raise ValueError(f"{action} 操作必须提供 canonical 参数")
-            resolved = self.registry.resolve(canonical)
-            asset = self.registry.get_asset(resolved)
-            return {
-                "ok": bool(asset),
-                "action": action,
-                "canonical": resolved,
-                "found": bool(asset),
-                "asset": asset,
-                "message": "资产存在" if asset else f"资产「{resolved}」不存在",
-            }
+            return self._asset_get_export(action, canonical)
 
         if action == "commit":
-            if not canonical:
-                raise ValueError("commit 操作必须提供 canonical 参数")
-            resolved = self.registry.resolve(canonical)
-
-            # 防污染检查：≥2 workflow 采用 + evidence
-            adopters = self._find_adopters(project_path, resolved)
-            adoption_count = len(adopters)
-            evidence = bool(adopters)  # 真实采用记录即 evidence
-            if adoption_count < MIN_ADOPTION_FOR_SOLIDIFY or not evidence:
-                return {
-                    "ok": False,
-                    "action": "commit",
-                    "canonical": resolved,
-                    "adoption_count": adoption_count,
-                    "solidified": False,
-                    "message": (
-                        f"拒绝固化（防污染，文档 15.2）：「{resolved}」仅有 "
-                        f"{adoption_count} 个 workflow 采用，需达到 ≥ "
-                        f"{MIN_ADOPTION_FOR_SOLIDIFY} 且附带 evidence 才允许固化。"
-                    ),
-                }
-
-            seed_info = SEED_DESIGNS.get(resolved, {})
-            # 蓝图：显式传入优先，否则自动从已验证 adopters 构建骨架
-            resolved_blueprint = blueprint if isinstance(blueprint, dict) and blueprint \
-                else self._build_blueprint_skeleton(resolved, adopters)
-            asset = WorkflowAsset(
-                canonical=resolved,
-                category=seed_info.get("category", "misc"),
-                description=description or seed_info.get("description", ""),
-                intent=next((k for k, v in INTENT_DESIGN.items() if v == resolved), ""),
-                template_code=template_code,
-                patch_suggestion=patch_suggestion,
-                migration_guide=migration_guide,
-                adopters=adopters,
-                adoption_count=adoption_count,
-                evidence=True,
-                solidified_at=datetime.now().strftime(TIMESTAMP_FORMAT),
-                source_project=project_path,
-                blueprint=resolved_blueprint,
+            return self._asset_commit(
+                project_path, canonical, description,
+                template_code, patch_suggestion, migration_guide, blueprint,
             )
-            self.registry.add_asset(asset.to_dict())
-            logger.info(f"[InnovationEngine] 已固化资产「{resolved}」({adoption_count} 采用)")
-            return {
-                "ok": True,
-                "action": "commit",
-                "canonical": resolved,
-                "solidified": True,
-                "adoption_count": adoption_count,
-                "evidence": True,
-                "asset": asset.to_dict(),
-            }
 
         raise ValueError(f"不支持的 action「{action}」，仅支持 list / get / export / commit。")
+
+    def _asset_list(self) -> Dict[str, Any]:
+        """资产化：list —— 列出注册表中的全部资产。"""
+        return {
+            "ok": True,
+            "action": "list",
+            "registry_path": self.registry.registry_path,
+            "count": self.registry.count_assets(),
+            "assets": self.registry.list_assets(),
+        }
+
+    def _asset_get_export(self, action: str, canonical: str) -> Dict[str, Any]:
+        """资产化：get / export —— 查询单个或导出全部资产。"""
+        if not canonical:
+            # export 可省略 canonical：导出全部资产
+            if action == "export":
+                return {
+                    "ok": True,
+                    "action": "export",
+                    "registry_path": self.registry.registry_path,
+                    "count": self.registry.count_assets(),
+                    "assets": self.registry.list_assets(),
+                }
+            raise ValueError(f"{action} 操作必须提供 canonical 参数")
+        resolved = self.registry.resolve(canonical)
+        asset = self.registry.get_asset(resolved)
+        return {
+            "ok": bool(asset),
+            "action": action,
+            "canonical": resolved,
+            "found": bool(asset),
+            "asset": asset,
+            "message": "资产存在" if asset else f"资产「{resolved}」不存在",
+        }
+
+    def _asset_commit(
+        self,
+        project_path: str,
+        canonical: str,
+        description: str,
+        template_code: str,
+        patch_suggestion: str,
+        migration_guide: str,
+        blueprint: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """资产化：commit —— 通过防污染检查后将设计固化为 WorkflowAsset。"""
+        if not canonical:
+            raise ValueError("commit 操作必须提供 canonical 参数")
+        resolved = self.registry.resolve(canonical)
+
+        # 防污染检查：≥2 workflow 采用 + evidence
+        adopters = self._find_adopters(project_path, resolved)
+        adoption_count = len(adopters)
+        evidence = bool(adopters)  # 真实采用记录即 evidence
+        if adoption_count < MIN_ADOPTION_FOR_SOLIDIFY or not evidence:
+            return {
+                "ok": False,
+                "action": "commit",
+                "canonical": resolved,
+                "adoption_count": adoption_count,
+                "solidified": False,
+                "message": (
+                    f"拒绝固化（防污染，文档 15.2）：「{resolved}」仅有 "
+                    f"{adoption_count} 个 workflow 采用，需达到 ≥ "
+                    f"{MIN_ADOPTION_FOR_SOLIDIFY} 且附带 evidence 才允许固化。"
+                ),
+            }
+
+        seed_info = SEED_DESIGNS.get(resolved, {})
+        # 蓝图：显式传入优先，否则自动从已验证 adopters 构建骨架
+        resolved_blueprint = blueprint if isinstance(blueprint, dict) and blueprint \
+            else self._build_blueprint_skeleton(resolved, adopters)
+        asset = WorkflowAsset(
+            canonical=resolved,
+            category=seed_info.get("category", "misc"),
+            description=description or seed_info.get("description", ""),
+            intent=next((k for k, v in INTENT_DESIGN.items() if v == resolved), ""),
+            template_code=template_code,
+            patch_suggestion=patch_suggestion,
+            migration_guide=migration_guide,
+            adopters=adopters,
+            adoption_count=adoption_count,
+            evidence=True,
+            solidified_at=datetime.now().strftime(TIMESTAMP_FORMAT),
+            source_project=project_path,
+            blueprint=resolved_blueprint,
+        )
+        self.registry.add_asset(asset.to_dict())
+        logger.info(f"[InnovationEngine] 已固化资产「{resolved}」({adoption_count} 采用)")
+        return {
+            "ok": True,
+            "action": "commit",
+            "canonical": resolved,
+            "solidified": True,
+            "adoption_count": adoption_count,
+            "evidence": True,
+            "asset": asset.to_dict(),
+        }
 
 
 # ═══════════════════════════════════════════════════════════════════
