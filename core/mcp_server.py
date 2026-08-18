@@ -26,6 +26,7 @@ def _pkg_version() -> str:
                 if line.strip().startswith("__version__"):
                     return line.split("=", 1)[1].strip().strip('"').strip("'")
     except Exception:
+        # 版本文件不可读时回退默认版本号
         pass
     return "4.0.0"
 
@@ -1019,12 +1020,20 @@ class Server:
                     "line_label": f.line_label, "title": f.title,
                     "detail": f.detail, "suggestion": f.suggestion,
                     "xval_by": f.xval_by,
+                    # 降噪聚合保留的追溯字段：count=该 finding 代表的同规则违规数，
+                    # locations=被合并的全部位置。硬约束：工具结果必须完整收集，
+                    # 禁止静默丢弃管道层精心保留的结构化字段。
+                    "count": getattr(f, "count", 1),
+                    "locations": getattr(f, "locations", []),
                 }
                 for f in r.findings
             ],
             "summary": {
                 "total_files": r.total_files, "total_lines": r.total_lines,
                 "findings": len(r.findings),
+                # 加权总数：把聚合条目的 count 展开回真实违规数，
+                # 与 findings（聚合后的条目数）互补，供调用方估算真实规模。
+                "findings_weighted": sum(getattr(f, "count", 1) for f in r.findings),
                 "high": sum(1 for f in r.findings if f.tier.value == "high"),
                 "medium": sum(1 for f in r.findings if f.tier.value == "medium"),
                 "low": sum(1 for f in r.findings if f.tier.value == "low"),

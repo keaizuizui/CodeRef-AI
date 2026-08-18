@@ -191,6 +191,7 @@ class ProjectScope:
                 try:
                     sub_entries = os.listdir(dir_path)
                 except PermissionError:
+                    # 无权限目录跳过，不影响其余扫描
                     continue
                 for entry in sub_entries:
                     full_path = os.path.join(dir_path, entry)

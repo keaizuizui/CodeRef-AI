@@ -681,8 +681,9 @@ class ChangeGuard:
             keep = scope.analyze()
             files = [getattr(f, "file_path", "") for f in keep]
             return [os.path.relpath(f, project_path) for f in files if f]
-        except Exception:
-            pass
+        except Exception as e:
+            # 作用域分析失败，回退简单遍历
+            logger.warning(f"ProjectScope 分析失败，回退简单遍历: {e}")
         # 降级：简单遍历
         result = []
         for root, dirs, files in os.walk(project_path):

@@ -109,32 +109,127 @@ def _compute_score(findings: List[Dict]) -> int:
     return max(0, int(score))
 
 
+# 兜底全局审计缓存的最大可信年龄（小时），超过则提示"审计数据较旧"
+_STALE_AUDIT_HOURS = 48
+
+
+def _read_audit_json(fp: str) -> Optional[Dict]:
+    """安全读取审计 findings JSON（dict）；文件缺失/损坏/非 dict 均返回 None。"""
+    if not os.path.isfile(fp):
+        return None
+    try:
+        with open(fp, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception as exc:
+        logger.warning(f"[interpret] 读取审计 findings 失败 {fp}: {exc}")
+        return None
+
+
+def _is_empty_shell_audit(data: Dict) -> bool:
+    """判定兜底文件是否为"空扫描空壳"（不算有效审计）。
+
+    条件（任一满足即空壳）：
+    - total_files 为 0/None（等价字段缺失）；
+    - findings 为空且 scope_text 自述空扫描（"0 个代码文件"/"空壳"字样）。
+    """
+    try:
+        total_files = int(data.get("total_files"))
+    except (TypeError, ValueError):
+        total_files = 0
+    if total_files <= 0:
+        return True
+    if not (data.get("findings") or []):
+        scope_text = str(data.get("scope_text") or "")
+        if "0 个代码文件" in scope_text or "空壳" in scope_text:
+            return True
+    return False
+
+
+def _scan_age_hours(data: Dict) -> Optional[float]:
+    """解析 scan_ts 距今小时数；缺失/格式不识别返回 None。"""
+    ts = str(data.get("scan_ts") or "").strip()
+    if not ts:
+        return None
+    from datetime import datetime
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            dt = datetime.strptime(ts, fmt)
+            return (datetime.now() - dt).total_seconds() / 3600.0
+        except ValueError:
+            # 尝试下一种时间格式
+            continue
+    return None
+
+
+def _describe_data_source(data: Optional[Dict]) -> str:
+    """把 _load_audit_findings 的来源标注翻译成对外的 data_source 字段。
+
+    - 哈希文件命中 → 文件路径；
+    - 旧版全局文件兜底 → "fallback_global"；
+    - 无任何可用数据 → "none"。
+    """
+    if data is None:
+        return "none"
+    if data.get("_source_kind") == "hashed":
+        return str(data.get("_source_path") or "")
+    return "fallback_global"
+
+
+def _stale_audit_note(data: Dict) -> str:
+    """兜底全局缓存 scan_ts 距今超过 48 小时 → 追加"审计数据较旧"警示；否则空串。"""
+    if data.get("_source_kind") != "fallback_global":
+        return ""
+    age_h = _scan_age_hours(data)
+    if age_h is not None and age_h > _STALE_AUDIT_HOURS:
+        return (f" 注意：审计数据较旧（来自旧版全局缓存，生成于 "
+                f"{data.get('scan_ts')}，距今约 {int(age_h)} 小时），"
+                f"建议重跑 coderef_audit 刷新。")
+    return ""
+
+
 def _load_audit_findings(project_path: str) -> Optional[Dict]:
     """读取已落盘的审计 findings（确定性；无则返回 None，由调用方诚实提示）。
 
-    优先按项目哈希隔离的文件名（v4.8.7+），避免共享 coderef-report 下跨项目串扰；
-    旧版全局单文件 audit_findings.json 仅作向后兼容兜底。
+    优先且仅用按项目哈希隔离的文件名（v4.8.7+），避免共享 coderef-report 下
+    跨项目串扰；旧版全局单文件 audit_findings.json 仅作向后兼容兜底，且必须
+    通过有效性校验——空扫描空壳（total_files=0 且 findings=[]）不算"已审计"，
+    防止陈旧缓存被当成满分健康。命中时在返回 dict 中附 _source_path /
+    _source_kind 供调用方输出 data_source。
     """
     import hashlib
     phash = hashlib.md5(project_path.encode()).hexdigest()[:12]
-    candidates = [
+    hashed_candidates = [
         os.path.join(project_path, "coderef-report",
                      f"audit_findings_{phash}.json"),
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                      "coderef-report", f"audit_findings_{phash}.json"),
-        # 向后兼容：旧版全局单文件（无项目标识）
+    ]
+    # 向后兼容：旧版全局单文件（无项目标识），仅作历史兜底
+    fallback_candidates = [
         os.path.join(project_path, "coderef-report", AUDIT_FINDINGS_FILE),
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                      "coderef-report", AUDIT_FINDINGS_FILE),
     ]
-    for fp in candidates:
-        if not os.path.isfile(fp):
+    # 1) 哈希文件存在时优先且仅用哈希文件
+    for fp in hashed_candidates:
+        data = _read_audit_json(fp)
+        if data is not None:
+            data["_source_path"] = fp
+            data["_source_kind"] = "hashed"
+            return data
+    # 2) 兜底全局文件必须校验：空扫描空壳视为"未审计"
+    for fp in fallback_candidates:
+        data = _read_audit_json(fp)
+        if data is None:
             continue
-        try:
-            with open(fp, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as exc:
-            logger.warning(f"[interpret] 读取审计 findings 失败 {fp}: {exc}")
+        if _is_empty_shell_audit(data):
+            logger.warning(
+                f"[interpret] 忽略陈旧空壳审计缓存（空扫描，无有效 findings）：{fp}")
+            continue
+        data["_source_path"] = fp
+        data["_source_kind"] = "fallback_global"
+        return data
     return None
 
 
@@ -234,6 +329,8 @@ class InterpretationPlatform:
                 "score_label": "未审计",
                 "score_color": "#999",
                 "findings_count": 0,
+                "data_source": "none",
+                "scan_ts": None,
                 "kg_stats": kg_stats,
                 "prompt": prompt,
                 "summary": summary,
@@ -254,6 +351,7 @@ class InterpretationPlatform:
             + (f" 高危清单：{'、'.join(top_risks)}。" if top_risks else "")
             + f" 知识图谱 {'已构建' if kg_stats else '未构建'}。"
             + " 注意：健康分来自确定性审计，仅反映已检出问题，不代表代码无错。"
+            + _stale_audit_note(data)
         )
 
         return {
@@ -268,6 +366,8 @@ class InterpretationPlatform:
             "findings_count": len(findings),
             "tally": {"high": len(high), "medium": len(medium), "low": len(low)},
             "top_risks": top_risks,
+            "data_source": _describe_data_source(data),
+            "scan_ts": data.get("scan_ts"),
             "kg_stats": kg_stats,
             "prompt": prompt,
             "summary": summary,
@@ -287,6 +387,8 @@ class InterpretationPlatform:
                 "project_path": project_path,
                 "error": "尚无审计结果。请先运行 coderef_audit 生成 findings，再生成仪表盘。",
                 "summary": "仪表盘依赖审计结果；未审计时无法渲染健康读数。",
+                "data_source": "none",
+                "scan_ts": None,
             }
         findings = data.get("findings", [])
         score = _compute_score(findings)
@@ -316,8 +418,11 @@ class InterpretationPlatform:
             "project_path": project_path,
             "score": score,
             "score_label": humanize_score(score),
+            "data_source": _describe_data_source(data),
+            "scan_ts": data.get("scan_ts"),
             "report_file": fp,
-            "summary": f"健康仪表盘已生成：{fp}（健康分 {score}/100）。",
+            "summary": f"健康仪表盘已生成：{fp}（健康分 {score}/100）。"
+                       + _stale_audit_note(data),
         }
 
     # ─── verify / verify_html：论断人话核验 ────────────────────
@@ -467,7 +572,9 @@ class InterpretationPlatform:
                 "edge_count": stats.get("edge_count", 0),
                 "built_at": stats.get("built_at", ""),
             }
-        except Exception:
+        except Exception as e:
+            # 图谱统计不可用时返回 None
+            logger.warning(f"读取图谱统计失败: {e}")
             return None
 
     def _prompt_summary(self, project_path: str) -> Dict:
@@ -496,6 +603,7 @@ class InterpretationPlatform:
                     return [d for d in data if isinstance(d, dict) and d.get("title")]
                 return []
             except Exception:
+                # LLM 输出非标准 JSON 时按行解析，属预期降级
                 pass
         # 多行 → 每条 title
         return [{"title": line.strip()} for line in text.splitlines() if line.strip()]

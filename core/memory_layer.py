@@ -264,6 +264,7 @@ class MemoryLayer:
             try:
                 os.unlink(tmp)
             except OSError:
+                # 临时文件清理尽力而为，随后原样抛出
                 pass
             raise
         return path
@@ -287,8 +288,8 @@ class MemoryLayer:
         for fp in files:
             try:
                 snap[fp] = {"mtime": os.path.getmtime(fp), "size": os.path.getsize(fp)}
-            except OSError:
-                pass
+            except OSError as e:
+                logger.warning(f"读取文件快照失败，跳过 {fp}: {e}")
         return snap
 
     @staticmethod
@@ -438,8 +439,9 @@ class MemoryLayer:
             stats = {}
             try:
                 stats = kb.stats()
-            except Exception:
-                pass
+            except Exception as e:
+                # 统计不可用时返回空结果
+                logger.warning(f"读取知识库统计失败，返回空统计: {e}")
             return {"db_path": db_path, "chunks": count, "stats": stats}
         except Exception as e:
             logger.warning(f"[MemoryLayer] 语义知识库索引失败: {e}")
@@ -679,6 +681,7 @@ class MemoryLayer:
                 try:
                     rel = os.path.relpath(fp, common)
                 except ValueError:
+                    # relpath 失败（跨盘符），保留绝对路径
                     pass
             parts = rel.replace(os.sep, "/").split("/")
             mod = parts[0] if len(parts) > 1 else "__root__"

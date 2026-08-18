@@ -236,6 +236,7 @@ class LLMIntegration:
                 # 5xx 可重试；408/429 也可重试；其余 4xx 为永久性错误
                 return e.status_code >= 500 or e.status_code in (408, 429)
         except ImportError:
+            # openai 异常类型不可用时，降级为按状态码/关键字识别
             pass
 
         # 兜底：按状态码 / 关键字识别

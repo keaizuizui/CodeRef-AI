@@ -77,6 +77,46 @@ TAG_SEVERITY = {
     "FIXME": "high", "BUG": "critical", "HACK": "medium", "TODO": "low", "XXX": "low",
 }
 
+# 叙述性上下文识别：注释在叙述"历史上修过 / 社区反馈过 bug"等已了结的往事，
+# 而非留下未完成工作标记（如 pipeline_runner.py 中"# 社区反馈的'全 0'bug 根源）"）。
+_NARRATIVE_KEYWORDS = ("已修复", "修复过", "历史", "反馈", "曾经", "既往")
+# 全角标点（句读/引号/括号等）：tag 前后紧邻这些或 CJK 字符时视为嵌在中文叙述里
+_CJK_PUNCT = "。，、；：！？…—·～（）【】《》〈〉「」『』“”‘’"
+# 标记后允许出现的中文说明分隔符（"# BUG：xxx" 仍是合法标记形式，不应排除）
+_TAG_COLON_CN = "："
+
+
+def _is_cjk_like(ch: str) -> bool:
+    """字符是否为 CJK 汉字或全角标点"""
+    if not ch:
+        return False
+    return ("\u4e00" <= ch <= "\u9fff") or (ch in _CJK_PUNCT)
+
+
+def _is_narrative_context(stripped: str, m) -> bool:
+    """tag 命中是否处于中文叙述上下文（而非 "TAG: 待办" 标记形式）。
+
+    判定规则：
+    1. tag 前紧邻 CJK/全角标点（如 反馈的"…"bug）；
+    2. tag 后紧邻 CJK/全角标点且不是中文冒号（如 bug）／bug。）；
+    3. 行含叙述关键词，且 tag 前最近的非空白字符是 CJK/全角标点/引号
+       （引号收尾说明 tag 前是引述内容，嵌在中文句子中）。
+    """
+    s, e = m.start(), m.end()
+    if s > 0 and _is_cjk_like(stripped[s - 1]):
+        return True
+    if e < len(stripped):
+        nxt = stripped[e]
+        if _is_cjk_like(nxt) and nxt != _TAG_COLON_CN:
+            return True
+    if any(k in stripped for k in _NARRATIVE_KEYWORDS):
+        k = s - 1
+        while k >= 0 and stripped[k].isspace():
+            k -= 1
+        if k >= 0 and (_is_cjk_like(stripped[k]) or stripped[k] in "\"'“”‘’"):
+            return True
+    return False
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 完整性检查器
@@ -196,7 +236,9 @@ class IntegrityChecker:
             try:
                 with open(fp, "r", encoding="utf-8") as f:
                     lines = f.readlines()
-            except Exception:
+            except Exception as e:
+                # 文件不可读，跳过该文件
+                logger.warning(f"读取文件失败，跳过完整性检查 {fp}: {e}")
                 continue
 
             # 获取文档字符串行号，跳过文档字符串
@@ -225,16 +267,25 @@ class IntegrityChecker:
                 if tag == "XXX" and _sf.is_placeholder_xxx(stripped):
                     continue
 
+                # 跳过叙述性上下文：描述"已修复/社区反馈/历史"等往事的注释
+                # （如 "# 社区反馈的'全 0'bug 根源）"），不是未完成工作标记
+                if _is_narrative_context(stripped, m):
+                    continue
+
                 severity = TAG_SEVERITY.get(tag, "low")
                 # 提取标签后的内容
                 after_tag = stripped[m.end():].strip().lstrip(":- ")
+                # 剥离首尾残余标点，避免"）""。"等截断残片成为残缺标题
+                phrase = after_tag.strip("。，、；！？…—()（）[]【】《》〈〉「」『』“”‘’\"'")
+                if not phrase:
+                    phrase = after_tag.strip().strip("。，、；！？…—（）()")
 
                 issues.append(IntegrityIssue(
                     category="todo_fixme",
                     severity=severity,
                     file_path=fp,
                     line=i,
-                    content=f"[{tag}] {after_tag}" if after_tag else f"[{tag}]",
+                    content=f"[{tag}] {phrase}" if phrase else f"[{tag}]",
                     suggestion=f"处理此 {tag} 标记，或如果不再需要则删除注释",
                 ))
 
@@ -332,7 +383,9 @@ class IntegrityChecker:
                 try:
                     with open(fp, "r", encoding="utf-8") as fh:
                         content = fh.read()
-                except Exception:
+                except Exception as e:
+                    # 文件不可读，跳过该文件
+                    logger.warning(f"读取文件失败，跳过引用检查 {fp}: {e}")
                     continue
 
                 # 检查反引号中的文件引用
@@ -427,7 +480,9 @@ class IntegrityChecker:
                     # 读取文件末尾几个字节
                     f.seek(-1, os.SEEK_END)
                     last_byte = f.read(1)
-            except Exception:
+            except Exception as e:
+                # 文件不可读，跳过该文件
+                logger.warning(f"读取文件失败，跳过换行检查 {fp}: {e}")
                 continue
 
             if last_byte != b"\n":

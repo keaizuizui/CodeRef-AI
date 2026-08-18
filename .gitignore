@@ -16,6 +16,7 @@ build/
 data/
 logs/
 *.log
+.gitnexus/
 
 # ─── 测试缓存 ───
 .pytest_cache/

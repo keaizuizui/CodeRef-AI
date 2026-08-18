@@ -39,6 +39,9 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from collections import defaultdict
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -228,8 +231,8 @@ class WikiGenerator:
                     rules["core_names"] = saved["core_names"]
                 if "min_files" in saved:
                     rules["min_files"] = saved["min_files"]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"加载入口规则缓存失败，使用默认规则: {e}")
         return rules
 
     @staticmethod
@@ -529,6 +532,7 @@ class WikiGenerator:
             if p:
                 return os.path.abspath(p)
         except Exception:
+            # git 探测失败时继续尝试便携根
             pass
         # 便携根探测：复用 operation_memory 的便携根 / bin 子目录配置
         try:
@@ -542,6 +546,7 @@ class WikiGenerator:
                 try:
                     matches = glob.glob(os.path.expanduser(root_pat))
                 except Exception:
+                    # glob 模式异常时跳过该根
                     continue
                 for root in matches:
                     if not os.path.isdir(root):
@@ -551,6 +556,7 @@ class WikiGenerator:
                         if os.path.isfile(cand):
                             return os.path.abspath(cand)
         except Exception:
+            # 便携根探测整体失败时返回 None，走无 git 降级
             pass
         return None
 
@@ -563,8 +569,8 @@ class WikiGenerator:
             )
             if out.returncode == 0:
                 return out.stdout.strip() or None
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"获取 git HEAD 失败，跳过版本标注: {e}")
         return None
 
     def _git_last_commit(self, git_bin: str, project_path: str, file_path: str) -> str:
@@ -576,8 +582,8 @@ class WikiGenerator:
             )
             if out.returncode == 0:
                 return out.stdout.strip() or ""
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"获取文件最近提交哈希失败: {e}")
         return ""
 
     def _git_changed_files(self, git_bin: str, project_path: str,
@@ -619,7 +625,8 @@ class WikiGenerator:
                     if rel and rel not in files:
                         files.append(rel)
             return files
-        except Exception:
+        except Exception as e:
+            logger.warning(f"解析 git ls-files 输出失败，回退全量扫描: {e}")
             return None
 
     def _load_last_update(self, output_dir: str) -> Optional[dict]:
@@ -628,7 +635,8 @@ class WikiGenerator:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"读取增量状态文件失败，将全量生成: {e}")
             return None
 
     def _save_last_update(self, output_dir: str, git_head: Optional[str],
@@ -643,8 +651,8 @@ class WikiGenerator:
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"写入增量状态文件失败，下次将全量生成: {e}")
 
     def _incremental_update(self, project_path: str, output_dir: str,
                             changed_files: List[str], wiki_style: str,
@@ -675,6 +683,7 @@ class WikiGenerator:
             try:
                 mod_rel = os.path.normpath(os.path.relpath(mod.path, project_path))
             except ValueError:
+                # relpath 失败（跨盘符）时跳过该模块
                 continue
             for rel in changed_set:
                 if not rel.endswith(".py"):
@@ -751,8 +760,10 @@ class WikiGenerator:
                 try:
                     os.remove(entry.path)
                 except OSError:
+                    # 过期文档删除尽力而为
                     pass
         except OSError:
+            # 目录扫描失败时跳过清理
             pass
 
     # ─── 模块发现 ───
@@ -857,6 +868,7 @@ class WikiGenerator:
                         # 不是子项目，继续深入
                         _scan(entry.path, depth + 1)
             except PermissionError:
+                # 无权限目录跳过
                 pass
 
         _scan(project_path, 1)
@@ -899,8 +911,8 @@ class WikiGenerator:
                 meta = self._metadata_from_dict(raw)
                 if meta and len(meta.modules) == len(modules):
                     return meta
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"读取元数据缓存失败，重新探测: {e}")
 
         web_framework_kws = {"fastapi", "django", "flask", "sanic", "tornado",
                              "aiohttp", "starlette", "bottle", "falcon"}
@@ -945,8 +957,8 @@ class WikiGenerator:
         try:
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(self._metadata_to_dict(meta), f, ensure_ascii=False, indent=1)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"写入元数据缓存失败，忽略: {e}")
 
         return meta
 
@@ -1024,6 +1036,7 @@ class WikiGenerator:
             fm.is_entry_point = base in ("main.py", "app.py", "server.py", "run.py")
 
         except SyntaxError:
+            # 语法错误文件保留默认元信息
             pass
 
         return fm
@@ -1077,7 +1090,8 @@ class WikiGenerator:
                 total_files=d.get("total_files", 0),
                 has_web_framework=d.get("has_web_framework", False),
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"反序列化元数据缓存失败，忽略: {e}")
             return None
 
     # ═══════════════════════════════════════════════════════════════════
@@ -1191,8 +1205,8 @@ class WikiGenerator:
         try:
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(descriptions, f, ensure_ascii=False, indent=1)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"写入描述缓存失败，忽略: {e}")
 
         return descriptions
 
@@ -1434,7 +1448,9 @@ class WikiGenerator:
             doc_name = os.path.basename(doc_path)
             try:
                 content = open(doc_path, encoding="utf-8").read()
-            except Exception:
+            except Exception as e:
+                # 文档不可读，跳过该文档
+                logger.warning(f"读取模块文档失败，跳过 cite-verify {doc_path}: {e}")
                 continue
             # 只对 LLM body 做 cite-verify/fix，保留确定性前缀（front matter/
             # 徽章/证据锚定）不被 LLM 重写覆盖；修复后原子拼回前缀与修复后的 body。
@@ -2171,8 +2187,8 @@ class WikiGenerator:
             db = CodeKnowledgeGraph(project_path).db_path
             if db and os.path.exists(db):
                 return db
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"定位知识图谱数据库失败: {e}")
         return None
 
     @staticmethod
@@ -2723,8 +2739,8 @@ class WikiGenerator:
             shutil.copytree(
                 output_dir, dst,
                 ignore=shutil.ignore_patterns(WIKI_LAST_GOOD_DIR))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"写入 last-good 备份失败，忽略: {e}")
 
     def _emit(self, docs: List[str], output_dir: str, name: str, content: str,
               front_matter: Optional[str] = None) -> None:
@@ -2837,8 +2853,8 @@ echo "[CodeRef] Wiki 已更新"
                 content = block + "\n"
             with open(agent_file, "w", encoding="utf-8") as f:
                 f.write(content)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"写入 agent 说明文件失败: {e}")
 
     # ─── 报告生成 ───
 

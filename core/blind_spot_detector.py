@@ -21,8 +21,10 @@
 版本: v1.0
 """
 
+import ast
 import os
 import re
+import sys
 from typing import Dict, List, Optional, Set, Tuple
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -163,9 +165,16 @@ class BlindSpotDetector:
         except Exception:
             return imports
 
-        for line in content.split("\n"):
+        # docstring/字符串里的示例 import（如本文件 docstring 中的
+        # `import tomli as tomllib` 示例）不是真实代码行为，落在字符串
+        # 区间内的行跳过，避免把文档示例中的模块名误报为缺失依赖
+        str_ranges = self._string_line_ranges(content)
+
+        for idx, line in enumerate(content.split("\n"), 1):
             stripped = line.strip()
             if stripped.startswith("#"):
+                continue
+            if str_ranges and any(lo <= idx <= hi for lo, hi in str_ranges):
                 continue
             # from X.Y import Z
             m = re.match(r'from\s+([\w.]+)\s+import', stripped)
@@ -255,6 +264,15 @@ class BlindSpotDetector:
         # 收集所有本地模块名
         local_modules = self._all_module_names.copy()
 
+        # 依赖清单中已声明的第三方包（requirements*.txt）：已明确声明的安装
+        # 项（如 loguru）不属于"缺失依赖"盲区，跳过避免误报
+        declared_deps = self._declared_dependencies(project_path)
+
+        # 项目自身的顶层模块名（项目根下的顶层 .py 文件名 + 顶层目录名）：
+        # `from config import settings`、`from core import tool_registry` 的
+        # import 根名是项目自己的顶层包目录名，不是缺失的第三方依赖
+        local_roots = self._project_local_roots(project_path)
+
         all_imported: Set[str] = set()
         for imports in self._all_imports.values():
             all_imported.update(imports)
@@ -277,21 +295,215 @@ class BlindSpotDetector:
             # 检查顶级模块是否在本地
             if root in local_modules:
                 continue
+            # 跳过项目自身的顶层包/模块（如 config、core 等项目内目录）
+            if root in local_roots:
+                continue
+            # 跳过依赖清单中已声明的第三方包（pip 安装项，非项目内缺失）
+            if root.lower().replace("_", "-") in declared_deps:
+                continue
 
             # 找到引用该模块的文件
             ref_files = [fp for fp, imps in self._all_imports.items() if imp in imps]
+            # 排除"标准库后备别名"写法：import tomli as tomllib —— 给标准库
+            # 模块（tomllib）提供旧版本后备（tomli），是标准兼容写法而非缺依赖
+            ref_files = [fp for fp in ref_files
+                         if not self._is_stdlib_fallback_alias(fp, imp, stdlib_modules)]
+            if not ref_files:
+                continue
             for ref_file in ref_files[:3]:  # 最多列 3 个引用
+                # 可选依赖（try-import / 函数内延迟 import，缺失时功能自动
+                # 降级而非崩溃，如 stdlib_list、selenium）：降级为 low 保持
+                # 可见性，不再按 high 缺失处理
+                optional = root in self._optional_import_roots(ref_file)
+                if optional:
+                    detail = (f"import 了 '{imp}'，属可选依赖（try-import / 延迟 "
+                              f"import，缺失时功能自动降级），如需该功能请 pip install {root}")
+                    user_should_know = (f"文件 '{os.path.basename(ref_file)}' 引用了可选模块 "
+                                        f"'{imp}'，当前环境未安装也不影响其它功能。如需启用该功能，"
+                                        f"请安装：pip install {root}。")
+                    risk_level = "low"
+                else:
+                    detail = f"import 了 '{imp}'，但项目中找不到该模块（可能是外部依赖，需要 pip install 检查）"
+                    user_should_know = f"文件 '{os.path.basename(ref_file)}' 引用了一个叫 '{imp}' 的模块，但项目里找不到这个模块。这可能是需要额外安装的第三方库，或者是一个被删除/遗漏的模块。你需要确认环境是否完整。"
+                    risk_level = "high"
                 spots.append(BlindSpot(
                     category="missing_dependency",
                     item=imp,
-                    detail=f"import 了 '{imp}'，但项目中找不到该模块（可能是外部依赖，需要 pip install 检查）",
+                    detail=detail,
                     file_path=ref_file,
-                    risk_level="high",
-                    user_should_know=f"文件 '{os.path.basename(ref_file)}' 引用了一个叫 '{imp}' 的模块，但项目里找不到这个模块。这可能是需要额外安装的第三方库，或者是一个被删除/遗漏的模块。你需要确认环境是否完整。",
+                    risk_level=risk_level,
+                    user_should_know=user_should_know,
                 ))
 
         logger.info(f"[BlindSpotDetector] 缺失依赖: {len(spots)} 个")
         return spots
+
+    @staticmethod
+    def _declared_dependencies(project_path: str) -> Set[str]:
+        """读取项目根目录的依赖声明文件，返回已声明的包名集合。
+
+        目前支持 requirements*.txt（含 requirements-dev.txt 等变体）。
+        包名做规范化处理（小写、下划线归一为连字符，与 pip 规则一致）。
+        在依赖清单中声明的包是明确的安装项，不构成"缺失依赖"盲区。
+        """
+        declared: Set[str] = set()
+        try:
+            names = os.listdir(project_path)
+        except OSError:
+            return declared
+        for name in names:
+            if not (name.lower().startswith("requirements") and name.lower().endswith(".txt")):
+                continue
+            try:
+                with open(os.path.join(project_path, name), "r",
+                          encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+            except OSError as e:
+                # 依赖清单不可读，跳过该文件
+                logger.warning(f"读取文件失败，跳过依赖清单检查 {name}: {e}")
+                continue
+            for line in content.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith(("#", "-", ";")):
+                    continue
+                # 取行首包名（兼容 pkg>=1.0 / pkg[extras]==2.0 / pkg~=1.0 等）
+                m = re.match(r'[A-Za-z0-9][A-Za-z0-9._\-]*', stripped)
+                if m:
+                    declared.add(m.group(0).lower().replace("_", "-"))
+        return declared
+
+    @staticmethod
+    def _project_local_roots(project_path: str) -> Set[str]:
+        """收集项目自身的顶层模块名（项目根下的顶层 .py 文件名 + 顶层目录名）。
+
+        项目内顶层包（如 config/、core/）以 `from config import settings`、
+        `from core import tool_registry` 形式引用时，import 根名是包目录名
+        本身，不在逐文件收集的模块名集合（形如 "config.__init__"）里，
+        曾被误判为缺失的第三方依赖；命中本集合即视为项目内模块。
+        """
+        roots: Set[str] = set()
+        try:
+            names = os.listdir(project_path)
+        except OSError:
+            return roots
+        for name in names:
+            if name.endswith(".py"):
+                roots.add(name[:-3])
+            elif not name.startswith(".") and os.path.isdir(os.path.join(project_path, name)):
+                roots.add(name)
+        return roots
+
+    @staticmethod
+    def _optional_import_roots(file_path: str) -> Set[str]:
+        """收集文件中"可选依赖"import 的模块根名（缺失时功能降级而非崩溃）。
+
+        两类形态：
+        1. try/except（ImportError/ModuleNotFoundError/Exception/裸 except）
+           包裹的 import（如 ast_parser.py 的 stdlib_list）：缺失时代码
+           自动走降级分支；
+        2. 函数/方法体内的延迟 import（如 frontend_inspector.py 的
+           selenium）：仅在对应功能被调用时加载，调用方捕获异常降级为
+           静态分析。
+        """
+        roots: Set[str] = set()
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+        except OSError:
+            return roots
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            return roots
+
+        def _add_import_roots(stmts) -> None:
+            for stmt in stmts:
+                if isinstance(stmt, ast.Import):
+                    for alias in stmt.names:
+                        roots.add(alias.name.split(".")[0])
+                elif isinstance(stmt, ast.ImportFrom) and stmt.module and stmt.level == 0:
+                    roots.add(stmt.module.split(".")[0])
+
+        def _catches_import_error(handler: ast.ExceptHandler) -> bool:
+            t = handler.type
+            if t is None:  # 裸 except 同样覆盖 ImportError
+                return True
+            names: List[str] = []
+            elts = t.elts if isinstance(t, ast.Tuple) else [t]
+            for el in elts:
+                if isinstance(el, ast.Name):
+                    names.append(el.id)
+                elif isinstance(el, ast.Attribute):
+                    names.append(el.attr)
+            return any(n in ("ImportError", "ModuleNotFoundError", "Exception")
+                       for n in names)
+
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                _add_import_roots(node.body)
+            elif isinstance(node, ast.Try):
+                if any(_catches_import_error(h) for h in node.handlers):
+                    _add_import_roots(node.body)
+                    for h in node.handlers:
+                        _add_import_roots(h.body)
+        return roots
+
+    def _is_stdlib_fallback_alias(self, file_path: str, imp: str,
+                                  stdlib_modules: Set[str]) -> bool:
+        """该 import 是否是"标准库后备别名"写法（不应报缺失依赖）。
+
+        标准 Py3.11 兼容写法（如 ci_compile_check.py）：
+            try:
+                import tomllib  # Python 3.11+
+            except ImportError:
+                import tomli as tomllib  # 旧版本回退
+        `import tomli as tomllib` 中别名 tomllib 是标准库模块名，说明 tomli
+        只是为旧解释器提供同名能力的后备，并非缺失依赖。
+        仅当文件中对该模块的所有引用都采用此写法时才跳过；裸 import
+        （如 try: import notinstalled_pkg）仍正常报出。
+        """
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+        except OSError:
+            return False
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            return False
+
+        hits = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == imp or alias.name.split(".")[0] == imp.split(".")[0]:
+                        hits.append(alias)
+        if not hits:
+            return False
+        return all(
+            alias.asname
+            and alias.asname.split(".")[0] in stdlib_modules
+            for alias in hits
+        )
+
+    @staticmethod
+    def _string_line_ranges(content: str) -> Optional[List[Tuple[int, int]]]:
+        """用 ast 定位所有字符串字面量（含 docstring、f-string）的行区间。
+
+        返回 None 表示无法解析（语法错误），调用方应回退为不过滤。
+        """
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            # 语法错误的文件无法用 ast 定位字符串区间，返回 None 由调用方回退为不过滤
+            return None
+        ranges = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                ranges.append((node.lineno, node.end_lineno))
+            elif isinstance(node, ast.JoinedStr):
+                ranges.append((node.lineno, node.end_lineno))
+        return ranges
 
     def _detect_dynamic_paths(self, project_path: str) -> List[BlindSpot]:
         """检测动态路径注入：sys.path.insert / sys.path.append"""
@@ -302,12 +514,23 @@ class BlindSpotDetector:
             try:
                 with open(fp, "r", encoding="utf-8") as f:
                     lines = f.readlines()
-            except Exception:
+            except Exception as e:
+                # 文件不可读，跳过该文件的盲区检测
+                logger.warning(f"读取文件失败，跳过盲区检测 {fp}: {e}")
                 continue
+
+            # 字符串/docstring 内的示例说明（如文档中的用法示例、测试的期望
+            # 数据 JSON）不是真实代码行为，命中行落在字符串区间内则跳过
+            str_ranges = self._string_line_ranges("".join(lines))
 
             for i, line in enumerate(lines, 1):
                 if pattern.search(line):
                     stripped = line.strip()
+                    # 注释中的示例说明不作为代码行为
+                    if stripped.startswith("#"):
+                        continue
+                    if str_ranges and any(lo <= i <= hi for lo, hi in str_ranges):
+                        continue
                     spots.append(BlindSpot(
                         category="dynamic_path",
                         item=f"sys.path 动态修改",
@@ -361,7 +584,9 @@ class BlindSpotDetector:
             try:
                 with open(fp, "r", encoding="utf-8") as f:
                     content = f.read()
-            except Exception:
+            except Exception as e:
+                # 文件不可读，跳过该文件的符号检测
+                logger.warning(f"读取文件失败，跳过符号检测 {fp}: {e}")
                 continue
 
             has_symbols = bool(re.search(r'^\s*(def|class)\s+\w+', content, re.MULTILINE))
@@ -391,7 +616,9 @@ class BlindSpotDetector:
             try:
                 with open(fp, "r", encoding="utf-8") as f:
                     lines = f.readlines()
-            except Exception:
+            except Exception as e:
+                # 文件不可读，跳过该文件的检查
+                logger.warning(f"读取文件失败，跳过检查 {fp}: {e}")
                 continue
 
             if not lines:
@@ -445,7 +672,14 @@ class BlindSpotDetector:
 
     @staticmethod
     def _get_stdlib_modules() -> Set[str]:
-        """获取 Python 3.10+ 标准库模块名集合"""
+        """获取标准库模块名集合
+
+        优先用 sys.stdlib_module_names（Python 3.10+，与解释器实际版本一致，
+        天然包含 tomllib 等新标准库）；旧解释器回退到静态清单并补 tomllib。
+        """
+        dyn = getattr(sys, "stdlib_module_names", None)
+        if dyn:
+            return set(dyn)
         stdlib = {
             "abc", "aifc", "argparse", "array", "ast", "asynchat", "asyncio",
             "asyncore", "atexit", "audioop", "base64", "bdb", "binascii", "binhex",
@@ -480,6 +714,7 @@ class BlindSpotDetector:
             "xdrlib", "xml", "xmlrpc", "zipapp", "zipfile", "zipimport", "zlib",
             "zoneinfo", "_thread",
         }
+        stdlib.add("tomllib")  # Python 3.11+ 标准库，旧静态清单缺失
         return stdlib
 
     # ─── 报告生成 ─────────────────────────────────────────────────

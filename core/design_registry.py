@@ -173,6 +173,7 @@ class DesignRegistry:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
             except OSError:
+                # 临时文件已不存在或清理失败均可忽略：外层随后仍会 raise 原异常
                 pass
             raise
 

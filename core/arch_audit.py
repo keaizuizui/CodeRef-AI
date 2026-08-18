@@ -69,6 +69,7 @@ def module_of(node: dict, project_path: str = "") -> str:
             if not rel.startswith(".."):
                 base = rel
         except Exception:
+            # relpath 失败（跨盘符等），保留绝对路径兜底
             pass
     root, _ = os.path.splitext(base)
     return root if root else (node.get("name") or "?")
@@ -106,17 +107,10 @@ def build_module_graph(nodes: Dict[str, dict],
     return {m: sorted(t) for m, t in mod_adj.items()}, self_edges
 
 
-def find_sccs(adj: Dict[str, List[str]]) -> List[List[str]]:
-    """在模块依赖图上求强连通分量（Kosaraju）。返回各分量内模块名列表。"""
-    all_nodes = set(adj.keys())
-    for tars in adj.values():
-        all_nodes.update(tars)
-    if not all_nodes:
-        return []
-    # 正向 DFS 记录完成顺序（迭代栈，避免大项目 RecursionError）
+def _dfs_finish_order(adj: Dict[str, List[str]], all_nodes: set) -> List[str]:
+    """正向迭代 DFS，返回节点完成顺序（后序）。栈模拟避免大项目递归溢出。"""
     visited = set()
     order: List[str] = []
-
     for v in all_nodes:
         if v in visited:
             continue
@@ -133,30 +127,122 @@ def find_sccs(adj: Dict[str, List[str]]) -> List[List[str]]:
             for w in adj.get(node, []):
                 if w not in visited:
                     stack.append((w, False))
-    # 反向图
+    return order
+
+
+def _reverse_graph(adj: Dict[str, List[str]]) -> Dict[str, List[str]]:
     radj: Dict[str, List[str]] = defaultdict(list)
     for v, tars in adj.items():
         for w in tars:
             radj[w].append(v)
-    # 按完成逆序收集分量（迭代栈）
-    visited2 = set()
-    comps: List[List[str]] = []
+    return radj
 
+
+def _collect_components(radj: Dict[str, List[str]], order: List[str]) -> List[List[str]]:
+    """按完成逆序在反向图上迭代 DFS，每个连通栈即一个强连通分量。"""
+    visited = set()
+    comps: List[List[str]] = []
     for v in reversed(order):
-        if v in visited2:
+        if v in visited:
             continue
         comp: List[str] = []
         stack = [v]
-        visited2.add(v)
+        visited.add(v)
         while stack:
             node = stack.pop()
             comp.append(node)
             for w in radj.get(node, []):
-                if w not in visited2:
-                    visited2.add(w)
+                if w not in visited:
+                    visited.add(w)
                     stack.append(w)
         comps.append(comp)
     return comps
+
+
+def find_sccs(adj: Dict[str, List[str]]) -> List[List[str]]:
+    """在模块依赖图上求强连通分量（Kosaraju）。返回各分量内模块名列表。"""
+    all_nodes = set(adj.keys())
+    for tars in adj.values():
+        all_nodes.update(tars)
+    if not all_nodes:
+        return []
+    order = _dfs_finish_order(adj, all_nodes)
+    return _collect_components(_reverse_graph(adj), order)
+
+
+def _find_cycles(mod_adj: Dict[str, List[str]], self_edges: set, sc_min: int) -> List[List[str]]:
+    """模块级 SCC 中筛出真循环：单模块分量需自环，多模块分量需达最小尺寸。"""
+    cycles = []
+    for comp in find_sccs(mod_adj):
+        is_cycle = len(comp) >= sc_min
+        if len(comp) == 1:
+            is_cycle = comp[0] in self_edges
+        if is_cycle:
+            cycles.append(comp)
+    return cycles
+
+
+def _fan_stats(mod_adj: Dict[str, List[str]], fo_t: int) -> tuple:
+    """计算各模块扇出/扇入，返回 (god_modules, fan_top10)。"""
+    fan_out = {m: len(mod_adj.get(m, [])) for m in mod_adj}
+    fan_in: Dict[str, int] = defaultdict(int)
+    for m, tars in mod_adj.items():
+        for t in tars:
+            fan_in[t] += 1
+    all_mods = set(fan_out) | set(fan_in.keys())
+    row = lambda m: {"module": m, "fan_out": fan_out.get(m, 0), "fan_in": fan_in.get(m, 0)}
+    god = sorted((row(m) for m in all_mods if fan_out.get(m, 0) > fo_t),
+                 key=lambda x: -x["fan_out"])
+    top = sorted((row(m) for m in all_mods), key=lambda x: -x["fan_out"])[:10]
+    return god, top
+
+
+def _layer_violations(nodes: dict, mod_adj: Dict[str, List[str]], project_path: str) -> list:
+    """下层模块依赖上层模块的违例清单（模块层取其下节点层的最大值）。"""
+    mod_layer: Dict[str, int] = {}
+    for nid, n in nodes.items():
+        m = module_of(n, project_path)
+        if m:
+            mod_layer[m] = max(mod_layer.get(m, 0), layer_of(n))
+    viol = []
+    for m, tars in mod_adj.items():
+        lm = mod_layer.get(m, _DEFAULT_LAYER)
+        for t in tars:
+            lt = mod_layer.get(t, _DEFAULT_LAYER)
+            if lm < lt:
+                viol.append({
+                    "from": m, "to": t,
+                    "reason": f"{_LAYER_NAME.get(lm, '?')} 依赖 {_LAYER_NAME.get(lt, '?')}（下层依赖上层）",
+                })
+    return viol
+
+
+def _large_modules(nodes: dict, project_path: str, ls_t: int) -> list:
+    """符号数超过阈值的异常规模模块。"""
+    mod_symbols: Dict[str, int] = defaultdict(int)
+    for nid, n in nodes.items():
+        if n.get("type") in ("function", "method", "class"):
+            mod_symbols[module_of(n, project_path)] += 1
+    return sorted(
+        ({"module": m, "symbols": c} for m, c in mod_symbols.items() if c > ls_t),
+        key=lambda x: -x["symbols"])
+
+
+def _health_summary(cycles: list, god: list, layer_viol: list, large: list) -> dict:
+    """架构健康度（0-10）：循环/上帝模块/分层违例/异常规模扣分。"""
+    score = 10.0
+    score -= min(6.0, len(cycles) * ARCH_HEALTH_WEIGHT_CYCLE)
+    score -= min(2.0, len(god) * ARCH_HEALTH_WEIGHT_GOD)
+    score -= min(2.0, len(layer_viol) * ARCH_HEALTH_WEIGHT_LAYER)
+    score -= min(2.0, len(large) * ARCH_HEALTH_WEIGHT_LARGE)
+    health = round(max(0.0, score), 1)
+    label = ("优秀" if health >= 8.5 else "良好" if health >= 7.0 else
+             "中等" if health >= 5.0 else "堪忧")
+    return {
+        "health": health, "health_label": label,
+        "cycles": len(cycles), "god_modules": len(god),
+        "layer_violations": len(layer_viol), "large_modules": len(large),
+    }
 
 
 def audit(project_path: str, db_path: str = None,
@@ -197,73 +283,20 @@ def audit(project_path: str, db_path: str = None,
     result["graph_stats"]["modules"] = len(mod_adj)
 
     # 1) 循环依赖（模块级 SCC）
-    cycles = []
-    for comp in find_sccs(mod_adj):
-        is_cycle = len(comp) >= sc_min
-        if len(comp) == 1:
-            is_cycle = comp[0] in self_edges
-        if is_cycle:
-            cycles.append(comp)
-    result["cycles"] = cycles
+    result["cycles"] = _find_cycles(mod_adj, self_edges, sc_min)
 
     # 2) 扇出 / 扇入
-    fan_out = {m: len(mod_adj.get(m, [])) for m in mod_adj}
-    fan_in: Dict[str, int] = defaultdict(int)
-    for m, tars in mod_adj.items():
-        for t in tars:
-            fan_in[t] += 1
-    all_mods = set(fan_out) | set(fan_in.keys())
-    result["god_modules"] = sorted(
-        ({"module": m, "fan_out": fan_out.get(m, 0), "fan_in": fan_in.get(m, 0)}
-         for m in all_mods if fan_out.get(m, 0) > fo_t),
-        key=lambda x: -x["fan_out"])
-    result["fan_top"] = sorted(
-        ({"module": m, "fan_out": fan_out.get(m, 0), "fan_in": fan_in.get(m, 0)}
-         for m in all_mods),
-        key=lambda x: -x["fan_out"])[:10]
+    result["god_modules"], result["fan_top"] = _fan_stats(mod_adj, fo_t)
 
-    # 3) 分层违例（模块所属层取该模块下节点层的最大值）
-    mod_layer: Dict[str, int] = {}
-    for nid, n in nodes.items():
-        m = module_of(n, project_path)
-        if m:
-            mod_layer[m] = max(mod_layer.get(m, 0), layer_of(n))
-    layer_viol = []
-    for m, tars in mod_adj.items():
-        lm = mod_layer.get(m, _DEFAULT_LAYER)
-        for t in tars:
-            lt = mod_layer.get(t, _DEFAULT_LAYER)
-            if lm < lt:
-                layer_viol.append({
-                    "from": m, "to": t,
-                    "reason": f"{_LAYER_NAME.get(lm, '?')} 依赖 {_LAYER_NAME.get(lt, '?')}（下层依赖上层）",
-                })
+    # 3) 分层违例
+    layer_viol = _layer_violations(nodes, mod_adj, project_path)
     result["layer_violations"] = layer_viol
 
     # 4) 异常模块规模（函数/方法/类符号数）
-    mod_symbols: Dict[str, int] = defaultdict(int)
-    for nid, n in nodes.items():
-        if n.get("type") in ("function", "method", "class"):
-            mod_symbols[module_of(n, project_path)] += 1
-    result["large_modules"] = sorted(
-        ({"module": m, "symbols": c} for m, c in mod_symbols.items()
-         if c > ls_t),
-        key=lambda x: -x["symbols"])
+    result["large_modules"] = _large_modules(nodes, project_path, ls_t)
 
     # 5) 架构健康度（0-10）
-    score = 10.0
-    score -= min(6.0, len(cycles) * ARCH_HEALTH_WEIGHT_CYCLE)
-    score -= min(2.0, len(result["god_modules"]) * ARCH_HEALTH_WEIGHT_GOD)
-    score -= min(2.0, len(layer_viol) * ARCH_HEALTH_WEIGHT_LAYER)
-    score -= min(2.0, len(result["large_modules"]) * ARCH_HEALTH_WEIGHT_LARGE)
-    health = round(max(0.0, score), 1)
-    label = ("优秀" if health >= 8.5 else "良好" if health >= 7.0 else
-             "中等" if health >= 5.0 else "堪忧")
-    result["summary"] = {
-        "health": health, "health_label": label,
-        "cycles": len(cycles), "god_modules": len(result["god_modules"]),
-        "layer_violations": len(layer_viol),
-        "large_modules": len(result["large_modules"]),
-    }
+    result["summary"] = _health_summary(
+        result["cycles"], result["god_modules"], layer_viol, result["large_modules"])
     result["ok"] = True
     return result

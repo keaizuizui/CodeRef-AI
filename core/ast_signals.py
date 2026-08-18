@@ -14,10 +14,17 @@
 import ast
 import os
 from typing import Dict, List, Optional, Set
+import logging
+
+logger = logging.getLogger(__name__)
 
 # 日志/告警调用名（静默吞掉判定）
 _LOG_CALLS = {"print", "log", "logger", "logging", "warn", "warning", "error",
               "exception", "critical", "info", "debug", "traceback"}
+# 错误收集方法名：append/extend/add/insert 到列表/集合变量（如 errors.append）
+_COLLECT_METHODS = {"append", "extend", "add", "insert"}
+# 错误集合变量名前缀：调用名以这些前缀开头视为错误收集（保守识别，宁缺勿滥）
+_COLLECT_NAME_PREFIXES = ("errors", "issues", "problems", "failures")
 # 关键尺寸/坐标参数名提示（参数透传缺失判定）
 _SIZE_PARAM_HINTS = ("canvas_", "width", "height", "logo_x", "logo_y",
                      "brand_text_x", "brand_text_y")
@@ -42,11 +49,14 @@ def _parse(path: str):
         try:
             with open(path, "r", encoding="gbk") as f:
                 src = f.read()
-        except Exception:
+        except Exception as e:
+            # utf-8/gbk 双编码读取均失败，无法解析该文件
+            logger.warning(f"读取源文件失败（双编码回退后），跳过解析 {path}: {e}")
             return None
     try:
         return ast.parse(src)
     except SyntaxError:
+        # 语法错误文件无法解析，按无信号处理
         return None
 
 
@@ -66,6 +76,31 @@ def _is_log_call(node) -> bool:
         if isinstance(f, ast.Attribute):
             return f.attr in _LOG_CALLS
     return False
+
+
+def _is_collect_call(node) -> bool:
+    """判断语句是否为"错误收集"调用。
+
+    两种保守模式（宁缺勿滥，避免把真静默吞掉误判为已收集）：
+    1. 表达式调用 append/extend/add/insert 到某个列表/集合变量
+       （如 errors.append(...) / self.errors.append(...)）；
+    2. 调用名（函数名或方法名）以 errors/issues/problems/failures
+       等错误集合名为前缀（如 collect_errors(...) / record_issues(...)）。
+    """
+    if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+        return False
+    f = node.value.func
+    if isinstance(f, ast.Attribute):
+        # errors.append(...) / self.errors.extend(...)
+        if f.attr in _COLLECT_METHODS:
+            return True
+        name = f.attr
+    elif isinstance(f, ast.Name):
+        name = f.id
+    else:
+        return False
+    low = name.lower()
+    return any(low.startswith(p) for p in _COLLECT_NAME_PREFIXES)
 
 
 def detect_silent_except(tree, rel_path) -> List[dict]:
@@ -107,6 +142,19 @@ def detect_silent_except(tree, rel_path) -> List[dict]:
                 exc_name = node.type.id
             elif isinstance(node.type, ast.Attribute):
                 exc_name = node.type.attr
+        # 错误收集模式：异常被 append/extend 等收进错误列表统一处理
+        #（典型如 ci_compile_check 的 errors.append 决定 CI 退出码），
+        # 错误信息并未丢失，仅缺显式日志 → 换文案，不再报"完全丢失"。
+        if any(_is_collect_call(s) for s in stmts):
+            out.append({
+                "signal": "silent_except",
+                "file": rel_path,
+                "line": node.lineno,
+                "exc": exc_name or "Exception",
+                "detail": f"except {exc_name or 'Exception'} 块内 {len(stmts)} 条语句无日志/无 raise，"
+                          f"异常未显式记录日志（已收集到错误列表统一处理）",
+            })
+            continue
         out.append({
             "signal": "silent_except",
             "file": rel_path,

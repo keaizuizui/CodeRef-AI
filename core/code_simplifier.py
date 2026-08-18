@@ -32,6 +32,7 @@ Ponytail 核心理念（40K+ stars, 2026-06-12）：
 版本: v1.0
 """
 
+import ast
 import os
 import re
 import json
@@ -284,37 +285,71 @@ class CodeSimplifier:
         """检测未使用的导入"""
         items = []
         for cf in analysis.files:
-            if not cf.imports:
-                continue
-            # 收集文件中实际使用的模块名
-            used_names = set()
             raw = cf.raw_content or ""
-            # 简单检测：导入名是否在代码中出现（排除导入行本身）
-            import_lines = set()
-            for line_no, line in enumerate(raw.split("\n"), 1):
-                stripped = line.strip()
-                if stripped.startswith("import ") or stripped.startswith("from "):
-                    import_lines.add(line_no)
+            if not raw.strip():
+                continue
 
-            for imp in cf.imports:
-                # 提取模块的最后一部分
-                imp_name = imp.split(".")[-1]
-                # 检查是否在非导入行中使用（使用词边界匹配，避免子串误匹配）
+            # ─── AST 精确解析真实导入绑定名 ──────────────────────
+            # import X              → 检查绑定名 X
+            # from X import Y       → 检查绑定名 Y（X 是模块路径，代码中
+            #                         不会被直接引用；旧逻辑检查 X 导致
+            #                         `from pathlib import Path`（Path 已用）
+            #                         仍误报 "未使用的导入: pathlib"）
+            # from X import Y as Z  → 检查别名 Z
+            # import X.Y            → 检查绑定名 X
+            try:
+                tree = ast.parse(raw)
+            except SyntaxError:
+                tree = None
+
+            lines = raw.split("\n")
+            imports_info = []  # (绑定名, 展示名, 语句行号)
+            import_lines = set()
+            if tree is not None:
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            binding = alias.asname or alias.name.split(".")[0]
+                            imports_info.append((binding, alias.name, node.lineno))
+                        import_lines.update(range(node.lineno, node.end_lineno + 1))
+                    elif isinstance(node, ast.ImportFrom):
+                        if node.level > 0:
+                            continue  # 相对导入始终指向项目内模块，保守跳过
+                        for alias in node.names:
+                            if alias.name == "*":
+                                continue  # import * 无法判定绑定名
+                            binding = alias.asname or alias.name
+                            display = f"{node.module}.{alias.name}" if node.module else alias.name
+                            imports_info.append((binding, display, node.lineno))
+                        import_lines.update(range(node.lineno, node.end_lineno + 1))
+            else:
+                # 语法无法解析的文件：回退旧的正则启发式（按模块名检查）
+                imports_info = [(imp.split(".")[-1], imp, 0)
+                                for imp in (cf.imports or [])]
+                for line_no, line in enumerate(lines, 1):
+                    stripped = line.strip()
+                    if stripped.startswith("import ") or stripped.startswith("from "):
+                        import_lines.add(line_no)
+
+            for binding, display, line_no in imports_info:
+                # 检查绑定名是否在非导入行中使用（词边界匹配，避免子串误匹配）
                 found = False
-                for line_no, line in enumerate(raw.split("\n"), 1):
-                    if line_no in import_lines:
+                for ln, line in enumerate(lines, 1):
+                    if ln in import_lines:
                         continue
-                    if re.search(rf'\b{re.escape(imp_name)}\b', line):
+                    if re.search(rf'\b{re.escape(binding)}\b', line):
                         found = True
                         break
                 if not found:
+                    stmt = (lines[line_no - 1].strip()[:120]
+                            if 0 < line_no <= len(lines) else f"import {display}")
                     items.append(SimplificationItem(
                         category="dead_code",
                         severity="low",
                         file_path=cf.file_path,
-                        line_range=(0, 0),
-                        title=f"未使用的导入: {imp}",
-                        current=f"import {imp}",
+                        line_range=(line_no, line_no),
+                        title=f"未使用的导入: {display}",
+                        current=stmt,
                         suggestion="删除此导入",
                         savings=1,
                         risk="safe",
@@ -387,6 +422,11 @@ class CodeSimplifier:
         for cf in analysis.files:
             for cls in cf.classes:
                 if cls.name.startswith("_") and not cls.name.startswith("__"):
+                    continue
+                # 测试类由 unittest/pytest 加载器按命名约定发现执行，
+                # 无显式引用是常态（自审实测 3 个 TestCase 被误报未使用）
+                if re.search(r'[/\\](tests?|test)[/\\]', cf.file_path) or \
+                        os.path.basename(cf.file_path).startswith("test_"):
                     continue
                 # 检查是否被引用（排除定义行和继承行）
                 ref_count = all_refs.get(cls.name, 0)
@@ -533,6 +573,32 @@ class CodeSimplifier:
                         ))
         return items
 
+    @staticmethod
+    def _comment_body_is_code(body: str) -> bool:
+        """注释正文（去掉 # 后）是否为注释掉的代码。
+
+        AST 确证判据：正文能被 ast.parse 解析为合法 Python 语句才算。
+        旧关键词判定（含 =/(/[/if 即算）把规则说明注释（"插值形式：
+        `f\\"... {prompt} ...\\"`"）、TODO 叙述（"FIXME/BUG > HACK"）等
+        说明性文字全部误判为死代码（自审实测 110 条误报）；含 CJK 字符
+        的行一定是叙述性注释，直接排除。块头语句（def/if/for/...）缺
+        函数体时补 pass 再判定。
+        """
+        if not body or len(body) < 2 or re.search(r'[\u4e00-\u9fff]', body):
+            return False
+        # 裸注解形态（"type: ignore" / "Returns: list"）是合法 Python 注解
+        # 语法但几乎总是说明注释，且无赋值的注解本身不是可执行死代码
+        if "=" not in body and re.fullmatch(r'[A-Za-z_]\w*\s*:\s*\S.*', body):
+            return False
+        cand = body
+        if cand.endswith(":") and re.match(
+                r'^(?:def|class|if|for|while|with|try)\b', cand):
+            cand += "\n    pass"
+        try:
+            return bool(ast.parse(cand).body)
+        except (SyntaxError, ValueError):
+            return False
+
     def _detect_commented_code(self, analysis) -> List[SimplificationItem]:
         """检测注释掉的代码块"""
         items = []
@@ -546,10 +612,7 @@ class CodeSimplifier:
             for i, line in enumerate(lines, 1):
                 stripped = line.strip()
                 if stripped.startswith("#") and len(stripped) > 2:
-                    # 检查是否是注释掉的代码（含 =, def, class, import, (, {, [）
-                    code_indicators = ["def ", "class ", "import ", "from ", "=", "return ",
-                                       "if ", "for ", "while ", "try:", "(", "{", "[", "->"]
-                    if any(ind in stripped for ind in code_indicators):
+                    if self._comment_body_is_code(stripped.lstrip("#").strip()):
                         if current_block_start is None:
                             current_block_start = i
                         current_block_count += 1

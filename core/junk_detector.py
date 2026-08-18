@@ -231,6 +231,7 @@ class JunkDetector:
                         total_size += os.path.getsize(fpath)
                         pyc_count += 1
                     except OSError:
+                        # 单文件大小统计失败不影响整体统计
                         pass
                 if pyc_count > 0:
                     self._items.append(JunkItem(
@@ -278,6 +279,7 @@ class JunkDetector:
                 try:
                     fsize = os.path.getsize(fpath)
                 except OSError:
+                    # 文件大小不可得时跳过该文件
                     continue
                 if fsize > 0:
                     size_buckets[fsize].append(fpath)
@@ -356,6 +358,7 @@ class JunkDetector:
                 try:
                     fsize = os.path.getsize(fpath)
                 except OSError:
+                    # 文件大小不可得时跳过该文件
                     continue
                 if fsize == 0 and f not in placeholders:
                     self._items.append(JunkItem(
@@ -385,7 +388,9 @@ class JunkDetector:
                 try:
                     with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
                         content = fh.read()
-                except Exception:
+                except Exception as e:
+                    # 文件不可读，跳过该文件
+                    logger.warning(f"读取文件失败，跳过空壳检测 {fpath}: {e}")
                     continue
 
                 if self._is_empty_shell(content):
@@ -467,6 +472,7 @@ class JunkDetector:
                         if stripped and not stripped.startswith("#"):
                             ignore_patterns.add(stripped)
             except Exception:
+                # 无 .gitignore 或不可读时按无忽略规则处理
                 pass
 
         for root, dirs, files in os.walk(project_path):
@@ -539,7 +545,7 @@ class JunkDetector:
 
         # 构建 import 关系图：哪些文件被 import 了
         imported_files: Set[str] = set()
-        import_graph = self._build_import_graph(all_files)
+        import_graph = self._build_import_graph(all_files, project_path)
 
         for imports in import_graph.values():
             for imp in imports:
@@ -552,19 +558,25 @@ class JunkDetector:
             if not self._is_code_file(fpath):
                 continue
 
+            # __init__.py 是包文件，本就不会被显式 import，永不报孤儿
+            if os.path.basename(fpath) == "__init__.py":
+                continue
+
             rel_path = os.path.relpath(fpath, project_path).replace("\\", "/")
 
             # 检查修改时间
             try:
                 mtime = datetime.fromtimestamp(os.path.getmtime(fpath))
             except OSError:
+                # 修改时间不可得时跳过该文件
                 continue
 
             if mtime > cutoff_time:
                 continue  # 最近 30 天修改过，不孤立
 
-            # 检查是否被 import
-            if rel_path in imported_files or fpath in imported_files:
+            # 检查是否被 import（绝对路径按 normcase 归一比对）
+            key = os.path.normcase(os.path.normpath(os.path.abspath(fpath)))
+            if rel_path in imported_files or key in imported_files or fpath in imported_files:
                 continue
 
             # 检查是否是入口文件（含 main/if __name__）
@@ -586,80 +598,98 @@ class JunkDetector:
                 safe_to_delete=False,
             ))
 
-    def _build_import_graph(self, all_files: List[str]) -> Dict[str, Set[str]]:
+    def _build_import_graph(self, all_files: List[str], project_path: str = None) -> Dict[str, Set[str]]:
         """
-        构建 import 关系图
+        构建 import 关系图（ast 解析，含函数体内延迟导入）
+
+        旧实现两个缺陷：① `module.split(".")[0]` 把 "core.cache_manager"
+        截成首段 "core"，永远匹配不到目标文件；② 只支持同目录/子目录匹配，
+        顶层的 `from core.xxx import`（如 shared_filter 导入 cache_manager）
+        与函数内延迟导入（如 governance_audit 导入 cache_manager）全部漏判，
+        导致被引用文件被误报为孤儿。
 
         Returns:
-            {file_path: set of imported relative paths}
+            {file_path: set of imported paths（绝对路径归一 + 相对 project_path）}
         """
+        import ast as _ast
+
         graph: Dict[str, Set[str]] = defaultdict(set)
+        py_files = [f for f in all_files if f.endswith(".py")]
 
-        # 构建文件路径到模块名的映射
-        path_to_module: Dict[str, str] = {}
-        for fpath in all_files:
-            fname = os.path.basename(fpath)
-            if fname.endswith(".py"):
-                module_name = fname[:-3]
-                path_to_module[fpath] = module_name
+        # 索引1：模块点路径（相对 project_path）-> 文件，如 "core.cache_manager"
+        # 同时登记包名（"core" -> core/__init__.py），支持 `import core.xxx` 首段
+        mod_dot_index: Dict[str, str] = {}
+        # 索引2：目录 -> {同目录裸模块名 -> 文件}，支持 `import cache_manager`
+        dir_index: Dict[str, Dict[str, str]] = defaultdict(dict)
+        for fp in py_files:
+            stem = os.path.basename(fp)[:-3]
+            dir_index[os.path.dirname(fp)][stem] = fp
+            if project_path:
+                relp = os.path.relpath(fp, project_path).replace("\\", "/")
+                if relp.endswith(".py"):
+                    dot = relp[:-3].replace("/", ".")
+                    mod_dot_index.setdefault(dot, fp)
+                    if dot.endswith(".__init__"):
+                        mod_dot_index.setdefault(dot[: -len(".__init__")], fp)
 
-        # 包含文件对应目录的路径映射
-        for fpath in all_files:
-            fname = os.path.basename(fpath)
-            if fname.endswith(".py"):
-                module_name = fname[:-3]
-                # 构建完整路径映射
-                parent_dir = os.path.dirname(fpath)
-                for other_fpath in all_files:
-                    other_dir = os.path.dirname(other_fpath)
-                    other_name = os.path.basename(other_fpath)
-                    if other_name.endswith(".py"):
-                        other_module = other_name[:-3]
-                        if other_module == module_name and other_dir == parent_dir:
-                            continue
+        def _add_edge(src: str, target_fp: str):
+            graph[src].add(target_fp)
+            graph[src].add(os.path.normcase(os.path.normpath(os.path.abspath(target_fp))))
+            if project_path:
+                rel = os.path.relpath(target_fp, project_path).replace("\\", "/")
+                graph[src].add(rel)
 
-        # 解析每个文件的 import 语句
         import_re = re.compile(
             r'^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))',
             re.MULTILINE
         )
 
-        for fpath in all_files:
-            if not fpath.endswith(".py"):
-                continue
+        for fpath in py_files:
             try:
                 with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
                     content = fh.read()
-            except Exception:
+            except Exception as e:
+                # 文件不可读，跳过该文件
+                logger.warning(f"读取文件失败，跳过导入统计 {fpath}: {e}")
                 continue
 
+            # ast.walk 收集全部 Import/ImportFrom（顶层 + 函数体内延迟导入）
+            modules: Set[str] = set()
+            try:
+                tree = _ast.parse(content)
+            except SyntaxError:
+                # 语法错误（模板/生成文件）：回退旧正则提取
+                for m in import_re.finditer(content):
+                    mod = m.group(1) or m.group(2)
+                    if mod:
+                        modules.add(mod)
+            else:
+                for node in _ast.walk(tree):
+                    if isinstance(node, _ast.Import):
+                        for alias in node.names:
+                            modules.add(alias.name)
+                    elif isinstance(node, _ast.ImportFrom) and node.module:
+                        modules.add(node.module)
+
             file_dir = os.path.dirname(fpath)
-
-            for m in import_re.finditer(content):
-                module = m.group(1) or m.group(2)
-                if not module:
+            for mod in modules:
+                # 1) 点路径精确匹配（"core.cache_manager" -> core/cache_manager.py）
+                target = mod_dot_index.get(mod)
+                if target:
+                    _add_edge(fpath, target)
                     continue
-                root_module = module.split(".")[0]
-
-                # 尝试匹配本地文件
-                for other_fpath in all_files:
-                    other_name = os.path.basename(other_fpath)
-                    if not other_name.endswith(".py"):
-                        continue
-                    other_module = other_name[:-3]
-                    other_dir = os.path.dirname(other_fpath)
-
-                    # 同目录匹配
-                    if other_module == root_module and other_dir == file_dir:
-                        rel = os.path.relpath(other_fpath, os.path.dirname(fpath)).replace("\\", "/")
-                        graph[fpath].add(rel)
-                        graph[fpath].add(other_fpath)
-                    # 子目录匹配
-                    elif other_module == root_module and other_dir.startswith(
-                            os.path.join(file_dir, root_module)):
-                        rel = os.path.relpath(other_fpath, os.path.dirname(fpath)).replace("\\", "/")
-                        graph[fpath].add(rel)
-                        graph[fpath].add(other_fpath)
+                # 2) 同目录裸名匹配（import cache_manager）
+                target = dir_index.get(file_dir, {}).get(mod.split(".")[0])
+                if target:
+                    _add_edge(fpath, target)
+                    continue
+                # 3) 带点路径在项目内逐级回退（"a.b.c" -> a/b.py、a.py）
+                parts = mod.split(".")
+                for i in range(len(parts) - 1, 0, -1):
+                    target = mod_dot_index.get(".".join(parts[:i]))
+                    if target:
+                        _add_edge(fpath, target)
+                        break
 
         return graph
 

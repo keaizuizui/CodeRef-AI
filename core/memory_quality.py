@@ -355,7 +355,9 @@ class MemoryQuality:
                 with open(py_file, "r", encoding="utf-8", errors="replace") as f:
                     source = f.read()
                 tree = ast.parse(source)
-            except Exception:
+            except Exception as e:
+                # 文件不可读或语法错误，跳过该文件
+                logger.warning(f"解析文件失败，跳过符号统计 {py_file}: {e}")
                 continue
 
             # 只收集模块级与类级符号（函数/类/方法），避免重复统计
@@ -423,8 +425,9 @@ class MemoryQuality:
                     loaded = json.load(f)
                 if isinstance(loaded, dict):
                     data = loaded
-            except Exception:
-                pass
+            except Exception as e:
+                # 状态文件不可读时按空数据处理
+                logger.warning(f"读取状态文件失败: {e}")
         phash = hashlib.md5(project_path.encode("utf-8")).hexdigest()[:12]
         proj = data.get("projects", {}).get(phash)
         if proj is None:
@@ -514,6 +517,7 @@ class MemoryQuality:
             if isinstance(data, list):
                 return [d for d in data if isinstance(d, dict)]
         except Exception:
+            # 文本中无合法 JSON 时返回空列表
             pass
         return []
 
@@ -542,8 +546,11 @@ class MemoryQuality:
                        total_findings, auto_fix_applied) -> str:
         lines = ["# 记忆质量体检摘要"]
         lines.append(f"\n- 发现总数：{total_findings}")
+        orphan_total = integrity_stats.get('orphan_nodes', 0)
+        orphan_note = (f"（findings 仅展示前 {MAX_ORPHAN_NODES_REPORT} 条）"
+                       if orphan_total > MAX_ORPHAN_NODES_REPORT else "")
         lines.append(f"- 引用完整性：孤儿边 {integrity_stats.get('orphan_edges', 0)} 条，"
-                     f"孤立节点 {integrity_stats.get('orphan_nodes', 0)} 个")
+                     f"孤立节点共 {orphan_total} 个{orphan_note}")
         lines.append(f"- 语义覆盖率：{coverage_stats.get('ratio', 0):.0%}"
                      f"（{coverage_stats.get('covered', 0)}/{coverage_stats.get('total', 0)}）")
         lines.append(f"- 偏差检测：{bias_status}")
