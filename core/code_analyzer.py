@@ -76,6 +76,1459 @@ class ProjectAnalysis:
         return obj
 
 
+# ============================================================
+# 模块级辅助函数 —— 从 CodeAnalyzer 类提取的纯逻辑（不依赖 self 状态）。
+# 类内保留原方法签名作为委托入口，公共接口与行为不变。
+# ============================================================
+
+def _parse_python_file_content(content: str, file_path: str, project_root: str = "") -> CodeFile:
+    """解析 Python 文件内容（原 CodeAnalyzer.parse_python_file 实现）
+    拆分说明：AST 解析、导入/调用提取、函数/类填充提取为独立步骤函数，本函数仅编排。"""
+    code_file = CodeFile(file_path=file_path, language='python', raw_content=content)
+
+    # 计算当前文件所在模块（相对项目根的目录）
+    if project_root:
+        rel_dir = os.path.dirname(os.path.relpath(file_path, project_root))
+    else:
+        rel_dir = ""
+
+    # ─── 优先使用 AST 精确解析 ──────────────────────────────────
+    ast_result, ast_assignments = _ast_parse_content(content, file_path, project_root)
+    # 存储 AST 赋值分类（供 _audit_security 使用）
+    code_file.ast_assignments = ast_assignments
+
+    _extract_basic_imports(content, code_file, rel_dir)
+    _extract_full_import_calls(content, code_file, rel_dir)
+    _extract_dynamic_and_http(content, code_file)
+
+    # 提取函数/类：优先使用 AST 精确结果（node.end_lineno 精确到函数体最后一行，
+    # 类方法来自 ClassDef.body），AST 失败（如语法错误）时回退正则推断。
+    # 旧正则版缺陷：最后一个函数的 end_line 直接取文件总行数、中间函数取下一个
+    # def/class 定义前一行，函数后的模块级常量区被算进函数体，行数虚高；
+    # 且 CodeClass.methods 从未填充，方法计数恒为 0。
+    _fill_functions_and_classes(code_file, ast_result, content)
+
+    return code_file
+
+
+def _ast_parse_content(content: str, file_path: str, project_root: str):
+    """AST 精确解析（失败时返回 (None, []) 供调用方回退正则）"""
+    ast_assignments = []  # AST 解析的赋值分类
+    ast_result = None
+    try:
+        from core.ast_parser import AstParser
+        ast_parser = AstParser(project_root=project_root)
+        ast_result = ast_parser.parse_content(content, file_path)
+        if ast_result:
+            ast_assignments = ast_result.assignments
+            logger.debug(f"[AST] {file_path}: {len(ast_result.functions)}函数, "
+                       f"{len(ast_result.classes)}类, {len(ast_result.assignments)}赋值")
+    except Exception as e:
+        ast_result = None
+        logger.debug(f"[AST] 解析失败 {file_path}: {e}")
+    return ast_result, ast_assignments
+
+
+def _extract_basic_imports(content: str, code_file: CodeFile, rel_dir: str):
+    """提取导入语句，并区分项目内部导入 vs 外部依赖"""
+    import_pattern = r'^(?:from|import)\s+([\w\.]+)'
+    for match in re.finditer(import_pattern, content, re.MULTILINE):
+        imp = match.group(1)
+        code_file.imports.append(imp)
+        root_pkg = imp.split('.')[0]
+        
+        # 区分项目内部导入 vs 外部依赖
+        # 如果导入以项目模块名开头，标记为项目内部
+        if rel_dir and (root_pkg == rel_dir.split('\\')[0].split('/')[0] or 
+                        any(part == root_pkg for part in rel_dir.replace('\\', '/').split('/'))):
+            code_file.project_imports.append(imp)
+        else:
+            code_file.dependencies.add(root_pkg)
+
+
+def _extract_full_import_calls(content: str, code_file: CodeFile, rel_dir: str):
+    """提取完整的from ... import ... 语句（用于跨模块分析）"""
+    full_import_pattern = r'from\s+([\w\.]+)\s+import\s+([\w\s,]+)'
+    for match in re.finditer(full_import_pattern, content):
+        module_path = match.group(1)
+        names = [n.strip() for n in match.group(2).split(',')]
+        # 检测是否导入其他模块的类/函数（表明跨模块调用）
+        if rel_dir and module_path not in ('__future__', 'typing', 'abc', 'dataclasses', 'enum'):
+            root = module_path.split('.')[0]
+            if root != rel_dir.split('\\')[0].split('/')[0] and not root.startswith('_'):
+                for name in names:
+                    code_file.function_calls.append(f"{module_path}.{name}")
+
+
+def _extract_dynamic_and_http(content: str, code_file: CodeFile):
+    """提取 sys.path 注入、动态导入、本地 HTTP 调用"""
+    # 提取 sys.path.insert / sys.path.append（动态注入点）
+    syspath_pattern = r'sys\.path\.(?:insert|append)\s*\(([^)]*)\)'
+    for match in re.finditer(syspath_pattern, content):
+        code_file.sys_path_inserts.append(match.group(1).strip())
+    
+    # 提取 importlib.import_module（动态导入）
+    dyn_import_pattern = r'importlib\.import_module\s*\(([^)]*)\)'
+    for match in re.finditer(dyn_import_pattern, content):
+        code_file.dynamic_imports.append({"module_expr": match.group(1).strip()})
+    
+    # 提取对本地服务的 HTTP 请求
+    http_pattern = r'(requests|httpx|aiohttp)\.(get|post|put|delete)\s*\(\s*["\'](http://127\.0\.0\.1|http://localhost|http://0\.0\.0\.0)'
+    for match in re.finditer(http_pattern, content):
+        code_file.http_calls.append({
+            "method": match.group(2).upper(),
+            "url_pattern": match.group(0)
+        })
+
+
+def _fill_functions_and_classes(code_file: CodeFile, ast_result, content: str):
+    """填充函数/类结构：AST 可用时走精确路径，否则回退正则近似解析"""
+    if ast_result is not None:
+        _fill_funcs_classes_from_ast(code_file, ast_result)
+    else:
+        _fill_funcs_classes_from_regex(code_file, content)
+
+
+def _fill_funcs_classes_from_ast(code_file: CodeFile, ast_result):
+    """从 AST 结果填充函数/类（all_functions = 顶层函数 + 类方法，方法也参与行数统计）"""
+    for func in ast_result.all_functions:
+        if func.name.startswith('_'):
+            continue  # 与旧正则行为一致：跳过私有函数/方法
+        code_file.functions.append(CodeFunction(
+            name=func.name,
+            start_line=func.start_line,
+            end_line=func.end_line,
+            parameters=func.parameters,
+            return_type=func.return_type,
+            docstring=func.docstring,
+            code=func.code,
+        ))
+    for cls in ast_result.classes:
+        code_file.classes.append(CodeClass(
+            name=cls.name,
+            start_line=cls.start_line,
+            end_line=cls.end_line,
+            methods=[CodeFunction(
+                name=m.name,
+                start_line=m.start_line,
+                end_line=m.end_line,
+                parameters=m.parameters,
+                return_type=m.return_type,
+                docstring=m.docstring,
+                code=m.code,
+            ) for m in cls.methods],
+            base_classes=cls.base_classes,
+            docstring=cls.docstring,
+        ))
+
+
+def _fill_funcs_classes_from_regex(code_file: CodeFile, content: str):
+    """正则回退：AST 不可用（语法错误文件）时的近似解析"""
+    func_pattern = r'def\s+(\w+)\s*\(([^)]*)\)\s*(?:->\s*([\w\[\],\s]+))?:'
+    func_matches = list(re.finditer(func_pattern, content))
+    for idx, match in enumerate(func_matches):
+        func_name = match.group(1)
+        if not func_name.startswith('_'):  # 跳过私有函数
+            params = [p.strip() for p in match.group(2).split(',') if p.strip()]
+            start_line = content[:match.start()].count('\n') + 1
+            # 计算 end_line：下一个函数/类定义之前减1行，或文件末尾
+            end_line = len(content.splitlines())
+            if idx + 1 < len(func_matches):
+                end_line = content[:func_matches[idx + 1].start()].count('\n')
+            code_file.functions.append(CodeFunction(
+                name=func_name,
+                start_line=start_line,
+                end_line=end_line,
+                parameters=params,
+                return_type=match.group(3)
+            ))
+
+    class_pattern = r'class\s+(\w+)(?:\(([^)]*)\))?:'
+    class_matches = list(re.finditer(class_pattern, content))
+    for idx, match in enumerate(class_matches):
+        class_name = match.group(1)
+        bases = [b.strip() for b in (match.group(2) or '').split(',') if b.strip()]
+        start_line = content[:match.start()].count('\n') + 1
+        end_line = len(content.splitlines())
+        if idx + 1 < len(class_matches):
+            end_line = content[:class_matches[idx + 1].start()].count('\n')
+        code_file.classes.append(CodeClass(
+            name=class_name,
+            start_line=start_line,
+            end_line=end_line,
+            base_classes=bases
+        ))
+
+
+def _tech_stack_summary(analysis: ProjectAnalysis) -> List[str]:
+    """分析技术栈（原 CodeAnalyzer._analyze_tech_stack 实现）"""
+    tech_stack = []
+    
+    # 主要语言
+    for lang, count in analysis.languages.items():
+        tech_stack.append(f"{lang} ({count} 文件)")
+    
+    # 主要依赖
+    common_frameworks = {
+        'fastapi': 'FastAPI',
+        'flask': 'Flask',
+        'django': 'Django',
+        'react': 'React',
+        'vue': 'Vue.js',
+        'angular': 'Angular',
+        'pandas': 'Pandas',
+        'numpy': 'NumPy',
+        'torch': 'PyTorch',
+        'tensorflow': 'TensorFlow',
+        'requests': 'Requests',
+    }
+    
+    for dep, name in common_frameworks.items():
+        if dep in analysis.dependencies:
+            tech_stack.append(name)
+    
+    return tech_stack
+
+
+def _core_features_from(analysis: ProjectAnalysis) -> List[str]:
+    """提取核心功能（原 CodeAnalyzer._extract_core_features 实现）"""
+    features = []
+    
+    # 从类名和函数名推断功能
+    keywords = {
+        'api': 'API接口',
+        'db': '数据库操作',
+        'database': '数据库',
+        'auth': '认证授权',
+        'user': '用户管理',
+        'search': '搜索功能',
+        'parser': '解析器',
+        'analyzer': '分析器',
+        'crawl': '爬虫',
+        'scraper': '数据抓取',
+        'ml': '机器学习',
+        'model': '模型',
+        'train': '训练',
+        'predict': '预测',
+    }
+    
+    found_features = set()
+    
+    for code_file in analysis.files:
+        for cls in code_file.classes:
+            for kw, feature in keywords.items():
+                if kw.lower() in cls.name.lower() and feature not in found_features:
+                    found_features.add(feature)
+                    features.append(feature)
+        
+        for func in code_file.functions:
+            for kw, feature in keywords.items():
+                if kw.lower() in func.name.lower() and feature not in found_features:
+                    found_features.add(feature)
+                    features.append(feature)
+    
+    return features[:10]  # 最多返回10个核心功能
+
+
+def _architecture_summary_text(analysis: ProjectAnalysis) -> str:
+    """生成架构摘要（原 CodeAnalyzer._generate_architecture_summary 实现）"""
+    summary_parts = []
+    
+    # 基本信息
+    summary_parts.append(f"## 项目概览")
+    summary_parts.append(f"- 总文件数: {analysis.total_files}")
+    summary_parts.append(f"- 总代码行数: {analysis.total_lines:,}")
+    lang_str = ', '.join([f'{k}({v}个文件)' for k, v in sorted(analysis.languages.items(), key=lambda x: -x[1])])
+    summary_parts.append(f"- 语言分布: {lang_str}")
+    summary_parts.append(f"- 总模块数: {len(analysis.modules)}")
+    summary_parts.append(f"- 总类数: {sum(len(f.classes) for f in analysis.files)}")
+    summary_parts.append(f"- 总函数数: {sum(len(f.functions) for f in analysis.files)}")
+    
+    # 技术栈
+    if analysis.tech_stack:
+        summary_parts.append(f"\n## 技术栈")
+        for tech in analysis.tech_stack:
+            summary_parts.append(f"- {tech}")
+    
+    # 核心功能
+    if analysis.core_features:
+        summary_parts.append(f"\n## 核心功能")
+        for feature in analysis.core_features:
+            summary_parts.append(f"- {feature}")
+    
+    # 模块结构
+    summary_parts.append(f"\n## 模块结构")
+    for module, files in sorted(analysis.modules.items()):
+        summary_parts.append(f"- **{module}**: {len(files)} 个文件")
+    
+    # 依赖概览
+    if analysis.dependencies:
+        summary_parts.append(f"\n## 外部依赖")
+        for dep in sorted(analysis.dependencies)[:20]:
+            summary_parts.append(f"- {dep}")
+        if len(analysis.dependencies) > 20:
+            summary_parts.append(f"- ... 及其他 {len(analysis.dependencies) - 20} 个依赖")
+    
+    return '\n'.join(summary_parts)
+
+
+def _mode_metadata_from(analysis: ProjectAnalysis, max_parse_size: int) -> list:
+    """
+    从代码中提取工具模式元数据（原 CodeAnalyzer._extract_mode_metadata 实现）
+    V2.1: 从 MODE_METADATA 字典中提取，不再硬编码 fallback
+    """
+    modes = []
+    
+    # 扫描所有文件，查找 MODE_METADATA 字典定义（从磁盘读取完整文件）
+    for f in analysis.files:
+        if 'MODE_METADATA' not in (getattr(f, 'raw_content', '') or ''):
+            # raw_content 只有500字符，可能不包含 MODE_METADATA
+            # 直接从磁盘读取（超大文件跳过，避免整读大文件占用内存）
+            try:
+                if os.path.getsize(f.file_path) > max_parse_size:
+                    logger.debug(f"跳过超大文件 MODE_METADATA 提取: {f.file_path}")
+                    continue
+                with open(f.file_path, 'r', encoding='utf-8') as fh:
+                    content = fh.read()
+            except Exception as e:
+                # 文件不可读，跳过模式提取
+                logger.warning(f"读取文件失败，跳过模式提取 {f.file_path}: {e}")
+                continue
+        else:
+            content = getattr(f, 'raw_content', '')
+        if 'MODE_METADATA' not in content:
+            continue
+        
+        import re
+        # 匹配 "tool:mode": { ... "roles": ["A", "B"], ... "name": "xxx", "description": "xxx" ... }
+        # 用多行匹配提取完整的模式块
+        pattern = r'["\']([\w]+):([\w]+)["\']\s*:\s*\{([^}]+)\}'
+        for match in re.finditer(pattern, content):
+            mode_id = match.group(1) + ':' + match.group(2)
+            block = match.group(3)
+            
+            # 提取 roles
+            roles_match = re.search(r'["\']roles["\']\s*:\s*\[([^\]]*)\]', block)
+            roles = []
+            if roles_match:
+                roles = [r.strip().strip('"\'') for r in roles_match.group(1).split(',')]
+            
+            # 提取 name
+            name_match = re.search(r'["\']name["\']\s*:\s*["\']([^"\']+)["\']', block)
+            cn_name = name_match.group(1) if name_match else mode_id.split(':')[1]
+            
+            # 提取 description
+            desc_match = re.search(r'["\']description["\']\s*:\s*["\']([^"\']+)["\']', block)
+            description = desc_match.group(1) if desc_match else ''
+            
+            tool = mode_id.split(':')[0]
+            a_role = '✓' if 'A' in roles else '✗'
+            b_role = '✓' if 'B' in roles else '✗'
+            
+            # 额外能力从 description 提取
+            extra = description if description else '-'
+            
+            modes.append([mode_id, cn_name, tool, a_role, b_role, extra])
+    
+    if not modes:
+        modes = [['(未找到)', '-', '-', '-', '-', '未找到 MODE_METADATA 定义']]
+    
+    return modes
+
+
+def _model_roles_from(analysis: ProjectAnalysis) -> list:
+    """
+    从代码中提取 LLM 模型角色配置（原 CodeAnalyzer._extract_model_roles 实现）
+    V2.1: 直接在项目目录中搜索 config.yaml 并解析，不再硬编码
+    """
+    import yaml as _yaml
+    roles = []
+    
+    # 在项目目录中搜索 config.yaml（不依赖 analysis.files，因为扫描器只扫描代码文件）
+    config_path = None
+    for root, dirs, files in os.walk(analysis.project_path):
+        # 跳过常见的非项目目录
+        dirs[:] = [d for d in dirs if d not in ('node_modules', '__pycache__', '.git', 'venv', '.venv', 'data', 'vendor')]
+        for fname in files:
+            if fname in ('config.yaml', 'config.yml'):
+                config_path = os.path.join(root, fname)
+                break
+        if config_path:
+            break
+    
+    if config_path:
+        try:
+            with open(config_path, 'r', encoding='utf-8') as fh:
+                content = fh.read()
+            cfg = _yaml.safe_load(content)
+            if isinstance(cfg, dict):
+                # 提取 llm.models 下的角色配置
+                llm_models = cfg.get('llm', {}).get('models', {})
+                if isinstance(llm_models, dict):
+                    for role_name, role_cfg in llm_models.items():
+                        if isinstance(role_cfg, dict):
+                            model_name = role_cfg.get('name', '?')
+                            temperature = str(role_cfg.get('temperature', '?'))
+                            max_tokens = str(role_cfg.get('max_tokens', '?'))
+                            purpose_map = {
+                                'planner': '规划/策略制定', 'writer': '写作/内容生成',
+                                'reviewer': '审查/校验', 'embedder': '嵌入/向量化',
+                                'extractor': '信息提取', 'backtester': '回测/验证',
+                            }
+                            purpose = purpose_map.get(role_name, role_name)
+                            roles.append([role_name, model_name, temperature, max_tokens, purpose])
+                # 提取 semantic 模型配置
+                semantic = cfg.get('semantic', {})
+                if isinstance(semantic, dict):
+                    sem_model = semantic.get('model', '')
+                    sem_provider = semantic.get('provider', '')
+                    if sem_model:
+                        roles.append(['semantic', sem_model, '-', '-', f'语义嵌入 ({sem_provider})'])
+                # 提取 vector 模型配置
+                vector = cfg.get('vector', {})
+                if isinstance(vector, dict):
+                    local = vector.get('local', {})
+                    if isinstance(local, dict):
+                        vec_model = local.get('embed_model', '')
+                        vec_provider = local.get('provider', '')
+                        if vec_model:
+                            roles.append(['vector', vec_model, '-', '-', f'向量嵌入 ({vec_provider})'])
+                # 缓存 agent_mapping
+                agent_mapping = cfg.get('agent_mapping', {})
+                if isinstance(agent_mapping, dict):
+                    analysis._agent_mapping = agent_mapping
+        except Exception as e:
+            logger.warning(f"解析模型角色配置失败，跳过该文件 {config_path}: {e}")
+    
+    if not roles:
+        roles = [['(未找到配置)', '-', '-', '-', f'未在 {analysis.project_path} 中找到 config.yaml']]
+    return roles
+
+
+def _render_rich_header(analysis: ProjectAnalysis, totals: Dict[str, int]) -> List[str]:
+    """渲染深度报告头部 + 项目概览 + 语言分布（generate_rich_report 拆分步骤）"""
+    report = []
+    
+    # ==================== 头部 ====================
+    report.append("# 📊 项目深度分析报告")
+    report.append(f"\n> 生成时间: 即时分析")
+    report.append(f"> 项目路径: `{analysis.project_path}`")
+    report.append("")
+    report.append("---")
+    
+    # ==================== 1. 项目概览 ====================
+    report.append("## 一、项目概览")
+    
+    total_files = totals["files"]
+    total_lines = totals["lines"]
+    total_classes = totals["classes"]
+    total_functions = totals["functions"]
+    total_imports = totals["imports"]
+    
+    report.append(f"| 指标 | 数值 |")
+    report.append(f"|------|------|")
+    report.append(f"| 📄 代码文件数 | {total_files} |")
+    report.append(f"| 📝 总代码行数 | {total_lines:,} |")
+    report.append(f"| 🏗️ 模块/目录数 | {len(analysis.modules)} |")
+    report.append(f"| 🏛️ 类/结构体数 | {total_classes} |")
+    report.append(f"| 🔧 函数/方法数 | {total_functions} |")
+    report.append(f"| 📦 导入语句数 | {total_imports} |")
+    report.append(f"| 🔗 外部依赖数 | {len(analysis.dependencies)} |")
+    
+    # ==================== 2. 语言分布 ====================
+    report.append("\n## 二、语言分布")
+    report.append("\n| 语言 | 文件数 | 占比 |")
+    report.append("|------|--------|------|")
+    for lang, count in sorted(analysis.languages.items(), key=lambda x: -x[1]):
+        pct = count / total_files * 100 if total_files > 0 else 0
+        bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
+        report.append(f"| {lang} | {count} | {bar} {pct:.1f}% |")
+    
+    return report
+
+
+def _render_rich_module_file_entry(analysis: ProjectAnalysis, file_path: str) -> Optional[str]:
+    """渲染模块内单个文件的详情行；无法定位 CodeFile 时返回 None。
+
+    拆分说明：原 _render_rich_modules 内层文件详情渲染段提取为纯函数，
+    输出行内容与拆分前逐字符一致（details 为空时同样返回带尾随空格的行）。
+    """
+    full_path = os.path.join(analysis.project_path, file_path)
+    code_file = next((f for f in analysis.files if f.file_path == full_path), None)
+    if not code_file:
+        return None
+    cls_count = len(code_file.classes)
+    func_count = len(code_file.functions)
+    imp_count = len(code_file.imports)
+    details = []
+    if cls_count > 0:
+        cls_names = ', '.join(c.name for c in code_file.classes[:3])
+        details.append(f"{cls_count}个类[{cls_names}]")
+    if func_count > 0:
+        details.append(f"{func_count}个函数")
+    if imp_count > 0:
+        details.append(f"{imp_count}个导入")
+    detail_str = ' / '.join(details) if details else ''
+    return f"  - `{os.path.basename(file_path)}` {detail_str}"
+
+
+def _render_rich_modules(analysis: ProjectAnalysis) -> List[str]:
+    """渲染模块/目录结构段（generate_rich_report 拆分步骤）"""
+    report = []
+
+    # ==================== 3. 模块结构 ====================
+    report.append("\n## 三、模块/目录结构")
+
+    # 按文件数排序
+    sorted_modules = sorted(analysis.modules.items(), key=lambda x: len(x[1]), reverse=True)
+
+    for module, files in sorted_modules:
+        # 统计该模块的语言分布
+        lang_in_module = {}
+        for file in analysis.files:
+            rel_path = os.path.relpath(file.file_path, analysis.project_path)
+            file_module = os.path.dirname(rel_path) or 'root'
+            if file_module == module:
+                lang_in_module[file.language] = lang_in_module.get(file.language, 0) + 1
+
+        lang_detail = ', '.join([f"{k}({v})" for k, v in lang_in_module.items()])
+        report.append(f"\n### 📁 {module}")
+        report.append(f"- **文件数**: {len(files)} 个")
+        report.append(f"- **语言**: {lang_detail}")
+
+        # 列出该模块下的文件详情
+        for file_path in files[:8]:  # 最多显示8个
+            entry = _render_rich_module_file_entry(analysis, file_path)
+            if entry:
+                report.append(entry)
+
+        if len(files) > 8:
+            report.append(f"  - ... 及其他 {len(files) - 8} 个文件")
+
+    return report
+
+
+def _render_rich_entities(analysis: ProjectAnalysis) -> List[str]:
+    """渲染关键代码实体段（generate_rich_report 拆分步骤）"""
+    report = []
+    
+    # ==================== 4. 代码实体分析 ====================
+    report.append("\n## 四、关键代码实体")
+    
+    # 所有类（按文件分组）
+    all_classes = []
+    for f in analysis.files:
+        for c in f.classes:
+            all_classes.append((c, f))
+    
+    if all_classes:
+        report.append("\n### 🏛️ 类/结构体")
+        report.append("\n| 类名 | 所在文件 | 基类 |")
+        report.append("|------|----------|------|")
+        for cls, code_file in sorted(all_classes, key=lambda x: x[0].name):
+            rel_path = os.path.relpath(code_file.file_path, analysis.project_path)
+            bases = ', '.join(cls.base_classes) if cls.base_classes else '-'
+            report.append(f"| `{cls.name}` | `{rel_path}` | {bases} |")
+    
+    # 所有函数（按文件分组，去私有）
+    all_funcs = []
+    for f in analysis.files:
+        for func in f.functions:
+            if not func.name.startswith('_'):
+                all_funcs.append((func, f))
+    
+    if all_funcs:
+        report.append("\n### 🔧 公开函数/方法")
+        report.append("\n| 函数名 | 所在文件 | 参数 |")
+        report.append("|--------|----------|------|")
+        for func, code_file in sorted(all_funcs, key=lambda x: (os.path.relpath(x[1].file_path, analysis.project_path), x[0].name)):
+            rel_path = os.path.relpath(code_file.file_path, analysis.project_path)
+            params = ', '.join(func.parameters[:4])
+            if len(func.parameters) > 4:
+                params += '...'
+            report.append(f"| `{func.name}` | `{rel_path}` | `{params}` |")
+    
+    return report
+
+
+def _render_rich_deps(analysis: ProjectAnalysis) -> List[str]:
+    """渲染依赖关系分析段（generate_rich_report 拆分步骤）"""
+    report = []
+    
+    # ==================== 5. 依赖分析 ====================
+    report.append("\n## 五、依赖关系分析")
+    
+    # 收集每个文件的关键依赖
+    file_deps = []
+    for f in analysis.files:
+        if f.dependencies:
+            rel_path = os.path.relpath(f.file_path, analysis.project_path)
+            file_deps.append((rel_path, f.dependencies))
+    
+    if analysis.dependencies:
+        report.append("\n### 📦 外部依赖")
+        for dep in sorted(analysis.dependencies)[:30]:
+            report.append(f"- `{dep}`")
+        if len(analysis.dependencies) > 30:
+            report.append(f"- ... 及其他 {len(analysis.dependencies) - 30} 个依赖")
+    
+    if file_deps:
+        report.append("\n### 🔗 文件级依赖")
+        report.append("\n| 文件 | 依赖 |")
+        report.append("|------|------|")
+        for rel_path, deps in file_deps:
+            dep_str = ', '.join(f'`{d}`' for d in sorted(deps)[:6])
+            if len(deps) > 6:
+                dep_str += f' ...(+{len(deps)-6})'
+            report.append(f"| `{rel_path}` | {dep_str} |")
+    
+    return report
+
+
+def _render_rich_metrics(analysis: ProjectAnalysis, totals: Dict[str, int]) -> List[str]:
+    """渲染代码度量段（generate_rich_report 拆分步骤）"""
+    report = []
+    
+    total_files = totals["files"]
+    total_lines = totals["lines"]
+    total_classes = totals["classes"]
+    total_functions = totals["functions"]
+    total_imports = totals["imports"]
+    
+    # ==================== 6. 代码度量 ====================
+    report.append("\n## 六、代码度量")
+    
+    # 计算各维度指标
+    file_class_ratios = [(f, len(f.classes)) for f in analysis.files if len(f.classes) > 0]
+    file_func_ratios = [(f, len(f.functions)) for f in analysis.files if len(f.functions) > 0]
+    
+    avg_classes_per_file = total_classes / total_files if total_files > 0 else 0
+    avg_funcs_per_file = total_functions / total_files if total_files > 0 else 0
+    avg_lines_per_file = total_lines / total_files if total_files > 0 else 0
+    avg_imports_per_file = total_imports / total_files if total_files > 0 else 0
+    
+    # 函数量最多的文件
+    most_funcs = sorted(file_func_ratios, key=lambda x: -x[1])[:3]
+    # 类最多的文件
+    most_classes = sorted(file_class_ratios, key=lambda x: -x[1])[:3]
+    
+    report.append("\n| 指标 | 数值 |")
+    report.append("|------|------|")
+    report.append(f"| 平均每文件类数 | {avg_classes_per_file:.2f} |")
+    report.append(f"| 平均每文件函数数 | {avg_funcs_per_file:.2f} |")
+    report.append(f"| 平均每文件行数 | {avg_lines_per_file:.0f} |")
+    report.append(f"| 平均每文件导入数 | {avg_imports_per_file:.1f} |")
+    
+    if most_funcs:
+        report.append("\n**函数最密集的文件**:")
+        for f, count in most_funcs:
+            rel_path = os.path.relpath(f.file_path, analysis.project_path)
+            report.append(f"- `{rel_path}` — {count} 个函数")
+    
+    if most_classes:
+        report.append("\n**类最集中的文件**:")
+        for f, count in most_classes:
+            rel_path = os.path.relpath(f.file_path, analysis.project_path)
+            report.append(f"- `{rel_path}` — {count} 个类")
+    
+    return report
+
+
+def _render_rich_tail(analysis: ProjectAnalysis) -> List[str]:
+    """渲染技术栈/核心功能/入口点与报告尾部（generate_rich_report 拆分步骤）"""
+    report = []
+    
+    # ==================== 7. 技术栈评估 ====================
+    if analysis.tech_stack:
+        report.append("\n## 七、技术栈评估")
+        for tech in analysis.tech_stack:
+            report.append(f"- ✅ {tech}")
+    
+    # ==================== 8. 核心功能 ====================
+    if analysis.core_features:
+        report.append("\n## 八、核心功能识别")
+        for feature in analysis.core_features:
+            report.append(f"- 🎯 {feature}")
+    
+    # ==================== 9. 入口点检测 ====================
+    report.append("\n## 九、入口点检测")
+    entry_files = []
+    for f in analysis.files:
+        basename = os.path.basename(f.file_path)
+        if basename in ('main.py', 'index.js', 'app.py', 'server.py', '__init__.py', 'index.ts'):
+            entry_files.append(f)
+    
+    if entry_files:
+        for f in entry_files:
+            rel_path = os.path.relpath(f.file_path, analysis.project_path)
+            report.append(f"- 🚪 `{rel_path}`")
+    else:
+        report.append("- 未检测到标准入口文件")
+    
+    report.append("\n---")
+    report.append("\n*报告由 CodeRef-AI 代码分析引擎自动生成*")
+    
+    return report
+
+
+def _render_ai_header(analysis: ProjectAnalysis) -> List[str]:
+    """渲染 AI 审计报告头部（generate_ai_report 拆分步骤）"""
+    lines = []
+    
+    lines.append("# 🔍 全代码审计报告（AI辅助编程版）")
+    lines.append("")
+    lines.append(f"> 项目: `{analysis.project_path}`")
+    lines.append(f"> 扫描文件数: {analysis.total_files} | 总行数: {analysis.total_lines:,}")
+    lines.append(f"> 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    lines.append("")
+    lines.append("> 本报告专为AI辅助编程LLM设计，聚焦代码审计维度（Bug/安全/质量/性能/设计），")
+    lines.append("> 不再包含代码结构描述（请通过MCP工具获取实时代码上下文）。")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    return lines
+
+
+def _render_ai_summary(audit_results: Dict[str, List[Dict]]) -> List[str]:
+    """渲染审计摘要段（generate_ai_report 拆分步骤）"""
+    lines = []
+    
+    lines.append("## 一、审计摘要")
+    lines.append("")
+    
+    total_issues = sum(len(v) for v in audit_results.values())
+    critical = sum(1 for cat in audit_results.values() for item in cat if item.get('severity') == 'critical')
+    high = sum(1 for cat in audit_results.values() for item in cat if item.get('severity') == 'high')
+    medium = sum(1 for cat in audit_results.values() for item in cat if item.get('severity') == 'medium')
+    low = sum(1 for cat in audit_results.values() for item in cat if item.get('severity') == 'low')
+    
+    lines.append(f"| 维度 | 问题数 | 严重 | 高 | 中 | 低 |")
+    lines.append(f"|------|--------|------|----|----|----|")
+    for category, items in audit_results.items():
+        c = sum(1 for i in items if i.get('severity') == 'critical')
+        h = sum(1 for i in items if i.get('severity') == 'high')
+        m = sum(1 for i in items if i.get('severity') == 'medium')
+        l = sum(1 for i in items if i.get('severity') == 'low')
+        lines.append(f"| {category} | {len(items)} | {c} | {h} | {m} | {l} |")
+    lines.append(f"| **总计** | **{total_issues}** | **{critical}** | **{high}** | **{medium}** | **{low}** |")
+    lines.append("")
+    return lines
+
+
+def _render_ai_categories(audit_results: Dict[str, List[Dict]]) -> List[str]:
+    """渲染各审计维度详情段（generate_ai_report 拆分步骤）"""
+    lines = []
+    
+    category_titles = {
+        'bugs': ('二、Bug与错误', '🔴'),
+        'security': ('三、安全问题', '🔒'),
+        'quality': ('四、代码质量', '📐'),
+        'performance': ('五、性能风险', '⚡'),
+        'design': ('六、设计问题', '🏗️'),
+    }
+    
+    for cat_key, (title, emoji) in category_titles.items():
+        items = audit_results.get(cat_key, [])
+        lines.append(f"## {title}")
+        lines.append("")
+        
+        if not items:
+            lines.append(f"{emoji} 未发现此类问题。")
+            lines.append("")
+            continue
+        
+        # 按严重度排序
+        severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+        items_sorted = sorted(items, key=lambda x: severity_order.get(x.get('severity', 'low'), 3))
+        
+        for item in items_sorted:
+            sev = item.get('severity', 'low')
+            sev_emoji = {'critical': '🔴', 'high': '🟠', 'medium': '🟡', 'low': '🔵'}.get(sev, '⚪')
+            file_path = item.get('file', '未知文件')
+            line = item.get('line', '-')
+            desc = item.get('description', '')
+            suggestion = item.get('suggestion', '')
+            
+            lines.append(f"### {sev_emoji} [{sev.upper()}] `{file_path}:{line}`")
+            lines.append("")
+            lines.append(f"**问题**: {desc}")
+            if suggestion:
+                lines.append(f"**建议**: {suggestion}")
+            lines.append("")
+        
+        lines.append("---")
+        lines.append("")
+    return lines
+
+
+def _render_ai_priorities(audit_results: Dict[str, List[Dict]]) -> List[str]:
+    """渲染修复优先级建议与报告尾部（generate_ai_report 拆分步骤）"""
+    lines = []
+    
+    lines.append("## 七、修复优先级建议")
+    lines.append("")
+    
+    lines.append("基于审计结果，建议按以下优先级处理：")
+    lines.append("")
+    
+    all_issues = []
+    for cat, items in audit_results.items():
+        for item in items:
+            all_issues.append(item)
+    
+    # 按严重度+影响范围排序
+    all_issues.sort(key=lambda x: (
+        {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}.get(x.get('severity', 'low'), 3),
+        -len(x.get('description', ''))
+    ))
+    
+    if all_issues:
+        lines.append("| 优先级 | 文件 | 问题简述 | 建议操作 |")
+        lines.append("|--------|------|----------|----------|")
+        for i, item in enumerate(all_issues[:20], 1):  # 最多显示前20个
+            sev = item.get('severity', 'low')
+            file_path = item.get('file', '未知')
+            desc = item.get('description', '')[:40] + '...' if len(item.get('description', '')) > 40 else item.get('description', '')
+            suggestion = item.get('suggestion', '')[:30] + '...' if len(item.get('suggestion', '')) > 30 else item.get('suggestion', '')
+            lines.append(f"| P{i} ({sev}) | `{file_path}` | {desc} | {suggestion or '审查修复'} |")
+        lines.append("")
+    else:
+        lines.append("✅ 未发现需要修复的问题。")
+        lines.append("")
+    
+    lines.append("---")
+    lines.append("*全代码审计报告 · 供AI辅助编程LLM参考*")
+    return lines
+
+
+def _enhance_analysis_with_gitnexus(analysis: ProjectAnalysis):
+    """用GitNexus图谱数据增强分析结果（原 CodeAnalyzer._enhance_with_gitnexus 实现）
+    
+    通过MCP查询GitNexus图数据库，获取：
+    - 执行流（process）信息
+    - 函数集群（community）信息
+    - 入口点的上下游关系
+    """
+    from .gitnexus_client import GitNexusMCPClient
+    
+    logger.info(f"[GitNexus] 尝试增强分析，项目路径: {analysis.project_path}")
+    
+    with GitNexusMCPClient(project_path=analysis.project_path) as client:
+        # 1. 获取已索引的仓库列表
+        repos = client.list_repos()
+        logger.info(f"[GitNexus] 发现 {len(repos)} 个索引仓库: {[r.get('name') for r in repos]}")
+        if not repos:
+            logger.info("[GitNexus] 当前项目无索引数据，跳过增强")
+            return
+        
+        # 2. 搜索项目中的关键符号，补充进程/集群信息
+        # 查找入口点文件
+        entry_files = []
+        for f in analysis.files:
+            basename = os.path.basename(f.file_path)
+            if basename in ('main.py', 'index.js', 'app.py', 'server.py', 'v4_main.py'):
+                entry_files.append(f)
+        
+        # 3. 对每个入口函数查询上下文
+        for ef in entry_files:
+            for func in ef.functions:
+                if func.name in ('main', 'run', 'start', 'serve', 'app'):
+                    try:
+                        context = client.get_context(func.name)
+                        if isinstance(context, dict):
+                            # 补充进程信息到架构摘要
+                            processes = context.get("processes", [])
+                            if processes:
+                                proc_names = []
+                                for p in processes[:5]:
+                                    if isinstance(p, dict):
+                                        proc_names.append(p.get("name", str(p)))
+                                    else:
+                                        proc_names.append(str(p))
+                                if proc_names:
+                                    analysis.architecture_summary += (
+                                        f"\n[GitNexus] 检测到执行流: {', '.join(proc_names)}"
+                                    )
+                    except Exception as e:
+                        logger.warning(f"应用 GitNexus 执行流增强失败，跳过: {e}")
+        
+        # 4. 用混合搜索发现项目中的关键模块
+        try:
+            project_name = os.path.basename(analysis.project_path.rstrip('/\\'))
+            search_results = client.search(project_name)
+            if isinstance(search_results, dict):
+                clusters = search_results.get("clusters", [])
+                if clusters:
+                    cluster_info = []
+                    for c in clusters[:10]:
+                        if isinstance(c, dict):
+                            name = c.get("name", "")
+                            cohesion = c.get("cohesion", "")
+                            if name:
+                                cluster_info.append(f"{name}(内聚度:{cohesion})" if cohesion else name)
+                    if cluster_info:
+                        analysis.architecture_summary += (
+                            f"\n[GitNexus] 功能集群: {', '.join(cluster_info)}"
+                        )
+        except Exception as e:
+            logger.warning(f"应用 GitNexus 功能集群增强失败，跳过: {e}")
+        
+        logger.info("[CodeAnalyzer] GitNexus增强完成")
+
+
+def _run_gitnexus_cmd(cmd: List[str], project_path: str) -> Optional[str]:
+    """执行 gitnexus 命令行并返回 stdout（列表式参数，无 shell 注入面）
+    （原 CodeAnalyzer._run_gitnexus 实现）
+
+    Args:
+        cmd: gitnexus 子命令参数列表（如 ["export", "--entry", "main", ...]）
+        project_path: GitNexus 索引所在的项目目录
+
+    Returns:
+        命令 stdout 字符串；失败返回 None
+    """
+    try:
+        argv = list(cmd)
+        if not argv or argv[0] != "gitnexus":
+            argv = ["gitnexus"] + argv
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+            cwd=project_path,
+            stdin=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            logger.warning(f"[CodeAnalyzer] gitnexus 命令失败: {result.stderr.strip()[:200]}")
+            return None
+        return result.stdout
+    except FileNotFoundError:
+        logger.warning("[CodeAnalyzer] gitnexus CLI 未安装，请执行: npm install -g gitnexus")
+        return None
+    except subprocess.TimeoutExpired:
+        logger.warning("[CodeAnalyzer] gitnexus 命令执行超时（120s）")
+        return None
+    except Exception as e:
+        logger.warning(f"[CodeAnalyzer] gitnexus 调用异常: {e}")
+        return None
+
+
+def _mermaid_from_analysis(analysis: ProjectAnalysis) -> str:
+    """基于分析结果生成Mermaid架构图（原 CodeAnalyzer.generate_mermaid_diagram 实现）
+    
+    利用 auto_classifier 自动分层，生成带子图的 Mermaid flowchart
+    """
+    from .diagram_generator import generate_mermaid, classify_nodes
+    
+    # 构建节点列表
+    nodes = []
+    for f in analysis.files:
+        rel_path = os.path.relpath(f.file_path, analysis.project_path)
+        # 每个文件作为一个节点
+        nodes.append({
+            "name": rel_path,
+            "filePath": rel_path,
+        })
+    
+    # 构建边列表（基于项目内导入关系）
+    edges = []
+    for f in analysis.files:
+        rel_path = os.path.relpath(f.file_path, analysis.project_path)
+        for imp in f.project_imports[:10]:  # 限制每个文件最多10条边
+            edges.append({
+                "source": rel_path,
+                "target": imp,
+                "relation_type": "imports",
+            })
+    
+    project_name = os.path.basename(analysis.project_path.rstrip('/\\'))
+    
+    return generate_mermaid(
+        nodes=nodes[:50],  # 限制节点数避免图过大
+        edges=edges[:100],
+        entry_point="",
+        title=f"{project_name} - 模块依赖图",
+    )
+
+
+def _verify_audit_line_numbers(analysis: ProjectAnalysis, audit_results: Dict[str, List[Dict]]) -> Dict[str, List[Dict]]:
+    """验证审计结果行号有效性（原 CodeAnalyzer._verify_line_numbers 实现）
+    
+    对于每个包含行号的 finding，检查：
+    - 文件是否仍然存在
+    - 行号是否在文件范围内
+    - 该行的内容是否仍包含与 description 相关的关键词
+    """
+    verified = {}
+    for category, items in audit_results.items():
+        verified_items = []
+        for item in items:
+            if 'line' not in item or 'file' not in item:
+                verified_items.append(item)
+                continue
+            
+            file_path = os.path.join(analysis.project_path, item['file'])
+            line_no = item['line']
+            
+            # 检查文件是否存在
+            if not os.path.isfile(file_path):
+                continue  # 文件已删除/移动，移除该 finding
+            
+            try:
+                # 只读取到目标行（采样），避免大文件整读 `readlines()` 造成内存峰值
+                from itertools import islice
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    file_lines = list(islice(f, line_no))
+
+                # 检查行号是否在文件范围内
+                if line_no < 1 or len(file_lines) < line_no:
+                    continue
+
+                actual_line = file_lines[line_no - 1]
+                
+                # 从 description 中提取反引号内的关键词，检查该行是否仍包含它们
+                desc = item.get('description', '')
+                keywords = re.findall(r'`([^`]+)`', desc)
+                if keywords:
+                    found = any(kw in actual_line for kw in keywords)
+                    if not found:
+                        continue  # 内容不匹配，移除该 finding
+                
+                verified_items.append(item)
+            except Exception:
+                # 读取失败时保守保留 finding
+                verified_items.append(item)
+        
+        if verified_items:
+            verified[category] = verified_items
+    
+    return verified
+
+
+def _audit_file_bugs(cf: CodeFile, rel_path: str, content: str, lines: List[str], issues: List[Dict]):
+    """Bug与错误检测（原 CodeAnalyzer._audit_bugs 实现）
+    注意：content 来自 CodeFile.raw_content，缓存不截断后为完整内容
+    拆分说明：logger 检测与异常处理检测提取为独立检测函数，本函数仅编排。"""
+    _detect_undefined_logger(content, lines, rel_path, issues)
+    _detect_missing_exception_handling(cf, lines, rel_path, issues)
+
+
+def _logger_is_imported(content: str) -> bool:
+    """判断 content 是否以任一形式导入/定义了 logger（供 logger 未定义检测使用）"""
+    has_logging_import = bool(re.search(r'import\s+logging', content))
+    has_logger_def = bool(re.search(r'\blogger\s*=\s*(?:logging\.getLogger|getLogger)', content))
+
+    # 跨模块导入追踪：from X import ... logger ...
+    # 单行匹配：from config import logger / from config import x, logger, y
+    has_logger_import_single = bool(re.search(r'\bfrom\s+\S+\s+import\s+[^)]*\blogger\b', content))
+
+    # 多行匹配：from config import ( \n    x, \n    logger, \n )
+    has_logger_import_multi = False
+    multi_import_matches = list(re.finditer(r'\bfrom\s+\S+\s+import\s*\(', content))
+    for m in multi_import_matches:
+        if _multiline_import_contains_logger(content, m):
+            has_logger_import_multi = True
+            break
+
+    # import logger 别名：from loguru import logger as log
+    has_logger_alias = bool(re.search(r'\bfrom\s+\S+\s+import\s+.*\blogger\s+as\s+\w+', content))
+
+    return (has_logging_import or has_logger_def or
+            has_logger_import_single or has_logger_import_multi or has_logger_alias)
+
+
+def _multiline_import_contains_logger(content: str, m) -> bool:
+    """检查多行 import(...) 块内是否导入 logger（从匹配到的 import ( 开始配对括号）"""
+    depth = 1
+    pos = m.end()
+    while pos < len(content) and depth > 0:
+        if content[pos] == '(':
+            depth += 1
+        elif content[pos] == ')':
+            depth -= 1
+        pos += 1
+    if depth == 0:
+        import_block = content[m.end():pos-1]
+        return bool(re.search(r'\blogger\b', import_block))
+    return False
+
+
+def _detect_undefined_logger(content: str, lines: List[str], rel_path: str, issues: List[Dict]):
+    """logger未定义检测（精准：排除跨模块导入 logger 的情况）"""
+    if not re.search(r'\blogger\.(debug|info|warning|error|critical)\b', content):
+        return
+    if _logger_is_imported(content):
+        return
+    for i, line in enumerate(lines, 1):
+        if re.search(r'\blogger\.(debug|info|warning|error|critical)\b', line):
+            issues.append({
+                'severity': 'high',
+                'file': rel_path,
+                'line': i,
+                'description': 'logger未定义：使用logger.xxx()但无import logging或导入logger',
+                'suggestion': '添加 `import logging` 和 `logger = logging.getLogger(__name__)`'
+            })
+            break
+
+
+def _find_scope_for_line(cf: CodeFile, i: int):
+    """返回包含行 i 的 (scope_start, scope_end)，依次查函数→类方法→类体；无则 None"""
+    # 优先检查函数作用域（包括类方法）
+    for func in cf.functions:
+        if func.start_line <= i <= func.end_line:
+            return func.start_line, func.end_line
+
+    # 如果不在独立函数内，检查类方法
+    for cls in cf.classes:
+        for method in cls.methods:
+            if method.start_line <= i <= method.end_line:
+                return method.start_line, method.end_line
+
+    # 如果不在方法内但位于类体中，检查整个类
+    for cls in cf.classes:
+        if cls.start_line <= i <= cls.end_line:
+            return cls.start_line, cls.end_line
+    return None
+
+
+def _line_covered_by_try(lines: List[str], i: int, scope) -> bool:
+    """判断行 i 所在作用域（或模块级邻近5行）是否被 try 覆盖"""
+    if scope is not None:
+        scope_start, scope_end = scope
+        # 在函数/类作用域内：检查整个作用域是否有 try
+        for j in range(scope_start, min(scope_end + 1, len(lines) + 1)):
+            check_line = lines[j - 1].strip() if j <= len(lines) else ''
+            if check_line.startswith('try:') or check_line == 'try:':
+                return True
+        return False
+    # 模块级代码：只检查周围5行
+    for j in range(i - 1, max(i - 5, 0), -1):
+        check_line = lines[j - 1].strip() if j > 0 else ''
+        if check_line.startswith('try:') or check_line == 'try:':
+            return True
+    return False
+
+
+def _detect_missing_exception_handling(cf: CodeFile, lines: List[str], rel_path: str, issues: List[Dict]):
+    """异常处理缺失检测（函数级try块检测，使用函数/类作用域而非行级回溯）"""
+    if cf.language != 'python':
+        return
+    risky_calls = ['requests.', 'urllib', 'socket.', 'subprocess.', 'open(', 'httpx.']
+    for risky in risky_calls:
+        for i, line in enumerate(lines, 1):
+            if risky in line:
+                if _line_covered_by_try(lines, i, _find_scope_for_line(cf, i)):
+                    continue
+                issues.append({
+                    'severity': 'medium',
+                    'file': rel_path,
+                    'line': i,
+                    'description': f'调用 `{risky}` 可能缺少异常处理',
+                    'suggestion': '添加 try/except 块处理IO/网络异常'
+                })
+                break
+
+
+def _audit_file_security(cf: CodeFile, rel_path: str, content: str, lines: List[str], issues: List[Dict]):
+    """安全问题检测（原 CodeAnalyzer._audit_security 实现，AST 精确分类 + 正则回退）
+    拆分说明：按风险类别提取为独立检测函数，本函数仅编排。"""
+    _detect_hardcoded_secrets(cf, rel_path, content, lines, issues)
+    _detect_sql_injection(rel_path, lines, issues)
+    _detect_path_traversal(rel_path, content, lines, issues)
+    _detect_unsafe_deserialization(rel_path, lines, issues)
+    _detect_eval_exec(rel_path, lines, issues)
+    _detect_hardcoded_win_paths(rel_path, lines, issues)
+
+
+def _detect_hardcoded_secrets(cf: CodeFile, rel_path: str, content: str, lines: List[str], issues: List[Dict]):
+    """硬编码密钥/Token 检测 — 优先使用 AST 精确分类，AST 不可用回退正则"""
+    ast_assignments = getattr(cf, 'ast_assignments', [])
+    if ast_assignments:
+        # AST 解析可用：只报告确认为 hardcoded 的赋值
+        for assign in ast_assignments:
+            if assign.category == "hardcoded":
+                issues.append({
+                    'severity': 'high',
+                    'file': rel_path,
+                    'line': assign.line,
+                    'description': f'硬编码凭据: {assign.target} = {assign.value_repr[:50]}',
+                    'suggestion': '使用环境变量或密钥管理服务（os.environ.get()）'
+                })
+        return
+    # AST 不可用：回退到正则（但增加排除逻辑）
+    secret_patterns = [
+        (r'\bapi[_-]?key\b\s*=\s*["\'][^"\']{10,}["\']', '硬编码API Key'),
+        (r'\bsecret\b\s*=\s*["\'][^"\']{8,}["\']', '硬编码Secret'),
+        (r'\btoken\b\s*=\s*["\'][^"\']{10,}["\']', '硬编码Token'),
+        (r'\bpassword\b\s*=\s*["\'][^"\']{4,}["\']', '硬编码密码'),
+    ]
+    # 排除模式
+    exclude_patterns = [
+        r'\.get\s*\(',          # config.get()
+        r'os\.(?:environ|getenv)',  # os.environ / os.getenv
+        r'^[A-Z_]{4,}\s*=\s*["\'][A-Z_\d]+["\']',  # 错误码常量
+        r'MISSING_|_MISSING',    # 错误码
+    ]
+    for pattern, desc in secret_patterns:
+        for i, line in enumerate(lines, 1):
+            if re.search(pattern, line, re.IGNORECASE):
+                # 排除配置读取和错误码常量
+                if any(re.search(ep, line, re.IGNORECASE) for ep in exclude_patterns):
+                    continue
+                issues.append({
+                    'severity': 'high',
+                    'file': rel_path,
+                    'line': i,
+                    'description': f'发现{desc}',
+                    'suggestion': '使用环境变量或密钥管理服务'
+                })
+                break
+
+
+def _detect_sql_injection(rel_path: str, lines: List[str], issues: List[Dict]):
+    """SQL注入风险检测（字符串拼接SQL）"""
+    sql_patterns = [
+        r'execute\s*\(\s*["\'].*%s',
+        r'execute\s*\(\s*["\'].*\+',
+        r'execute\s*\(\s*f["\']',
+    ]
+    for pattern in sql_patterns:
+        for i, line in enumerate(lines, 1):
+            if re.search(pattern, line, re.IGNORECASE):
+                issues.append({
+                    'severity': 'critical',
+                    'file': rel_path,
+                    'line': i,
+                    'description': '可能的SQL注入风险：字符串拼接SQL',
+                    'suggestion': '使用参数化查询（parameterized queries）'
+                })
+                break
+
+
+def _detect_path_traversal(rel_path: str, content: str, lines: List[str], issues: List[Dict]):
+    """路径遍历风险检测（open() 拼接用户输入）"""
+    for i, line in enumerate(lines, 1):
+        if 'open(' in line and ('+' in line or 'f"' in line or "f'" in line):
+            if 'pathlib' not in content and 'os.path.join' not in line:
+                issues.append({
+                    'severity': 'medium',
+                    'file': rel_path,
+                    'line': i,
+                    'description': '文件路径可能包含用户输入，存在路径遍历风险',
+                    'suggestion': '使用 pathlib.Path.resolve() 和路径验证'
+                })
+                break
+
+
+def _detect_unsafe_deserialization(rel_path: str, lines: List[str], issues: List[Dict]):
+    """不安全的反序列化检测（pickle.loads / yaml.load）"""
+    for i, line in enumerate(lines, 1):
+        if 'pickle.loads' in line or 'yaml.load(' in line:
+            issues.append({
+                'severity': 'high',
+                'file': rel_path,
+                'line': i,
+                'description': '使用不安全的反序列化方法',
+                'suggestion': 'pickle→json; yaml.load→yaml.safe_load'
+            })
+            break
+
+
+def _detect_eval_exec(rel_path: str, lines: List[str], issues: List[Dict]):
+    """eval/exec 动态代码执行检测"""
+    for i, line in enumerate(lines, 1):
+        if re.search(r'\beval\s*\(', line) or re.search(r'\bexec\s*\(', line):
+            issues.append({
+                'severity': 'critical',
+                'file': rel_path,
+                'line': i,
+                'description': '使用 eval/exec 执行动态代码',
+                'suggestion': '避免使用eval/exec，改用ast.literal_eval或安全替代方案'
+            })
+            break
+
+
+def _detect_hardcoded_win_paths(rel_path: str, lines: List[str], issues: List[Dict]):
+    """硬编码Windows路径检测（带过滤：跳过测试文件、注释、模板、UI文本等）"""
+    # 跳过测试文件和 __pycache__ 目录
+    if '__pycache__' in rel_path or '/test_' in rel_path.replace('\\', '/') or rel_path.startswith('test_'):
+        return
+    win_path_pattern = re.compile(r'(?<![a-zA-Z])[A-Za-z]:(?:[\\/][^\\/"\'\n\r\t\)\]\}]+)+')
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+        # 跳过注释行
+        if stripped.startswith('#') or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*'):
+            continue
+        # 跳过日志消息模板（包含 {} 或 %s/%d 等占位符）
+        if re.search(r'[\{\}]|%[sd]|%\(', line):
+            continue
+        # 跳过UI标签/显示文本（包含常见UI关键词的短行）
+        if any(kw in line.lower() for kw in ['路径', '文件', '目录', 'folder', 'path', 'directory', 'file']):
+            if len(stripped) < 100:
+                continue
+        # 跳过默认值/示例
+        if re.search(r'example|sample|your[-\s]|默认|示例', line, re.IGNORECASE):
+            continue
+        # 实际检测硬盘路径
+        if win_path_pattern.search(line):
+            issues.append({
+                'severity': 'low',
+                'file': rel_path,
+                'line': i,
+                'description': f'硬编码Windows路径: `{line.strip()[:60]}`',
+                'suggestion': '使用 os.path.join() 或 pathlib.Path 构建路径'
+            })
+
+
+def _audit_file_quality(cf: CodeFile, rel_path: str, content: str, lines: List[str], issues: List[Dict]):
+    """代码质量检测（原 CodeAnalyzer._audit_quality 实现）"""
+    # 1. 函数过长
+    for func in cf.functions:
+        func_lines = func.end_line - func.start_line
+        if func_lines > 100:
+            issues.append({
+                'severity': 'medium',
+                'file': rel_path,
+                'line': func.start_line,
+                'description': f'函数 `{func.name}` 过长 ({func_lines} 行)',
+                'suggestion': '拆分为多个小函数，遵循单一职责原则'
+            })
+        elif func_lines > 50:
+            issues.append({
+                'severity': 'low',
+                'file': rel_path,
+                'line': func.start_line,
+                'description': f'函数 `{func.name}` 较长 ({func_lines} 行)',
+                'suggestion': '考虑拆分或提取辅助函数'
+            })
+    
+    # 2. 类过大
+    for cls in cf.classes:
+        cls_lines = cls.end_line - cls.start_line
+        if cls_lines > 300:
+            issues.append({
+                'severity': 'medium',
+                'file': rel_path,
+                'line': cls.start_line,
+                'description': f'类 `{cls.name}` 过大 ({cls_lines} 行)',
+                'suggestion': '拆分为多个类或使用组合替代继承'
+            })
+    
+    # 3. 参数过多
+    for func in cf.functions:
+        if len(func.parameters) > 7:
+            issues.append({
+                'severity': 'low',
+                'file': rel_path,
+                'line': func.start_line,
+                'description': f'函数 `{func.name}` 参数过多 ({len(func.parameters)} 个)',
+                'suggestion': '使用dataclass或dict封装参数'
+            })
+    
+    # 4. TODO/FIXME 标记
+    for i, line in enumerate(lines, 1):
+        if 'TODO' in line or 'FIXME' in line or 'HACK' in line:
+            issues.append({
+                'severity': 'low',
+                'file': rel_path,
+                'line': i,
+                'description': f'发现技术债务标记: {line.strip()[:60]}',
+                'suggestion': '安排时间清理或转化为正式issue'
+            })
+
+
+def _audit_file_performance(cf: CodeFile, rel_path: str, content: str, lines: List[str], issues: List[Dict]):
+    """性能风险检测（原 CodeAnalyzer._audit_performance 实现）"""
+    # 1. 文件级循环中的IO操作
+    for i, line in enumerate(lines, 1):
+        window = '\n'.join(lines[i:i + 10])
+        if ('for ' in line or 'while ' in line) and 'open(' in window:
+            issues.append({
+                'severity': 'medium',
+                'file': rel_path,
+                'line': i,
+                'description': '循环中可能包含文件IO操作',
+                'suggestion': '将IO操作移出循环，或使用批量读写'
+            })
+            break
+    
+    # 2. 字符串拼接在循环中
+    for i, line in enumerate(lines, 1):
+        if ('for ' in line or 'while ' in line) and ('+=' in line and '"' in line):
+            issues.append({
+                'severity': 'low',
+                'file': rel_path,
+                'line': i,
+                'description': '循环中使用字符串拼接',
+                'suggestion': '使用列表+join或StringIO替代+=拼接'
+            })
+            break
+    
+    # 3. 潜在的内存泄漏（全局缓存无上限）
+    if 'cache' in content.lower() and 'maxsize' not in content.lower():
+        for i, line in enumerate(lines, 1):
+            if '@lru_cache' in line and 'maxsize' not in line:
+                issues.append({
+                    'severity': 'low',
+                    'file': rel_path,
+                    'line': i,
+                    'description': 'lru_cache未设置maxsize，可能导致内存无限增长',
+                    'suggestion': '添加 maxsize 参数限制缓存大小'
+                })
+                break
+
+
+def _audit_file_design(cf: CodeFile, rel_path: str, content: str, lines: List[str], issues: List[Dict]):
+    """设计问题检测（原 CodeAnalyzer._audit_design 实现）"""
+    # 1. sys.path 动态注入
+    if cf.sys_path_inserts:
+        for spi in cf.sys_path_inserts:
+            issues.append({
+                'severity': 'medium',
+                'file': rel_path,
+                'line': 1,  # 无法精确定位行号
+                'description': f'使用 sys.path.insert 动态注入路径: `{spi}`',
+                'suggestion': '改为相对导入或包结构重构'
+            })
+    
+    # 2. 循环依赖检测（简单：A导入B，B导入A）
+    # 这个需要在全局层面检测，这里只做文件级标记
+    
+    # 3. 上帝类检测（方法过多）
+    for cls in cf.classes:
+        if len(cls.methods) > 20:
+            issues.append({
+                'severity': 'medium',
+                'file': rel_path,
+                'line': cls.start_line,
+                'description': f'类 `{cls.name}` 方法过多 ({len(cls.methods)} 个)，可能是上帝类',
+                'suggestion': '拆分为多个职责单一的类'
+            })
+    
+    # 4. 重复代码检测（简单：相同import模式）
+    # 复杂重复检测需要AST级分析，这里跳过
+    
+    # 5. 硬编码配置（排除注释、字符串常量、文档路径等合理场景）
+    hardcoded_patterns = [
+        (r'localhost:\d+', '硬编码本地服务地址'),
+        (r'127\.0\.0\.1:\d+', '硬编码本地IP地址'),
+    ]
+    for pattern, desc in hardcoded_patterns:
+        for i, line in enumerate(lines, 1):
+            if re.search(pattern, line) and '#' not in line and '"""' not in line:
+                issues.append({
+                    'severity': 'low',
+                    'file': rel_path,
+                    'line': i,
+                    'description': f'{desc}: `{line.strip()[:50]}`',
+                    'suggestion': '使用配置文件或环境变量'
+                })
+                break
+
+
 class CodeAnalyzer:
     """代码分析器"""
     
@@ -348,152 +1801,8 @@ class CodeAnalyzer:
         return code_files
     
     def parse_python_file(self, content: str, file_path: str, project_root: str = "") -> CodeFile:
-        """解析Python文件（增强版：AST 精确解析 + 正则回退）"""
-        code_file = CodeFile(file_path=file_path, language='python', raw_content=content)
-
-        # 计算当前文件所在模块（相对项目根的目录）
-        if project_root:
-            rel_dir = os.path.dirname(os.path.relpath(file_path, project_root))
-        else:
-            rel_dir = ""
-
-        # ─── 优先使用 AST 精确解析 ──────────────────────────────────
-        ast_assignments = []  # AST 解析的赋值分类
-        ast_result = None
-        try:
-            from core.ast_parser import AstParser
-            ast_parser = AstParser(project_root=project_root)
-            ast_result = ast_parser.parse_content(content, file_path)
-            if ast_result:
-                ast_assignments = ast_result.assignments
-                logger.debug(f"[AST] {file_path}: {len(ast_result.functions)}函数, "
-                           f"{len(ast_result.classes)}类, {len(ast_result.assignments)}赋值")
-        except Exception as e:
-            ast_result = None
-            logger.debug(f"[AST] 解析失败 {file_path}: {e}")
-
-        # 存储 AST 赋值分类（供 _audit_security 使用）
-        code_file.ast_assignments = ast_assignments
-
-        # 提取导入
-        import_pattern = r'^(?:from|import)\s+([\w\.]+)'
-        for match in re.finditer(import_pattern, content, re.MULTILINE):
-            imp = match.group(1)
-            code_file.imports.append(imp)
-            root_pkg = imp.split('.')[0]
-            
-            # 区分项目内部导入 vs 外部依赖
-            # 如果导入以项目模块名开头，标记为项目内部
-            if rel_dir and (root_pkg == rel_dir.split('\\')[0].split('/')[0] or 
-                            any(part == root_pkg for part in rel_dir.replace('\\', '/').split('/'))):
-                code_file.project_imports.append(imp)
-            else:
-                code_file.dependencies.add(root_pkg)
-        
-        # 提取完整的from ... import ... 语句（用于跨模块分析）
-        full_import_pattern = r'from\s+([\w\.]+)\s+import\s+([\w\s,]+)'
-        for match in re.finditer(full_import_pattern, content):
-            module_path = match.group(1)
-            names = [n.strip() for n in match.group(2).split(',')]
-            # 检测是否导入其他模块的类/函数（表明跨模块调用）
-            if rel_dir and module_path not in ('__future__', 'typing', 'abc', 'dataclasses', 'enum'):
-                root = module_path.split('.')[0]
-                if root != rel_dir.split('\\')[0].split('/')[0] and not root.startswith('_'):
-                    for name in names:
-                        code_file.function_calls.append(f"{module_path}.{name}")
-        
-        # 提取 sys.path.insert / sys.path.append（动态注入点）
-        syspath_pattern = r'sys\.path\.(?:insert|append)\s*\(([^)]*)\)'
-        for match in re.finditer(syspath_pattern, content):
-            code_file.sys_path_inserts.append(match.group(1).strip())
-        
-        # 提取 importlib.import_module（动态导入）
-        dyn_import_pattern = r'importlib\.import_module\s*\(([^)]*)\)'
-        for match in re.finditer(dyn_import_pattern, content):
-            code_file.dynamic_imports.append({"module_expr": match.group(1).strip()})
-        
-        # 提取对本地服务的 HTTP 请求
-        http_pattern = r'(requests|httpx|aiohttp)\.(get|post|put|delete)\s*\(\s*["\'](http://127\.0\.0\.1|http://localhost|http://0\.0\.0\.0)'
-        for match in re.finditer(http_pattern, content):
-            code_file.http_calls.append({
-                "method": match.group(2).upper(),
-                "url_pattern": match.group(0)
-            })
-        
-        # 提取函数/类：优先使用 AST 精确结果（node.end_lineno 精确到函数体最后一行，
-        # 类方法来自 ClassDef.body），AST 失败（如语法错误）时回退正则推断。
-        # 旧正则版缺陷：最后一个函数的 end_line 直接取文件总行数、中间函数取下一个
-        # def/class 定义前一行，函数后的模块级常量区被算进函数体，行数虚高；
-        # 且 CodeClass.methods 从未填充，方法计数恒为 0。
-        if ast_result is not None:
-            # all_functions = 顶层函数 + 类方法（与旧正则口径一致，方法也参与行数统计）
-            for func in ast_result.all_functions:
-                if func.name.startswith('_'):
-                    continue  # 与旧正则行为一致：跳过私有函数/方法
-                code_file.functions.append(CodeFunction(
-                    name=func.name,
-                    start_line=func.start_line,
-                    end_line=func.end_line,
-                    parameters=func.parameters,
-                    return_type=func.return_type,
-                    docstring=func.docstring,
-                    code=func.code,
-                ))
-            for cls in ast_result.classes:
-                code_file.classes.append(CodeClass(
-                    name=cls.name,
-                    start_line=cls.start_line,
-                    end_line=cls.end_line,
-                    methods=[CodeFunction(
-                        name=m.name,
-                        start_line=m.start_line,
-                        end_line=m.end_line,
-                        parameters=m.parameters,
-                        return_type=m.return_type,
-                        docstring=m.docstring,
-                        code=m.code,
-                    ) for m in cls.methods],
-                    base_classes=cls.base_classes,
-                    docstring=cls.docstring,
-                ))
-        else:
-            # 正则回退：AST 不可用（语法错误文件）时的近似解析
-            func_pattern = r'def\s+(\w+)\s*\(([^)]*)\)\s*(?:->\s*([\w\[\],\s]+))?:'
-            func_matches = list(re.finditer(func_pattern, content))
-            for idx, match in enumerate(func_matches):
-                func_name = match.group(1)
-                if not func_name.startswith('_'):  # 跳过私有函数
-                    params = [p.strip() for p in match.group(2).split(',') if p.strip()]
-                    start_line = content[:match.start()].count('\n') + 1
-                    # 计算 end_line：下一个函数/类定义之前减1行，或文件末尾
-                    end_line = len(content.splitlines())
-                    if idx + 1 < len(func_matches):
-                        end_line = content[:func_matches[idx + 1].start()].count('\n')
-                    code_file.functions.append(CodeFunction(
-                        name=func_name,
-                        start_line=start_line,
-                        end_line=end_line,
-                        parameters=params,
-                        return_type=match.group(3)
-                    ))
-
-            class_pattern = r'class\s+(\w+)(?:\(([^)]*)\))?:'
-            class_matches = list(re.finditer(class_pattern, content))
-            for idx, match in enumerate(class_matches):
-                class_name = match.group(1)
-                bases = [b.strip() for b in (match.group(2) or '').split(',') if b.strip()]
-                start_line = content[:match.start()].count('\n') + 1
-                end_line = len(content.splitlines())
-                if idx + 1 < len(class_matches):
-                    end_line = content[:class_matches[idx + 1].start()].count('\n')
-                code_file.classes.append(CodeClass(
-                    name=class_name,
-                    start_line=start_line,
-                    end_line=end_line,
-                    base_classes=bases
-                ))
-        
-        return code_file
+        """解析Python文件（实现提取至模块级 _parse_python_file_content）"""
+        return _parse_python_file_content(content, file_path, project_root)
     
     def parse_file(self, file_path: str) -> Optional[CodeFile]:
         """解析单个代码文件"""
@@ -631,537 +1940,64 @@ class CodeAnalyzer:
         return result
     
     def _analyze_tech_stack(self, analysis: ProjectAnalysis) -> List[str]:
-        """分析技术栈"""
-        tech_stack = []
-        
-        # 主要语言
-        for lang, count in analysis.languages.items():
-            tech_stack.append(f"{lang} ({count} 文件)")
-        
-        # 主要依赖
-        common_frameworks = {
-            'fastapi': 'FastAPI',
-            'flask': 'Flask',
-            'django': 'Django',
-            'react': 'React',
-            'vue': 'Vue.js',
-            'angular': 'Angular',
-            'pandas': 'Pandas',
-            'numpy': 'NumPy',
-            'torch': 'PyTorch',
-            'tensorflow': 'TensorFlow',
-            'requests': 'Requests',
-        }
-        
-        for dep, name in common_frameworks.items():
-            if dep in analysis.dependencies:
-                tech_stack.append(name)
-        
-        return tech_stack
+        """分析技术栈（实现提取至模块级 _tech_stack_summary）"""
+        return _tech_stack_summary(analysis)
     
     def _extract_core_features(self, analysis: ProjectAnalysis) -> List[str]:
-        """提取核心功能"""
-        features = []
-        
-        # 从类名和函数名推断功能
-        keywords = {
-            'api': 'API接口',
-            'db': '数据库操作',
-            'database': '数据库',
-            'auth': '认证授权',
-            'user': '用户管理',
-            'search': '搜索功能',
-            'parser': '解析器',
-            'analyzer': '分析器',
-            'crawl': '爬虫',
-            'scraper': '数据抓取',
-            'ml': '机器学习',
-            'model': '模型',
-            'train': '训练',
-            'predict': '预测',
-        }
-        
-        found_features = set()
-        
-        for code_file in analysis.files:
-            for cls in code_file.classes:
-                for kw, feature in keywords.items():
-                    if kw.lower() in cls.name.lower() and feature not in found_features:
-                        found_features.add(feature)
-                        features.append(feature)
-            
-            for func in code_file.functions:
-                for kw, feature in keywords.items():
-                    if kw.lower() in func.name.lower() and feature not in found_features:
-                        found_features.add(feature)
-                        features.append(feature)
-        
-        return features[:10]  # 最多返回10个核心功能
+        """提取核心功能（实现提取至模块级 _core_features_from）"""
+        return _core_features_from(analysis)
     
     def _generate_architecture_summary(self, analysis: ProjectAnalysis) -> str:
-        """生成架构摘要（基础版）"""
-        summary_parts = []
-        
-        # 基本信息
-        summary_parts.append(f"## 项目概览")
-        summary_parts.append(f"- 总文件数: {analysis.total_files}")
-        summary_parts.append(f"- 总代码行数: {analysis.total_lines:,}")
-        lang_str = ', '.join([f'{k}({v}个文件)' for k, v in sorted(analysis.languages.items(), key=lambda x: -x[1])])
-        summary_parts.append(f"- 语言分布: {lang_str}")
-        summary_parts.append(f"- 总模块数: {len(analysis.modules)}")
-        summary_parts.append(f"- 总类数: {sum(len(f.classes) for f in analysis.files)}")
-        summary_parts.append(f"- 总函数数: {sum(len(f.functions) for f in analysis.files)}")
-        
-        # 技术栈
-        if analysis.tech_stack:
-            summary_parts.append(f"\n## 技术栈")
-            for tech in analysis.tech_stack:
-                summary_parts.append(f"- {tech}")
-        
-        # 核心功能
-        if analysis.core_features:
-            summary_parts.append(f"\n## 核心功能")
-            for feature in analysis.core_features:
-                summary_parts.append(f"- {feature}")
-        
-        # 模块结构
-        summary_parts.append(f"\n## 模块结构")
-        for module, files in sorted(analysis.modules.items()):
-            summary_parts.append(f"- **{module}**: {len(files)} 个文件")
-        
-        # 依赖概览
-        if analysis.dependencies:
-            summary_parts.append(f"\n## 外部依赖")
-            for dep in sorted(analysis.dependencies)[:20]:
-                summary_parts.append(f"- {dep}")
-            if len(analysis.dependencies) > 20:
-                summary_parts.append(f"- ... 及其他 {len(analysis.dependencies) - 20} 个依赖")
-        
-        return '\n'.join(summary_parts)
+        """生成架构摘要（基础版，实现提取至模块级 _architecture_summary_text）"""
+        return _architecture_summary_text(analysis)
     
     def _extract_mode_metadata(self, analysis: ProjectAnalysis) -> list:
         """
         从代码中提取工具模式元数据（模式标识、角色、所属工具等）
         V2.1: 从 MODE_METADATA 字典中提取，不再硬编码 fallback
+        （实现提取至模块级 _mode_metadata_from）
         """
-        modes = []
-        
-        # 扫描所有文件，查找 MODE_METADATA 字典定义（从磁盘读取完整文件）
-        for f in analysis.files:
-            if 'MODE_METADATA' not in (getattr(f, 'raw_content', '') or ''):
-                # raw_content 只有500字符，可能不包含 MODE_METADATA
-                # 直接从磁盘读取（超大文件跳过，避免整读大文件占用内存）
-                try:
-                    if os.path.getsize(f.file_path) > self.MAX_PARSE_FILE_SIZE:
-                        logger.debug(f"跳过超大文件 MODE_METADATA 提取: {f.file_path}")
-                        continue
-                    with open(f.file_path, 'r', encoding='utf-8') as fh:
-                        content = fh.read()
-                except Exception as e:
-                    # 文件不可读，跳过模式提取
-                    logger.warning(f"读取文件失败，跳过模式提取 {f.file_path}: {e}")
-                    continue
-            else:
-                content = getattr(f, 'raw_content', '')
-            if 'MODE_METADATA' not in content:
-                continue
-            
-            import re
-            # 匹配 "tool:mode": { ... "roles": ["A", "B"], ... "name": "xxx", "description": "xxx" ... }
-            # 用多行匹配提取完整的模式块
-            pattern = r'["\']([\w]+):([\w]+)["\']\s*:\s*\{([^}]+)\}'
-            for match in re.finditer(pattern, content):
-                mode_id = match.group(1) + ':' + match.group(2)
-                block = match.group(3)
-                
-                # 提取 roles
-                roles_match = re.search(r'["\']roles["\']\s*:\s*\[([^\]]*)\]', block)
-                roles = []
-                if roles_match:
-                    roles = [r.strip().strip('"\'') for r in roles_match.group(1).split(',')]
-                
-                # 提取 name
-                name_match = re.search(r'["\']name["\']\s*:\s*["\']([^"\']+)["\']', block)
-                cn_name = name_match.group(1) if name_match else mode_id.split(':')[1]
-                
-                # 提取 description
-                desc_match = re.search(r'["\']description["\']\s*:\s*["\']([^"\']+)["\']', block)
-                description = desc_match.group(1) if desc_match else ''
-                
-                tool = mode_id.split(':')[0]
-                a_role = '✓' if 'A' in roles else '✗'
-                b_role = '✓' if 'B' in roles else '✗'
-                
-                # 额外能力从 description 提取
-                extra = description if description else '-'
-                
-                modes.append([mode_id, cn_name, tool, a_role, b_role, extra])
-        
-        if not modes:
-            modes = [['(未找到)', '-', '-', '-', '-', '未找到 MODE_METADATA 定义']]
-        
-        return modes
+        return _mode_metadata_from(analysis, self.MAX_PARSE_FILE_SIZE)
     
     def _extract_model_roles(self, analysis: ProjectAnalysis) -> list:
         """
         从代码中提取 LLM 模型角色配置
         V2.1: 直接在项目目录中搜索 config.yaml 并解析，不再硬编码
+        （实现提取至模块级 _model_roles_from）
         """
-        import yaml as _yaml
-        roles = []
-        
-        # 在项目目录中搜索 config.yaml（不依赖 analysis.files，因为扫描器只扫描代码文件）
-        config_path = None
-        for root, dirs, files in os.walk(analysis.project_path):
-            # 跳过常见的非项目目录
-            dirs[:] = [d for d in dirs if d not in ('node_modules', '__pycache__', '.git', 'venv', '.venv', 'data', 'vendor')]
-            for fname in files:
-                if fname in ('config.yaml', 'config.yml'):
-                    config_path = os.path.join(root, fname)
-                    break
-            if config_path:
-                break
-        
-        if config_path:
-            try:
-                with open(config_path, 'r', encoding='utf-8') as fh:
-                    content = fh.read()
-                cfg = _yaml.safe_load(content)
-                if isinstance(cfg, dict):
-                    # 提取 llm.models 下的角色配置
-                    llm_models = cfg.get('llm', {}).get('models', {})
-                    if isinstance(llm_models, dict):
-                        for role_name, role_cfg in llm_models.items():
-                            if isinstance(role_cfg, dict):
-                                model_name = role_cfg.get('name', '?')
-                                temperature = str(role_cfg.get('temperature', '?'))
-                                max_tokens = str(role_cfg.get('max_tokens', '?'))
-                                purpose_map = {
-                                    'planner': '规划/策略制定', 'writer': '写作/内容生成',
-                                    'reviewer': '审查/校验', 'embedder': '嵌入/向量化',
-                                    'extractor': '信息提取', 'backtester': '回测/验证',
-                                }
-                                purpose = purpose_map.get(role_name, role_name)
-                                roles.append([role_name, model_name, temperature, max_tokens, purpose])
-                    # 提取 semantic 模型配置
-                    semantic = cfg.get('semantic', {})
-                    if isinstance(semantic, dict):
-                        sem_model = semantic.get('model', '')
-                        sem_provider = semantic.get('provider', '')
-                        if sem_model:
-                            roles.append(['semantic', sem_model, '-', '-', f'语义嵌入 ({sem_provider})'])
-                    # 提取 vector 模型配置
-                    vector = cfg.get('vector', {})
-                    if isinstance(vector, dict):
-                        local = vector.get('local', {})
-                        if isinstance(local, dict):
-                            vec_model = local.get('embed_model', '')
-                            vec_provider = local.get('provider', '')
-                            if vec_model:
-                                roles.append(['vector', vec_model, '-', '-', f'向量嵌入 ({vec_provider})'])
-                    # 缓存 agent_mapping
-                    agent_mapping = cfg.get('agent_mapping', {})
-                    if isinstance(agent_mapping, dict):
-                        analysis._agent_mapping = agent_mapping
-            except Exception as e:
-                logger.warning(f"解析模型角色配置失败，跳过该文件 {config_path}: {e}")
-        
-        if not roles:
-            roles = [['(未找到配置)', '-', '-', '-', f'未在 {analysis.project_path} 中找到 config.yaml']]
-        return roles
+        return _model_roles_from(analysis)
     
     def generate_rich_report(self, analysis: ProjectAnalysis) -> str:
         """
         生成深度分析报告（独立方法，纯代码分析，无 LLM/外部依赖）
         返回完整的 Markdown 报告内容
+        
+        拆分说明：按报告章节提取为模块级 _render_rich_* 渲染函数，
+        本方法仅作编排，输出内容与拆分前逐字段一致。
         """
-        report = []
-        
-        # ==================== 头部 ====================
-        report.append("# 📊 项目深度分析报告")
-        report.append(f"\n> 生成时间: 即时分析")
-        report.append(f"> 项目路径: `{analysis.project_path}`")
-        report.append("")
-        report.append("---")
-        
-        # ==================== 1. 项目概览 ====================
-        report.append("## 一、项目概览")
-        
-        total_files = analysis.total_files
-        total_lines = analysis.total_lines
-        total_classes = sum(len(f.classes) for f in analysis.files)
-        total_functions = sum(len(f.functions) for f in analysis.files)
-        total_imports = sum(len(f.imports) for f in analysis.files)
-        
-        report.append(f"| 指标 | 数值 |")
-        report.append(f"|------|------|")
-        report.append(f"| 📄 代码文件数 | {total_files} |")
-        report.append(f"| 📝 总代码行数 | {total_lines:,} |")
-        report.append(f"| 🏗️ 模块/目录数 | {len(analysis.modules)} |")
-        report.append(f"| 🏛️ 类/结构体数 | {total_classes} |")
-        report.append(f"| 🔧 函数/方法数 | {total_functions} |")
-        report.append(f"| 📦 导入语句数 | {total_imports} |")
-        report.append(f"| 🔗 外部依赖数 | {len(analysis.dependencies)} |")
-        
-        # ==================== 2. 语言分布 ====================
-        report.append("\n## 二、语言分布")
-        report.append("\n| 语言 | 文件数 | 占比 |")
-        report.append("|------|--------|------|")
-        for lang, count in sorted(analysis.languages.items(), key=lambda x: -x[1]):
-            pct = count / total_files * 100 if total_files > 0 else 0
-            bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
-            report.append(f"| {lang} | {count} | {bar} {pct:.1f}% |")
-        
-        # ==================== 3. 模块结构 ====================
-        report.append("\n## 三、模块/目录结构")
-        
-        # 按文件数排序
-        sorted_modules = sorted(analysis.modules.items(), key=lambda x: len(x[1]), reverse=True)
-        
-        for module, files in sorted_modules:
-            # 统计该模块的语言分布
-            lang_in_module = {}
-            for file in analysis.files:
-                rel_path = os.path.relpath(file.file_path, analysis.project_path)
-                file_module = os.path.dirname(rel_path) or 'root'
-                if file_module == module:
-                    lang_in_module[file.language] = lang_in_module.get(file.language, 0) + 1
-            
-            lang_detail = ', '.join([f"{k}({v})" for k, v in lang_in_module.items()])
-            report.append(f"\n### 📁 {module}")
-            report.append(f"- **文件数**: {len(files)} 个")
-            report.append(f"- **语言**: {lang_detail}")
-            
-            # 列出该模块下的文件详情
-            for file_path in files[:8]:  # 最多显示8个
-                # 找到对应的 CodeFile 对象
-                full_path = os.path.join(analysis.project_path, file_path)
-                code_file = next((f for f in analysis.files if f.file_path == full_path), None)
-                if code_file:
-                    cls_count = len(code_file.classes)
-                    func_count = len(code_file.functions)
-                    imp_count = len(code_file.imports)
-                    details = []
-                    if cls_count > 0:
-                        cls_names = ', '.join(c.name for c in code_file.classes[:3])
-                        details.append(f"{cls_count}个类[{cls_names}]")
-                    if func_count > 0:
-                        details.append(f"{func_count}个函数")
-                    if imp_count > 0:
-                        details.append(f"{imp_count}个导入")
-                    detail_str = ' / '.join(details) if details else ''
-                    report.append(f"  - `{os.path.basename(file_path)}` {detail_str}")
-            
-            if len(files) > 8:
-                report.append(f"  - ... 及其他 {len(files) - 8} 个文件")
-        
-        # ==================== 4. 代码实体分析 ====================
-        report.append("\n## 四、关键代码实体")
-        
-        # 所有类（按文件分组）
-        all_classes = []
-        for f in analysis.files:
-            for c in f.classes:
-                all_classes.append((c, f))
-        
-        if all_classes:
-            report.append("\n### 🏛️ 类/结构体")
-            report.append("\n| 类名 | 所在文件 | 基类 |")
-            report.append("|------|----------|------|")
-            for cls, code_file in sorted(all_classes, key=lambda x: x[0].name):
-                rel_path = os.path.relpath(code_file.file_path, analysis.project_path)
-                bases = ', '.join(cls.base_classes) if cls.base_classes else '-'
-                report.append(f"| `{cls.name}` | `{rel_path}` | {bases} |")
-        
-        # 所有函数（按文件分组，去私有）
-        all_funcs = []
-        for f in analysis.files:
-            for func in f.functions:
-                if not func.name.startswith('_'):
-                    all_funcs.append((func, f))
-        
-        if all_funcs:
-            report.append("\n### 🔧 公开函数/方法")
-            report.append("\n| 函数名 | 所在文件 | 参数 |")
-            report.append("|--------|----------|------|")
-            for func, code_file in sorted(all_funcs, key=lambda x: (os.path.relpath(x[1].file_path, analysis.project_path), x[0].name)):
-                rel_path = os.path.relpath(code_file.file_path, analysis.project_path)
-                params = ', '.join(func.parameters[:4])
-                if len(func.parameters) > 4:
-                    params += '...'
-                report.append(f"| `{func.name}` | `{rel_path}` | `{params}` |")
-        
-        # ==================== 5. 依赖分析 ====================
-        report.append("\n## 五、依赖关系分析")
-        
-        # 收集每个文件的关键依赖
-        file_deps = []
-        for f in analysis.files:
-            if f.dependencies:
-                rel_path = os.path.relpath(f.file_path, analysis.project_path)
-                file_deps.append((rel_path, f.dependencies))
-        
-        if analysis.dependencies:
-            report.append("\n### 📦 外部依赖")
-            for dep in sorted(analysis.dependencies)[:30]:
-                report.append(f"- `{dep}`")
-            if len(analysis.dependencies) > 30:
-                report.append(f"- ... 及其他 {len(analysis.dependencies) - 30} 个依赖")
-        
-        if file_deps:
-            report.append("\n### 🔗 文件级依赖")
-            report.append("\n| 文件 | 依赖 |")
-            report.append("|------|------|")
-            for rel_path, deps in file_deps:
-                dep_str = ', '.join(f'`{d}`' for d in sorted(deps)[:6])
-                if len(deps) > 6:
-                    dep_str += f' ...(+{len(deps)-6})'
-                report.append(f"| `{rel_path}` | {dep_str} |")
-        
-        # ==================== 6. 代码度量 ====================
-        report.append("\n## 六、代码度量")
-        
-        # 计算各维度指标
-        file_class_ratios = [(f, len(f.classes)) for f in analysis.files if len(f.classes) > 0]
-        file_func_ratios = [(f, len(f.functions)) for f in analysis.files if len(f.functions) > 0]
-        
-        avg_classes_per_file = total_classes / total_files if total_files > 0 else 0
-        avg_funcs_per_file = total_functions / total_files if total_files > 0 else 0
-        avg_lines_per_file = total_lines / total_files if total_files > 0 else 0
-        avg_imports_per_file = total_imports / total_files if total_files > 0 else 0
-        
-        # 函数量最多的文件
-        most_funcs = sorted(file_func_ratios, key=lambda x: -x[1])[:3]
-        # 类最多的文件
-        most_classes = sorted(file_class_ratios, key=lambda x: -x[1])[:3]
-        
-        report.append("\n| 指标 | 数值 |")
-        report.append("|------|------|")
-        report.append(f"| 平均每文件类数 | {avg_classes_per_file:.2f} |")
-        report.append(f"| 平均每文件函数数 | {avg_funcs_per_file:.2f} |")
-        report.append(f"| 平均每文件行数 | {avg_lines_per_file:.0f} |")
-        report.append(f"| 平均每文件导入数 | {avg_imports_per_file:.1f} |")
-        
-        if most_funcs:
-            report.append("\n**函数最密集的文件**:")
-            for f, count in most_funcs:
-                rel_path = os.path.relpath(f.file_path, analysis.project_path)
-                report.append(f"- `{rel_path}` — {count} 个函数")
-        
-        if most_classes:
-            report.append("\n**类最集中的文件**:")
-            for f, count in most_classes:
-                rel_path = os.path.relpath(f.file_path, analysis.project_path)
-                report.append(f"- `{rel_path}` — {count} 个类")
-        
-        # ==================== 7. 技术栈评估 ====================
-        if analysis.tech_stack:
-            report.append("\n## 七、技术栈评估")
-            for tech in analysis.tech_stack:
-                report.append(f"- ✅ {tech}")
-        
-        # ==================== 8. 核心功能 ====================
-        if analysis.core_features:
-            report.append("\n## 八、核心功能识别")
-            for feature in analysis.core_features:
-                report.append(f"- 🎯 {feature}")
-        
-        # ==================== 9. 入口点检测 ====================
-        report.append("\n## 九、入口点检测")
-        entry_files = []
-        for f in analysis.files:
-            basename = os.path.basename(f.file_path)
-            if basename in ('main.py', 'index.js', 'app.py', 'server.py', '__init__.py', 'index.ts'):
-                entry_files.append(f)
-        
-        if entry_files:
-            for f in entry_files:
-                rel_path = os.path.relpath(f.file_path, analysis.project_path)
-                report.append(f"- 🚪 `{rel_path}`")
-        else:
-            report.append("- 未检测到标准入口文件")
-        
-        report.append("\n---")
-        report.append("\n*报告由 CodeRef-AI 代码分析引擎自动生成*")
-        
+        # 汇总统计（概览段与代码度量段共用）
+        totals = {
+            "files": analysis.total_files,
+            "lines": analysis.total_lines,
+            "classes": sum(len(f.classes) for f in analysis.files),
+            "functions": sum(len(f.functions) for f in analysis.files),
+            "imports": sum(len(f.imports) for f in analysis.files),
+        }
+        report: List[str] = []
+        report.extend(_render_rich_header(analysis, totals))
+        report.extend(_render_rich_modules(analysis))
+        report.extend(_render_rich_entities(analysis))
+        report.extend(_render_rich_deps(analysis))
+        report.extend(_render_rich_metrics(analysis, totals))
+        report.extend(_render_rich_tail(analysis))
         return '\n'.join(report)
 
 
     # ==================== GitNexus 增强通道 ====================
 
     def _enhance_with_gitnexus(self, analysis: ProjectAnalysis):
-        """用GitNexus图谱数据增强分析结果
-        
-        通过MCP查询GitNexus图数据库，获取：
-        - 执行流（process）信息
-        - 函数集群（community）信息
-        - 入口点的上下游关系
-        """
-        from .gitnexus_client import GitNexusMCPClient
-        
-        logger.info(f"[GitNexus] 尝试增强分析，项目路径: {analysis.project_path}")
-        
-        with GitNexusMCPClient(project_path=analysis.project_path) as client:
-            # 1. 获取已索引的仓库列表
-            repos = client.list_repos()
-            logger.info(f"[GitNexus] 发现 {len(repos)} 个索引仓库: {[r.get('name') for r in repos]}")
-            if not repos:
-                logger.info("[GitNexus] 当前项目无索引数据，跳过增强")
-                return
-            
-            # 2. 搜索项目中的关键符号，补充进程/集群信息
-            # 查找入口点文件
-            entry_files = []
-            for f in analysis.files:
-                basename = os.path.basename(f.file_path)
-                if basename in ('main.py', 'index.js', 'app.py', 'server.py', 'v4_main.py'):
-                    entry_files.append(f)
-            
-            # 3. 对每个入口函数查询上下文
-            for ef in entry_files:
-                for func in ef.functions:
-                    if func.name in ('main', 'run', 'start', 'serve', 'app'):
-                        try:
-                            context = client.get_context(func.name)
-                            if isinstance(context, dict):
-                                # 补充进程信息到架构摘要
-                                processes = context.get("processes", [])
-                                if processes:
-                                    proc_names = []
-                                    for p in processes[:5]:
-                                        if isinstance(p, dict):
-                                            proc_names.append(p.get("name", str(p)))
-                                        else:
-                                            proc_names.append(str(p))
-                                    if proc_names:
-                                        analysis.architecture_summary += (
-                                            f"\n[GitNexus] 检测到执行流: {', '.join(proc_names)}"
-                                        )
-                        except Exception as e:
-                            logger.warning(f"应用 GitNexus 执行流增强失败，跳过: {e}")
-            
-            # 4. 用混合搜索发现项目中的关键模块
-            try:
-                project_name = os.path.basename(analysis.project_path.rstrip('/\\'))
-                search_results = client.search(project_name)
-                if isinstance(search_results, dict):
-                    clusters = search_results.get("clusters", [])
-                    if clusters:
-                        cluster_info = []
-                        for c in clusters[:10]:
-                            if isinstance(c, dict):
-                                name = c.get("name", "")
-                                cohesion = c.get("cohesion", "")
-                                if name:
-                                    cluster_info.append(f"{name}(内聚度:{cohesion})" if cohesion else name)
-                        if cluster_info:
-                            analysis.architecture_summary += (
-                                f"\n[GitNexus] 功能集群: {', '.join(cluster_info)}"
-                            )
-            except Exception as e:
-                logger.warning(f"应用 GitNexus 功能集群增强失败，跳过: {e}")
-            
-            logger.info("[CodeAnalyzer] GitNexus增强完成")
+        """用GitNexus图谱数据增强分析结果（实现提取至模块级 _enhance_analysis_with_gitnexus）"""
+        _enhance_analysis_with_gitnexus(analysis)
 
     def scan_function(self, entry: str, depth: int = 3, fmt: str = "report") -> str:
         """扫描单个功能的上下游依赖，生成架构图
@@ -1200,45 +2036,11 @@ class CodeAnalyzer:
             return f"```text\n{result}\n```"
 
     def _run_gitnexus(self, cmd: List[str], project_path: str) -> Optional[str]:
-        """执行 gitnexus 命令行并返回 stdout（列表式参数，无 shell 注入面）
-
-        Args:
-            cmd: gitnexus 子命令参数列表（如 ["export", "--entry", "main", ...]）
-            project_path: GitNexus 索引所在的项目目录
-
-        Returns:
-            命令 stdout 字符串；失败返回 None
-        """
-        try:
-            argv = list(cmd)
-            if not argv or argv[0] != "gitnexus":
-                argv = ["gitnexus"] + argv
-            result = subprocess.run(
-                argv,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=120,
-                cwd=project_path,
-                stdin=subprocess.DEVNULL,
-            )
-            if result.returncode != 0:
-                logger.warning(f"[CodeAnalyzer] gitnexus 命令失败: {result.stderr.strip()[:200]}")
-                return None
-            return result.stdout
-        except FileNotFoundError:
-            logger.warning("[CodeAnalyzer] gitnexus CLI 未安装，请执行: npm install -g gitnexus")
-            return None
-        except subprocess.TimeoutExpired:
-            logger.warning("[CodeAnalyzer] gitnexus 命令执行超时（120s）")
-            return None
-        except Exception as e:
-            logger.warning(f"[CodeAnalyzer] gitnexus 调用异常: {e}")
-            return None
+        """执行 gitnexus 命令行并返回 stdout（实现提取至模块级 _run_gitnexus_cmd）"""
+        return _run_gitnexus_cmd(cmd, project_path)
 
     def generate_mermaid_diagram(self, analysis: ProjectAnalysis) -> str:
-        """基于分析结果生成Mermaid架构图
+        """基于分析结果生成Mermaid架构图（实现提取至模块级 _mermaid_from_analysis）
         
         利用 auto_classifier 自动分层，生成带子图的 Mermaid flowchart
         
@@ -1248,37 +2050,7 @@ class CodeAnalyzer:
         Returns:
             Mermaid代码字符串
         """
-        from .diagram_generator import generate_mermaid, classify_nodes
-        
-        # 构建节点列表
-        nodes = []
-        for f in analysis.files:
-            rel_path = os.path.relpath(f.file_path, analysis.project_path)
-            # 每个文件作为一个节点
-            nodes.append({
-                "name": rel_path,
-                "filePath": rel_path,
-            })
-        
-        # 构建边列表（基于项目内导入关系）
-        edges = []
-        for f in analysis.files:
-            rel_path = os.path.relpath(f.file_path, analysis.project_path)
-            for imp in f.project_imports[:10]:  # 限制每个文件最多10条边
-                edges.append({
-                    "source": rel_path,
-                    "target": imp,
-                    "relation_type": "imports",
-                })
-        
-        project_name = os.path.basename(analysis.project_path.rstrip('/\\'))
-        
-        return generate_mermaid(
-            nodes=nodes[:50],  # 限制节点数避免图过大
-            edges=edges[:100],
-            entry_point="",
-            title=f"{project_name} - 模块依赖图",
-        )
+        return _mermaid_from_analysis(analysis)
 
 
     def generate_ai_report(self, analysis: ProjectAnalysis) -> str:
@@ -1291,21 +2063,12 @@ class CodeAnalyzer:
         - 代码质量评估
         - 性能风险识别
         - 设计模式违规
-        """
-        lines = []
         
-        # ==================== 头部 ====================
-        lines.append("# 🔍 全代码审计报告（AI辅助编程版）")
-        lines.append("")
-        lines.append(f"> 项目: `{analysis.project_path}`")
-        lines.append(f"> 扫描文件数: {analysis.total_files} | 总行数: {analysis.total_lines:,}")
-        lines.append(f"> 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        lines.append("")
-        lines.append("> 本报告专为AI辅助编程LLM设计，聚焦代码审计维度（Bug/安全/质量/性能/设计），")
-        lines.append("> 不再包含代码结构描述（请通过MCP工具获取实时代码上下文）。")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
+        拆分说明：按报告章节提取为模块级 _render_ai_* 渲染函数，
+        本方法仅作编排，输出内容与拆分前逐字段一致。
+        """
+        lines: List[str] = []
+        lines.extend(_render_ai_header(analysis))
         
         # 运行所有审计规则
         audit_results = self._run_code_audit(analysis)
@@ -1313,101 +2076,9 @@ class CodeAnalyzer:
         # 验证审计结果的行号是否仍然有效（防止缓存导致行号过时）
         audit_results = self._verify_line_numbers(analysis, audit_results)
         
-        # ==================== 一、审计摘要 ====================
-        lines.append("## 一、审计摘要")
-        lines.append("")
-        
-        total_issues = sum(len(v) for v in audit_results.values())
-        critical = sum(1 for cat in audit_results.values() for item in cat if item.get('severity') == 'critical')
-        high = sum(1 for cat in audit_results.values() for item in cat if item.get('severity') == 'high')
-        medium = sum(1 for cat in audit_results.values() for item in cat if item.get('severity') == 'medium')
-        low = sum(1 for cat in audit_results.values() for item in cat if item.get('severity') == 'low')
-        
-        lines.append(f"| 维度 | 问题数 | 严重 | 高 | 中 | 低 |")
-        lines.append(f"|------|--------|------|----|----|----|")
-        for category, items in audit_results.items():
-            c = sum(1 for i in items if i.get('severity') == 'critical')
-            h = sum(1 for i in items if i.get('severity') == 'high')
-            m = sum(1 for i in items if i.get('severity') == 'medium')
-            l = sum(1 for i in items if i.get('severity') == 'low')
-            lines.append(f"| {category} | {len(items)} | {c} | {h} | {m} | {l} |")
-        lines.append(f"| **总计** | **{total_issues}** | **{critical}** | **{high}** | **{medium}** | **{low}** |")
-        lines.append("")
-        
-        # ==================== 二~六、各审计维度详情 ====================
-        category_titles = {
-            'bugs': ('二、Bug与错误', '🔴'),
-            'security': ('三、安全问题', '🔒'),
-            'quality': ('四、代码质量', '📐'),
-            'performance': ('五、性能风险', '⚡'),
-            'design': ('六、设计问题', '🏗️'),
-        }
-        
-        for cat_key, (title, emoji) in category_titles.items():
-            items = audit_results.get(cat_key, [])
-            lines.append(f"## {title}")
-            lines.append("")
-            
-            if not items:
-                lines.append(f"{emoji} 未发现此类问题。")
-                lines.append("")
-                continue
-            
-            # 按严重度排序
-            severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
-            items_sorted = sorted(items, key=lambda x: severity_order.get(x.get('severity', 'low'), 3))
-            
-            for item in items_sorted:
-                sev = item.get('severity', 'low')
-                sev_emoji = {'critical': '🔴', 'high': '🟠', 'medium': '🟡', 'low': '🔵'}.get(sev, '⚪')
-                file_path = item.get('file', '未知文件')
-                line = item.get('line', '-')
-                desc = item.get('description', '')
-                suggestion = item.get('suggestion', '')
-                
-                lines.append(f"### {sev_emoji} [{sev.upper()}] `{file_path}:{line}`")
-                lines.append("")
-                lines.append(f"**问题**: {desc}")
-                if suggestion:
-                    lines.append(f"**建议**: {suggestion}")
-                lines.append("")
-            
-            lines.append("---")
-            lines.append("")
-        
-        # ==================== 七、修复优先级建议 ====================
-        lines.append("## 七、修复优先级建议")
-        lines.append("")
-        lines.append("基于审计结果，建议按以下优先级处理：")
-        lines.append("")
-        
-        all_issues = []
-        for cat, items in audit_results.items():
-            for item in items:
-                all_issues.append(item)
-        
-        # 按严重度+影响范围排序
-        all_issues.sort(key=lambda x: (
-            {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}.get(x.get('severity', 'low'), 3),
-            -len(x.get('description', ''))
-        ))
-        
-        if all_issues:
-            lines.append("| 优先级 | 文件 | 问题简述 | 建议操作 |")
-            lines.append("|--------|------|----------|----------|")
-            for i, item in enumerate(all_issues[:20], 1):  # 最多显示前20个
-                sev = item.get('severity', 'low')
-                file_path = item.get('file', '未知')
-                desc = item.get('description', '')[:40] + '...' if len(item.get('description', '')) > 40 else item.get('description', '')
-                suggestion = item.get('suggestion', '')[:30] + '...' if len(item.get('suggestion', '')) > 30 else item.get('suggestion', '')
-                lines.append(f"| P{i} ({sev}) | `{file_path}` | {desc} | {suggestion or '审查修复'} |")
-            lines.append("")
-        else:
-            lines.append("✅ 未发现需要修复的问题。")
-            lines.append("")
-        
-        lines.append("---")
-        lines.append("*全代码审计报告 · 供AI辅助编程LLM参考*")
+        lines.extend(_render_ai_summary(audit_results))
+        lines.extend(_render_ai_categories(audit_results))
+        lines.extend(_render_ai_priorities(audit_results))
         
         return '\n'.join(lines)
     
@@ -1435,456 +2106,26 @@ class CodeAnalyzer:
             if content.startswith('[超大文件') or len(content) < 100:
                 continue
             
-            # ===== Bug检测 =====
-            self._audit_bugs(cf, rel_path, content, lines_content, results['bugs'])
+            # ===== Bug检测 =====（审计器实现提取至模块级 _audit_file_* 函数）
+            _audit_file_bugs(cf, rel_path, content, lines_content, results['bugs'])
             
             # ===== 安全检测 =====
-            self._audit_security(cf, rel_path, content, lines_content, results['security'])
+            _audit_file_security(cf, rel_path, content, lines_content, results['security'])
             
             # ===== 质量检测 =====
-            self._audit_quality(cf, rel_path, content, lines_content, results['quality'])
+            _audit_file_quality(cf, rel_path, content, lines_content, results['quality'])
             
             # ===== 性能检测 =====
-            self._audit_performance(cf, rel_path, content, lines_content, results['performance'])
+            _audit_file_performance(cf, rel_path, content, lines_content, results['performance'])
             
             # ===== 设计检测 =====
-            self._audit_design(cf, rel_path, content, lines_content, results['design'])
+            _audit_file_design(cf, rel_path, content, lines_content, results['design'])
         
         return dict(results)
     
     def _verify_line_numbers(self, analysis: ProjectAnalysis, audit_results: Dict[str, List[Dict]]) -> Dict[str, List[Dict]]:
         """
         验证审计结果的行号是否仍然有效，移除因文件变更（缓存过时）而过期的 findings
-        
-        对于每个包含行号的 finding，检查：
-        - 文件是否仍然存在
-        - 行号是否在文件范围内
-        - 该行的内容是否仍包含与 description 相关的关键词
+        （实现提取至模块级 _verify_audit_line_numbers）
         """
-        verified = {}
-        for category, items in audit_results.items():
-            verified_items = []
-            for item in items:
-                if 'line' not in item or 'file' not in item:
-                    verified_items.append(item)
-                    continue
-                
-                file_path = os.path.join(analysis.project_path, item['file'])
-                line_no = item['line']
-                
-                # 检查文件是否存在
-                if not os.path.isfile(file_path):
-                    continue  # 文件已删除/移动，移除该 finding
-                
-                try:
-                    # 只读取到目标行（采样），避免大文件整读 `readlines()` 造成内存峰值
-                    from itertools import islice
-                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        file_lines = list(islice(f, line_no))
-
-                    # 检查行号是否在文件范围内
-                    if line_no < 1 or len(file_lines) < line_no:
-                        continue
-
-                    actual_line = file_lines[line_no - 1]
-                    
-                    # 从 description 中提取反引号内的关键词，检查该行是否仍包含它们
-                    desc = item.get('description', '')
-                    keywords = re.findall(r'`([^`]+)`', desc)
-                    if keywords:
-                        found = any(kw in actual_line for kw in keywords)
-                        if not found:
-                            continue  # 内容不匹配，移除该 finding
-                    
-                    verified_items.append(item)
-                except Exception:
-                    # 读取失败时保守保留 finding
-                    verified_items.append(item)
-            
-            if verified_items:
-                verified[category] = verified_items
-        
-        return verified
-    
-    def _audit_bugs(self, cf: CodeFile, rel_path: str, content: str, lines: List[str], issues: List[Dict]):
-        """Bug与错误检测（注意：content 来自 CodeFile.raw_content，缓存不截断后为完整内容）"""
-        # 1. logger未定义检测（精准：排除跨模块导入 logger 的情况）
-        if re.search(r'\blogger\.(debug|info|warning|error|critical)\b', content):
-            has_logging_import = bool(re.search(r'import\s+logging', content))
-            has_logger_def = bool(re.search(r'\blogger\s*=\s*(?:logging\.getLogger|getLogger)', content))
-            
-            # 跨模块导入追踪：from X import ... logger ...
-            # 单行匹配：from config import logger / from config import x, logger, y
-            has_logger_import_single = bool(re.search(r'\bfrom\s+\S+\s+import\s+[^)]*\blogger\b', content))
-            
-            # 多行匹配：from config import ( \n    x, \n    logger, \n )
-            has_logger_import_multi = False
-            multi_import_matches = list(re.finditer(r'\bfrom\s+\S+\s+import\s*\(', content))
-            for m in multi_import_matches:
-                # 从 import ( 开始，找到匹配的 )
-                paren_start = m.end()
-                depth = 1
-                pos = paren_start
-                while pos < len(content) and depth > 0:
-                    if content[pos] == '(':
-                        depth += 1
-                    elif content[pos] == ')':
-                        depth -= 1
-                    pos += 1
-                if depth == 0:
-                    import_block = content[m.end():pos-1]
-                    if re.search(r'\blogger\b', import_block):
-                        has_logger_import_multi = True
-                        break
-            
-            # import logger 别名：from loguru import logger as log
-            has_logger_alias = bool(re.search(r'\bfrom\s+\S+\s+import\s+.*\blogger\s+as\s+\w+', content))
-            
-            has_logger_import = has_logging_import or has_logger_def or \
-                                has_logger_import_single or has_logger_import_multi or has_logger_alias
-            
-            if not has_logger_import:
-                for i, line in enumerate(lines, 1):
-                    if re.search(r'\blogger\.(debug|info|warning|error|critical)\b', line):
-                        issues.append({
-                            'severity': 'high',
-                            'file': rel_path,
-                            'line': i,
-                            'description': 'logger未定义：使用logger.xxx()但无import logging或导入logger',
-                            'suggestion': '添加 `import logging` 和 `logger = logging.getLogger(__name__)`'
-                        })
-                        break
-        
-        # 2. 异常处理缺失（函数级try块检测，使用函数/类作用域而非行级回溯）
-        if cf.language == 'python':
-            risky_calls = ['requests.', 'urllib', 'socket.', 'subprocess.', 'open(', 'httpx.']
-            for risky in risky_calls:
-                for i, line in enumerate(lines, 1):
-                    if risky in line:
-                        # 查找包含该行的函数/类作用域
-                        in_try = False
-                        scope_start = None
-                        scope_end = None
-                        
-                        # 优先检查函数作用域（包括类方法）
-                        for func in cf.functions:
-                            if func.start_line <= i <= func.end_line:
-                                scope_start = func.start_line
-                                scope_end = func.end_line
-                                break
-                        
-                        # 如果不在独立函数内，检查类方法
-                        if scope_start is None:
-                            for cls in cf.classes:
-                                for method in cls.methods:
-                                    if method.start_line <= i <= method.end_line:
-                                        scope_start = method.start_line
-                                        scope_end = method.end_line
-                                        break
-                                if scope_start is not None:
-                                    break
-                        
-                        # 如果不在方法内但位于类体中，检查整个类
-                        if scope_start is None:
-                            for cls in cf.classes:
-                                if cls.start_line <= i <= cls.end_line:
-                                    scope_start = cls.start_line
-                                    scope_end = cls.end_line
-                                    break
-                        
-                        if scope_start is not None and scope_end is not None:
-                            # 在函数/类作用域内：检查整个作用域是否有 try
-                            for j in range(scope_start, min(scope_end + 1, len(lines) + 1)):
-                                check_line = lines[j - 1].strip() if j <= len(lines) else ''
-                                if check_line.startswith('try:') or check_line == 'try:':
-                                    in_try = True
-                                    break
-                        else:
-                            # 模块级代码：只检查周围5行
-                            for j in range(i - 1, max(i - 5, 0), -1):
-                                check_line = lines[j - 1].strip() if j > 0 else ''
-                                if check_line.startswith('try:') or check_line == 'try:':
-                                    in_try = True
-                                    break
-                        
-                        if not in_try:
-                            issues.append({
-                                'severity': 'medium',
-                                'file': rel_path,
-                                'line': i,
-                                'description': f'调用 `{risky}` 可能缺少异常处理',
-                                'suggestion': '添加 try/except 块处理IO/网络异常'
-                            })
-                            break
-    
-    def _audit_security(self, cf: CodeFile, rel_path: str, content: str, lines: List[str], issues: List[Dict]):
-        """安全问题检测（AST 精确分类 + 正则回退）"""
-        # 1. 硬编码密钥/Token — 优先使用 AST 精确分类
-        ast_assignments = getattr(cf, 'ast_assignments', [])
-        if ast_assignments:
-            # AST 解析可用：只报告确认为 hardcoded 的赋值
-            for assign in ast_assignments:
-                if assign.category == "hardcoded":
-                    issues.append({
-                        'severity': 'high',
-                        'file': rel_path,
-                        'line': assign.line,
-                        'description': f'硬编码凭据: {assign.target} = {assign.value_repr[:50]}',
-                        'suggestion': '使用环境变量或密钥管理服务（os.environ.get()）'
-                    })
-        else:
-            # AST 不可用：回退到正则（但增加排除逻辑）
-            secret_patterns = [
-                (r'\bapi[_-]?key\b\s*=\s*["\'][^"\']{10,}["\']', '硬编码API Key'),
-                (r'\bsecret\b\s*=\s*["\'][^"\']{8,}["\']', '硬编码Secret'),
-                (r'\btoken\b\s*=\s*["\'][^"\']{10,}["\']', '硬编码Token'),
-                (r'\bpassword\b\s*=\s*["\'][^"\']{4,}["\']', '硬编码密码'),
-            ]
-            # 排除模式
-            exclude_patterns = [
-                r'\.get\s*\(',          # config.get()
-                r'os\.(?:environ|getenv)',  # os.environ / os.getenv
-                r'^[A-Z_]{4,}\s*=\s*["\'][A-Z_\d]+["\']',  # 错误码常量
-                r'MISSING_|_MISSING',    # 错误码
-            ]
-            for pattern, desc in secret_patterns:
-                for i, line in enumerate(lines, 1):
-                    if re.search(pattern, line, re.IGNORECASE):
-                        # 排除配置读取和错误码常量
-                        if any(re.search(ep, line, re.IGNORECASE) for ep in exclude_patterns):
-                            continue
-                        issues.append({
-                            'severity': 'high',
-                            'file': rel_path,
-                            'line': i,
-                            'description': f'发现{desc}',
-                            'suggestion': '使用环境变量或密钥管理服务'
-                        })
-                        break
-        
-        # 2. SQL注入风险
-        sql_patterns = [
-            r'execute\s*\(\s*["\'].*%s',
-            r'execute\s*\(\s*["\'].*\+',
-            r'execute\s*\(\s*f["\']',
-        ]
-        for pattern in sql_patterns:
-            for i, line in enumerate(lines, 1):
-                if re.search(pattern, line, re.IGNORECASE):
-                    issues.append({
-                        'severity': 'critical',
-                        'file': rel_path,
-                        'line': i,
-                        'description': '可能的SQL注入风险：字符串拼接SQL',
-                        'suggestion': '使用参数化查询（parameterized queries）'
-                    })
-                    break
-        
-        # 3. 路径遍历风险
-        for i, line in enumerate(lines, 1):
-            if 'open(' in line and ('+' in line or 'f"' in line or "f'" in line):
-                if 'pathlib' not in content and 'os.path.join' not in line:
-                    issues.append({
-                        'severity': 'medium',
-                        'file': rel_path,
-                        'line': i,
-                        'description': '文件路径可能包含用户输入，存在路径遍历风险',
-                        'suggestion': '使用 pathlib.Path.resolve() 和路径验证'
-                    })
-                    break
-        
-        # 4. 不安全的反序列化
-        for i, line in enumerate(lines, 1):
-            if 'pickle.loads' in line or 'yaml.load(' in line:
-                issues.append({
-                    'severity': 'high',
-                    'file': rel_path,
-                    'line': i,
-                    'description': '使用不安全的反序列化方法',
-                    'suggestion': 'pickle→json; yaml.load→yaml.safe_load'
-                })
-                break
-        
-        # 5. eval/exec 使用
-        for i, line in enumerate(lines, 1):
-            if re.search(r'\beval\s*\(', line) or re.search(r'\bexec\s*\(', line):
-                issues.append({
-                    'severity': 'critical',
-                    'file': rel_path,
-                    'line': i,
-                    'description': '使用 eval/exec 执行动态代码',
-                    'suggestion': '避免使用eval/exec，改用ast.literal_eval或安全替代方案'
-                })
-                break
-        
-        # 6. 硬编码Windows路径（带过滤）
-        # 跳过测试文件和 __pycache__ 目录
-        if '__pycache__' not in rel_path and '/test_' not in rel_path.replace('\\', '/') and not rel_path.startswith('test_'):
-            win_path_pattern = re.compile(r'(?<![a-zA-Z])[A-Za-z]:(?:[\\/][^\\/"\'\n\r\t\)\]\}]+)+')
-            for i, line in enumerate(lines, 1):
-                stripped = line.strip()
-                # 跳过注释行
-                if stripped.startswith('#') or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*'):
-                    continue
-                # 跳过日志消息模板（包含 {} 或 %s/%d 等占位符）
-                if re.search(r'[\{\}]|%[sd]|%\(', line):
-                    continue
-                # 跳过UI标签/显示文本（包含常见UI关键词的短行）
-                if any(kw in line.lower() for kw in ['路径', '文件', '目录', 'folder', 'path', 'directory', 'file']):
-                    if len(stripped) < 100:
-                        continue
-                # 跳过默认值/示例
-                if re.search(r'example|sample|your[-\s]|默认|示例', line, re.IGNORECASE):
-                    continue
-                # 实际检测硬盘路径
-                if win_path_pattern.search(line):
-                    issues.append({
-                        'severity': 'low',
-                        'file': rel_path,
-                        'line': i,
-                        'description': f'硬编码Windows路径: `{line.strip()[:60]}`',
-                        'suggestion': '使用 os.path.join() 或 pathlib.Path 构建路径'
-                    })
-    
-    def _audit_quality(self, cf: CodeFile, rel_path: str, content: str, lines: List[str], issues: List[Dict]):
-        """代码质量检测"""
-        # 1. 函数过长
-        for func in cf.functions:
-            func_lines = func.end_line - func.start_line
-            if func_lines > 100:
-                issues.append({
-                    'severity': 'medium',
-                    'file': rel_path,
-                    'line': func.start_line,
-                    'description': f'函数 `{func.name}` 过长 ({func_lines} 行)',
-                    'suggestion': '拆分为多个小函数，遵循单一职责原则'
-                })
-            elif func_lines > 50:
-                issues.append({
-                    'severity': 'low',
-                    'file': rel_path,
-                    'line': func.start_line,
-                    'description': f'函数 `{func.name}` 较长 ({func_lines} 行)',
-                    'suggestion': '考虑拆分或提取辅助函数'
-                })
-        
-        # 2. 类过大
-        for cls in cf.classes:
-            cls_lines = cls.end_line - cls.start_line
-            if cls_lines > 300:
-                issues.append({
-                    'severity': 'medium',
-                    'file': rel_path,
-                    'line': cls.start_line,
-                    'description': f'类 `{cls.name}` 过大 ({cls_lines} 行)',
-                    'suggestion': '拆分为多个类或使用组合替代继承'
-                })
-        
-        # 3. 参数过多
-        for func in cf.functions:
-            if len(func.parameters) > 7:
-                issues.append({
-                    'severity': 'low',
-                    'file': rel_path,
-                    'line': func.start_line,
-                    'description': f'函数 `{func.name}` 参数过多 ({len(func.parameters)} 个)',
-                    'suggestion': '使用dataclass或dict封装参数'
-                })
-        
-        # 4. TODO/FIXME 标记
-        for i, line in enumerate(lines, 1):
-            if 'TODO' in line or 'FIXME' in line or 'HACK' in line:
-                issues.append({
-                    'severity': 'low',
-                    'file': rel_path,
-                    'line': i,
-                    'description': f'发现技术债务标记: {line.strip()[:60]}',
-                    'suggestion': '安排时间清理或转化为正式issue'
-                })
-    
-    def _audit_performance(self, cf: CodeFile, rel_path: str, content: str, lines: List[str], issues: List[Dict]):
-        """性能风险检测"""
-        # 1. 文件级循环中的IO操作
-        for i, line in enumerate(lines, 1):
-            window = '\n'.join(lines[i:i + 10])
-            if ('for ' in line or 'while ' in line) and 'open(' in window:
-                issues.append({
-                    'severity': 'medium',
-                    'file': rel_path,
-                    'line': i,
-                    'description': '循环中可能包含文件IO操作',
-                    'suggestion': '将IO操作移出循环，或使用批量读写'
-                })
-                break
-        
-        # 2. 字符串拼接在循环中
-        for i, line in enumerate(lines, 1):
-            if ('for ' in line or 'while ' in line) and ('+=' in line and '"' in line):
-                issues.append({
-                    'severity': 'low',
-                    'file': rel_path,
-                    'line': i,
-                    'description': '循环中使用字符串拼接',
-                    'suggestion': '使用列表+join或StringIO替代+=拼接'
-                })
-                break
-        
-        # 3. 潜在的内存泄漏（全局缓存无上限）
-        if 'cache' in content.lower() and 'maxsize' not in content.lower():
-            for i, line in enumerate(lines, 1):
-                if '@lru_cache' in line and 'maxsize' not in line:
-                    issues.append({
-                        'severity': 'low',
-                        'file': rel_path,
-                        'line': i,
-                        'description': 'lru_cache未设置maxsize，可能导致内存无限增长',
-                        'suggestion': '添加 maxsize 参数限制缓存大小'
-                    })
-                    break
-    
-    def _audit_design(self, cf: CodeFile, rel_path: str, content: str, lines: List[str], issues: List[Dict]):
-        """设计问题检测"""
-        # 1. sys.path 动态注入
-        if cf.sys_path_inserts:
-            for spi in cf.sys_path_inserts:
-                issues.append({
-                    'severity': 'medium',
-                    'file': rel_path,
-                    'line': 1,  # 无法精确定位行号
-                    'description': f'使用 sys.path.insert 动态注入路径: `{spi}`',
-                    'suggestion': '改为相对导入或包结构重构'
-                })
-        
-        # 2. 循环依赖检测（简单：A导入B，B导入A）
-        # 这个需要在全局层面检测，这里只做文件级标记
-        
-        # 3. 上帝类检测（方法过多）
-        for cls in cf.classes:
-            if len(cls.methods) > 20:
-                issues.append({
-                    'severity': 'medium',
-                    'file': rel_path,
-                    'line': cls.start_line,
-                    'description': f'类 `{cls.name}` 方法过多 ({len(cls.methods)} 个)，可能是上帝类',
-                    'suggestion': '拆分为多个职责单一的类'
-                })
-        
-        # 4. 重复代码检测（简单：相同import模式）
-        # 复杂重复检测需要AST级分析，这里跳过
-        
-        # 5. 硬编码配置（排除注释、字符串常量、文档路径等合理场景）
-        hardcoded_patterns = [
-            (r'localhost:\d+', '硬编码本地服务地址'),
-            (r'127\.0\.0\.1:\d+', '硬编码本地IP地址'),
-        ]
-        for pattern, desc in hardcoded_patterns:
-            for i, line in enumerate(lines, 1):
-                if re.search(pattern, line) and '#' not in line and '"""' not in line:
-                    issues.append({
-                        'severity': 'low',
-                        'file': rel_path,
-                        'line': i,
-                        'description': f'{desc}: `{line.strip()[:50]}`',
-                        'suggestion': '使用配置文件或环境变量'
-                    })
-                    break
+        return _verify_audit_line_numbers(analysis, audit_results)

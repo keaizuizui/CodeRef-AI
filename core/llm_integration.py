@@ -72,6 +72,186 @@ def _safe_int(raw, default: int) -> int:
         return default
 
 
+def _load_llm_config_from_settings() -> LLMConfig:
+    """加载 LLM 配置，按优先级尝试多个来源：
+    1. 环境变量（CODEREF_API_KEY / CODEREF_BASE_URL / CODEREF_MODEL）
+    2. config/config.json（旧版配置文件，兼容）
+    3. 默认值（DeepSeek）
+
+    拆分说明：原 LLMIntegration._load_config_from_settings 静态方法提取为
+    模块级纯函数（不依赖 self/cls），类内保留同名静态方法作委托，
+    配置读取与回退语义与拆分前一致。
+    """
+    # ── 优先级 1：环境变量 ──
+    env_key = os.environ.get("CODEREF_API_KEY", "")
+    if env_key:
+        provider_str = os.environ.get("CODEREF_PROVIDER", "deepseek")
+        provider_map = {
+            "deepseek": LLMProvider.DEEPSEEK,
+            "openai": LLMProvider.OPENAI,
+            "ollama": LLMProvider.OLLAMA,
+            "custom": LLMProvider.CUSTOM,
+        }
+        return LLMConfig(
+            provider=provider_map.get(provider_str, LLMProvider.DEEPSEEK),
+            api_key=env_key,
+            base_url=os.environ.get("CODEREF_BASE_URL", "https://api.deepseek.com"),
+            model=os.environ.get("CODEREF_MODEL", "deepseek-v4-flash"),
+            temperature=_safe_float(os.environ.get("CODEREF_TEMPERATURE"), 0.7),
+            max_tokens=_safe_int(os.environ.get("CODEREF_MAX_TOKENS"), 4096),
+        )
+
+    # ── 优先级 2：config/config.json（旧版配置文件，兼容） ──
+    try:
+        config_paths = [
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "config.json"),
+            # 支持从项目根目录查找
+            os.path.join(os.getcwd(), "config", "config.json"),
+        ]
+        for cfg_path in config_paths:
+            if os.path.exists(cfg_path):
+                with open(cfg_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                api_key = data.get("llm_api_key", "") or data.get("api_key", "")
+                if api_key and api_key != "ollama":  # "ollama" 是占位符，不算有效 key
+                    provider_str = data.get("llm_provider", "deepseek")
+                    provider_map = {
+                        "deepseek": LLMProvider.DEEPSEEK,
+                        "openai": LLMProvider.OPENAI,
+                        "ollama": LLMProvider.OLLAMA,
+                        "custom": LLMProvider.CUSTOM,
+                    }
+                    return LLMConfig(
+                        provider=provider_map.get(provider_str, LLMProvider.DEEPSEEK),
+                        api_key=api_key,
+                        base_url=data.get("llm_base_url", data.get("base_url", "https://api.deepseek.com")),
+                        model=data.get("llm_model", data.get("model_name", "deepseek-v4-flash")),
+                        temperature=float(data.get("llm_temperature", data.get("temperature", 0.7))),
+                        max_tokens=int(data.get("llm_max_tokens", data.get("max_tokens", 4096))),
+                    )
+                else:
+                    logger.debug(f"config.json 中 api_key 为占位符或空，跳过: {cfg_path}")
+    except Exception as e:
+        logger.debug(f"读取 config.json 失败: {e}")
+
+    # ── 优先级 3：默认值（无 API Key） ──
+    logger.debug("未找到有效的 LLM 配置（环境变量/config.json 均无），LLM 功能暂不可用")
+    return LLMConfig(
+        provider=LLMProvider.DEEPSEEK,
+        base_url="https://api.deepseek.com",
+        model="deepseek-v4-flash",
+        api_key=""
+    )
+
+
+def _complete_bare_token(tok: str) -> str:
+    """补全被截断的裸 token：tr/tru → true，fa/fal/fals → false，nu/nul → null。
+
+    拆分说明：原 LLMIntegration._complete_bare_token 静态方法提取为模块级
+    纯函数，类内保留同名静态方法作委托。
+    """
+    t = tok.strip()
+    low = t.lower()
+    for prefix, full in (("true", "true"), ("false", "false"), ("null", "null")):
+        if prefix.startswith(low) and low:
+            return full
+    if re.fullmatch(r"-?\d*\.?\d*(?:[eE][+-]?\d*)?", t):
+        return t
+    return tok
+
+
+def _repair_truncated_json(text: str) -> str:
+    """尽力修复被截断的 JSON 文本（LLM 因 max_tokens 截断的常见残缺）。
+
+    处理三类残缺：
+    1. 字符串字面量被截断（如 `{"a": "unfin`，缺闭合引号）；
+    2. 裸 token 被截断（如 `"verified": tr`，缺结尾）；
+    3. 数组/对象括号未闭合（如 `[{"x":1`，缺 `}]`）。
+
+    仅当能修复时返回修复后的文本，否则返回原文本（由调用方判定）。
+
+    拆分说明：原 LLMIntegration._repair_truncated_json 类方法提取为模块级
+    纯函数（内部改调模块级 _complete_bare_token），类内保留同名类方法作委托，
+    修复逻辑与拆分前逐字符一致。
+    """
+    if not text:
+        return text
+    # 定位第一个结构起点（{ 或 [），丢弃前缀杂文
+    start = -1
+    for i, ch in enumerate(text):
+        if ch in "{[":
+            start = i
+            break
+    if start < 0:
+        return text
+    frag = text[start:]
+    out: List[str] = []
+    stack: List[str] = []
+    in_string = False
+    escape = False
+    token: List[str] = []   # value 位置的裸 token 缓冲（补全前不写入 out）
+
+    def flush_token() -> None:
+        """把已缓冲的裸 token 补全后写入 out。"""
+        if token:
+            out.append(_complete_bare_token("".join(token)))
+            token.clear()
+
+    i = 0
+    n = len(frag)
+    while i < n:
+        ch = frag[i]
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            flush_token()
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch in "{[":
+            flush_token()
+            stack.append("}" if ch == "{" else "]")
+            out.append(ch)
+            i += 1
+            continue
+        if ch in "}]":
+            flush_token()
+            if stack:
+                stack.pop()
+            out.append(ch)
+            i += 1
+            continue
+        if ch in ",:":
+            flush_token()
+            out.append(ch)
+            i += 1
+            continue
+        if ch.isspace():
+            flush_token()
+            out.append(ch)
+            i += 1
+            continue
+        token.append(ch)
+        i += 1
+    # 扫描结束：补全残余
+    if in_string:
+        out.append('"')          # 补闭合引号
+    else:
+        flush_token()
+    while stack:                 # 补未闭合括号
+        out.append(stack.pop())
+    return "".join(out)
+
+
 class LLMIntegration:
     """LLM集成管理器"""
     # 结构化错误串统一前缀：预算拒绝/缺Key/初始化失败/调用失败等非正常内容
@@ -100,74 +280,8 @@ class LLMIntegration:
     
     @staticmethod
     def _load_config_from_settings() -> LLMConfig:
-        """
-        加载 LLM 配置，按优先级尝试多个来源：
-        1. 环境变量（CODEREF_API_KEY / CODEREF_BASE_URL / CODEREF_MODEL）
-        2. config/config.json（旧版配置文件，兼容）
-        3. 默认值（DeepSeek）
-        """
-        # ── 优先级 1：环境变量 ──
-        env_key = os.environ.get("CODEREF_API_KEY", "")
-        if env_key:
-            provider_str = os.environ.get("CODEREF_PROVIDER", "deepseek")
-            provider_map = {
-                "deepseek": LLMProvider.DEEPSEEK,
-                "openai": LLMProvider.OPENAI,
-                "ollama": LLMProvider.OLLAMA,
-                "custom": LLMProvider.CUSTOM,
-            }
-            return LLMConfig(
-                provider=provider_map.get(provider_str, LLMProvider.DEEPSEEK),
-                api_key=env_key,
-                base_url=os.environ.get("CODEREF_BASE_URL", "https://api.deepseek.com"),
-                model=os.environ.get("CODEREF_MODEL", "deepseek-v4-flash"),
-                temperature=_safe_float(os.environ.get("CODEREF_TEMPERATURE"), 0.7),
-                max_tokens=_safe_int(os.environ.get("CODEREF_MAX_TOKENS"), 4096),
-            )
-
-        
-
-        # ── 优先级 2：config/config.json（旧版配置文件，兼容） ──
-        try:
-            config_paths = [
-                os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "config.json"),
-                # 支持从项目根目录查找
-                os.path.join(os.getcwd(), "config", "config.json"),
-            ]
-            for cfg_path in config_paths:
-                if os.path.exists(cfg_path):
-                    with open(cfg_path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                    api_key = data.get("llm_api_key", "") or data.get("api_key", "")
-                    if api_key and api_key != "ollama":  # "ollama" 是占位符，不算有效 key
-                        provider_str = data.get("llm_provider", "deepseek")
-                        provider_map = {
-                            "deepseek": LLMProvider.DEEPSEEK,
-                            "openai": LLMProvider.OPENAI,
-                            "ollama": LLMProvider.OLLAMA,
-                            "custom": LLMProvider.CUSTOM,
-                        }
-                        return LLMConfig(
-                            provider=provider_map.get(provider_str, LLMProvider.DEEPSEEK),
-                            api_key=api_key,
-                            base_url=data.get("llm_base_url", data.get("base_url", "https://api.deepseek.com")),
-                            model=data.get("llm_model", data.get("model_name", "deepseek-v4-flash")),
-                            temperature=float(data.get("llm_temperature", data.get("temperature", 0.7))),
-                            max_tokens=int(data.get("llm_max_tokens", data.get("max_tokens", 4096))),
-                        )
-                    else:
-                        logger.debug(f"config.json 中 api_key 为占位符或空，跳过: {cfg_path}")
-        except Exception as e:
-            logger.debug(f"读取 config.json 失败: {e}")
-
-        # ── 优先级 3：默认值（无 API Key） ──
-        logger.debug("未找到有效的 LLM 配置（环境变量/config.json 均无），LLM 功能暂不可用")
-        return LLMConfig(
-            provider=LLMProvider.DEEPSEEK,
-            base_url="https://api.deepseek.com",
-            model="deepseek-v4-flash",
-            api_key=""
-        )
+        """加载 LLM 配置（实现已拆分至模块级 _load_llm_config_from_settings）。"""
+        return _load_llm_config_from_settings()
     
     def _init_client(self):
         """初始化LLM客户端（无API Key时不初始化，留待用时提示）"""
@@ -361,103 +475,13 @@ class LLMIntegration:
 
     @staticmethod
     def _complete_bare_token(tok: str) -> str:
-        """补全被截断的裸 token：tr/tru → true，fa/fal/fals → false，nu/nul → null。"""
-        t = tok.strip()
-        low = t.lower()
-        for prefix, full in (("true", "true"), ("false", "false"), ("null", "null")):
-            if prefix.startswith(low) and low:
-                return full
-        if re.fullmatch(r"-?\d*\.?\d*(?:[eE][+-]?\d*)?", t):
-            return t
-        return tok
+        """补全被截断的裸 token（实现已拆分至模块级 _complete_bare_token）。"""
+        return _complete_bare_token(tok)
 
     @classmethod
     def _repair_truncated_json(cls, text: str) -> str:
-        """尽力修复被截断的 JSON 文本（LLM 因 max_tokens 截断的常见残缺）。
-
-        处理三类残缺：
-        1. 字符串字面量被截断（如 `{"a": "unfin`，缺闭合引号）；
-        2. 裸 token 被截断（如 `"verified": tr`，缺结尾）；
-        3. 数组/对象括号未闭合（如 `[{"x":1`，缺 `}]`）。
-
-        仅当能修复时返回修复后的文本，否则返回原文本（由调用方判定）。
-        """
-        if not text:
-            return text
-        # 定位第一个结构起点（{ 或 [），丢弃前缀杂文
-        start = -1
-        for i, ch in enumerate(text):
-            if ch in "{[":
-                start = i
-                break
-        if start < 0:
-            return text
-        frag = text[start:]
-        out: List[str] = []
-        stack: List[str] = []
-        in_string = False
-        escape = False
-        token: List[str] = []   # value 位置的裸 token 缓冲（补全前不写入 out）
-
-        def flush_token() -> None:
-            """把已缓冲的裸 token 补全后写入 out。"""
-            if token:
-                out.append(cls._complete_bare_token("".join(token)))
-                token.clear()
-
-        i = 0
-        n = len(frag)
-        while i < n:
-            ch = frag[i]
-            if in_string:
-                out.append(ch)
-                if escape:
-                    escape = False
-                elif ch == "\\":
-                    escape = True
-                elif ch == '"':
-                    in_string = False
-                i += 1
-                continue
-            if ch == '"':
-                flush_token()
-                in_string = True
-                out.append(ch)
-                i += 1
-                continue
-            if ch in "{[":
-                flush_token()
-                stack.append("}" if ch == "{" else "]")
-                out.append(ch)
-                i += 1
-                continue
-            if ch in "}]":
-                flush_token()
-                if stack:
-                    stack.pop()
-                out.append(ch)
-                i += 1
-                continue
-            if ch in ",:":
-                flush_token()
-                out.append(ch)
-                i += 1
-                continue
-            if ch.isspace():
-                flush_token()
-                out.append(ch)
-                i += 1
-                continue
-            token.append(ch)
-            i += 1
-        # 扫描结束：补全残余
-        if in_string:
-            out.append('"')          # 补闭合引号
-        else:
-            flush_token()
-        while stack:                 # 补未闭合括号
-            out.append(stack.pop())
-        return "".join(out)
+        """尽力修复被截断的 JSON 文本（实现已拆分至模块级 _repair_truncated_json）。"""
+        return _repair_truncated_json(text)
 
     @staticmethod
     def _validate_analysis_dict(data: Any) -> bool:

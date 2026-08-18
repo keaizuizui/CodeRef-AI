@@ -178,6 +178,97 @@ def _changed_fields(before: dict, after: dict) -> List[str]:
                   if before.get(k) != after.get(k))
 
 
+def _diff_node_presence(b_node_map: dict, a_node_map: dict) -> tuple:
+    """节点 added / removed（键在对方索引中不存在）。"""
+    added_nodes = [{"kind": "node", "id": nid, "data": anode}
+                   for nid, anode in a_node_map.items() if nid not in b_node_map]
+    removed_nodes = [{"kind": "node", "id": nid, "data": bnode}
+                     for nid, bnode in b_node_map.items() if nid not in a_node_map]
+    return added_nodes, removed_nodes
+
+
+def _diff_node_common(b_node_map: dict, a_node_map: dict) -> tuple:
+    """节点交集内的 moved（file_path 变化）与 changed（属性签名变化）。"""
+    moved_nodes = []
+    changed_nodes = []
+    for nid in b_node_map.keys() & a_node_map.keys():
+        bnode, anode = b_node_map[nid], a_node_map[nid]
+        bfp = str(bnode.get("file_path", "")) if isinstance(bnode, dict) else ""
+        afp = str(anode.get("file_path", "")) if isinstance(anode, dict) else ""
+        name = anode.get("name", nid) if isinstance(anode, dict) else nid
+        if bfp != afp:
+            moved_nodes.append({
+                "kind": "node", "id": nid, "name": name,
+                "before_file": bfp, "after_file": afp,
+            })
+        b_attrs, a_attrs = _node_attrs(bnode), _node_attrs(anode)
+        if b_attrs != a_attrs:
+            changed_nodes.append({
+                "kind": "node", "id": nid, "name": name,
+                "before": b_attrs, "after": a_attrs,
+                "changed_fields": _changed_fields(b_attrs, a_attrs),
+            })
+    return moved_nodes, changed_nodes
+
+
+def _diff_edge_presence(b_edge_map: dict, a_edge_map: dict) -> tuple:
+    """边 added / removed（键在对方索引中不存在）。"""
+    added_edges = [{"kind": "edge", "key": list(k), "data": e}
+                   for k, e in a_edge_map.items() if k not in b_edge_map]
+    removed_edges = [{"kind": "edge", "key": list(k), "data": e}
+                     for k, e in b_edge_map.items() if k not in a_edge_map]
+    return added_edges, removed_edges
+
+
+def _extract_rerouted(removed_edges: List[dict], added_edges: List[dict]) -> tuple:
+    """从 removed/added 中提取"端点变化但关系类型不变"的配对（rerouted）。
+
+    旧边 (A→B, r) 变为 (A→C, r) 或 (C→B, r)：共享一个端点且关系类型不变，
+    视为"重定向"而非简单的删除+新增，单独收据更贴合 code review 场景。
+
+    返回 (rerouted, 剩余 removed, 剩余 added)。
+    """
+    rerouted = []
+    used_removed: set = set()
+    used_added: set = set()
+    for ri, re_item in enumerate(removed_edges):
+        re_key = tuple(re_item["key"])
+        re_rel = re_key[2]
+        for ai, ae_item in enumerate(added_edges):
+            if ai in used_added:
+                continue
+            ae_key = tuple(ae_item["key"])
+            if ae_key[2] == re_rel and (ae_key[0] == re_key[0] or ae_key[1] == re_key[1]):
+                rerouted.append({
+                    "kind": "edge",
+                    "relation": re_rel,
+                    "from": re_item["data"],
+                    "to": ae_item["data"],
+                })
+                used_removed.add(ri)
+                used_added.add(ai)
+                break
+    kept_removed = [it for i, it in enumerate(removed_edges) if i not in used_removed]
+    kept_added = [it for i, it in enumerate(added_edges) if i not in used_added]
+    return rerouted, kept_removed, kept_added
+
+
+def _diff_edge_common(b_edge_map: dict, a_edge_map: dict) -> List[dict]:
+    """changed 边：键相同但属性签名不同。"""
+    changed_edges = []
+    for k in b_edge_map.keys() & a_edge_map.keys():
+        be, ae = b_edge_map[k], a_edge_map[k]
+        b_attrs, a_attrs = _edge_attrs(be), _edge_attrs(ae)
+        if b_attrs != a_attrs:
+            changed_edges.append({
+                "kind": "edge",
+                "source": k[0], "target": k[1], "relation": k[2],
+                "before": b_attrs, "after": a_attrs,
+                "changed_fields": _changed_fields(b_attrs, a_attrs),
+            })
+    return changed_edges
+
+
 def compare_snapshots(before: dict, after: dict) -> dict:
     """比对前后快照，给出五类变更收据。
 
@@ -208,79 +299,19 @@ def compare_snapshots(before: dict, after: dict) -> dict:
     # ── 节点索引与三类节点变更 ──
     b_node_map = {_node_id(n, i): n for i, n in enumerate(b_nodes)}
     a_node_map = {_node_id(n, i): n for i, n in enumerate(a_nodes)}
-
-    added_nodes = [{"kind": "node", "id": nid, "data": anode}
-                   for nid, anode in a_node_map.items() if nid not in b_node_map]
-    removed_nodes = [{"kind": "node", "id": nid, "data": bnode}
-                     for nid, bnode in b_node_map.items() if nid not in a_node_map]
-
-    moved_nodes = []
-    changed_nodes = []
-    for nid in b_node_map.keys() & a_node_map.keys():
-        bnode, anode = b_node_map[nid], a_node_map[nid]
-        bfp = str(bnode.get("file_path", "")) if isinstance(bnode, dict) else ""
-        afp = str(anode.get("file_path", "")) if isinstance(anode, dict) else ""
-        name = anode.get("name", nid) if isinstance(anode, dict) else nid
-        if bfp != afp:
-            moved_nodes.append({
-                "kind": "node", "id": nid, "name": name,
-                "before_file": bfp, "after_file": afp,
-            })
-        b_attrs, a_attrs = _node_attrs(bnode), _node_attrs(anode)
-        if b_attrs != a_attrs:
-            changed_nodes.append({
-                "kind": "node", "id": nid, "name": name,
-                "before": b_attrs, "after": a_attrs,
-                "changed_fields": _changed_fields(b_attrs, a_attrs),
-            })
+    added_nodes, removed_nodes = _diff_node_presence(b_node_map, a_node_map)
+    moved_nodes, changed_nodes = _diff_node_common(b_node_map, a_node_map)
 
     # ── 边索引与新增/删除 ──
     b_edge_map = {_edge_key(e): e for e in b_edges}
     a_edge_map = {_edge_key(e): e for e in a_edges}
+    added_edges, removed_edges = _diff_edge_presence(b_edge_map, a_edge_map)
 
-    added_edges = [{"kind": "edge", "key": list(k), "data": e}
-                   for k, e in a_edge_map.items() if k not in b_edge_map]
-    removed_edges = [{"kind": "edge", "key": list(k), "data": e}
-                     for k, e in b_edge_map.items() if k not in a_edge_map]
+    # ── rerouted：配对后从 removed/added 中移除已消费的项 ──
+    rerouted, removed_edges, added_edges = _extract_rerouted(removed_edges, added_edges)
 
-    # ── rerouted：从 removed/added 中提取"端点变化但关系类型不变"的配对 ──
-    # 旧边 (A→B, r) 变为 (A→C, r) 或 (C→B, r)：共享一个端点且关系类型不变，
-    # 视为"重定向"而非简单的删除+新增，单独收据更贴合 code review 场景。
-    rerouted = []
-    used_removed: set = set()
-    used_added: set = set()
-    for ri, re_item in enumerate(removed_edges):
-        re_key = tuple(re_item["key"])
-        re_rel = re_key[2]
-        for ai, ae_item in enumerate(added_edges):
-            if ai in used_added:
-                continue
-            ae_key = tuple(ae_item["key"])
-            if ae_key[2] == re_rel and (ae_key[0] == re_key[0] or ae_key[1] == re_key[1]):
-                rerouted.append({
-                    "kind": "edge",
-                    "relation": re_rel,
-                    "from": re_item["data"],
-                    "to": ae_item["data"],
-                })
-                used_removed.add(ri)
-                used_added.add(ai)
-                break
-    removed_edges = [it for i, it in enumerate(removed_edges) if i not in used_removed]
-    added_edges = [it for i, it in enumerate(added_edges) if i not in used_added]
-
-    # ── changed 边：键相同但属性不同 ──
-    changed_edges = []
-    for k in b_edge_map.keys() & a_edge_map.keys():
-        be, ae = b_edge_map[k], a_edge_map[k]
-        b_attrs, a_attrs = _edge_attrs(be), _edge_attrs(ae)
-        if b_attrs != a_attrs:
-            changed_edges.append({
-                "kind": "edge",
-                "source": k[0], "target": k[1], "relation": k[2],
-                "before": b_attrs, "after": a_attrs,
-                "changed_fields": _changed_fields(b_attrs, a_attrs),
-            })
+    # ── changed 边 ──
+    changed_edges = _diff_edge_common(b_edge_map, a_edge_map)
 
     return {
         "added": added_nodes + added_edges,
