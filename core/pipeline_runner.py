@@ -909,7 +909,7 @@ def _fmt(r: PipeResult, title: str, t0: float = 0.0) -> str:
     # 修复：报告头时间取自错误变量，导致 elapsed 显示 0.0s。
     # 若调用方尚未写入 r.elapsed（在 _fmt 之后才赋值），此处实时兜底计算，
     # 保证报告头展示真实耗时。
-    if r.elapsed == 0.0 and getattr(self, "_t0", None):
+    if r.elapsed == 0.0 and t0:
         r.elapsed = round(time.time() - t0, 1)
     # 把"建议项"(kind=advice) 与"缺陷项"(defect) 分开统计/展示，
     # 建议项不计入 HIGH/MEDIUM/LOW 缺陷表，避免工程化改进建议被误报为缺陷。
@@ -1075,7 +1075,7 @@ def _load_whitelist(project_path: str) -> list:
     """加载 AI 白名单（供 _denoise 使用）"""
     return whitelist_list(project_path)
 
-def run_single(project_path: str, tool: str) -> PipeResult:
+def run_single(pipe: "Pipe", project_path: str, tool: str) -> PipeResult:
     """单独运行某一个审计工具 —— AI 写代码时的实时安全带。
 
     相比 audit 全量管线，只跑一个工具：不构建知识图谱、不生成 dashboard，
@@ -1086,13 +1086,13 @@ def run_single(project_path: str, tool: str) -> PipeResult:
     if tool not in tool_registry.SINGLE_TOOLS:
         raise ValueError(
             f"未知工具 '{tool}'，支持: {', '.join(sorted(tool_registry.SINGLE_TOOLS))}")
-    self._t0 = time.time()
+    pipe._t0 = time.time()
     r = PipeResult(project_path=project_path)
     try:
         tf, tl, analysis = _scan(project_path)
         r.total_files, r.total_lines = tf, tl
         label, method = tool_registry.SINGLE_TOOLS[tool]
-        fn = getattr(self, method)
+        fn = getattr(pipe, method)
         # 全新 done 集合，不读 checkpoint，保证单工具独立、可复现
         fn(project_path, r, set())
         if r.findings:
@@ -1102,11 +1102,11 @@ def run_single(project_path: str, tool: str) -> PipeResult:
             # 支持多工具则自动生效。交叉验证的局限在 MCP 描述中如实声明。
             _xval(r)
             _denoise(r)
-        r.elapsed = round(time.time() - self._t0, 1)
+        r.elapsed = round(time.time() - pipe._t0, 1)
     except Exception as e:
         r.errors.append(str(e))
     r.health_score = _compute_health(r)
-    r.elapsed = round(time.time() - self._t0, 1)
+    r.elapsed = round(time.time() - pipe._t0, 1)
     return r
 
 def docs(project_path: str, output_dir: str = None,
@@ -1124,7 +1124,7 @@ def docs(project_path: str, output_dir: str = None,
     cross_verify: 是否对模块描述做静态交叉验证（确证徽章）
     cross_entry_spec: 交叉验证的入口（入口调用闭包为确证依据）
     """
-    self._t0 = time.time()
+    t0 = time.time()
     r = PipeResult(project_path=project_path)
     d = _load(project_path) if resume else set()
 
@@ -1154,7 +1154,7 @@ def docs(project_path: str, output_dir: str = None,
     except Exception as e:
         r.errors.append(str(e))
 
-    r.elapsed = round(time.time() - self._t0, 1)
+    r.elapsed = round(time.time() - t0, 1)
     return r
 
 def render_report(project_path: str,
@@ -1777,7 +1777,7 @@ class Pipe:
         return _select_tools(strategy)
 
     def run_single(self, project_path, tool):
-        return run_single(project_path, tool)
+        return run_single(self, project_path, tool)
 
     def architecture(self, project_path: str, output_dir: str = None,
                      resume: bool = False) -> PipeResult:
@@ -2054,5 +2054,5 @@ class Pipe:
     # ═══════════════════════════════════
 
     @staticmethod
-    def kg_query(project_path, query_type):
-        return kg_query(project_path, query_type)
+    def kg_query(project_path, query_type, **kwargs):
+        return kg_query(project_path, query_type, **kwargs)
