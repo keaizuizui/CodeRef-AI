@@ -424,13 +424,13 @@ class FrontendInspector:
             except Exception as e:
                 logger.warning(f"扫描文件失败 {fp}: {e}")
 
-        # 同模板去重：历史快照/模板 HTML 中同一按钮（如报告折叠按钮）会在
-        # 多份文件里重复出现，按 (text, tag) 只保留一项，出现次数记入
-        # occurrences，避免对同一模板按钮重复计数与重复送审。
+        # 同文件去重：同一文件内重复出现的按钮（生成产物重复块）合并，
+        # 出现次数记入 occurrences；不同文件的按钮各自保留（同名按钮
+        # 属于不同源码位置的证据锚点，合并会丢失 file:line 位置）。
         _dedup: Dict[tuple, ButtonItem] = {}
         _dedup_buttons: List[ButtonItem] = []
         for b in buttons:
-            key = (b.text, b.tag)
+            key = (b.text, b.tag, b.file)
             if key in _dedup:
                 _dedup[key].occurrences += 1
             else:
