@@ -150,6 +150,7 @@ class GitNexusMCPClient:
                         )
                     return msg.get("result", {})
             except Empty:
+                # 队列暂无响应，继续等待直至超时
                 continue
 
         raise TimeoutError(f"MCP请求超时: {method}")
@@ -262,6 +263,7 @@ class GitNexusMCPClient:
             try:
                 self._process.stdin.close()
             except Exception:
+                # 停止时尽力关闭 stdin，失败不影响终止
                 pass
             try:
                 self._process.terminate()
@@ -270,6 +272,7 @@ class GitNexusMCPClient:
                 try:
                     self._process.kill()
                 except Exception:
+                    # terminate 失败后尽力 kill，均失败则交由系统回收
                     pass
             self._process = None
         self._initialized = False
@@ -753,7 +756,8 @@ class GitNexusMCPClient:
                             "type": item.get("type", item.get("kind", "Unknown")),
                             "source": "search"
                         })
-            except Exception:
+            except Exception as e:
+                logger.warning(f"GitNexus 搜索结果归一化失败，跳过该结果: {e}")
                 continue
         return discovered
     
@@ -913,7 +917,8 @@ class GitNexusMCPClient:
                 items = self._normalize_search_results(r)
                 if items:
                     results[kw] = items[:10]
-            except Exception:
+            except Exception as e:
+                logger.warning(f"GitNexus 关键词搜索失败，跳过关键词 {kw}: {e}")
                 continue
         return results
     
@@ -997,6 +1002,6 @@ class GitNexusMCPClient:
             )
             if result.returncode == 0:
                 return result.stdout.strip()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"探测 git 版本失败，降级为 unknown: {e}")
         return "unknown"

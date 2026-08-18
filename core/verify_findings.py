@@ -295,6 +295,7 @@ class FindingsVerifier:
                     if inside:
                         return True
             except Exception:
+                # 路径判断失败按"项目外"保守处理
                 pass
         return False
 

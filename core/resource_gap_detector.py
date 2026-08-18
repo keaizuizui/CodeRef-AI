@@ -213,7 +213,13 @@ class ResourceGapDetector:
         return py_files
 
     def _collect_all_imports(self, project_path: str):
-        """预收集所有文件中的 import 信息"""
+        """预收集所有文件中的 import 信息
+
+        用 ast 精确解析（含函数体内延迟导入），避免正则手动 split 把
+        "import dataclasses" 截断成 "datacl"（"as" 字面量被误当别名分隔符）。
+        语法错误文件回退旧正则兜底。
+        """
+        import ast as _ast
         import_pattern = re.compile(
             r'^\s*(?:from\s+([\w.]+)\s+import\s+\S|import\s+([\w.,\s]+?)(?:\s*(?:as|#|$)))',
             re.MULTILINE
@@ -223,19 +229,35 @@ class ResourceGapDetector:
             try:
                 with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
                     content = fh.read()
-            except Exception:
+            except Exception as e:
+                # 文件不可读，跳过该文件
+                logger.warning(f"读取文件失败，跳过导入分析 {fpath}: {e}")
                 continue
 
             imports = set()
-            for m in import_pattern.finditer(content):
-                module = m.group(1) or m.group(2)
-                if module:
-                    # 处理 import a, b, c 的形式
-                    for part in module.split(","):
-                        part = part.strip().split(" as ")[0].strip()
-                        if part:
-                            imports.add(part)
-                            self._all_imports.add(part)
+            try:
+                tree = _ast.parse(content)
+            except SyntaxError:
+                # 语法错误（模板/生成文件等）：回退旧正则，保持原有覆盖面
+                for m in import_pattern.finditer(content):
+                    module = m.group(1) or m.group(2)
+                    if module:
+                        for part in module.split(","):
+                            part = part.strip().split(" as ")[0].strip()
+                            if part:
+                                imports.add(part)
+                                self._all_imports.add(part)
+            else:
+                for node in _ast.walk(tree):
+                    if isinstance(node, _ast.Import):
+                        for alias in node.names:
+                            imports.add(alias.name)
+                            self._all_imports.add(alias.name)
+                    elif isinstance(node, _ast.ImportFrom):
+                        # 相对导入（level>0）不参与"缺失模块"判定
+                        if node.module and node.level == 0:
+                            imports.add(node.module)
+                            self._all_imports.add(node.module)
             self._all_imports_by_file[fpath] = imports
 
     # ─── 检测 1: 缺失的本地模块 ─────────────────────────────────────
@@ -488,7 +510,9 @@ class ResourceGapDetector:
             try:
                 with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
                     content = fh.read()
-            except Exception:
+            except Exception as e:
+                # 文件不可读，跳过该文件
+                logger.warning(f"读取文件失败，跳过资源缺口检查 {fpath}: {e}")
                 continue
 
             file_dir = os.path.dirname(fpath)
@@ -553,7 +577,9 @@ class ResourceGapDetector:
             try:
                 with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
                     content = fh.read()
-            except Exception:
+            except Exception as e:
+                # 文件不可读，跳过该文件
+                logger.warning(f"读取文件失败，跳过动态调用检查 {fpath}: {e}")
                 continue
 
             for pattern, desc in dynamic_patterns:
@@ -690,8 +716,9 @@ class ResourceGapDetector:
                         content = fh.read()
                     if pkg_name.lower() in content.lower():
                         return True
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 配置文件不可读时按未确认处理
+                    logger.warning(f"读取文件失败，跳过依赖确认 {cf_path}: {e}")
         return False
 
     # ─── 检测 5: 未引用的环境变量 ───────────────────────────────────
@@ -724,7 +751,9 @@ class ResourceGapDetector:
                                         key = key[7:].strip()
                                     if key and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key):
                                         env_vars[key] = fpath
-                    except Exception:
+                    except Exception as e:
+                        # 单文件解析失败，跳过该文件
+                        logger.warning(f"解析环境变量引用失败，跳过 {fpath}: {e}")
                         continue
 
         if not env_vars:
@@ -744,7 +773,9 @@ class ResourceGapDetector:
             try:
                 with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
                     content = fh.read()
-            except Exception:
+            except Exception as e:
+                # 文件不可读，跳过该文件
+                logger.warning(f"读取文件失败，跳过环境变量检查 {fpath}: {e}")
                 continue
 
             for pattern in env_patterns:
@@ -762,7 +793,9 @@ class ResourceGapDetector:
                 try:
                     with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
                         content = fh.read()
-                except Exception:
+                except Exception as e:
+                    # 文件不可读，跳过该文件
+                    logger.warning(f"读取文件失败，跳过检查 {fpath}: {e}")
                     continue
 
                 for var_name in env_vars:

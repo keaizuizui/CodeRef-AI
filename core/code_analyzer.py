@@ -188,8 +188,8 @@ class CodeAnalyzer:
                 mtime = os.path.getmtime(fp)
                 size = os.path.getsize(fp)
                 snapshot[fp] = {"mtime": mtime, "size": size}
-            except OSError:
-                pass
+            except OSError as e:
+                logger.warning(f"读取文件状态失败，跳过快照项 {fp}: {e}")
         return snapshot
     
     def _is_cache_valid(self, project_path: str) -> bool:
@@ -359,6 +359,7 @@ class CodeAnalyzer:
 
         # ─── 优先使用 AST 精确解析 ──────────────────────────────────
         ast_assignments = []  # AST 解析的赋值分类
+        ast_result = None
         try:
             from core.ast_parser import AstParser
             ast_parser = AstParser(project_root=project_root)
@@ -368,6 +369,7 @@ class CodeAnalyzer:
                 logger.debug(f"[AST] {file_path}: {len(ast_result.functions)}函数, "
                            f"{len(ast_result.classes)}类, {len(ast_result.assignments)}赋值")
         except Exception as e:
+            ast_result = None
             logger.debug(f"[AST] 解析失败 {file_path}: {e}")
 
         # 存储 AST 赋值分类（供 _audit_security 使用）
@@ -418,42 +420,78 @@ class CodeAnalyzer:
                 "url_pattern": match.group(0)
             })
         
-        # 提取函数
-        func_pattern = r'def\s+(\w+)\s*\(([^)]*)\)\s*(?:->\s*([\w\[\],\s]+))?:'
-        func_matches = list(re.finditer(func_pattern, content))
-        for idx, match in enumerate(func_matches):
-            func_name = match.group(1)
-            if not func_name.startswith('_'):  # 跳过私有函数
-                params = [p.strip() for p in match.group(2).split(',') if p.strip()]
-                start_line = content[:match.start()].count('\n') + 1
-                # 计算 end_line：下一个函数/类定义之前减1行，或文件末尾
-                end_line = len(content.splitlines())
-                if idx + 1 < len(func_matches):
-                    end_line = content[:func_matches[idx + 1].start()].count('\n')
+        # 提取函数/类：优先使用 AST 精确结果（node.end_lineno 精确到函数体最后一行，
+        # 类方法来自 ClassDef.body），AST 失败（如语法错误）时回退正则推断。
+        # 旧正则版缺陷：最后一个函数的 end_line 直接取文件总行数、中间函数取下一个
+        # def/class 定义前一行，函数后的模块级常量区被算进函数体，行数虚高；
+        # 且 CodeClass.methods 从未填充，方法计数恒为 0。
+        if ast_result is not None:
+            # all_functions = 顶层函数 + 类方法（与旧正则口径一致，方法也参与行数统计）
+            for func in ast_result.all_functions:
+                if func.name.startswith('_'):
+                    continue  # 与旧正则行为一致：跳过私有函数/方法
                 code_file.functions.append(CodeFunction(
-                    name=func_name,
+                    name=func.name,
+                    start_line=func.start_line,
+                    end_line=func.end_line,
+                    parameters=func.parameters,
+                    return_type=func.return_type,
+                    docstring=func.docstring,
+                    code=func.code,
+                ))
+            for cls in ast_result.classes:
+                code_file.classes.append(CodeClass(
+                    name=cls.name,
+                    start_line=cls.start_line,
+                    end_line=cls.end_line,
+                    methods=[CodeFunction(
+                        name=m.name,
+                        start_line=m.start_line,
+                        end_line=m.end_line,
+                        parameters=m.parameters,
+                        return_type=m.return_type,
+                        docstring=m.docstring,
+                        code=m.code,
+                    ) for m in cls.methods],
+                    base_classes=cls.base_classes,
+                    docstring=cls.docstring,
+                ))
+        else:
+            # 正则回退：AST 不可用（语法错误文件）时的近似解析
+            func_pattern = r'def\s+(\w+)\s*\(([^)]*)\)\s*(?:->\s*([\w\[\],\s]+))?:'
+            func_matches = list(re.finditer(func_pattern, content))
+            for idx, match in enumerate(func_matches):
+                func_name = match.group(1)
+                if not func_name.startswith('_'):  # 跳过私有函数
+                    params = [p.strip() for p in match.group(2).split(',') if p.strip()]
+                    start_line = content[:match.start()].count('\n') + 1
+                    # 计算 end_line：下一个函数/类定义之前减1行，或文件末尾
+                    end_line = len(content.splitlines())
+                    if idx + 1 < len(func_matches):
+                        end_line = content[:func_matches[idx + 1].start()].count('\n')
+                    code_file.functions.append(CodeFunction(
+                        name=func_name,
+                        start_line=start_line,
+                        end_line=end_line,
+                        parameters=params,
+                        return_type=match.group(3)
+                    ))
+
+            class_pattern = r'class\s+(\w+)(?:\(([^)]*)\))?:'
+            class_matches = list(re.finditer(class_pattern, content))
+            for idx, match in enumerate(class_matches):
+                class_name = match.group(1)
+                bases = [b.strip() for b in (match.group(2) or '').split(',') if b.strip()]
+                start_line = content[:match.start()].count('\n') + 1
+                end_line = len(content.splitlines())
+                if idx + 1 < len(class_matches):
+                    end_line = content[:class_matches[idx + 1].start()].count('\n')
+                code_file.classes.append(CodeClass(
+                    name=class_name,
                     start_line=start_line,
                     end_line=end_line,
-                    parameters=params,
-                    return_type=match.group(3)
+                    base_classes=bases
                 ))
-        
-        # 提取类
-        class_pattern = r'class\s+(\w+)(?:\(([^)]*)\))?:'
-        class_matches = list(re.finditer(class_pattern, content))
-        for idx, match in enumerate(class_matches):
-            class_name = match.group(1)
-            bases = [b.strip() for b in (match.group(2) or '').split(',') if b.strip()]
-            start_line = content[:match.start()].count('\n') + 1
-            end_line = len(content.splitlines())
-            if idx + 1 < len(class_matches):
-                end_line = content[:class_matches[idx + 1].start()].count('\n')
-            code_file.classes.append(CodeClass(
-                name=class_name,
-                start_line=start_line,
-                end_line=end_line,
-                base_classes=bases
-            ))
         
         return code_file
     
@@ -473,8 +511,9 @@ class CodeAnalyzer:
                     with open(file_path, 'rb') as f_large:
                         line_count = sum(1 for _ in f_large)
                     code_file.raw_content = f"[超大文件，已跳过详细分析，约 {line_count} 行]"
-                except OSError:
-                    pass
+                except OSError as e:
+                    # 行数估算失败，保留默认超大文件标记
+                    logger.warning(f"超大文件行数估算失败 {file_path}: {e}")
                 return code_file
             
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -537,6 +576,7 @@ class CodeAnalyzer:
                 try:
                     file_progress_cb(idx + 1, len(code_files))
                 except Exception:
+                    # 进度回调异常不影响分析主流程
                     pass
 
             code_file = self.parse_file(file_path)
@@ -717,7 +757,9 @@ class CodeAnalyzer:
                         continue
                     with open(f.file_path, 'r', encoding='utf-8') as fh:
                         content = fh.read()
-                except Exception:
+                except Exception as e:
+                    # 文件不可读，跳过模式提取
+                    logger.warning(f"读取文件失败，跳过模式提取 {f.file_path}: {e}")
                     continue
             else:
                 content = getattr(f, 'raw_content', '')
@@ -821,8 +863,8 @@ class CodeAnalyzer:
                     agent_mapping = cfg.get('agent_mapping', {})
                     if isinstance(agent_mapping, dict):
                         analysis._agent_mapping = agent_mapping
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"解析 GitNexus 技术栈配置失败，忽略该增强: {e}")
         
         if not roles:
             roles = [['(未找到配置)', '-', '-', '-', f'未在 {analysis.project_path} 中找到 config.yaml']]
@@ -1095,8 +1137,8 @@ class CodeAnalyzer:
                                         analysis.architecture_summary += (
                                             f"\n[GitNexus] 检测到执行流: {', '.join(proc_names)}"
                                         )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"应用 GitNexus 执行流增强失败，跳过: {e}")
             
             # 4. 用混合搜索发现项目中的关键模块
             try:
@@ -1116,8 +1158,8 @@ class CodeAnalyzer:
                             analysis.architecture_summary += (
                                 f"\n[GitNexus] 功能集群: {', '.join(cluster_info)}"
                             )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"应用 GitNexus 功能集群增强失败，跳过: {e}")
             
             logger.info("[CodeAnalyzer] GitNexus增强完成")
 

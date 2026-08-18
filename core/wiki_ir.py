@@ -20,6 +20,9 @@ import re
 from typing import Any, Dict, List, Optional
 
 from config.settings import WIKI_IR_SCHEMA_VERSION
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -528,7 +531,8 @@ def extract_ir_from_kg(project_path: str,
         if not db:
             return None
         nodes, adj = load_graph(db)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"加载知识图谱失败，返回 None: {e}")
         return None
 
     # 模块节点 → IR 节点
