@@ -219,8 +219,9 @@ class WorkflowGraph:
                 community = row.get("community", "")
                 if name and community:
                     clusters[name] = community
-        except Exception:
-            pass
+        except Exception as e:
+            # 聚类结果应用失败，保留默认聚类
+            logger.warning(f"应用社区聚类结果失败: {e}")
         return clusters
 
     def _build_nodes(self, symbols: List[Dict]) -> List[Dict]:

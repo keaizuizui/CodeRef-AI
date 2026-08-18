@@ -82,6 +82,7 @@ def _write_atomic(path: str, data: str) -> bool:
         try:
             os.remove(tmp)
         except OSError:
+            # 临时文件清理尽力而为
             pass
 
 

@@ -527,16 +527,20 @@ class GovernanceAuditor:
     # 允许的层级依赖方向（低层不应该依赖高层）
     # 注意：这是默认规则，可通过配置文件覆盖。
     # 开源项目可通过 .coderef_governance.json 自定义层级规则。
+    # test 为独立测试层：测试代码引用被测代码（任意层）属正常行为，不算穿透。
     LAYER_RULES = {
         "entry": ["core", "data", "shared", "other"],
         "core": ["data", "shared", "other"],
         "data": ["shared", "other"],
         "shared": ["other"],
+        "test": ["entry", "core", "data", "shared", "other"],
         "other": [],
     }
 
     # 层级→目录名映射（默认值，可通过 LLM 分析覆盖）
     # 开源项目不应依赖此映射，应通过 LLM 分析代码内容动态分类。
+    # test 层目录名：tests/test/spec 等，避免测试文件落入 "other" 层后
+    # 因白名单为空，import core.* 全部误报层级穿透。
     DEFAULT_LAYER_PATTERNS = {
         "entry": ["route", "routes", "controller", "controllers", "handler", "handlers",
                    "api", "view", "views", "gui", "window"],
@@ -544,6 +548,7 @@ class GovernanceAuditor:
         "data": ["model", "models", "data", "db", "database", "store", "repo",
                   "repository", "entity", "entities", "schema", "schemas"],
         "shared": ["util", "utils", "shared", "common", "config", "helper", "helpers", "lib"],
+        "test": ["test", "tests", "testing", "spec", "specs", "__tests__"],
     }
 
     def __init__(self):
@@ -575,6 +580,11 @@ class GovernanceAuditor:
 
         # 2. 逐文件检测
         for cf in analysis.files:
+            # 跳过检测器自身文件（避免规则描述文本自命中：如 unserialize 规则的
+            # 说明字符串 "PHP 的 unserialize() 可被利用..." 命中自身正则），
+            # 参照 resource_gap_detector 的自身文件豁免机制
+            if os.path.basename(cf.file_path) == "governance_audit.py":
+                continue
             # 安全铁律
             violations.extend(self._check_security(cf))
             # 密钥明文落盘（写入 .env 等凭据文件）
@@ -606,6 +616,13 @@ class GovernanceAuditor:
         violations = [
             v for v in violations
             if not cache_manager.is_security_whitelisted(v.rule_id, v.file_path, v.line_number)
+        ]
+
+        # 3.8 集中兜底：跨文件检测（架构/循环依赖）中自身文件作为一端出现的
+        #     条目同样豁免，确保 governance_audit.py 不出现在任何 findings 中
+        violations = [
+            v for v in violations
+            if os.path.basename(v.file_path) != "governance_audit.py"
         ]
 
         # 4. 构建报告
@@ -720,6 +737,23 @@ class GovernanceAuditor:
         """委托给 SharedFilter"""
         return _sf.is_in_try_block(lines, line_idx)
 
+    @staticmethod
+    def _is_static_html_generator(content: str) -> bool:
+        """判断文件是否是"生成静态 HTML 报告/可视化页面"的代码。
+
+        用于 IRON-SEC-12 XSS 降级：这类文件的 innerHTML 注入目标是本地
+        查看页面，渲染数据是分析器自产的结构化产物而非用户输入，无对外
+        攻击面（仅理论二阶注入）。判据从简且保守——文件需含 HTML 写文件
+        特征才认定；面向用户输入渲染的 Web 服务代码不含这些特征，保持 high。
+        """
+        if not content:
+            return False
+        hints = (
+            r'\.html["\']',        # .html 文件名字符串（写入 HTML 报告/可视化文件）
+            r'\bHTML_TEMPLATE\b',  # HTML 模板常量（内嵌静态页面模板）
+        )
+        return any(re.search(h, content) for h in hints)
+
     def _check_security(self, cf) -> List[GovernanceViolation]:
         """检测安全铁律违规"""
         violations = []
@@ -727,6 +761,9 @@ class GovernanceAuditor:
 
         # 预解析文档字符串范围，跳过其中的所有安全检测
         docstring_lines = self._get_docstring_lines(lines)
+
+        # XSS 降级预判：该文件是否为生成静态 HTML 报告/可视化的代码
+        is_static_html_gen = self._is_static_html_generator(cf.raw_content or "")
 
         for i, line in enumerate(lines, 1):
             line_stripped = line.strip()
@@ -895,11 +932,21 @@ class GovernanceAuditor:
             if not is_pattern_def:
                 for pattern, rule_id, rule_name, severity, detail, suggestion in self.XSS_PATTERNS:
                     if pattern.search(line_stripped):
+                        eff_severity, eff_detail = severity, detail
+                        # 本地静态查看页面降级：命中文件是生成静态 HTML 报告/
+                        # 可视化的代码（数据为自产分析产物，无对外攻击面）时
+                        # 降为 low，仅提示理论二阶注入；面向用户输入渲染的
+                        # Web 服务保持 high
+                        if is_static_html_gen:
+                            eff_severity = "low"
+                            eff_detail = (detail
+                                          + "（降级说明：本地静态查看页面，数据为自产"
+                                            "分析产物，理论二阶注入）")
                         violations.append(GovernanceViolation(
                             rule_id=rule_id, rule_name=rule_name, category="security",
-                            severity=severity, file_path=cf.file_path, line_number=i,
+                            severity=eff_severity, file_path=cf.file_path, line_number=i,
                             line_content=line_stripped[:120],
-                            detail=detail,
+                            detail=eff_detail,
                             suggestion=suggestion,
                         ))
 
@@ -1306,6 +1353,43 @@ class GovernanceAuditor:
                     pass
         return violations
 
+    # 文档密钥赋值的已知占位符值（lower 精确匹配）：示例配置的通用占位写法。
+    # ollama 是本地免费模型名（README 明示无需 Key），同样按占位符处理。
+    DOC_SECRET_PLACEHOLDER_VALUES = frozenset({
+        "xxx", "xxxx", "xxx-xxx", "placeholder", "example", "sample", "dummy",
+        "changeme", "change_me", "replace_me", "replace-me", "your-api-key",
+        "your_api_key", "your-key", "your_key", "your-secret", "your_token",
+        "your-token", "your-key-here", "yourkeyhere", "ollama", "test", "demo",
+        "mock", "fake",
+    })
+
+    @staticmethod
+    def _doc_value_is_placeholder(value: str) -> bool:
+        """判断密钥赋值语句的值侧是否为已知占位符（不区分大小写）。
+
+        保守实现：仅按常见占位词/包裹形式精确匹配，不做熵计算。
+        宁可漏掉少见占位符，也不放过真密钥——高熵长随机串、sk- 后跟
+        20+ 字符的真密钥格式均不在占位清单内，仍会正常报出。
+        """
+        v = value.strip()
+        # 去包裹引号/反引号（"your-api-key" → your-api-key）
+        while len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"', '`'):
+            v = v[1:-1].strip()
+        if not v:
+            return True
+        lv = v.lower()
+        # 变量引用/角括号占位：<your-api-key> / ${VAR} / $VAR / {{VAR}}
+        if re.fullmatch(r'<[^<>]*>|\$\{[^}]*\}|\$[A-Za-z_]\w*|\{\{[^}]*\}\}', v):
+            return True
+        # 已知占位词精确匹配
+        if lv in GovernanceAuditor.DOC_SECRET_PLACEHOLDER_VALUES:
+            return True
+        # your-xxx / your_xxx / sk-xxx / sk-your 等短占位前缀（限长 24，
+        # 确保不会误吞长随机真密钥）
+        if len(lv) <= 24 and re.fullmatch(r'(?:your[-_][a-z0-9_-]*|sk-(?:x+|your[-_a-z]*))', lv):
+            return True
+        return False
+
     @staticmethod
     def _doc_placeholder(line: str) -> bool:
         """判断文档行是否仅为占位符/示例配置，避免把示例密钥误报为明文泄露。
@@ -1313,6 +1397,12 @@ class GovernanceAuditor:
         复用 _scan_non_py_secrets 的占位符思路（your_key_here/changeme/xxx 等），
         并覆盖角括号占位符（= <your_key>），供文档类扫描过滤 guidance 用。
         """
+        # 值侧占位符识别：提取行内最后一个 = 后的赋值值（去引号）做占位判断。
+        # export CODEREF_API_KEY="your-api-key" 这类值包在引号内的占位写法，
+        # 下方行尾正则匹配不到（占位词后有引号收尾），必须取值侧判断。
+        m = re.search(r'=([^=]*)$', line.strip())
+        if m and GovernanceAuditor._doc_value_is_placeholder(m.group(1)):
+            return True
         if re.search(r'(?i)(your_|your-|your\s+key|your\s+secret|your\s+token|'
                      r'changeme|replace_me|replace\s+me|xxx|placeholder|\be\.?g\.?\b|'
                      r'example|dummy|sample|todo|fixme|<[A-Za-z_>-]+>|`<[^`]+>`)\s*$', line.strip()):

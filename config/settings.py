@@ -8,6 +8,9 @@ LLM 配置统一由 core/llm_integration.py 的 LLMIntegration() 无参构造加
 """
 
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════
 # 检测阈值常量
@@ -130,8 +133,8 @@ def omem_extra_tool_roots():
                 item = (item or "").strip()
                 if item:
                     extra.append(item)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"读取 extra_tool_roots 配置失败，忽略附加工具根配置: {e}")
     return extra
 
 # 便携根下的 bin 子目录名（相对便携根）

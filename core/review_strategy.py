@@ -160,8 +160,8 @@ class ReviewAdvisor:
         for fp in files:
             try:
                 snap[fp] = {"mtime": os.path.getmtime(fp), "size": os.path.getsize(fp)}
-            except OSError:
-                pass
+            except OSError as e:
+                logger.warning(f"读取文件快照失败，跳过 {fp}: {e}")
         return snap
 
     @staticmethod
@@ -340,7 +340,8 @@ class ReviewAdvisor:
                     qr = kg.query_file_entities(fp)
                     for n in qr.nodes:
                         start_nodes.add(n.id)
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"查询知识图谱文件实体失败，跳过 {fp}: {e}")
                     continue
             if start_nodes:
                 impact_nodes, impact_depth = compute_impact_closure(
@@ -391,6 +392,7 @@ class ReviewAdvisor:
             try:
                 kg.close()
             except Exception:
+                # 关闭图谱连接尽力而为
                 pass
 
         return result

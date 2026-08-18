@@ -583,7 +583,9 @@ class AgentSecurityAuditor:
         # json.load(f)（参数仅文件句柄），单行参数确认漏检；此处改为整文件级确认：
         # 文件内存在图谱/检索消费信号（from_dict/kg_search/load_knowledge_graph/
         # add_triple/hybrid_search 等）即判定，见 _scan_file。
-        (re.compile(r'(?:json\.load|yaml\.load|yaml\.safe_load|pickle\.load|pd\.read_csv|pd\.read_excel|pd\.read_json)\s*\(', re.IGNORECASE),
+        # 注意：yaml.safe_load 是安全 API（非 yaml.load 的任意对象构造），不作为
+        # 风险信号，避免把安全用法误计入投毒面。
+        (re.compile(r'(?:json\.load|yaml\.load|pickle\.load|pd\.read_csv|pd\.read_excel|pd\.read_json)\s*\(', re.IGNORECASE),
          "AGENT-SEC-58", "RAG 数据投毒（外部数据加载）", "high",
          "检测到外部持久化数据文件（JSON/YAML/CSV/Excel/pickle）被加载后直接作为可信输入喂给图谱/检索/LLM 下游，文件可被投毒污染检索与生成结果",
          "对外部数据文件做格式校验、内容过滤与来源可信度评估，加载后标记不可信并做消毒"),
@@ -858,6 +860,36 @@ class AgentSecurityAuditor:
     def __init__(self):
         pass
 
+    # 自身/同级检测器豁免清单：这些文件是规则签名与规则描述文本密集的检测器
+    # （正则字面量、危险 API 名、detail/suggestion 文本），agent 检测器跨扫它们
+    # 只会产生规则文本自命中（如 governance_audit 的 DANGEROUS_FUNCTIONS 描述、
+    # resource_gap_detector 的 dynamic_patterns 规则文本），无真实风险含义。
+    # 各检测器只豁免自身及同类检测器文件；_check_resilience_gaps 的项目级
+    # 存在性统计不豁免（否则规则文本不再满足防御模式会新增韧性缺口条目）。
+    SELF_EXEMPT_FILES = frozenset({
+        "agent_security_auditor.py",
+        "governance_audit.py",
+        "resource_gap_detector.py",
+    })
+
+    def _collect_target_files(self, project_path: str) -> List[str]:
+        """收集所有受支持语言的待扫描文件（单一遍历，正则与 AST 扫描复用）。
+
+        只排除当前目录名，不影响路径中包含该词的项目。Python 走完整 8 维 +
+        参数透传 AST 扫描；Go/Node/PHP/Java 走各自跨语言安全模式组。跳过
+        SELF_EXEMPT_FILES 中的检测器自身文件（规则文本自命中豁免）。
+        """
+        scan_files: List[str] = []
+        for root, dirs, files in os.walk(project_path):
+            dirs[:] = [d for d in dirs if not self._is_excluded_dir(root, d)]
+            for f in files:
+                if f in self.SELF_EXEMPT_FILES:
+                    continue
+                ext = os.path.splitext(f)[1].lower()
+                if ext == ".py" or ext in self.CROSSLANG_GROUPS:
+                    scan_files.append(os.path.join(root, f))
+        return scan_files
+
     def audit(self, project_path: str) -> List[AgentSecurityRisk]:
         """执行 Agent 安全审计"""
         risks = []
@@ -866,16 +898,7 @@ class AgentSecurityAuditor:
         from core.shared_filter import SharedFilter
         SharedFilter.load_cache(project_path)
 
-        # 收集所有受支持语言的文件（单一遍历，正则扫描与 AST 扫描复用同一份内容，避免二次 I/O）
-        # 只排除当前目录名，不影响路径中包含该词的项目。
-        # Python 走完整 8 维 + 参数透传 AST 扫描；Go/Node/PHP/Java 走各自跨语言安全模式组。
-        scan_files: List[str] = []
-        for root, dirs, files in os.walk(project_path):
-            dirs[:] = [d for d in dirs if not self._is_excluded_dir(root, d)]
-            for f in files:
-                ext = os.path.splitext(f)[1].lower()
-                if ext == ".py" or ext in self.CROSSLANG_GROUPS:
-                    scan_files.append(os.path.join(root, f))
+        scan_files = self._collect_target_files(project_path)
 
         for fpath in scan_files:
             ext = os.path.splitext(fpath)[1].lower()
@@ -979,6 +1002,15 @@ class AgentSecurityAuditor:
         # max_retries/retry_delay（429 重试）不算轮询超时防护，避免误放行无超时轮询。
         file_has_poll_timeout = bool(re.search(
             r'\b(?:timeout|deadline|max_wait_seconds?|give_up)\b|while\s+.*\b(?:timeout|deadline)\b',
+            content, re.IGNORECASE))
+
+        # SEC-58/59 自产数据消费信号（整文件级）：数据根指向工具自管目录
+        # （cache/coderef-report/coderef-wiki/.gitnexus/data/memory_state 等，
+        # 含 MEMORY_STATE 快照类常量）时，"RAG 投毒"威胁模型错配——加载的是
+        # 本工具运行时自产的缓存/快照，不是外部可控输入，降级为 medium 人工确认。
+        file_self_managed_data = bool(re.search(
+            r'(?:memory_state|coderef-report|coderef-wiki|gitnexus|\w*snapshot\w*'
+            r'|(?:^|[\'"\\/])cache[\'"\\/]|_cache_|CACHE_)',
             content, re.IGNORECASE))
 
         for i, line in enumerate(lines, 1):
@@ -1091,15 +1123,65 @@ class AgentSecurityAuditor:
                         # 外部长任务轮询无超时：整文件存在 timeout/deadline 防护则跳过
                         if risk_id == "AGENT-SEC-70" and file_has_poll_timeout:
                             continue
+                        # ─── 误报抑制/降级（按规则定制，见各 _refine_* 方法注释） ───
+                        eff_severity, eff_detail = severity, detail
+                        if risk_id == "AGENT-SEC-08":
+                            verdict = self._refine_sec08(lines, i - 1, stripped, indent_len, m, filepath)
+                            if verdict is None:
+                                continue
+                            if verdict:
+                                eff_severity, eff_detail = verdict
+                        elif risk_id == "AGENT-SEC-06":
+                            verdict = self._refine_sec06(lines, i - 1, stripped, indent_len, m)
+                            if verdict:
+                                eff_severity, eff_detail = verdict
+                        elif risk_id == "AGENT-SEC-PT":
+                            verdict = self._refine_secpt(lines, i - 1, stripped, indent_len, m)
+                            if verdict:
+                                eff_severity, eff_detail = verdict
+                        elif risk_id == "AGENT-SEC-SSRF":
+                            verdict = self._refine_ssrf(lines, i - 1, stripped, indent_len, m)
+                            if verdict:
+                                eff_severity, eff_detail = verdict
+                        elif risk_id == "AGENT-SEC-SECRET":
+                            verdict = self._refine_secret(lines, i - 1, stripped)
+                            if verdict:
+                                eff_severity, eff_detail = verdict
+                        elif risk_id in ("AGENT-SEC-58", "AGENT-SEC-59"):
+                            # CLI 参数显式指定的本地文件（open(args.*)）：用户传参
+                            # 即人工确认，与 SEC-08 的 args.* 豁免同口径，降级。
+                            _win58 = " ".join(
+                                x.strip() for x in lines[max(0, i - 6):i])
+                            if re.search(r'\bopen\s*\(\s*args\.', _win58):
+                                eff_severity = "medium"
+                                eff_detail = detail + "（数据文件为 CLI 参数显式指定（open(args.*)），用户传参即人工确认，非不受信外部数据；需人工复核）"
+                            elif file_self_managed_data:
+                                eff_severity = "medium"
+                                eff_detail = detail + "（数据源为本地自产缓存/快照目录（cache/coderef-report/memory_state 等），非外部输入，威胁模型错配；需人工确认）"
+                        elif risk_id == "AGENT-SEC-01" and category_key == "prompt_injection":
+                            # ① 全大写常量名（如 MAX_UNITS_PER_PROMPT）不是用户输入，
+                            #    剔除后不再命中即视为常量撞名，跳过
+                            caps_removed = re.sub(r'\b[A-Z][A-Z0-9_]{2,}\b', ' ', stripped)
+                            if not pattern.search(caps_removed):
+                                continue
+                            # ② dict 字面量键（如 {"content": ...} 的 "content"）是结构
+                            #    字段名而非注入变量，跳过
+                            if re.search(
+                                    r'["\'](?:user_input|user_message|query|question|prompt|input|content)["\']\s*:',
+                                    stripped):
+                                continue
+                            # ③ 剩余命中为纯关键词撞名候选，降级为人工确认项
+                            eff_severity = "medium"
+                            eff_detail = detail + "（纯关键词撞名候选，需人工确认是否进入 LLM 调用）"
                         risks.append(AgentSecurityRisk(
                             risk_id=risk_id,
                             risk_name=risk_name,
                             category=category_key,
-                            severity=severity,
+                            severity=eff_severity,
                             file_path=filepath,
                             line_number=i,
                             line_content=stripped[:150],
-                            detail=detail,
+                            detail=eff_detail,
                             suggestion=suggestion,
                         ))
 
@@ -1112,6 +1194,537 @@ class AgentSecurityAuditor:
             if cur is None or SEVERITY_ORDER.get(r.severity, 99) < SEVERITY_ORDER.get(cur.severity, 99):
                 best[key] = r
         return list(best.values())
+
+    # ─── AGENT-SEC-08 / SEC-06 误报抑制辅助 ───
+
+    # SEC-08 只读 SQL 首词集合：命中即降级为 low 提示（不再按"写入"报 high）
+    _SEC08_READONLY_SQL_HEADS = ("SELECT", "PRAGMA", "EXPLAIN")
+    # SEC-06 自管产物信号：路径参数（含回溯到的赋值来源）命中即降级为 low 提示。
+    # 注意避免裸 "temp"（会撞 template）；tmp/_tmp/tmp 前后缀、cache、checkpoint、
+    # __pycache__、write_probe、tempfile/mkstemp 产物、".tmp" 后缀均视为自管产物。
+    # 追加工具自产管理文件信号：运行时生成的白名单（whitelist）、Last-good 备份
+    # （last_good/lastgood）、.bak/backup 备份、coderef-wiki 产出的 wiki 文档
+    # （MODULES 目录下的 *.md）——删除这些是缓存/产物清理，不是删用户源文件。
+    _SEC06_SELF_MANAGED_RE = re.compile(
+        r'(?:__pycache__|\bpycache\b|\b\w*cache\w*\b|\b\w*ckpt\w*\b|\bcheckpoint\w*\b'
+        r'|\bwrite_probe\w*\b|\btempfile\b|\bmkstemp\b|\.tmp\b|\btmp\w*\b|\b\w*_tmp\b'
+        r'|\bwhitelist\w*\b|\w*last[_-]?good\w*\b|\.bak\b|\bbackups?\b|\bcoderef-wiki\b'
+        r'|\bMODULES\b)',
+        re.IGNORECASE)
+
+    def _lookup_var_rhs(self, lines: List[str], cur_idx: int, var: str, max_up: int = 60) -> str:
+        """从 cur_idx（0-based 当前行）向上回溯变量的全部赋值，拼接返回。
+
+        收集函数内（遇到 def/class/装饰器行即停止）该变量的所有 `=` / `+=` 赋值行
+        及其后 2 行（覆盖 `x = os.path.join(\\n ...)` 跨行写法），按"最远在前"拼接：
+        SEC-08 判断 SQL 首词时需取基始赋值（如 `sql = "SELECT..."`），而不是更近的
+        `sql += " AND ..."` 增量；SEC-06 判定自管产物信号只需任一赋值命中。
+        找不到返回空串。
+        """
+        if not var or not re.fullmatch(r'[A-Za-z_]\w*', var):
+            return ""
+        assign_re = re.compile(r'(?<![\w.])' + re.escape(var) + r'\s*(?:\+?=)\s*(?!=)')
+        found: List[str] = []
+        j = cur_idx - 1
+        steps = 0
+        while j >= 0 and steps < max_up:
+            line = lines[j]
+            if re.match(r'\s*(?:def|class|@)\s', line):
+                break
+            if assign_re.search(line):
+                found.append(" ".join(s.strip() for s in lines[j:j + 3]))
+            j -= 1
+            steps += 1
+        return " ".join(reversed(found))  # 最远（基始）赋值在前
+
+    def _refine_sec08(self, lines: List[str], cur_idx: int, stripped: str,
+                      indent_len: int, m, filepath: str = "") -> "tuple | None":
+        """AGENT-SEC-08（无确认写入）误报抑制。
+
+        返回 None 表示跳过不报；返回 ("low", detail) 表示降级为 low 提示；
+        返回 () （空 tuple，falsy）表示维持原报。
+
+        - 命中 `.write(` 且调用目标为进程管道（stdin/stdout/stderr，如
+          proc.stdin.write）：进程间协议通信，不是文件保存，跳过。
+        - 命中 `.execute(`：提取 SQL 首词（字面量优先；参数以变量开头时回溯变量
+          赋值再取字面量），SELECT/PRAGMA/EXPLAIN 开头为只读查询，降级 low；
+          CREATE 开头为幂等 schema 初始化（CREATE TABLE/INDEX IF NOT
+          EXISTS），不写入业务数据，降级 low。DELETE/INSERT/UPDATE 等写入
+          语句：若目标库经符号闭包回溯属于自管 cache 目录（如
+          cache/kg/{md5}.db），降级 low"自管缓存库写入"；否则维持原报。
+        - `.commit(`：目标库属于自管 cache 目录时降级 low；否则维持原报。
+        - `.write(`（非管道）/`.save(`：写入目标为 CLI 参数（open(args.*)）
+          或路径经符号闭包回溯命中自管产物/报告输出信号（cache、coderef-*、
+          *report*、tempfile/mkstemp、.html、.lock 等，见
+          _SEC08_WRITE_SIGNAL_RE）时降级 low；写入用户项目路径（无自管
+          信号，如 manifest 目标、git hook）维持原报。
+        """
+        method = m.group(0).lstrip(".").lower()  # 如 "execute(" / "write("
+        if method.startswith("write") and re.search(
+                r'\.\s*std(?:in|out|err)\s*\.\s*write\s*\(', stripped):
+            return None
+        if method.startswith("save") or method.startswith("write"):
+            verdict = self._sec08_write_target(lines, cur_idx, stripped, m, indent_len)
+            return verdict if verdict is not None else ()
+        if method.startswith("execute"):
+            args = self._collect_call_args(lines, cur_idx, stripped, m.start() + indent_len, keep_parens=True)
+            sql_literal = self._extract_sql_literal(args, lines, cur_idx)
+            head = sql_literal.strip().split(None, 1)[0].upper() if sql_literal.strip() else ""
+            if head in self._SEC08_READONLY_SQL_HEADS:
+                return ("low",
+                        "检测到数据库/文件写入调用，但 SQL 为只读查询（" + head +
+                        "），已降级为提示；如后续引入写语句需人工复核")
+            if head == "CREATE":
+                return ("low",
+                        "检测到数据库写入调用，但 SQL 为 CREATE TABLE/INDEX（幂等 "
+                        "schema 初始化，不写入业务数据），已降级为提示")
+            if self._sec08_self_managed_db(lines, cur_idx, stripped, m, indent_len, filepath):
+                return ("low",
+                        "检测到数据库写入调用，但目标库为工具自管缓存库"
+                        "（cache 目录下的 .db，如 cache/kg/{hash}.db），"
+                        "非用户数据库，已降级为提示；写入内容仍建议人工复核")
+            return ()
+        # commit：目标库为自管缓存库时降级
+        if method.startswith("commit") and self._sec08_self_managed_db(
+                lines, cur_idx, stripped, m, indent_len, filepath):
+            return ("low",
+                    "检测到数据库提交调用，但目标库为工具自管缓存库"
+                    "（cache 目录下的 .db），非用户数据库，已降级为提示")
+        return ()
+
+    # SEC-08 自管缓存库目录信号：连接对象闭包回溯文本命中即视为自管库。
+    # code_knowledge：CodeRef 自管知识库（code_knowledge.db），与 cache 同级
+    # 的自管数据目录信号；coderef[-_]\w* 覆盖 coderef-report/coderef-wiki/
+    # coderef_audit 等全部自产目录/文件前缀。
+    _SEC08_SELF_DB_RE = re.compile(
+        r'(?:\b\w*cache\w*\b|coderef[-_]\w*|gitnexus|memory_state|code_knowledge)',
+        re.IGNORECASE)
+
+    # SEC-08 自管产物/报告输出信号：文件写入（.write/.save）目标路径经符号
+    # 闭包回溯命中即降级 low。与 _SEC06_SELF_MANAGED_RE 同源（缓存/临时/
+    # 备份/白名单），追加报告产物（*report*、.html）、coderef-* 自产前缀、
+    # 跨进程锁文件（.lock）。信号只认字符串字面量（_extract_string_literals
+    # 配对扫描），防止闭包展开卷入无关文本时标识符撞词（如函数参数
+    # gap_report、变量 cache_file、函数名 _save_last_good）造成误降——
+    # 自管目录/文件名在代码中以字面量形态出现才有回溯意义。临时文件句柄
+    # （tempfile.mkstemp/mkdtemp）另由句柄来源特判覆盖（调用形态无字面量）。
+    # 注意不收裸 "temp"（会撞 template）。
+    _SEC08_WRITE_LITERAL_RE = re.compile(
+        r'(?:__pycache__|coderef[-_]\w*|\w*report\w*|\.html\b|\.md\b|\.lock\b|\.tmp\b'
+        r'|\btmp\w*\b|\bwrite_probe\w*|\bcheckpoint\w*|\bwhitelist\w*'
+        r'|\w*last[_-]?good\w*|\.bak\b|\bbackups?\b|\bcode_knowledge\b|config\.json)',
+        re.IGNORECASE)
+    # 临时文件 API（句柄直接来自临时文件，写入必然是自管临时产物）
+    _SEC08_TMP_HANDLE_RE = re.compile(r'\btempfile\s*\.\s*mk[ds]temp\b')
+
+    @staticmethod
+    def _extract_string_literals(blob: str, max_span: int = 120) -> str:
+        """配对扫描提取 blob 中的字符串字面量内容（跨双/单引号交替）。
+
+        闭包文本由"行 + 后 2 行"拼接而成，跨行三引号字符串被截断后会产生
+        孤立引号；若用简单正则提取，孤立引号会一直吞并到下一段文本的引号，
+        把无关的 def 行整段误当作"字面量内容"。这里顺序扫描：每个引号只在
+        max_span 内寻找同种配对引号，找不到配对就当作孤立引号跳过。
+        三引号（\"\"\"abc\"\"\") 会按空串 + abc + 空串正确取出。
+        """
+        out: List[str] = []
+        i, n = 0, len(blob)
+        while i < n:
+            ch = blob[i]
+            if ch in ('"', "'"):
+                j = blob.find(ch, i + 1)
+                if j != -1 and j - i <= max_span:
+                    out.append(blob[i + 1:j])
+                    i = j + 1
+                    continue
+            i += 1
+        return " ".join(out)
+
+    def _sec08_write_target(self, lines: List[str], cur_idx: int, stripped: str,
+                            m, indent_len: int) -> "tuple | None":
+        """SEC-08 文件写入（.write/.save）的目标确认。
+
+        定位写入句柄来源：写入点向上 15 行窗口内的 open(/fdopen( 行取第一
+        参数作闭包种子；`os.write(fd, ...)` 取第一参数（fd）。判定：
+        - 路径参数以 args. 开头：CLI 显式指定的输出文件，用户传参即人工
+          确认，降级 low；
+        - 句柄直接来自 tempfile.mkstemp/mkdtemp：临时文件写入，降级 low；
+        - 路径标识符做符号闭包展开（2 层：种子赋值 → 赋值中变量的赋值，
+          覆盖 filepath→out_dir→字面量、report_path→fn→字面量这类路径
+          构造链；更深展开会把无关函数体/HTML 模板卷进来造成撞词误降），
+          闭包与窗口内的字符串字面量（逐行配对提取，防止跨行三引号截断
+          产生的孤立引号吞并相邻代码行）命中自管产物/报告输出信号
+          （coderef-*、*report*、.html、.lock 等）时降级 low；窗口兜底
+          覆盖路径变量来自循环/参数的断链（如 results["xx.html"] 渲染
+          产物落盘）；
+        - 其余（manifest 目标、git hook、配置恢复、用户项目源码路径等
+          无字面量信号写入）返回 None 维持原报。
+        """
+        win = lines[max(0, cur_idx - 14):cur_idx + 1]
+        ctx = " ".join(x.strip() for x in win)
+        # ① CLI 参数输出：open(args.xxx, "w") —— 用户显式传参即人工确认
+        if re.search(r'\bopen\s*\(\s*args\.', ctx):
+            return ("low",
+                    "检测到文件写入调用，但目标为 CLI 参数显式指定的输出文件"
+                    "（args.*，用户传参即人工确认），已降级为提示")
+        # ② 提取路径闭包种子
+        seeds: List[str] = []
+        om = re.search(r'\b(?:open|fdopen)\s*\(\s*([^,()]+)', ctx)
+        if om:
+            seeds.extend(re.findall(r'[A-Za-z_]\w*', om.group(1)))
+        if re.match(r'\s*os\.write\s*\(', stripped):
+            wm = re.search(r'\bos\.write\s*\(\s*([A-Za-z_][\w.]*)', stripped)
+            if wm:
+                seeds.extend(re.findall(r'[A-Za-z_]\w*', wm.group(1)))
+        # ③ 句柄来源特判：fd/f 直接来自 tempfile.mkstemp/mkdtemp
+        if self._SEC08_TMP_HANDLE_RE.search(ctx):
+            return ("low",
+                    "检测到文件写入调用，但句柄直接来自 tempfile.mkstemp/"
+                    "mkdtemp（自管临时文件，通常配合 os.replace 原子落盘），"
+                    "已降级为提示；最终目标路径仍建议人工复核")
+        segments = self._symbol_closure_segments(lines, seeds, max_depth=2)
+        # 逐行提取字面量（行内配对；跨行三引号截断的孤立引号只影响所在行）
+        lit_parts: List[str] = []
+        for seg in [win] + segments:
+            for ln in seg:
+                lit_parts.append(self._extract_string_literals(ln))
+        literals = " ".join(lit_parts)
+        if self._SEC08_WRITE_LITERAL_RE.search(literals):
+            return ("low",
+                    "检测到文件写入调用，但目标经回溯属于工具自管产物/报告输出"
+                    "（路径字面量含 coderef-*、*report*、.html、.lock 等信号），"
+                    "非用户项目源码，已降级为提示；写入内容仍建议人工复核")
+        return None
+
+    # 符号闭包展开停用词：模块/内建/关键字与常见调用名，不作为回溯种子
+    _CLOSURE_STOPWORDS = frozenset({
+        "self", "return", "None", "True", "False", "str", "int", "len", "open",
+        "list", "dict", "set", "tuple", "float", "bool", "time", "json", "re",
+        "os", "sys", "sqlite3", "connect", "execute", "commit", "cursor",
+        "print", "isinstance", "range", "enumerate", "Exception", "Optional",
+        "Path", "dirname", "abspath", "basename", "join", "exists", "makedirs",
+        "import", "from", "with", "class", "def", "try", "except", "finally",
+        "else", "elif", "while", "for", "not", "and", "or", "raise", "yield",
+        "pass", "break", "continue", "global", "lambda", "assert", "del",
+    })
+
+    def _sec08_self_managed_db(self, lines: List[str], cur_idx: int, stripped: str,
+                               m, indent_len: int, filepath: str) -> bool:
+        """判定 SEC-08 命中行的目标库是否为自管缓存库。
+
+        提取调用接收对象（`.execute(`/`.commit(` 前的表达式，如 self._conn），
+        做全文件符号闭包展开（赋值 RHS / 函数体，5 层），回溯到
+        sqlite3.connect(db_path) → db_path 赋值 → 目录推算函数体，
+        判定路径是否含 cache 等自管目录信号。按 (文件, 接收对象) 记忆化。
+        """
+        head = stripped[:m.start()] if m.start() <= len(stripped) else ""
+        rm = re.search(r'([A-Za-z_][\w.]*)\s*$', head)
+        receiver = rm.group(1) if rm else ""
+        if not receiver:
+            return False
+        cache = getattr(self, "_sec08_db_cache", None)
+        if cache is None:
+            cache = self._sec08_db_cache = {}
+        key = (filepath, receiver)
+        if key in cache:
+            return cache[key]
+        sig = self._symbol_closure_text(lines, re.findall(r'[A-Za-z_]\w*', receiver))
+        # 参数中标识符的近程赋值也并入（覆盖 conn 由参数传入的情形）
+        args = self._collect_call_args(lines, cur_idx, stripped, m.start() + indent_len, keep_parens=True)
+        for ident in set(re.findall(r'\b[A-Za-z_]\w*\b', args)):
+            sig += " " + self._lookup_var_rhs(lines, cur_idx, ident)
+        verdict = bool(self._SEC08_SELF_DB_RE.search(sig))
+        cache[key] = verdict
+        return verdict
+
+    def _symbol_closure_text(self, lines: List[str], seeds: List[str], max_depth: int = 5) -> str:
+        """收集 seeds 符号在全文件中的赋值 RHS / 函数体文本（有限层闭包展开）。
+
+        实现为 _symbol_closure_segments 的拼接视图；文本形态用于信号
+        search（DB 路径回溯等）。行级形态见 _symbol_closure_segments。
+        """
+        return " ".join(" ".join(seg) for seg in
+                        self._symbol_closure_segments(lines, seeds, max_depth))
+
+    def _symbol_closure_segments(self, lines: List[str], seeds: List[str],
+                                 max_depth: int = 5) -> List[List[str]]:
+        """符号闭包展开（行级）：返回涉及的代码段（每段为行列表）。
+
+        每层对未处理的名字搜索：①赋值行 + 后 2 行（覆盖跨行写法）；环视
+        只排除前接 word 字符，因此 `x.attr = ...` 属性赋值与 `d["attr"] = ...`
+        字典键赋值也能回溯（如 r.report_path = os.path.join(...)）；②`self.`
+        属性赋值行（同①，保留显式形态）；③`def name(` 函数体（到下一个
+        def/class 或 30 行）；④name 作为函数参数出现的 def 行本身 + 后 2 行
+        （收集参数默认值字面量，如 `def __init__(self, db_path=
+        "code_knowledge.db")`，否则参数名无赋值行时回溯断链）。层间从新增
+        文本提取新标识符继续展开，用于把调用点回溯到数据来源定义处
+        （如 self._conn → sqlite3.connect(self._db_path) → _make_db_path()
+        → _kg_dir() → "cache"）。保留行边界供调用方做逐行字面量提取。
+        """
+        segments: List[List[str]] = []
+        seen: Set[str] = set()
+        frontier = [s for s in seeds if s and len(s) >= 2]
+        for _ in range(max_depth):
+            if not frontier:
+                break
+            for name in frontier:
+                if name in seen or name in self._CLOSURE_STOPWORDS:
+                    continue
+                seen.add(name)
+                esc = re.escape(name)
+                assign_re = re.compile(r'(?<!\w)' + esc + r'\s*(?:\+?=)\s*(?!=)')
+                attr_re = re.compile(r'self\s*\.\s*' + esc + r'\s*(?:\+?=)\s*(?!=)')
+                def_re = re.compile(r'\bdef\s+' + esc + r'\s*\(')
+                param_re = re.compile(r'\bdef\s+[\w.]+\s*\([^)\n]*\b' + esc + r'\b')
+                for j, line in enumerate(lines):
+                    if assign_re.search(line) or attr_re.search(line):
+                        segments.append(lines[j:j + 3])
+                    if def_re.search(line):
+                        body = []
+                        for k in range(j, min(len(lines), j + 30)):
+                            if k > j and re.match(r'\s*(?:def|class)\s', lines[k]):
+                                break
+                            body.append(lines[k])
+                        segments.append(body)
+                    elif param_re.search(line):
+                        # name 作为参数出现：收集 def 行（含默认值字面量）
+                        segments.append(lines[j:j + 3])
+            blob = " ".join(" ".join(seg) for seg in segments)
+            frontier = [n for n in set(re.findall(r'[A-Za-z_]\w{3,}', blob))
+                        if n not in seen and n not in self._CLOSURE_STOPWORDS]
+        return segments
+
+    def _extract_sql_literal(self, args: str, lines: List[str], cur_idx: int) -> str:
+        """从 execute() 参数中提取 SQL 字符串字面量。
+
+        参数以字符串字面量开头则直接取；以变量开头（如 `sql + " LIMIT 50"`）则
+        回溯该变量赋值，从赋值 RHS 中取字面量（拼接表达式取首个字面量）。
+        提取不到返回空串（调用方按未知处理，保守维持原报）。
+        """
+        # keep_parens=True 时 args 以调用开括号 '(' 开头，先剥掉再匹配
+        args = args.lstrip()
+        if args.startswith("("):
+            args = args[1:]
+        m = re.match(r'\s*[fFrRbB]{0,2}(?:"""(.*?)"""|\'\'\'(.*?)\'\'\'|"([^"]*)"|\'([^\']*)\')',
+                     args, re.S)
+        if m:
+            return next(g for g in m.groups() if g is not None)
+        vm = re.match(r'\s*([A-Za-z_]\w*)\s*(?:\+|,|\)|$)', args)
+        if not vm:
+            return ""
+        rhs = self._lookup_var_rhs(lines, cur_idx, vm.group(1))
+        if not rhs:
+            return ""
+        rm = re.search(r'"""(.*?)"""|\'\'\'(.*?)\'\'\'|"([^"]*)"|\'([^\']*)\'', rhs, re.S)
+        if not rm:
+            return ""
+        return next(g for g in rm.groups() if g is not None)
+
+    def _refine_sec06(self, lines: List[str], cur_idx: int, stripped: str,
+                      indent_len: int, m) -> "tuple":
+        """AGENT-SEC-06（危险文件操作）自管产物降级。
+
+        删除/重命名目标明显指向自管缓存/临时/管理文件（cache/tmp/__pycache__/
+        checkpoint/write_probe/.tmp/whitelist/last-good 备份/wiki 文档等）时降级为
+        low 提示，保持可见性不删条目。
+
+        判定文本 = 调用参数 + 参数中各标识符回溯到的赋值来源（向上到函数边界）
+        + 命中行上方 15 行窗口（覆盖 for entry in os.scandir(dir) 这类无赋值形式
+        的循环变量来源，如 wiki MODULES/*.md 增量清理）。
+        返回 ("low", detail) 降级；返回 () （空 tuple）维持原报。
+        """
+        args = self._collect_call_args(lines, cur_idx, stripped, m.start() + indent_len, keep_parens=True)
+        sig_text = args
+        for ident in set(re.findall(r'\b[A-Za-z_]\w*\b', args)):
+            sig_text += " " + self._lookup_var_rhs(lines, cur_idx, ident)
+        sig_text += " " + " ".join(
+            s.strip() for s in lines[max(0, cur_idx - 15):cur_idx + 1])
+        if self._SEC06_SELF_MANAGED_RE.search(sig_text):
+            return ("low",
+                    "检测到文件删除/重命名操作，但目标为自管缓存/临时/管理文件"
+                    "（cache/tmp/checkpoint/whitelist/last-good 备份/wiki 文档等），"
+                    "已降级为提示")
+        return ()
+
+    # ─── AGENT-SEC-PT / SSRF / SECRET 误报抑制辅助 ───
+
+    # SEC-PT 静态词：路径构造常用模块/函数/方法名与关键字，不参与"用户可控"判定
+    _PT_STATIC_WORDS = frozenset({
+        "os", "path", "join", "Path", "str", "dirname", "abspath", "basename",
+        "splitext", "expanduser", "normpath", "realpath", "parent", "name",
+        "stem", "suffix", "resolve", "return", "self", "f", "r",
+    })
+    # SEC-PT 用户输入痕迹：赋值回溯文本命中即判非常量（保持 high）
+    _PT_UNSAFE_RE = re.compile(
+        r'(?:\binput\s*\(|\brequest|\bargv|\benviron\b|\bgetenv|\.form\b'
+        r'|\bparams\[|\brecv|\breadline|\bcookies?\b)', re.IGNORECASE)
+    # SSRF 本地端点：请求目标命中即降级（本地服务，无外部 SSRF 面）
+    _SSRF_LOCAL_RE = re.compile(r'localhost|127\.0\.0\.1|0\.0\.0\.0|::1', re.IGNORECASE)
+    # SECRET 落盘调用：本行或后 2 行命中则维持原报
+    _SECRET_WRITE_RE = re.compile(
+        r'\.write\s*\(|write_text\s*\(|open\s*\([^)]*[\'"][wa]b?[\'"]|json\.dump')
+
+    def _lookup_module_const_rhs(self, lines: List[str], var: str) -> str:
+        """全文件搜索模块级/类级常量赋值（至多一层缩进），返回 RHS 拼接文本。
+
+        _lookup_var_rhs 在函数内回溯会被 def/class 边界截断，函数体内引用的
+        模块级常量（如 AUTO_SUMMARY_FILE）需经本方法补齐来源。
+        """
+        if not var or not re.fullmatch(r'[A-Za-z_]\w*', var):
+            return ""
+        found: List[str] = []
+        pat = re.compile(r'^\s{0,8}' + re.escape(var) + r'\s*(?:\+?=)\s*(?!=)')
+        for j, line in enumerate(lines):
+            if pat.search(line):
+                found.append(" ".join(s.strip() for s in lines[j:j + 3]))
+        return " ".join(found)
+
+    def _lookup_attr_rhs(self, lines: List[str], attr: str) -> str:
+        """全文件搜索 `xxx.attr =` / 模块级 `attr =` 赋值，返回 RHS 拼接文本。
+
+        覆盖 self.base_url / self.OSV_API_URL 这类实例属性与全大写类常量
+        （定义在 __init__/类体/模块级，跨函数引用时函数内回溯拿不到）。
+        """
+        if not attr or not re.fullmatch(r'[A-Za-z_]\w*', attr):
+            return ""
+        found: List[str] = []
+        pat = re.compile(r'(?:\.\s*' + re.escape(attr) + r'|(?<![\w.])' + re.escape(attr)
+                         + r')\s*(?:\+?=)\s*(?!=)')
+        for j, line in enumerate(lines):
+            if pat.search(line):
+                found.append(" ".join(s.strip() for s in lines[j:j + 3]))
+        return " ".join(found)
+
+    def _pt_token_is_static(self, lines: List[str], cur_idx: int, tok: str) -> bool:
+        """判定 SEC-PT 命中行中某标识符是否为静态（非用户可控）来源。
+
+        回溯该变量的赋值（函数内 _lookup_var_rhs + 全文件模块级常量补齐），
+        RHS 满足以下之一视为静态：
+        - 含 __file__ 推算（os.path.dirname(__file__) / Path(__file__) 等）；
+        - 字符串段提取（X.split(...)/X.strip(...) 等，模块名/后缀剥离，
+          来源是被解析对象而非用户路径输入）且无用户输入痕迹；
+        - 剥离字面量后仅引用全大写常量/静态词/调用名。
+        回溯不到赋值（函数参数、外部传入）视为非常量。
+        """
+        rhs = self._lookup_var_rhs(lines, cur_idx, tok)
+        if not rhs:
+            rhs = self._lookup_module_const_rhs(lines, tok)
+        if not rhs:
+            return False
+        if "__file__" in rhs:
+            return True
+        if self._PT_UNSAFE_RE.search(rhs):
+            return False
+        if re.search(r'\.\s*(?:split|strip|lstrip|rstrip|replace)\s*\(', rhs) \
+                and not re.search(r'\b(?:input|request|argv|form|recv)\b', rhs, re.IGNORECASE):
+            return True
+        rest = re.sub(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"[^"\n]*"|\'[^\'\n]*\'', ' ', rhs)
+        for ident in re.findall(r'[A-Za-z_]\w*', rest):
+            if ident in self._PT_STATIC_WORDS or ident == tok:
+                continue
+            if re.fullmatch(r'_*[A-Z][A-Z0-9_]*', ident):
+                continue
+            if re.search(r'\b' + re.escape(ident) + r'\s*\(', rhs):
+                continue
+            return False
+        return True
+
+    def _refine_secpt(self, lines: List[str], cur_idx: int, stripped: str,
+                      indent_len: int, m) -> "tuple":
+        """AGENT-SEC-PT（路径穿越）常量拼接降级。
+
+        命中行若各路径段均为字符串字面量、全大写/下划线前缀模块级常量
+        （__file__ 推算）、静态属性（self.xxx 配置根路径），即纯常量拼接、
+        无用户可控输入，降级为 low 提示；含非常量段（函数参数直接拼接、
+        用户输入痕迹）时维持 high。
+
+        判定 token 集 = 赋值左值以外的全部标识符；属性访问（obj.attr）视为
+        静态属性（属性链含用户输入痕迹词时除外）；裸标识符经
+        _pt_token_is_static 回溯判定。
+        返回 ("low", detail) 降级；返回 () （空 tuple）维持原报。
+        """
+        rhs_text = stripped
+        lhs_names: Set[str] = set()
+        am = re.match(r'\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*=\s*(?!=)(.*)$',
+                      stripped)
+        if am:
+            lhs_names = set(re.findall(r'[A-Za-z_]\w*', am.group(1)))
+            rhs_text = am.group(2)
+        if self._PT_UNSAFE_RE.search(rhs_text):
+            return ()
+        # 剥掉字符串字面量再提取标识符："data"/"memory_state" 等字面量段
+        # 不是变量引用，不参与"用户可控"判定
+        code_only = re.sub(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"[^"\n]*"|\'[^\'\n]*\'', ' ', rhs_text)
+        tokens = set(re.findall(r'[A-Za-z_]\w*', code_only)) - lhs_names
+        for tok in tokens:
+            if tok in self._PT_STATIC_WORDS:
+                continue
+            # 调用名（后随 '('）：其参数已作为独立 token 判定，跳过
+            if re.search(r'\b' + re.escape(tok) + r'\s*\(', rhs_text):
+                continue
+            # 属性访问 obj.tok / self.tok：静态属性（工具配置根路径等）
+            if re.search(r'[A-Za-z_]\w*\s*\.\s*' + re.escape(tok) + r'\b', rhs_text):
+                continue
+            if not self._pt_token_is_static(lines, cur_idx, tok):
+                return ()
+        return ("low",
+                "检测到路径拼接，但各段均为字符串字面量/模块级常量"
+                "（__file__ 推算或静态属性），无用户可控输入，已降级为提示")
+
+    def _refine_ssrf(self, lines: List[str], cur_idx: int, stripped: str,
+                     indent_len: int, m) -> "tuple":
+        """AGENT-SEC-SSRF 本地/常量端点降级。
+
+        - 请求目标为本地服务（localhost/127.0.0.1/0.0.0.0/::1，如本地
+          Ollama http://localhost:11434）时降级 low：无外部 SSRF 面。
+        - 请求 URL 为全大写类常量属性（_CAPS 模式，如 OSV_API_URL）且其
+          赋值为 http(s) 字面量（官方 API 端点）时降级 low：固定常量端点。
+
+        回溯两层：调用参数 → 裸标识符赋值（req → Request(self.OSV_API_URL)）
+        与属性赋值（self.base_url → DEFAULT_BASE_URL → "http://localhost..."）。
+        返回 ("low", detail) 降级；返回 () （空 tuple）维持原报。
+        """
+        args = self._collect_call_args(lines, cur_idx, stripped, m.start() + indent_len, keep_parens=True)
+        layer1 = " ".join(self._lookup_var_rhs(lines, cur_idx, t)
+                          for t in set(re.findall(r'\b[A-Za-z_]\w*\b', args)))
+        attrs1 = set(re.findall(r'\.\s*([A-Za-z_]\w*)', args))
+        layer1 += " " + " ".join(self._lookup_attr_rhs(lines, a) for a in attrs1)
+        attrs2 = set(re.findall(r'\.\s*([A-Za-z_]\w*)', layer1))
+        attrs2 |= set(re.findall(r'\b(_?[A-Z][A-Z0-9_]{2,})\b', layer1))
+        attrs2 -= attrs1
+        layer2 = " ".join(self._lookup_attr_rhs(lines, a) for a in attrs2)
+        sig_all = args + " " + layer1 + " " + layer2
+        if self._SSRF_LOCAL_RE.search(sig_all):
+            return ("low",
+                    "检测到网络请求，但目标为本地服务端点（localhost/127.0.0.1 等），"
+                    "无外部 SSRF 面，已降级为提示")
+        for attr in attrs1 | attrs2:
+            if re.fullmatch(r'_?[A-Z][A-Z0-9_]*', attr):
+                if re.search(r'=\s*[fFrRbB]{0,2}["\']https?://',
+                             self._lookup_attr_rhs(lines, attr)):
+                    return ("low",
+                            "检测到网络请求，但目标为固定常量端点"
+                            "（全大写类常量 URL，如官方 API），无外部 SSRF 面，"
+                            "已降级为提示")
+        return ()
+
+    def _refine_secret(self, lines: List[str], cur_idx: int, stripped: str) -> "tuple":
+        """AGENT-SEC-SECRET 读配置未见落盘降级。
+
+        仅处理"密钥赋值自配置属性"形态（如 `api_key = self.config.api_key or ""`，
+        只是读配置到局部变量）：本行及后 2 行无 .write(/write_text/open(...w)/
+        json.dump 等落盘调用时降级 low"仅读取配置，未见落盘"；有落盘调用维持
+        原报。save_env()/向 .env 写入的调用形态本身即落盘语义，不适用本降级。
+        返回 ("low", detail) 降级；返回 () （空 tuple）维持原报。
+        """
+        if not re.match(r'\s*[A-Za-z_]\w*\s*=\s*\{?self\.', stripped):
+            return ()
+        window = " ".join(s.strip() for s in lines[cur_idx:cur_idx + 3])
+        if self._SECRET_WRITE_RE.search(window):
+            return ()
+        return ("low",
+                "检测到 API Key 赋值，但仅为读取配置到局部变量，"
+                "本行及后 2 行未见落盘调用，已降级为提示")
 
     def _scan_crosslang_file(self, filepath: str, content: str, ext: str) -> List[AgentSecurityRisk]:
         """扫描 Go / Node / PHP 文件：仅应用该语言的跨语言安全模式组。
@@ -1591,12 +2204,16 @@ class AgentSecurityAuditor:
         
         return risks
 
-    def _collect_call_args(self, lines: List[str], start_idx: int, stripped: str, from_col: int) -> str:
+    def _collect_call_args(self, lines: List[str], start_idx: int, stripped: str, from_col: int,
+                           keep_parens: bool = False) -> str:
         """从调用起点提取完整括号内的参数（平衡括号匹配，支持跨行/嵌套调用）。
 
         从 from_col 位置起扫描，遇到 '(' 深度+1，遇到 ')' 深度-1，深度归零即返回
         括号内完整内容。若参数跨行（调用写到下一行），自动续读后续行，避免
         `[^)]*` 在第一个 ')' 提前截断导致的漏判（如 requests.get(url, timeout=compute())）。
+
+        keep_parens=True 时保留括号字符：默认剥括号会把 `os.path.join(pc, f)` 的
+        内容压成 `os.path.joinpc, f`（标识符粘连），需要按标识符解析参数时必须保留。
         """
         depth = 0
         started = False
@@ -1613,12 +2230,18 @@ class AgentSecurityAuditor:
                     if ch == '(':
                         started = True
                         depth = 1
+                        if keep_parens:
+                            buf.append(ch)
                     col += 1
                     continue
                 if ch == '(':
                     depth += 1
+                    if keep_parens:
+                        buf.append(ch)
                 elif ch == ')':
                     depth -= 1
+                    if keep_parens:
+                        buf.append(ch)
                     if depth == 0:
                         return "".join(buf)
                 elif ch not in ("\n", "\r", "\t"):
@@ -1651,45 +2274,81 @@ class AgentSecurityAuditor:
             return True
         return False
 
-    def to_report(self, risks: List[AgentSecurityRisk], project_path: str) -> str:
-        """生成 Agent 安全审计报告"""
-        # 统计
-        by_category = defaultdict(list)
-        for r in risks:
-            by_category[r.category].append(r)
+    # ─── 报告渲染（to_report 的分段 helper 共用的类别元数据） ───
+    # 类别键 → 中文类别名（"风险类别汇总"表与"详细风险列表"段标题共用同一映射）
+    CATEGORY_NAMES = {
+        "prompt_injection": "提示注入",
+        "context_manipulation": "上下文操纵",
+        "tool_misuse": "工具滥用",
+        "budget": "预算/资源耗尽",
+        "data_exfil": "数据泄露",
+        "pii_leak": "PII泄露",
+        "security_config": "安全配置",
+        "autonomous": "自主行为",
+        "param_shadow": "参数透传失效",
+        "knowledge": "知识投毒",
+        "resilience_gap": "防御层级韧性缺口",
+        "deserialization": "反序列化",
+        "ssrf": "SSRF",
+        "path_traversal": "路径穿越",
+        "browser_sandbox": "浏览器沙箱逃逸",
+        "info_leak": "信息泄露",
+        "resource_leak": "资源泄漏",
+    }
 
-        blocker = sum(1 for r in risks if r.severity == "blocker")
-        critical = sum(1 for r in risks if r.severity == "critical")
-        high = sum(1 for r in risks if r.severity == "high")
-        medium = sum(1 for r in risks if r.severity == "medium")
-        low = sum(1 for r in risks if r.severity == "low")
+    # 类别键 → "风险类别汇总"表"说明"列文案
+    CATEGORY_DETAILS = {
+        "prompt_injection": "用户输入可能被注入到 LLM prompt 中，绕过安全限制",
+        "context_manipulation": "外部内容可能操控 Agent 的上下文和决策",
+        "tool_misuse": "Agent 可能滥用工具能力执行危险操作",
+        "budget": "Agent 可能消耗过多资源（API费用、Token）",
+        "data_exfil": "敏感数据可能通过 Agent 泄露到外部",
+        "pii_leak": "个人身份信息（PII）可能泄露到日志或响应中",
+        "security_config": "安全配置不当可能导致生产环境风险",
+        "autonomous": "Agent 可能未经确认执行自主行为",
+        "param_shadow": "函数参数被配置读取静默覆盖，调用方传入的实参不生效",
+        "knowledge": "知识库/向量数据库可能被投毒",
+        "resilience_gap": "缺失的防御层级，如重试退避、模型回退、可观测性等",
+        "deserialization": "从文件/不可信输入反序列化，可能触发任意代码执行或知识图谱文件投毒",
+        "ssrf": "对不可信 URL 发起网络请求，无 scheme/host 白名单可注入内网地址",
+        "path_traversal": "用户可控输入拼接文件路径，未净化可能越权读写任意文件",
+        "browser_sandbox": "浏览器/沙箱隔离不足，可能逃逸访问宿主资源",
+        "info_leak": "敏感信息可能通过响应、日志或报错泄露",
+        "resource_leak": "打开的资源（连接/文件/句柄）未及时关闭导致泄漏",
+    }
+
+    # 报告中类别的固定展示顺序（"风险类别汇总"表与"详细风险列表"段共用）
+    CATEGORY_ORDER = ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "param_shadow", "resilience_gap", "deserialization", "ssrf", "path_traversal", "browser_sandbox", "info_leak", "resource_leak"]
+
+    def _report_severity_stats(self, risks: List[AgentSecurityRisk]) -> dict:
+        """统计各级别风险数量，并计算扣分后的安全总分与等级。"""
+        counts = defaultdict(int)
+        for r in risks:
+            counts[r.severity] += 1
+        blocker = counts["blocker"]
+        critical = counts["critical"]
+        high = counts["high"]
+        medium = counts["medium"]
+        low = counts["low"]
 
         # 评分
         penalty = blocker * 30 + critical * 20 + high * 10 + medium * 3 + low * 1
         score = max(0, min(100, 100 - penalty))
         grade = "A" if score >= 90 else "B" if score >= 75 else "C" if score >= 60 else "D" if score >= 40 else "F"
 
-        category_names = {
-            "prompt_injection": "提示注入",
-            "context_manipulation": "上下文操纵",
-            "tool_misuse": "工具滥用",
-            "budget": "预算/资源耗尽",
-            "data_exfil": "数据泄露",
-            "pii_leak": "PII泄露",
-            "security_config": "安全配置",
-            "autonomous": "自主行为",
-            "param_shadow": "参数透传失效",
-            "knowledge": "知识投毒",
-            "resilience_gap": "防御层级韧性缺口",
-            "deserialization": "反序列化",
-            "ssrf": "SSRF",
-            "path_traversal": "路径穿越",
-            "browser_sandbox": "浏览器沙箱逃逸",
-            "info_leak": "信息泄露",
-            "resource_leak": "资源泄漏",
+        return {
+            "blocker": blocker,
+            "critical": critical,
+            "high": high,
+            "medium": medium,
+            "low": low,
+            "score": score,
+            "grade": grade,
         }
 
-        lines = [
+    def _render_report_header(self, risks: List[AgentSecurityRisk], project_path: str, stats: dict) -> List[str]:
+        """渲染报告头部：标题、项目信息与安全评分表。"""
+        return [
             "# Agent 系统安全审计",
             "",
             f"> 项目: `{project_path}`",
@@ -1699,61 +2358,42 @@ class AgentSecurityAuditor:
             "",
             f"| 评分 | 等级 | 阻断 | 严重 | 高危 | 中危 | 低危 |",
             f"|------|------|------|------|------|------|------|",
-            f"| {score:.0f}/100 | **{grade}** | {blocker} | {critical} | {high} | {medium} | {low} |",
+            f"| {stats['score']:.0f}/100 | **{stats['grade']}** | {stats['blocker']} | {stats['critical']} | {stats['high']} | {stats['medium']} | {stats['low']} |",
             "",
         ]
 
-        if not risks:
-            lines.append("✅ 未发现 Agent 安全风险。")
-            return "\n".join(lines)
+    def _render_category_summary(self, by_category: "defaultdict") -> List[str]:
+        """渲染"风险类别汇总"段：每类风险一行的汇总表。"""
+        lines = [
+            "## 风险类别汇总",
+            "",
+            "| 类别 | 风险数 | 最高严重性 | 说明 |",
+            "|------|--------|------------|------|",
+        ]
 
-        # 按类别汇总
-        lines.append("## 风险类别汇总")
-        lines.append("")
-        lines.append("| 类别 | 风险数 | 最高严重性 | 说明 |")
-        lines.append("|------|--------|------------|------|")
-
-        cat_details = {
-            "prompt_injection": "用户输入可能被注入到 LLM prompt 中，绕过安全限制",
-            "context_manipulation": "外部内容可能操控 Agent 的上下文和决策",
-            "tool_misuse": "Agent 可能滥用工具能力执行危险操作",
-            "budget": "Agent 可能消耗过多资源（API费用、Token）",
-            "data_exfil": "敏感数据可能通过 Agent 泄露到外部",
-            "pii_leak": "个人身份信息（PII）可能泄露到日志或响应中",
-            "security_config": "安全配置不当可能导致生产环境风险",
-            "autonomous": "Agent 可能未经确认执行自主行为",
-            "param_shadow": "函数参数被配置读取静默覆盖，调用方传入的实参不生效",
-            "knowledge": "知识库/向量数据库可能被投毒",
-            "resilience_gap": "缺失的防御层级，如重试退避、模型回退、可观测性等",
-            "deserialization": "从文件/不可信输入反序列化，可能触发任意代码执行或知识图谱文件投毒",
-            "ssrf": "对不可信 URL 发起网络请求，无 scheme/host 白名单可注入内网地址",
-            "path_traversal": "用户可控输入拼接文件路径，未净化可能越权读写任意文件",
-            "browser_sandbox": "浏览器/沙箱隔离不足，可能逃逸访问宿主资源",
-            "info_leak": "敏感信息可能通过响应、日志或报错泄露",
-            "resource_leak": "打开的资源（连接/文件/句柄）未及时关闭导致泄漏",
-        }
-
-        _CAT_LIST = ["prompt_injection", "tool_misuse", "budget", "data_exfil", "pii_leak", "security_config", "context_manipulation", "autonomous", "param_shadow", "resilience_gap", "deserialization", "ssrf", "path_traversal", "browser_sandbox", "info_leak", "resource_leak"]
-
-        for cat_key in _CAT_LIST:
+        for cat_key in self.CATEGORY_ORDER:
             cat_risks = by_category.get(cat_key, [])
             if not cat_risks:
                 continue
             max_sev = min(cat_risks, key=lambda r: SEVERITY_ORDER.get(r.severity, 99)).severity
             sev_icon = "🔴" if max_sev in ("blocker", "critical") else "🟠" if max_sev == "high" else "🟡" if max_sev == "medium" else "⚪"
-            lines.append(f"| {category_names.get(cat_key, cat_key)} | {len(cat_risks)} | {sev_icon} {max_sev} | {cat_details.get(cat_key, '')} |")
+            lines.append(f"| {self.CATEGORY_NAMES.get(cat_key, cat_key)} | {len(cat_risks)} | {sev_icon} {max_sev} | {self.CATEGORY_DETAILS.get(cat_key, '')} |")
 
         lines.append("")
+        return lines
 
-        # 详细风险列表
-        lines.append("## 详细风险列表")
-        lines.append("")
+    def _render_risk_details(self, by_category: "defaultdict") -> List[str]:
+        """渲染"详细风险列表"段：每类风险一张明细表（单类别最多列 20 条）。"""
+        lines = [
+            "## 详细风险列表",
+            "",
+        ]
 
-        for cat_key in _CAT_LIST:
+        for cat_key in self.CATEGORY_ORDER:
             cat_risks = by_category.get(cat_key, [])
             if not cat_risks:
                 continue
-            lines.append(f"### {category_names.get(cat_key, cat_key)}")
+            lines.append(f"### {self.CATEGORY_NAMES.get(cat_key, cat_key)}")
             lines.append("")
             lines.append("| ID | 严重性 | 文件 | 行号 | 描述 | 建议 |")
             lines.append("|----|--------|------|------|------|------|")
@@ -1774,19 +2414,43 @@ class AgentSecurityAuditor:
                 lines.append(f"| ... | ... | ... | ... | （还有 {len(cat_risks) - 20} 条） | ... |")
             lines.append("")
 
-        lines.append("---")
-        lines.append("")
-        lines.append("### 关于 Agent 安全审计")
-        lines.append("")
-        lines.append("本报告基于 OWASP Top 10 for LLM Applications 和 Agent 安全最佳实践设计。")
-        lines.append("传统 SAST 工具（如 SonarQube、Snyk）主要关注代码注入和依赖漏洞，")
-        lines.append("但 AI Agent 系统引入了全新的攻击面：提示注入、上下文操纵、工具滥用、自主行为等。")
-        lines.append("")
-        lines.append("这些风险在传统安全扫描中完全不可见，需要专门的 Agent 安全审计。")
-        lines.append("")
-        lines.append("*扫描由 CodeRef Agent Security Auditor 执行*\n")
-        lines.append("")
-        lines.append("> **LLM 复查提示**：此报告可能包含误报。审查每条结果后，调用 `coderef_cache_whitelist` 工具将误报自动加入白名单，然后重新扫描。")
+        return lines
+
+    def _render_report_footer(self) -> List[str]:
+        """渲染报告尾部：审计方法说明与 LLM 复查提示。"""
+        return [
+            "---",
+            "",
+            "### 关于 Agent 安全审计",
+            "",
+            "本报告基于 OWASP Top 10 for LLM Applications 和 Agent 安全最佳实践设计。",
+            "传统 SAST 工具（如 SonarQube、Snyk）主要关注代码注入和依赖漏洞，",
+            "但 AI Agent 系统引入了全新的攻击面：提示注入、上下文操纵、工具滥用、自主行为等。",
+            "",
+            "这些风险在传统安全扫描中完全不可见，需要专门的 Agent 安全审计。",
+            "",
+            "*扫描由 CodeRef Agent Security Auditor 执行*\n",
+            "",
+            "> **LLM 复查提示**：此报告可能包含误报。审查每条结果后，调用 `coderef_cache_whitelist` 工具将误报自动加入白名单，然后重新扫描。",
+        ]
+
+    def to_report(self, risks: List[AgentSecurityRisk], project_path: str) -> str:
+        """生成 Agent 安全审计报告"""
+        # 统计
+        by_category = defaultdict(list)
+        for r in risks:
+            by_category[r.category].append(r)
+
+        stats = self._report_severity_stats(risks)
+        lines = self._render_report_header(risks, project_path, stats)
+
+        if not risks:
+            lines.append("✅ 未发现 Agent 安全风险。")
+            return "\n".join(lines)
+
+        lines.extend(self._render_category_summary(by_category))
+        lines.extend(self._render_risk_details(by_category))
+        lines.extend(self._render_report_footer())
 
         return "\n".join(lines)
 

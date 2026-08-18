@@ -248,6 +248,7 @@ class _InterProcessLock:
                 elif _fcntl is not None:
                     _fcntl.flock(self._fd, _fcntl.LOCK_UN)
         except OSError:
+            # 解锁失败也继续关闭句柄
             pass
         finally:
             os.close(self._fd)
@@ -349,6 +350,7 @@ def _write_atomic(path: str, data: str) -> bool:
         try:
             os.remove(tmp)
         except FileNotFoundError:
+            # replace 成功后 tmp 已不存在，属预期情况，无需处理
             pass
         except OSError as e:
             logger.warning(f"[OperationMemory] 清理临时文件失败 {tmp}: {e}")
@@ -401,6 +403,7 @@ def _walk_files(root: str) -> List[str]:
             try:
                 files.append(os.path.join(dirpath, fn))
             except Exception:
+                # join 不会实际抛异常，保持防御性包裹
                 pass
     return files
 
@@ -604,12 +607,14 @@ def _find_tool_executable(tool: str, bin_name: str) -> str:
         if p:
             return os.path.abspath(p)
     except Exception:
+        # PATH 探测失败时继续尝试便携根
         pass
     # 2. 常见便携根探测（支持 glob 通配）
     for root_pat in ENV_TOOL_ROOTS:
         try:
             roots = glob.glob(os.path.expanduser(root_pat))
         except Exception:
+            # glob 模式异常时跳过该根
             continue
         for root in roots:
             if not os.path.isdir(root):
@@ -644,6 +649,7 @@ def _locate_wsl_launcher() -> str:
         if p:
             return os.path.abspath(p)
     except Exception:
+        # PATH 探测失败时回退 System32 默认路径
         pass
     system32 = os.path.join(os.environ.get("SystemRoot", "C:/Windows"),
                             "System32", "wsl.exe")
@@ -674,6 +680,7 @@ def _find_wsl_tool(bin_name: str) -> str:
             if out:
                 return out
         except Exception:
+            # WSL 不可用时返回空，调用方降级
             pass
     return ""
 
@@ -1028,7 +1035,9 @@ class OperationMemory:
         try:
             with open(p, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
+        except Exception as e:
+            # 知识源不可读时返回 None
+            logger.warning(f"读取知识源失败，跳过 {p}: {e}")
             return None
 
     def _collect_knowledge_sources(self, project_path: str,
