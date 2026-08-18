@@ -106,10 +106,10 @@ def _parse_cypher_result(result: Any) -> List[Dict]:
                     "filePath": str(item[1]) if len(item) > 1 else "",
                 })
     elif isinstance(result, dict):
-        # 尝试各种可能的键名
+        # 尝试各种可能的键名（空列表继续尝试后续键，避免提前返回空结果）
         for key in ["data", "rows", "records", "results", "nodes"]:
             data = result.get(key, [])
-            if isinstance(data, list):
+            if isinstance(data, list) and data:
                 return _parse_cypher_result(data)
     return symbols
 
@@ -130,7 +130,7 @@ def _parse_cypher_pairs(result: Any) -> List[tuple]:
     elif isinstance(result, dict):
         for key in ["data", "rows", "records", "edges", "relationships"]:
             data = result.get(key, [])
-            if isinstance(data, list):
+            if isinstance(data, list) and data:
                 return _parse_cypher_pairs(data)
     return pairs
 
@@ -227,9 +227,8 @@ def _normalize_search_results(result: Any) -> List[Dict]:
     elif isinstance(result, dict):
         for key in ["results", "data", "matches", "items", "symbols"]:
             data = result.get(key, [])
-            if isinstance(data, list):
+            if isinstance(data, list) and data:
                 return _normalize_search_results(data)
-                break
     return items
 
 
@@ -317,17 +316,8 @@ def _subgraph_from_context(subgraph: Subgraph, context: Any, entry: str):
                     for c in callees
                 ]
 
-        # 填充节点元数据
-        sym = context.get("symbol")
-        if isinstance(sym, dict):
-            for node in subgraph.nodes:
-                if node.name == entry:
-                    node.qualified_name = sym.get("uid", "")
-                    node.file_path = sym.get("filePath", "")
-                    node.node_type = sym.get("kind", "")
-                    node.start_line = sym.get("startLine", 0)
-                    node.end_line = sym.get("endLine", 0)
-                    break
+        # 节点元数据不在此时填充：本步骤 subgraph.nodes 尚为空，
+        # 由 _build_subgraph_nodes_edges 创建节点后从 raw_context 统一回填。
 
 
 def _subgraph_from_impact(subgraph: Subgraph, impact: Any, entry: str):
@@ -395,6 +385,19 @@ def _build_subgraph_nodes_edges(subgraph: Subgraph, entry: str):
             target=callee,
             relation_type="CALLS"
         ))
+
+    # 回填入口节点元数据（来自 context 响应的 symbol 字段；
+    # 此时入口节点已创建，才能真正命中）
+    sym = subgraph.raw_context.get("symbol")
+    if isinstance(sym, dict):
+        for node in subgraph.nodes:
+            if node.name == entry:
+                node.qualified_name = sym.get("uid", "")
+                node.file_path = sym.get("filePath", "")
+                node.node_type = sym.get("kind", "")
+                node.start_line = sym.get("startLine", 0)
+                node.end_line = sym.get("endLine", 0)
+                break
 
 
 class GitNexusMCPClient:
