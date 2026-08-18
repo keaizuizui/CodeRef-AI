@@ -82,8 +82,10 @@ TAG_SEVERITY = {
 _NARRATIVE_KEYWORDS = ("已修复", "修复过", "历史", "反馈", "曾经", "既往")
 # 全角标点（句读/引号/括号等）：tag 前后紧邻这些或 CJK 字符时视为嵌在中文叙述里
 _CJK_PUNCT = "。，、；：！？…—·～（）【】《》〈〉「」『』“”‘’"
-# 标记后允许出现的中文说明分隔符（"# BUG：xxx" 仍是合法标记形式，不应排除）
-_TAG_COLON_CN = "："
+# 内容引入型全角标点：tag 后紧跟这些说明 tag 在引入待办内容（"TODO（v5 处理）"
+# "TODO，尽快"），仍是合法标记而非叙述；句读收尾型（。！？；）与关闭型（）】》）
+# 不在其中，"bug。"／"bug）" 仍判叙述
+_TAG_LEAD_CN = "：，（"
 
 
 def _is_cjk_like(ch: str) -> bool:
@@ -107,7 +109,7 @@ def _is_narrative_context(stripped: str, m) -> bool:
         return True
     if e < len(stripped):
         nxt = stripped[e]
-        if _is_cjk_like(nxt) and nxt != _TAG_COLON_CN:
+        if _is_cjk_like(nxt) and nxt not in _TAG_LEAD_CN:
             return True
     if any(k in stripped for k in _NARRATIVE_KEYWORDS):
         k = s - 1

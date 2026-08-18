@@ -864,7 +864,7 @@ class CodeAnalyzer:
                     if isinstance(agent_mapping, dict):
                         analysis._agent_mapping = agent_mapping
             except Exception as e:
-                logger.warning(f"解析 GitNexus 技术栈配置失败，忽略该增强: {e}")
+                logger.warning(f"解析模型角色配置失败，跳过该文件 {config_path}: {e}")
         
         if not roles:
             roles = [['(未找到配置)', '-', '-', '-', f'未在 {analysis.project_path} 中找到 config.yaml']]

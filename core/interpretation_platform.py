@@ -211,13 +211,19 @@ def _load_audit_findings(project_path: str) -> Optional[Dict]:
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                      "coderef-report", AUDIT_FINDINGS_FILE),
     ]
-    # 1) 哈希文件存在时优先且仅用哈希文件
+    # 1) 哈希文件存在时优先且仅用哈希文件（同样须过空壳校验：
+    #    零文件扫描产物被当成有效审计结果返回，会虚增健康分）
     for fp in hashed_candidates:
         data = _read_audit_json(fp)
-        if data is not None:
-            data["_source_path"] = fp
-            data["_source_kind"] = "hashed"
-            return data
+        if data is None:
+            continue
+        if _is_empty_shell_audit(data):
+            logger.warning(
+                f"[interpret] 忽略空壳审计结果（空扫描，无有效 findings）：{fp}")
+            continue
+        data["_source_path"] = fp
+        data["_source_kind"] = "hashed"
+        return data
     # 2) 兜底全局文件必须校验：空扫描空壳视为"未审计"
     for fp in fallback_candidates:
         data = _read_audit_json(fp)

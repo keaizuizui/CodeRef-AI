@@ -670,6 +670,10 @@ class JunkDetector:
                             modules.add(alias.name)
                     elif isinstance(node, _ast.ImportFrom) and node.module:
                         modules.add(node.module)
+                        # "from core import cache_manager" 须解析到具体模块：
+                        # 记录限定路径 module.alias，供点路径精确匹配命中
+                        for alias in node.names:
+                            modules.add(f"{node.module}.{alias.name}")
 
             file_dir = os.path.dirname(fpath)
             for mod in modules:
