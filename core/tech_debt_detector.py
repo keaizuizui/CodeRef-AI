@@ -266,8 +266,8 @@ def _render_td_todo_list(lines: List[str], todo_debts: List[TechDebt]) -> None:
     lines.append("")
     lines.append("> 以下按优先级排列：FIXME/BUG > HACK > TODO > XXX")
     lines.append("")
-    lines.append("| 优先级 | 标记 | 文件 | 行号 | 内容 | 所在位置 |")
-    lines.append("|--------|------|------|------|------|----------|")
+    lines.append("| 标记 | 严重度 | 文件 | 行号 | 内容 | 所在位置 |")
+    lines.append("|------|--------|------|------|------|----------|")
     for d in todo_debts:
         tag = "?"
         for t in ["BUG", "FIXME", "HACK", "TODO", "XXX"]:
@@ -359,8 +359,8 @@ def _render_td_magic_list(lines: List[str], magic_debts: List[TechDebt]) -> None
     """渲染魔法数字/硬编码列表"""
     lines.append("## 魔法数字/硬编码列表")
     lines.append("")
-    lines.append("| 严重程度 | 文件 | 行号 | 类型 | 值 | 所在位置 |")
-    lines.append("|---------|------|------|------|-----|----------|")
+    lines.append("| 严重程度 | 文件 | 行号 | 类型/值 | 所在位置 |")
+    lines.append("|---------|------|------|----------|----------|")
     for d in magic_debts:
         file_short = os.path.basename(d.file_path)
         # 提取类型和值

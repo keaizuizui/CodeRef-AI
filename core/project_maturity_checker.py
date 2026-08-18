@@ -121,6 +121,8 @@ def _render_category_summary(lines: List[str], by_category: Dict[str, List[Matur
     """渲染类别汇总表"""
     lines.append("## 类别汇总")
     lines.append("")
+    lines.append("| 类别 | 通过 | 说明 |")
+    lines.append("|------|------|------|")
 
     for cat_key in CATEGORY_ORDER:
         cat_checks = by_category.get(cat_key, [])

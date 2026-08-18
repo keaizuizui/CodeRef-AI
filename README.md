@@ -428,6 +428,14 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 
 ## 更新日志
 
+### 补充修复（并入 v4.9.6）：CodeRabbit 复审 11 条 findings 全部修复
+
+- 复审范围 4474184 + 323aa9f（`crb_review_323aa9f.log`，CLI v0.7.3 / WSL Ubuntu）：5 critical + 3 major + 3 minor，逐条验证全部真实后修复
+- **重构残留治理（5 critical）**：`pipeline_runner` 模块级 `_fmt` 残留 `self`（elapsed 兜底分支 NameError）改用 `t0` 参数；模块级 `docs()` 去 `self` 化（局部 `t0`）；`run_single` 改为显式接受 Pipe 实例；`kg_query` 壳补 `**kwargs` 转发；`wiki_generator` 5 个模块级函数删除残留 `@staticmethod`
+- **审计正确性（3 major）**：SEC-08 缓存键加 MD5 内容指纹（防 MCP 长驻进程跨审计返回过期判定）；GitNexus 三个解析函数 dict fallback 空列表继续尝试后续键 + 删 unreachable break；子图符号元数据移到节点构建后从 `raw_context` 回填（原在 `subgraph.nodes` 为空时填充，恒无效）
+- **输出健壮性（3 minor）**：`flow_verify` 合同文件读取改 with 上下文管理器；`project_maturity_checker` 类别汇总表补表头/分隔行；`tech_debt_detector` 两处报告表头列对齐（6/6、5/5）
+- 验证：7 文件编译零失败；`run_single`（修复前入口即 NameError）实测正常完成 agent 扫描（43 findings）；fallback 空跳/SEC-08 指纹隔离/表头对齐行为验证通过；回归 85/86（唯一失败为环境基线，与本轮无关）；coderef-src 同步 7 文件编译通过
+
 ### v4.9.6 — 存量复杂度债清零（4.9.x 系列最终闭环）
 
 - **目标**：自审计（TechDebtDetector）暴露的全部 26 条 high 级复杂度/大类存量债在本版清零，5.0 不背技术债

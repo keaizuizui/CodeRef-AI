@@ -46,6 +46,7 @@ Agent 安全审计器 —— 专为 AI Agent 系统设计的风险检测
 """
 
 import ast
+import hashlib
 import logging
 import os
 import re
@@ -55,8 +56,9 @@ from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
-# SEC-08 自管缓存库判定结果记忆化：键 (文件路径, 接收对象表达式)，值 bool。
-# 纯文件内容函数（与实例状态无关），进程级共享缓存语义等价于原实例懒加载缓存。
+# SEC-08 自管缓存库判定结果记忆化：键 (文件路径, 接收对象表达式, 内容指纹)，值 bool。
+# 纯文件内容函数（与实例状态无关），进程级共享缓存语义等价于原实例懒加载缓存；
+# 内容指纹保证文件变更后缓存失效，不会跨审计累积过期判定。
 _SEC08_DB_CACHE = {}
 
 
@@ -1732,7 +1734,9 @@ def _sec08_self_managed_db(lines: List[str], cur_idx: int, stripped: str,
     receiver = rm.group(1) if rm else ""
     if not receiver:
         return False
-    key = (filepath, receiver)
+    # 缓存键带内容指纹：文件内容变更后旧判定自动失效，防止跨审计返回过期结论
+    fp = hashlib.md5("\n".join(lines).encode("utf-8", "ignore")).hexdigest()
+    key = (filepath, receiver, fp)
     cache = _SEC08_DB_CACHE
     if key in cache:
         return cache[key]

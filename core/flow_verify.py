@@ -513,7 +513,8 @@ def _scan_one_contract_file(project_path: str, root: str, fn: str,
     """扫描单个前端/Go/PHP 文件：收集插件名引用 + 动态注入面信号。"""
     path = os.path.join(root, fn)
     try:
-        lines = open(path, encoding="utf-8", errors="ignore").read().splitlines()
+        with open(path, encoding="utf-8", errors="ignore") as fh:
+            lines = fh.read().splitlines()
     except Exception as e:
         # 文件不可读，跳过该文件
         _log(f"读取文件失败，跳过流程扫描 {path}: {e}")

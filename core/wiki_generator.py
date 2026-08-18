@@ -592,7 +592,6 @@ class WikiGenerator:
         return to_report(self, result)
 
 # ==================== 模块级生成函数（自 WikiGenerator 提取，实现细节与类接口分离） ====================
-@staticmethod
 def _core_rules_path(project_path: str) -> str:
     """核心模块规则配置文件路径"""
     import hashlib
@@ -638,7 +637,6 @@ def save_core_rules(project_path: str, rules: dict) -> bool:
         return False
 
 
-@staticmethod
 def get_core_rules(project_path: str) -> dict:
     """获取当前核心模块判定规则（供 AI 查看）"""
     wg = WikiGenerator()
@@ -3138,7 +3136,6 @@ def _anchor_evidence(self, confirmed: List[str], project_path: str,
     return anchors
 
 
-@staticmethod
 def _to_repo_rel(project_path: str, file_path: str) -> str:
     """把符号引用的文件路径归一为相对项目根的路径（供 git pathspec 使用）。
 
