@@ -303,6 +303,84 @@ class MemoryLayer:
     # 1. sync
     # ═══════════════════════════════════════════════════════════════
 
+    def _classify_changed(self, mode: str, files: List[str],
+                          current_snapshot: Dict[str, Dict[str, float]],
+                          prev_snapshot: Dict[str, Dict[str, float]]):
+        """按 mode 与快照把文件分为（变更, 未变更）两组。"""
+        changed: List[str] = []
+        unchanged: List[str] = []
+        for fp in files:
+            if mode == "full":
+                changed.append(fp)
+            elif self._same_file(prev_snapshot.get(fp), current_snapshot.get(fp)):
+                unchanged.append(fp)
+            else:
+                changed.append(fp)
+        return changed, unchanged
+
+    @staticmethod
+    def _extract_ast_cache(changed: List[str], unchanged: List[str],
+                           old_ast: Dict[str, Optional[dict]]):
+        """增量 AST 提取：只对变更文件重新解析，未变更复用状态里的缓存。"""
+        from core.ast_parser import AstParser
+        parser = AstParser()
+        new_ast: Dict[str, Optional[dict]] = {}
+        for fp in changed:
+            try:
+                ar = parser.parse(fp)
+                new_ast[fp] = _ast_to_dict(ar) if ar else None
+            except Exception:
+                new_ast[fp] = None
+        for fp in unchanged:
+            new_ast[fp] = old_ast.get(fp)
+        return new_ast
+
+    @staticmethod
+    def _analyze_structure(analyzer, project_path: str, mode: str):
+        """结构分析（复用 CodeAnalyzer 自身缓存；full 强制重建）。"""
+        try:
+            if analyzer is None:
+                from core.code_analyzer import CodeAnalyzer
+                analyzer = CodeAnalyzer()
+            return analyzer.analyze_project(project_path,
+                                            force_reanalyze=(mode == "full"))
+        except Exception as e:
+            logger.warning(f"[MemoryLayer] 结构分析失败，图谱退化为仅 AST: {e}")
+            return None
+
+    @staticmethod
+    def _update_knowledge_graph(project_path: str, analysis,
+                                ast_results) -> dict:
+        """更新知识图谱（结构记忆）。"""
+        try:
+            from core.code_knowledge_graph import CodeKnowledgeGraph
+            kg = CodeKnowledgeGraph(project_path)
+            kg_stats = kg.build(analysis=analysis, ast_results=ast_results)
+            kg.close()
+            return kg_stats
+        except Exception as e:
+            logger.warning(f"[MemoryLayer] 图谱更新失败: {e}")
+            return {"nodes": 0, "edges": 0, "errors": [str(e)]}
+
+    def _persist_state(self, project_path: str, mode: str,
+                       current_snapshot, new_ast, kg_stats: dict,
+                       kb_status: dict) -> None:
+        """持久化新的记忆状态（原子写）。"""
+        new_state = {
+            "project_path": project_path,
+            "hash": self._project_hash(project_path),
+            "mode": mode,
+            "last_sync": datetime.now().isoformat(),
+            "snapshot": current_snapshot,
+            "ast_cache": {fp: _strip_code(d) if d else None for fp, d in new_ast.items()},
+            "kg_stats": kg_stats,
+            "kb_status": kb_status,
+        }
+        try:
+            self._save_state(project_path, new_state)
+        except Exception as e:
+            logger.warning(f"[MemoryLayer] 记忆状态写入失败: {e}")
+
     def sync(self, project_path: str, mode: str = "full") -> dict:
         """全量或增量同步项目到代码记忆层。
 
@@ -338,59 +416,22 @@ class MemoryLayer:
         prev_snapshot = prev.get("snapshot", {})
 
         # 分类：变更 / 未变更
-        changed: List[str] = []
-        unchanged: List[str] = []
-        for fp in files:
-            cur = current_snapshot.get(fp)
-            if mode == "full":
-                changed.append(fp)
-            else:
-                old = prev_snapshot.get(fp)
-                if self._same_file(old, cur):
-                    unchanged.append(fp)
-                else:
-                    changed.append(fp)
+        changed, unchanged = self._classify_changed(mode, files,
+                                                     current_snapshot, prev_snapshot)
 
         # 增量 AST 提取：只对变更文件重新解析，未变更复用状态里的缓存
-        from core.ast_parser import AstParser
-        parser = AstParser()
-        old_ast = prev.get("ast_cache", {})
-        new_ast: Dict[str, Optional[dict]] = {}
-        for fp in changed:
-            try:
-                ar = parser.parse(fp)
-                new_ast[fp] = _ast_to_dict(ar) if ar else None
-            except Exception:
-                new_ast[fp] = None
-        for fp in unchanged:
-            new_ast[fp] = old_ast.get(fp)
+        new_ast = self._extract_ast_cache(changed, unchanged,
+                                          prev.get("ast_cache", {}))
 
         # 还原为 AstFileResult 对象供 CodeKnowledgeGraph.build 使用
         ast_results = {fp: _ast_from_dict(d)
                        for fp, d in new_ast.items() if d}
 
         # 结构分析（复用 CodeAnalyzer 自身缓存；full 强制重建）
-        analysis = None
-        try:
-            if analyzer is None:
-                from core.code_analyzer import CodeAnalyzer
-                analyzer = CodeAnalyzer()
-            analysis = analyzer.analyze_project(project_path,
-                                                force_reanalyze=(mode == "full"))
-        except Exception as e:
-            logger.warning(f"[MemoryLayer] 结构分析失败，图谱退化为仅 AST: {e}")
-            analysis = None
+        analysis = self._analyze_structure(analyzer, project_path, mode)
 
         # 更新知识图谱（结构记忆）
-        kg_stats: dict = {"nodes": 0, "edges": 0, "errors": []}
-        try:
-            from core.code_knowledge_graph import CodeKnowledgeGraph
-            kg = CodeKnowledgeGraph(project_path)
-            kg_stats = kg.build(analysis=analysis, ast_results=ast_results)
-            kg.close()
-        except Exception as e:
-            kg_stats = {"nodes": 0, "edges": 0, "errors": [str(e)]}
-            logger.warning(f"[MemoryLayer] 图谱更新失败: {e}")
+        kg_stats = self._update_knowledge_graph(project_path, analysis, ast_results)
 
         # 更新语义知识库（语义记忆，Ollama 缺失自动降级）
         kb_status = self._index_kb(project_path)
@@ -401,20 +442,8 @@ class MemoryLayer:
         confidence = self._overall_confidence(new_ast, total_files)
 
         # 持久化新的记忆状态（原子写）
-        new_state = {
-            "project_path": project_path,
-            "hash": self._project_hash(project_path),
-            "mode": mode,
-            "last_sync": datetime.now().isoformat(),
-            "snapshot": current_snapshot,
-            "ast_cache": {fp: _strip_code(d) if d else None for fp, d in new_ast.items()},
-            "kg_stats": kg_stats,
-            "kb_status": kb_status,
-        }
-        try:
-            self._save_state(project_path, new_state)
-        except Exception as e:
-            logger.warning(f"[MemoryLayer] 记忆状态写入失败: {e}")
+        self._persist_state(project_path, mode, current_snapshot, new_ast,
+                            kg_stats, kb_status)
 
         return {
             "status": "ok",

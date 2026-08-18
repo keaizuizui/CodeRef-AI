@@ -85,6 +85,67 @@ CATEGORY_LABELS = {
 
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 
+# 常见包名与 import 名的映射（包名可能与 import 名不同）
+# 拆分说明：原 _check_unused_deps 方法内的局部常量提取为模块级，
+# 内容与拆分前逐项一致。
+_PACKAGE_IMPORT_MAP = {
+    "scikit-learn": "sklearn",
+    "opencv-python": "cv2",
+    "opencv-python-headless": "cv2",
+    "python-dateutil": "dateutil",
+    "python-dotenv": "dotenv",
+    "pyyaml": "yaml",
+    "pillow": "PIL",
+    "beautifulsoup4": "bs4",
+    "pymongo": "pymongo",
+    "mysql-connector-python": "mysql",
+    "psycopg2-binary": "psycopg2",
+    "psycopg2": "psycopg2",
+    "azure-storage-blob": "azure",
+    "google-cloud-storage": "google",
+    "django": "django",
+    "flask": "flask",
+    "fastapi": "fastapi",
+    "sqlalchemy": "sqlalchemy",
+    "pydantic": "pydantic",
+    "celery": "celery",
+    "redis": "redis",
+    "aiohttp": "aiohttp",
+    "httpx": "httpx",
+    "websocket-client": "websocket",
+    "python-multipart": "multipart",
+    "python-jose": "jose",
+    "passlib": "passlib",
+    "bcrypt": "bcrypt",
+    "cryptography": "cryptography",
+    "markdown": "markdown",
+    "jinja2": "jinja2",
+    "boto3": "boto3",
+    "botocore": "botocore",
+    "docker": "docker",
+    "kubernetes": "kubernetes",
+    "prometheus-client": "prometheus_client",
+    "gunicorn": "gunicorn",
+    "uvicorn": "uvicorn",
+    "pydantic-settings": "pydantic_settings",
+    "starlette": "starlette",
+}
+
+# 报告中的分类说明文案（报告渲染用）
+_CATEGORY_DESCRIPTIONS = {
+    "missing_module": "代码中 import 了但项目里找不到的模块",
+    "invalid_path": "sys.path 指向了不存在的路径",
+    "dynamic_import": "使用了动态导入，可能隐藏依赖问题",
+    "unused_dep": "requirements.txt 中声明但未使用的依赖",
+    "unreferenced_env": ".env 中定义但代码中未引用的环境变量",
+}
+
+# 报告分节顺序
+_REPORT_CATEGORY_ORDER = [
+    "missing_module", "invalid_path", "dynamic_import",
+    "unused_dep", "unreferenced_env",
+]
+
 # Python 标准库模块名（Python 3.10+ 常用）
 STDLIB_MODULES = {
     "abc", "aifc", "argparse", "array", "ast", "asynchat", "asyncio",
@@ -119,6 +180,217 @@ STDLIB_MODULES = {
     "zipfile", "zipimport", "zlib", "zoneinfo",
     # 常用第三方但被忽略的模式（不是标准库但常见）
 }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 报告渲染（模块级纯函数）
+# ═══════════════════════════════════════════════════════════════════
+
+def _render_report_header(lines: List[str], project_path: str, gaps: List[ResourceGap],
+                          cat_counts: Dict[str, int], sev_counts: Dict[str, int]):
+    """渲染报告头部 + 总览表。空结果时仅输出头部与"未发现问题"提示。"""
+    lines.append("# 资源遗漏检测报告")
+    lines.append("")
+    lines.append(f"> 项目: `{project_path}`")
+    lines.append(f"> 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    # 总览
+    lines.append("## 资源遗漏总览")
+    lines.append("")
+    lines.append("| 指标 | 数值 |")
+    lines.append("|------|------|")
+    lines.append(f"| 发现问题数 | **{len(gaps)}** |")
+    lines.append(f"| 高危 (high) | {sev_counts.get('high', 0)} |")
+    lines.append(f"| 中危 (medium) | {sev_counts.get('medium', 0)} |")
+    lines.append(f"| 低危 (low) | {sev_counts.get('low', 0)} |")
+    lines.append("")
+
+
+def _render_report_categories(lines: List[str], cat_counts: Dict[str, int]):
+    """渲染"按分类统计"表（跳过数量为 0 的分类）。"""
+    lines.append("### 按分类统计")
+    lines.append("")
+    lines.append("| 分类 | 数量 | 说明 |")
+    lines.append("|------|------|------|")
+    for cat in _REPORT_CATEGORY_ORDER:
+        count = cat_counts.get(cat, 0)
+        if count == 0:
+            continue
+        label = CATEGORY_LABELS.get(cat, cat)
+        desc = _CATEGORY_DESCRIPTIONS.get(cat, "")
+        lines.append(f"| {label} | {count} | {desc} |")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+
+def _render_report_details(lines: List[str], gaps: List[ResourceGap]):
+    """按分类渲染每条资源遗漏的详细清单（分类内按严重程度排序）。"""
+    gaps_sorted = sorted(gaps, key=lambda g: (SEVERITY_ORDER.get(g.severity, 9), g.file_path))
+
+    for cat in _REPORT_CATEGORY_ORDER:
+        cat_gaps = [g for g in gaps_sorted if g.category == cat]
+        if not cat_gaps:
+            continue
+
+        label = CATEGORY_LABELS.get(cat, cat)
+        lines.append(f"## {label}（{len(cat_gaps)} 项）")
+        lines.append("")
+
+        for gap in cat_gaps:
+            sev_tag = {"high": "[高危]", "medium": "[中危]", "low": "[低危]"}.get(gap.severity, "")
+            lines.append(f"### {sev_tag} {gap.item}")
+            lines.append("")
+            lines.append(f"- **文件**: `{gap.file_path}`")
+            lines.append(f"- **详情**: {gap.detail}")
+            if gap.suggestion:
+                lines.append(f"- **建议**: {gap.suggestion}")
+            lines.append("")
+
+
+def _render_report_priority(lines: List[str], sev_counts: Dict[str, int]):
+    """渲染修复优先级建议段落。"""
+    lines.append("---")
+    lines.append("")
+    lines.append("## 修复优先级建议")
+    lines.append("")
+    if sev_counts.get("high", 0) > 0:
+        lines.append(f"1. **立即修复** ({sev_counts['high']} 项高危): 缺失的本地模块和失效的路径会导致程序运行失败")
+    if sev_counts.get("medium", 0) > 0:
+        lines.append(f"2. **尽快处理** ({sev_counts['medium']} 项中危): 动态导入风险需要评估，确保有充分的错误处理")
+    if sev_counts.get("low", 0) > 0:
+        lines.append(f"3. **定期清理** ({sev_counts['low']} 项低危): 未使用的依赖和环境变量可逐步清理")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    lines.append(f"*报告由 CodeRef-AI ResourceGapDetector v1.0 生成*")
+
+
+def _render_resource_gap_report(gaps: List[ResourceGap], project_path: str) -> str:
+    """生成 Markdown 格式的资源遗漏报告。
+
+    拆分说明：原 ResourceGapDetector._generate_report 方法提取为模块级
+    纯函数（不依赖 self，仅依赖 gaps 列表与 project_path），渲染步骤拆为
+    _render_report_header / categories / details / priority 四段，类内保留
+    同名方法作委托，输出内容与拆分前逐行一致。
+    """
+    lines: List[str] = []
+
+    # 分类统计
+    cat_counts: Dict[str, int] = defaultdict(int)
+    sev_counts: Dict[str, int] = defaultdict(int)
+    for gap in gaps:
+        cat_counts[gap.category] += 1
+        sev_counts[gap.severity] += 1
+
+    _render_report_header(lines, project_path, gaps, cat_counts, sev_counts)
+
+    if not gaps:
+        lines.append("**未发现资源遗漏问题，项目资源连接状况良好。**")
+        lines.append("")
+        return "\n".join(lines)
+
+    _render_report_categories(lines, cat_counts)
+    _render_report_details(lines, gaps)
+    _render_report_priority(lines, sev_counts)
+
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 环境变量引用检测辅助（模块级纯函数）
+# ═══════════════════════════════════════════════════════════════════
+
+def _parse_env_files(project_path: str, scope) -> Dict[str, str]:
+    """查找并解析 .env / .env.* 文件，返回 {变量名: 来源文件路径}。
+
+    拆分说明：原 _check_unreferenced_env 的 .env 扫描解析段提取为模块级
+    纯函数，解析规则（跳过注释/空行、KEY=VALUE、export 前缀、合法变量名
+    校验）与拆分前一致。
+    """
+    env_vars: Dict[str, str] = {}  # 变量名 -> 来源文件
+    for root, dirs, files in os.walk(project_path):
+        dirs[:] = [d for d in dirs if scope.should_scan(os.path.join(root, d))]
+        for f in files:
+            if f == ".env" or f.startswith(".env."):
+                fpath = os.path.join(root, f)
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
+                        for line in fh:
+                            stripped = line.strip()
+                            # 跳过注释和空行
+                            if not stripped or stripped.startswith("#"):
+                                continue
+                            # 解析 KEY=VALUE 或 KEY="VALUE"
+                            if "=" in stripped:
+                                key = stripped.split("=", 1)[0].strip()
+                                # 跳过 export 前缀
+                                if key.startswith("export "):
+                                    key = key[7:].strip()
+                                if key and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key):
+                                    env_vars[key] = fpath
+                except Exception as e:
+                    # 单文件解析失败，跳过该文件
+                    logger.warning(f"解析环境变量引用失败，跳过 {fpath}: {e}")
+                    continue
+    return env_vars
+
+
+def _collect_py_env_references(py_files: List[str]) -> Set[str]:
+    """扫描 .py 文件，收集代码中引用的环境变量名集合。
+
+    拆分说明：原 _check_unreferenced_env 的 py 文件引用收集段提取为
+    模块级纯函数，正则模式与拆分前一致。
+    """
+    referenced_vars: Set[str] = set()
+    env_patterns = [
+        re.compile(r'os\.(?:environ|getenv)\s*\[\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']', re.IGNORECASE),
+        re.compile(r'os\.(?:environ|getenv)\s*\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']', re.IGNORECASE),
+        re.compile(r'os\.environ\.get\s*\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']', re.IGNORECASE),
+        re.compile(r'process\.env\.([A-Za-z_][A-Za-z0-9_]*)', re.IGNORECASE),
+        re.compile(r'\bconfig\s*\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']', re.IGNORECASE),
+    ]
+    for fpath in py_files:
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
+                content = fh.read()
+        except Exception as e:
+            # 文件不可读，跳过该文件
+            logger.warning(f"读取文件失败，跳过环境变量检查 {fpath}: {e}")
+            continue
+        for pattern in env_patterns:
+            for m in pattern.finditer(content):
+                referenced_vars.add(m.group(1))
+    return referenced_vars
+
+
+def _scan_other_files_env_refs(project_path: str, scope, env_vars: Dict[str, str],
+                               referenced_vars: Set[str]):
+    """扫描 .js/.ts/.json/.yaml 等其他类型文件，按子串匹配补充环境变量引用。
+
+    拆分说明：原 _check_unreferenced_env 的其他文件扫描段提取为模块级
+    纯函数，扩展名集合与拆分前一致。
+    """
+    for root, dirs, files in os.walk(project_path):
+        dirs[:] = [d for d in dirs if scope.should_scan(os.path.join(root, d))]
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext not in (".js", ".ts", ".jsx", ".tsx", ".json", ".yaml", ".yml", ".toml", ".cfg"):
+                continue
+            fpath = os.path.join(root, f)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
+                    content = fh.read()
+            except Exception as e:
+                # 文件不可读，跳过该文件
+                logger.warning(f"读取文件失败，跳过检查 {fpath}: {e}")
+                continue
+            for var_name in env_vars:
+                if var_name in content:
+                    referenced_vars.add(var_name)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -625,56 +897,12 @@ class ResourceGapDetector:
         for imp in self._all_imports:
             all_imported_modules.add(imp.split(".")[0])
 
-        # 常见包名与 import 名的映射（包名可能与 import 名不同）
-        PACKAGE_IMPORT_MAP = {
-            "scikit-learn": "sklearn",
-            "opencv-python": "cv2",
-            "opencv-python-headless": "cv2",
-            "python-dateutil": "dateutil",
-            "python-dotenv": "dotenv",
-            "pyyaml": "yaml",
-            "pillow": "PIL",
-            "beautifulsoup4": "bs4",
-            "pymongo": "pymongo",
-            "mysql-connector-python": "mysql",
-            "psycopg2-binary": "psycopg2",
-            "psycopg2": "psycopg2",
-            "azure-storage-blob": "azure",
-            "google-cloud-storage": "google",
-            "django": "django",
-            "flask": "flask",
-            "fastapi": "fastapi",
-            "sqlalchemy": "sqlalchemy",
-            "pydantic": "pydantic",
-            "celery": "celery",
-            "redis": "redis",
-            "aiohttp": "aiohttp",
-            "httpx": "httpx",
-            "websocket-client": "websocket",
-            "python-multipart": "multipart",
-            "python-jose": "jose",
-            "passlib": "passlib",
-            "bcrypt": "bcrypt",
-            "cryptography": "cryptography",
-            "markdown": "markdown",
-            "jinja2": "jinja2",
-            "boto3": "boto3",
-            "botocore": "botocore",
-            "docker": "docker",
-            "kubernetes": "kubernetes",
-            "prometheus-client": "prometheus_client",
-            "gunicorn": "gunicorn",
-            "uvicorn": "uvicorn",
-            "pydantic-settings": "pydantic_settings",
-            "starlette": "starlette",
-        }
-
         for pkg_name, pkg_version in req_packages.items():
             # 跳过归一化别名键，避免对同一依赖重复报告 unused_dep
             if pkg_name in req_aliases:
                 continue
             pkg_lower = pkg_name.lower().replace("-", "_")
-            import_name = PACKAGE_IMPORT_MAP.get(pkg_name.lower(), pkg_lower)
+            import_name = _PACKAGE_IMPORT_MAP.get(pkg_name.lower(), pkg_lower)
 
             # 检查是否被 import
             is_used = False
@@ -728,79 +956,20 @@ class ResourceGapDetector:
         检测 .env 文件中的环境变量是否在代码中被引用
 
         正向检查：.env 中定义的变量 -> 代码中是否使用 os.getenv/os.environ
+
+        拆分说明：.env 解析 / py 引用收集 / 其他文件扫描提取为模块级
+        _parse_env_files / _collect_py_env_references / _scan_other_files_env_refs
+        纯函数，本方法仅作编排，判定与输出内容与拆分前一致。
         """
         # 查找 .env 文件（支持 .env, .env.local, .env.development 等）
-        env_vars: Dict[str, str] = {}  # 变量名 -> 来源文件
-        for root, dirs, files in os.walk(project_path):
-            dirs[:] = [d for d in dirs if self._scope.should_scan(os.path.join(root, d))]
-            for f in files:
-                if f == ".env" or f.startswith(".env."):
-                    fpath = os.path.join(root, f)
-                    try:
-                        with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
-                            for line in fh:
-                                stripped = line.strip()
-                                # 跳过注释和空行
-                                if not stripped or stripped.startswith("#"):
-                                    continue
-                                # 解析 KEY=VALUE 或 KEY="VALUE"
-                                if "=" in stripped:
-                                    key = stripped.split("=", 1)[0].strip()
-                                    # 跳过 export 前缀
-                                    if key.startswith("export "):
-                                        key = key[7:].strip()
-                                    if key and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key):
-                                        env_vars[key] = fpath
-                    except Exception as e:
-                        # 单文件解析失败，跳过该文件
-                        logger.warning(f"解析环境变量引用失败，跳过 {fpath}: {e}")
-                        continue
-
+        env_vars = _parse_env_files(project_path, self._scope)
         if not env_vars:
             return
 
         # 收集所有代码中引用的环境变量
-        referenced_vars: Set[str] = set()
-        env_patterns = [
-            re.compile(r'os\.(?:environ|getenv)\s*\[\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']', re.IGNORECASE),
-            re.compile(r'os\.(?:environ|getenv)\s*\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']', re.IGNORECASE),
-            re.compile(r'os\.environ\.get\s*\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']', re.IGNORECASE),
-            re.compile(r'process\.env\.([A-Za-z_][A-Za-z0-9_]*)', re.IGNORECASE),
-            re.compile(r'\bconfig\s*\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']', re.IGNORECASE),
-        ]
-
-        for fpath in self._all_py_files:
-            try:
-                with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
-                    content = fh.read()
-            except Exception as e:
-                # 文件不可读，跳过该文件
-                logger.warning(f"读取文件失败，跳过环境变量检查 {fpath}: {e}")
-                continue
-
-            for pattern in env_patterns:
-                for m in pattern.finditer(content):
-                    referenced_vars.add(m.group(1))
-
+        referenced_vars = _collect_py_env_references(self._all_py_files)
         # 也检查其他类型的文件（.js, .ts, .json, .yaml 等）
-        for root, dirs, files in os.walk(project_path):
-            dirs[:] = [d for d in dirs if self._scope.should_scan(os.path.join(root, d))]
-            for f in files:
-                ext = os.path.splitext(f)[1].lower()
-                if ext not in (".js", ".ts", ".jsx", ".tsx", ".json", ".yaml", ".yml", ".toml", ".cfg"):
-                    continue
-                fpath = os.path.join(root, f)
-                try:
-                    with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
-                        content = fh.read()
-                except Exception as e:
-                    # 文件不可读，跳过该文件
-                    logger.warning(f"读取文件失败，跳过检查 {fpath}: {e}")
-                    continue
-
-                for var_name in env_vars:
-                    if var_name in content:
-                        referenced_vars.add(var_name)
+        _scan_other_files_env_refs(project_path, self._scope, env_vars, referenced_vars)
 
         # 找出未引用的环境变量
         for var_name, env_file in env_vars.items():
@@ -870,105 +1039,8 @@ class ResourceGapDetector:
     # ─── 报告生成 ─────────────────────────────────────────────────
 
     def _generate_report(self, project_path: str) -> str:
-        """生成 Markdown 格式的资源遗漏报告"""
-        lines = []
-
-        # 分类统计
-        cat_counts: Dict[str, int] = defaultdict(int)
-        sev_counts: Dict[str, int] = defaultdict(int)
-        for gap in self._gaps:
-            cat_counts[gap.category] += 1
-            sev_counts[gap.severity] += 1
-
-        # 头部
-        lines.append("# 资源遗漏检测报告")
-        lines.append("")
-        lines.append(f"> 项目: `{project_path}`")
-        lines.append(f"> 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
-
-        # 总览
-        lines.append("## 资源遗漏总览")
-        lines.append("")
-        lines.append("| 指标 | 数值 |")
-        lines.append("|------|------|")
-        lines.append(f"| 发现问题数 | **{len(self._gaps)}** |")
-        lines.append(f"| 高危 (high) | {sev_counts.get('high', 0)} |")
-        lines.append(f"| 中危 (medium) | {sev_counts.get('medium', 0)} |")
-        lines.append(f"| 低危 (low) | {sev_counts.get('low', 0)} |")
-        lines.append("")
-
-        if not self._gaps:
-            lines.append("**未发现资源遗漏问题，项目资源连接状况良好。**")
-            lines.append("")
-            return "\n".join(lines)
-
-        # 分类统计
-        lines.append("### 按分类统计")
-        lines.append("")
-        lines.append("| 分类 | 数量 | 说明 |")
-        lines.append("|------|------|------|")
-        for cat in ["missing_module", "invalid_path", "dynamic_import", "unused_dep", "unreferenced_env"]:
-            count = cat_counts.get(cat, 0)
-            if count == 0:
-                continue
-            label = CATEGORY_LABELS.get(cat, cat)
-            desc = {
-                "missing_module": "代码中 import 了但项目里找不到的模块",
-                "invalid_path": "sys.path 指向了不存在的路径",
-                "dynamic_import": "使用了动态导入，可能隐藏依赖问题",
-                "unused_dep": "requirements.txt 中声明但未使用的依赖",
-                "unreferenced_env": ".env 中定义但代码中未引用的环境变量",
-            }.get(cat, "")
-            lines.append(f"| {label} | {count} | {desc} |")
-        lines.append("")
-
-        lines.append("---")
-        lines.append("")
-
-        # 分类详细清单（按严重程度排序）
-        gaps_sorted = sorted(self._gaps, key=lambda g: (SEVERITY_ORDER.get(g.severity, 9), g.file_path))
-
-        for cat in ["missing_module", "invalid_path", "dynamic_import", "unused_dep", "unreferenced_env"]:
-            cat_gaps = [g for g in gaps_sorted if g.category == cat]
-            if not cat_gaps:
-                continue
-
-            label = CATEGORY_LABELS.get(cat, cat)
-            lines.append(f"## {label}（{len(cat_gaps)} 项）")
-            lines.append("")
-
-            for gap in cat_gaps:
-                sev_tag = {"high": "[高危]", "medium": "[中危]", "low": "[低危]"}.get(gap.severity, "")
-                lines.append(f"### {sev_tag} {gap.item}")
-                lines.append("")
-                lines.append(f"- **文件**: `{gap.file_path}`")
-                lines.append(f"- **详情**: {gap.detail}")
-                if gap.suggestion:
-                    lines.append(f"- **建议**: {gap.suggestion}")
-                lines.append("")
-
-        lines.append("---")
-        lines.append("")
-
-        # 修复优先级建议
-        lines.append("## 修复优先级建议")
-        lines.append("")
-        if sev_counts.get("high", 0) > 0:
-            lines.append(f"1. **立即修复** ({sev_counts['high']} 项高危): 缺失的本地模块和失效的路径会导致程序运行失败")
-        if sev_counts.get("medium", 0) > 0:
-            lines.append(f"2. **尽快处理** ({sev_counts['medium']} 项中危): 动态导入风险需要评估，确保有充分的错误处理")
-        if sev_counts.get("low", 0) > 0:
-            lines.append(f"3. **定期清理** ({sev_counts['low']} 项低危): 未使用的依赖和环境变量可逐步清理")
-        lines.append("")
-
-        lines.append("---")
-        lines.append("")
-        lines.append(f"*报告由 CodeRef-AI ResourceGapDetector v1.0 生成*")
-
-        return "\n".join(lines)
+        """生成 Markdown 格式的资源遗漏报告（实现拆分至模块级 _render_resource_gap_report）"""
+        return _render_resource_gap_report(self._gaps, project_path)
 
 
 # ═══════════════════════════════════════════════════════════════════

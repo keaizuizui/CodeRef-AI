@@ -196,6 +196,52 @@ def _extract_entry_signals(files: List[CodeFile]) -> List[EntrySignal]:
     return dedup[:_MAX_ENTRY_SIGNALS]
 
 
+def _count_arch_hits(files: List[CodeFile]) -> Dict[str, int]:
+    """汇总各架构类型的文件命中数（一个文件对某类架构只计一次）。"""
+    arch_hits: Dict[str, int] = {ARCH_WEB: 0, ARCH_EVENT: 0, ARCH_PLUGIN: 0}
+    for f in files:
+        for arch, hit in _scan_file(getattr(f, "raw_content", "") or "").items():
+            arch_hits[arch] += hit
+    return arch_hits
+
+
+def _label_frameworks(arch_hits: Dict[str, int]) -> List[str]:
+    """记录命中的框架/中间件关键词（用于报告展示）。"""
+    return [ARCH_LABELS[arch] for arch, hits in arch_hits.items() if hits > 0]
+
+
+def _decide_arch_type(arch_hits: Dict[str, int], total: int) -> tuple:
+    """综合判定架构类型（web/event/plugin 取命中文件数最高的；默认 layered）。
+
+    Returns:
+        (arch_type, confidence, evidence) 三元组。
+    """
+    scored = [(a, c) for a, c in arch_hits.items() if c > 0]
+    if not scored:
+        return ARCH_LAYERED, 0.0, "未检测到框架/中间件信号，按分层/单体处理。"
+    scored.sort(key=lambda x: x[1], reverse=True)
+    best_arch, best_count = scored[0]
+    # 置信度：命中文件数 / 总文件数，且至少抓到 1 个文件
+    confidence = round(min(_CONFIDENCE_CAP, best_count / total + _CONFIDENCE_FLOOR), 2)
+    evidence = (
+        f"检测到 {best_count}/{total} 个文件含 {ARCH_LABELS[best_arch]} 信号"
+        f"（{ '、'.join(ARCH_LABELS[a] for a, c in scored[1:] if c > 0) or '无其他架构信号'}）。"
+        if len(scored) >= 2 else
+        f"检测到 {best_count}/{total} 个文件含 {ARCH_LABELS[best_arch]} 信号。"
+    )
+    return best_arch, confidence, evidence
+
+
+def _entry_signal_evidence(signals: List[EntrySignal]) -> str:
+    """入口信号的证据文案（路由 / 事件 / 插件数量统计）。"""
+    return (
+        f"提取到 {len(signals)} 个调用图之外的入口信号"
+        f"（{len([s for s in signals if s.kind == 'web_route'])} 路由 / "
+        f"{len([s for s in signals if s.kind == 'event_listener'])} 事件 / "
+        f"{len([s for s in signals if s.kind == 'plugin_hook'])} 插件）。"
+    )
+
+
 def detect_architecture(files: List[CodeFile]) -> ArchitectureProfile:
     """从文件列表静态探测架构画像。
 
@@ -212,47 +258,20 @@ def detect_architecture(files: List[CodeFile]) -> ArchitectureProfile:
             return profile
 
         # 1) 汇总各架构的文件命中数
-        arch_hits: Dict[str, int] = {ARCH_WEB: 0, ARCH_EVENT: 0, ARCH_PLUGIN: 0}
-        for f in files:
-            for arch, hit in _scan_file(getattr(f, "raw_content", "") or "").items():
-                arch_hits[arch] += hit
+        arch_hits = _count_arch_hits(files)
 
         # 2) 记录命中的框架/中间件关键词（用于报告展示）
-        frameworks: List[str] = []
-        for arch, hits in arch_hits.items():
-            if hits > 0:
-                frameworks.append(ARCH_LABELS[arch])
-        profile.frameworks = frameworks
+        profile.frameworks = _label_frameworks(arch_hits)
 
         total = len(files) or 1
         # 3) 综合判定架构类型（web/event/plugin 取命中文件数最高的；默认 layered）
-        scored = [(a, c) for a, c in arch_hits.items() if c > 0]
-        if scored:
-            scored.sort(key=lambda x: x[1], reverse=True)
-            best_arch, best_count = scored[0]
-            # 置信度：命中文件数 / 总文件数，且至少抓到 1 个文件
-            profile.confidence = round(min(_CONFIDENCE_CAP, best_count / total + _CONFIDENCE_FLOOR), 2)
-            profile.arch_type = best_arch
-            profile.evidence.append(
-                f"检测到 {best_count}/{total} 个文件含 {ARCH_LABELS[best_arch]} 信号"
-                f"（{ '、'.join(ARCH_LABELS[a] for a, c in scored[1:] if c > 0) or '无其他架构信号'}）。"
-                if len(scored) >= 2 else
-                f"检测到 {best_count}/{total} 个文件含 {ARCH_LABELS[best_arch]} 信号。"
-            )
-        else:
-            profile.confidence = 0.0
-            profile.arch_type = ARCH_LAYERED
-            profile.evidence.append("未检测到框架/中间件信号，按分层/单体处理。")
+        profile.arch_type, profile.confidence, evidence = _decide_arch_type(arch_hits, total)
+        profile.evidence.append(evidence)
 
         # 4) 提取入口信号
         profile.entry_signals = _extract_entry_signals(files)
         if profile.entry_signals:
-            profile.evidence.append(
-                f"提取到 {len(profile.entry_signals)} 个调用图之外的入口信号"
-                f"（{len([s for s in profile.entry_signals if s.kind == 'web_route'])} 路由 / "
-                f"{len([s for s in profile.entry_signals if s.kind == 'event_listener'])} 事件 / "
-                f"{len([s for s in profile.entry_signals if s.kind == 'plugin_hook'])} 插件）。"
-            )
+            profile.evidence.append(_entry_signal_evidence(profile.entry_signals))
 
         logger.info(f"[ArchDetector] 架构画像: {profile.label} "
                     f"(置信度 {profile.confidence:.2f}, 入口信号 {len(profile.entry_signals)})")

@@ -94,6 +94,317 @@ class PropagationGap:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 能力签名提取（模块级纯函数，从 InnovationPropagationDetector 提取）
+# ═══════════════════════════════════════════════════════════════════
+
+def _mark_structure_feature(node: ast.AST, sig: CapabilitySignature) -> None:
+    """按节点类型标记结构能力（注解/docstring/装饰器/with/async/try/f-string）"""
+    # 类型注解与 docstring
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if node.returns or any(a.annotation for a in node.args.args):
+            sig.has_type_hints = True
+        if ast.get_docstring(node):
+            sig.has_docstring = True
+
+    # 装饰器
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        if node.decorator_list:
+            sig.has_decorators = True
+
+    # 上下文管理器
+    if isinstance(node, ast.With):
+        sig.has_context_manager = True
+
+    # 异步代码
+    if isinstance(node, ast.AsyncFunctionDef):
+        sig.has_async_code = True
+
+    # try/except
+    if isinstance(node, ast.Try):
+        sig.has_error_handling = True
+
+    # f-string 字符串模板
+    if isinstance(node, ast.JoinedStr):
+        sig.has_prompt_template = True
+
+
+def _mark_llm_call(node: ast.Call, sig: CapabilitySignature) -> None:
+    """LLM 调用检测（属性方法名或裸函数名包含关键词）"""
+    if isinstance(node.func, ast.Attribute):
+        func_name = node.func.attr.lower()
+        if any(kw in func_name for kw in ("chat", "complete", "generate", "completion")):
+            sig.has_llm_call = True
+    elif isinstance(node.func, ast.Name):
+        if node.func.id.lower() in ("chat", "generate", "complete"):
+            sig.has_llm_call = True
+
+
+def _mark_call_feature(node: ast.Call, sig: CapabilitySignature) -> None:
+    """按调用形态标记能力（字符串模板/网络/文件IO/配置加载/LLM）"""
+    # .format 字符串模板
+    if isinstance(node.func, ast.Attribute) and node.func.attr == "format":
+        if isinstance(node.func.value, ast.Constant) and isinstance(node.func.value.value, str):
+            sig.has_prompt_template = True
+
+    # LLM 调用检测
+    _mark_llm_call(node, sig)
+
+    # 网络请求
+    if isinstance(node.func, ast.Attribute):
+        func_name = node.func.attr.lower()
+        if any(kw in func_name for kw in ("get", "post", "request", "fetch", "urlopen")):
+            sig.has_network_call = True
+
+    # 文件 I/O
+    if isinstance(node.func, ast.Name):
+        if node.func.id in ("open", "read", "write"):
+            sig.has_file_io = True
+
+    # 配置加载
+    if isinstance(node.func, ast.Attribute):
+        func_name = node.func.attr.lower()
+        if any(kw in func_name for kw in ("load", "safe_load", "getenv", "environ")):
+            sig.has_config_loading = True
+
+
+def _detect_ast_capabilities(tree: ast.AST, sig: CapabilitySignature) -> None:
+    """AST 遍历检测能力开关：单次遍历按节点类型分发到 _mark_* 特征标记"""
+    for node in ast.walk(tree):
+        _mark_structure_feature(node, sig)
+        if isinstance(node, ast.Call):
+            _mark_call_feature(node, sig)
+
+
+def _detect_text_capabilities(content: str, sig: CapabilitySignature) -> None:
+    """文本级高级能力检测（重试逻辑/校验链/管道流）"""
+    # ── 高级能力：重试逻辑 ──
+    content_lower = content.lower()
+    if any(kw in content_lower for kw in ("retry", "backoff", "retries", "max_attempts")):
+        sig.has_retry_logic = True
+
+    # ── 高级能力：校验链 ──
+    validate_count = len(re.findall(r'\bvalidate\b', content_lower))
+    sanitize_count = len(re.findall(r'\bsanitize\b', content_lower))
+    normalize_count = len(re.findall(r'\bnormalize\b', content_lower))
+    if validate_count >= 2 and (sanitize_count >= 1 or normalize_count >= 1):
+        sig.has_validation_chain = True
+
+    # ── 高级能力：管道流（超过3个连续函数调用在同一行） ──
+    pipeline_pattern = re.findall(r'(\w+\([^)]*\))\s*\.\s*(\w+\([^)]*\))', content)
+    if len(pipeline_pattern) >= 2:
+        sig.has_pipeline_flow = True
+
+
+def _extract_capability_signature(file_path: str, content: str) -> CapabilitySignature:
+    """
+    通过 AST 提取模块的能力签名
+
+    不用正则，用 AST 精确解析，避免把字符串/注释中的关键字误判为能力。
+    拆分说明：AST 能力检测提取为 _detect_ast_capabilities，
+    文本级能力检测提取为 _detect_text_capabilities，本函数仅做编排。
+    """
+    rel_path = os.path.basename(file_path)
+    sig = CapabilitySignature(
+        file_path=file_path,
+        module_name=rel_path.replace(".py", ""),
+        line_count=len(content.splitlines()),
+    )
+
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return sig
+
+    # 收集函数/类定义
+    func_defs = []
+    class_defs = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            func_defs.append(node)
+        elif isinstance(node, ast.ClassDef):
+            class_defs.append(node)
+
+    sig.function_count = len(func_defs)
+    sig.has_class_structure = len(class_defs) > 0
+
+    # ── 能力检测 ──
+    _detect_ast_capabilities(tree, sig)
+    _detect_text_capabilities(content, sig)
+
+    # ── 收集激活的标签 ──
+    for attr_name in dir(sig):
+        if attr_name.startswith("has_") and getattr(sig, attr_name):
+            sig.tags.append(attr_name[4:])  # 去掉 "has_" 前缀
+
+    return sig
+
+
+def _dedupe_gaps(all_gaps: List[PropagationGap]) -> List[PropagationGap]:
+    """缺口去重：同一模式 → 同一目标模块只保留一个"""
+    seen = set()
+    unique_gaps = []
+    for g in all_gaps:
+        key = (g.pattern.pattern_name, g.target_module)
+        if key not in seen:
+            seen.add(key)
+            unique_gaps.append(g)
+    return unique_gaps
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 报告渲染（模块级纯函数，从 InnovationPropagationDetector._format_report 提取）
+# ═══════════════════════════════════════════════════════════════════
+
+def _render_ipd_header(
+    lines: List[str],
+    gaps: List[PropagationGap],
+    clusters: List[List[CapabilitySignature]],
+    signatures: List[CapabilitySignature],
+    use_llm: bool,
+    llm_available: bool,
+) -> None:
+    """渲染报告头部统计"""
+    lines.append("# 创新传播检测报告")
+    lines.append("")
+    lines.append(f"> 检测时间: 自动生成")
+    lines.append(f"> 分析模式: {'LLM 增强' if use_llm and llm_available else '纯结构对比'}")
+    lines.append(f"> 扫描模块: {len(signatures)} 个")
+    lines.append(f"> 有效聚类: {len(clusters)} 个（≥2 模块）")
+    lines.append(f"> 传播缺口: {len(gaps)} 个")
+    lines.append("")
+
+
+def _render_ipd_no_gaps(lines: List[str], clusters: List[List[CapabilitySignature]]) -> None:
+    """渲染无缺口分支：结论与聚类概览"""
+    lines.append("## ✅ 未发现传播缺口")
+    lines.append("")
+    lines.append("所有同类型模块之间的设计模式传播良好，没有发现遗漏。")
+    lines.append("")
+    if clusters:
+        lines.append("### 模块聚类概览")
+        lines.append("")
+        for i, cluster in enumerate(clusters[:10], 1):
+            modules = [s.module_name for s in cluster]
+            shared_tags = set()
+            for s in cluster:
+                shared_tags.update(s.tags)
+            lines.append(f"**聚类 {i}** ({len(cluster)} 模块) — 共享标签: {', '.join(sorted(shared_tags)[:8])}")
+            lines.append(f"  {' → '.join(modules)}")
+            lines.append("")
+
+
+def _render_ipd_intro(lines: List[str]) -> None:
+    """渲染"这个功能是做什么的"说明段"""
+    lines.append("## 这个功能是做什么的？")
+    lines.append("")
+    lines.append("> 想象这个场景：你的项目里，`research` 模块用了一种「5w1h 问法」来结构化用户输入，效果很好。")
+    lines.append("> 但 `generate` 模块也是做类似的事，却没有用这个方法。")
+    lines.append("> 为什么？——**因为你忘了，AI 也忘了。**")
+    lines.append("> ")
+    lines.append("> 这个检测器就是在自动发现这种遗漏：")
+    lines.append("> 1. 先把所有模块按「能力标签」（有没有 LLM 调用、有没有校验链、有没有重试逻辑等）归类")
+    lines.append("> 2. 然后找出同组里「A 模块有，但 B 模块没有」的能力差异")
+    lines.append("> 3. 如果只有少数模块有某种能力，就建议传播到同类模块")
+    lines.append("> ")
+    lines.append("> **纯结构对比模式**（当前）：只能发现标签级缺口（比如 B 少了校验链）")
+    lines.append("> **LLM 增强模式**（需 API key）：能发现方法论级缺口（比如「5w1h 问法」「TDDDR 骨架降噪」）")
+    lines.append("")
+
+
+def _render_ipd_gap_group(lines: List[str], pattern_name: str, pattern_gaps: List[PropagationGap]) -> None:
+    """渲染单个模式缺口分组（属性表）"""
+    first = pattern_gaps[0]
+    source_modules = sorted(set(g.source_module for g in pattern_gaps))
+    target_modules = sorted(set(g.target_module for g in pattern_gaps))
+    missing_count = len(target_modules)
+    actual_have = int(first.adoption_rate * first.cluster_size) if first.adoption_rate > 0 else len(source_modules)
+    # 从 source_location 中提取实际拥有此能力的模块列表（结构模式）
+    have_set = set()
+    if first.pattern.source_location:
+        have_set = set(first.pattern.source_location.split(","))
+    if not have_set:
+        have_set = set(source_modules)
+
+    lines.append(f"### 「{pattern_name}」— {missing_count} 个模块缺失")
+    lines.append("")
+    lines.append(f"**这是什么？** {first.suggestion}")
+    lines.append("")
+    lines.append(f"| 属性 | 值 |")
+    lines.append(f"|------|-----|")
+    lines.append(f"| 采用率 | {first.adoption_rate:.0%}（{first.cluster_size} 个同类模块中仅 {actual_have} 个具备） |")
+    lines.append(f"| 已有此能力的模块 | {', '.join(f'`{m}`' for m in sorted(have_set))} |")
+    lines.append(f"| 建议传播到 | {', '.join(f'`{m}`' for m in target_modules[:8])}{' ...等' if missing_count > 8 else ''} |")
+    lines.append("")
+
+
+def _render_ipd_cluster_overview(
+    lines: List[str],
+    clusters: List[List[CapabilitySignature]],
+    specialized_tags: Set[str],
+) -> None:
+    """渲染聚类依据部分"""
+    lines.append("## 聚类依据")
+    lines.append("")
+    lines.append("> 以下展示模块是如何被归为「同类」的。只有同类模块之间才会做模式对比。")
+    lines.append("")
+
+    for i, cluster in enumerate(clusters[:10], 1):
+        shared_tags = set()
+        for s in cluster:
+            shared_tags.update(s.tags)
+        specialized_shared = sorted(shared_tags & specialized_tags)
+        basic_shared = sorted(shared_tags - specialized_tags)
+        lines.append(f"### 聚类 {i} — {len(cluster)} 个模块")
+        lines.append(f"**关键能力**: {', '.join(specialized_shared) if specialized_shared else '(无专业标签)'}")
+        lines.append(f"**基础能力**: {', '.join(basic_shared[:6])}{'...' if len(basic_shared) > 6 else ''}")
+        lines.append("")
+        lines.append(f"模块: {', '.join(f'`{s.module_name}`' for s in cluster)}")
+        lines.append("")
+
+
+def _format_propagation_report(
+    gaps: List[PropagationGap],
+    clusters: List[List[CapabilitySignature]],
+    signatures: List[CapabilitySignature],
+    use_llm: bool,
+    llm_available: bool,
+    specialized_tags: Set[str],
+) -> str:
+    """生成 Markdown 格式的检测报告（编排各 _render_ipd_* 段落）"""
+    lines: List[str] = []
+    _render_ipd_header(lines, gaps, clusters, signatures, use_llm, llm_available)
+
+    # ── 摘要 ──
+    if not gaps:
+        _render_ipd_no_gaps(lines, clusters)
+        return "\n".join(lines)
+
+    # ── 一句话总结 ──
+    _render_ipd_intro(lines)
+
+    # ── 按模式分组展示 ──
+    lines.append("## 发现的模式缺口")
+    lines.append("")
+
+    gaps_by_pattern: Dict[str, List[PropagationGap]] = defaultdict(list)
+    for g in gaps:
+        gaps_by_pattern[g.pattern.pattern_name].append(g)
+
+    for pattern_name, pattern_gaps in sorted(gaps_by_pattern.items(), key=lambda x: -len(x[1])):
+        _render_ipd_gap_group(lines, pattern_name, pattern_gaps)
+
+    # ── 聚类概览 ──
+    _render_ipd_cluster_overview(lines, clusters, specialized_tags)
+
+    # ── 免责声明 ──
+    lines.append("---")
+    lines.append("")
+    lines.append("*本报告自动生成，所有建议仅供参考。模式传播不等于强制统一，部分模块的差异可能是有意为之。*")
+
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 检测器主体
 # ═══════════════════════════════════════════════════════════════════
 
@@ -219,123 +530,8 @@ class InnovationPropagationDetector:
     # ─── Step 1: 能力签名提取 ────────────────────────────────────
 
     def _extract_capability_signature(self, file_path: str, content: str) -> CapabilitySignature:
-        """
-        通过 AST 提取模块的能力签名
-
-        不用正则，用 AST 精确解析，避免把字符串/注释中的关键字误判为能力。
-        """
-        rel_path = os.path.basename(file_path)
-        sig = CapabilitySignature(
-            file_path=file_path,
-            module_name=rel_path.replace(".py", ""),
-            line_count=len(content.splitlines()),
-        )
-
-        try:
-            tree = ast.parse(content)
-        except SyntaxError:
-            return sig
-
-        # 收集函数/类定义
-        func_defs = []
-        class_defs = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
-                func_defs.append(node)
-            elif isinstance(node, ast.ClassDef):
-                class_defs.append(node)
-
-        sig.function_count = len(func_defs)
-        sig.has_class_structure = len(class_defs) > 0
-
-        # ── 能力检测（AST 遍历） ──
-
-        for node in ast.walk(tree):
-            # 类型注解
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                if node.returns or any(a.annotation for a in node.args.args):
-                    sig.has_type_hints = True
-                if ast.get_docstring(node):
-                    sig.has_docstring = True
-
-            # 装饰器
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                if node.decorator_list:
-                    sig.has_decorators = True
-
-            # 上下文管理器
-            if isinstance(node, ast.With):
-                sig.has_context_manager = True
-
-            # 异步代码
-            if isinstance(node, ast.AsyncFunctionDef):
-                sig.has_async_code = True
-
-            # try/except
-            if isinstance(node, ast.Try):
-                sig.has_error_handling = True
-
-            # 字符串模板 (f-string 或 .format)
-            if isinstance(node, ast.JoinedStr):
-                sig.has_prompt_template = True
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Attribute) and node.func.attr == "format":
-                    if isinstance(node.func.value, ast.Constant) and isinstance(node.func.value.value, str):
-                        sig.has_prompt_template = True
-
-            # LLM 调用检测
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Attribute):
-                    func_name = node.func.attr.lower()
-                    if any(kw in func_name for kw in ("chat", "complete", "generate", "completion")):
-                        sig.has_llm_call = True
-                elif isinstance(node.func, ast.Name):
-                    if node.func.id.lower() in ("chat", "generate", "complete"):
-                        sig.has_llm_call = True
-
-            # 网络请求
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Attribute):
-                    func_name = node.func.attr.lower()
-                    if any(kw in func_name for kw in ("get", "post", "request", "fetch", "urlopen")):
-                        sig.has_network_call = True
-
-            # 文件 I/O
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name):
-                    if node.func.id in ("open", "read", "write"):
-                        sig.has_file_io = True
-
-            # 配置加载
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Attribute):
-                    func_name = node.func.attr.lower()
-                    if any(kw in func_name for kw in ("load", "safe_load", "getenv", "environ")):
-                        sig.has_config_loading = True
-
-        # ── 高级能力：重试逻辑 ──
-        content_lower = content.lower()
-        if any(kw in content_lower for kw in ("retry", "backoff", "retries", "max_attempts")):
-            sig.has_retry_logic = True
-
-        # ── 高级能力：校验链 ──
-        validate_count = len(re.findall(r'\bvalidate\b', content_lower))
-        sanitize_count = len(re.findall(r'\bsanitize\b', content_lower))
-        normalize_count = len(re.findall(r'\bnormalize\b', content_lower))
-        if validate_count >= 2 and (sanitize_count >= 1 or normalize_count >= 1):
-            sig.has_validation_chain = True
-
-        # ── 高级能力：管道流（超过3个连续函数调用在同一行） ──
-        pipeline_pattern = re.findall(r'(\w+\([^)]*\))\s*\.\s*(\w+\([^)]*\))', content)
-        if len(pipeline_pattern) >= 2:
-            sig.has_pipeline_flow = True
-
-        # ── 收集激活的标签 ──
-        for attr_name in dir(sig):
-            if attr_name.startswith("has_") and getattr(sig, attr_name):
-                sig.tags.append(attr_name[4:])  # 去掉 "has_" 前缀
-
-        return sig
+        """通过 AST 提取模块的能力签名（渲染逻辑已提取为同名模块级函数）"""
+        return _extract_capability_signature(file_path, content)
 
     # ─── Step 2: 模块聚类 ───────────────────────────────────────
 
@@ -642,9 +838,62 @@ class InnovationPropagationDetector:
 
     # ─── 主入口 ──────────────────────────────────────────────────
 
+    def _extract_patterns_with_llm(
+        self,
+        clusters: List[List[CapabilitySignature]],
+        max_llm_rounds: int,
+    ) -> Dict[str, List[InnovationPattern]]:
+        """Step 3：LLM 模式提取（受轮数上限与类级总预算双重约束）"""
+        all_patterns: Dict[str, List[InnovationPattern]] = {}
+        llm_rounds = 0
+
+        for cluster in clusters:
+            for sig in cluster:
+                if llm_rounds >= max_llm_rounds:
+                    logger.warning(f"LLM 调用达到上限 {max_llm_rounds}，停止模式提取")
+                    break
+                if self._llm_budget <= 0:
+                    logger.warning("LLM 总预算耗尽，停止模式提取")
+                    break
+                content = self._read_file(sig.file_path)
+                if not content:
+                    continue
+                patterns = self._extract_patterns_for_module(sig, content)
+                if patterns:
+                    all_patterns[sig.module_name] = patterns
+                llm_rounds += 1
+                self._llm_budget -= 1
+
+        logger.info(f"Step 3 完成: LLM 调用 {llm_rounds} 轮，提取 {sum(len(v) for v in all_patterns.values())} 个模式")
+        return all_patterns
+
+    def _enrich_gap_suggestions(
+        self,
+        unique_gaps: List[PropagationGap],
+        signatures: List[CapabilitySignature],
+    ) -> None:
+        """预算兜底：为幸存缺口生成 LLM 精建议（就地更新 suggestion）"""
+        sig_by_module = {s.module_name: s for s in signatures}
+        for g in unique_gaps:
+            if self._llm_budget <= 0:
+                logger.warning(
+                    f"LLM 总预算耗尽，剩余缺口使用结构建议（{self._llm_budget}）"
+                )
+                break
+            target_sig = sig_by_module.get(g.target_module)
+            if target_sig is not None:
+                llm_suggestion = self._generate_suggestion(g.pattern, target_sig)
+                if llm_suggestion.strip():
+                    g.suggestion = llm_suggestion
+                self._llm_budget -= 1
+
     def detect(self, project_path: str, use_llm: bool = True, max_llm_rounds: int = 20) -> str:
         """
         执行创新传播检测
+
+        拆分说明：Step 3 LLM 模式提取提取为 _extract_patterns_with_llm，
+        预算兜底精建议生成提取为 _enrich_gap_suggestions，
+        缺口去重提取为模块级 _dedupe_gaps，本方法仅做编排。
 
         Args:
             project_path: 项目根目录
@@ -684,26 +933,8 @@ class InnovationPropagationDetector:
 
         # Step 3: 模式提取（LLM）
         all_patterns: Dict[str, List[InnovationPattern]] = {}
-        llm_rounds = 0
-
         if use_llm and self._llm_available:
-            for cluster in clusters:
-                for sig in cluster:
-                    if llm_rounds >= max_llm_rounds:
-                        logger.warning(f"LLM 调用达到上限 {max_llm_rounds}，停止模式提取")
-                        break
-                    if self._llm_budget <= 0:
-                        logger.warning("LLM 总预算耗尽，停止模式提取")
-                        break
-                    content = self._read_file(sig.file_path)
-                    if not content:
-                        continue
-                    patterns = self._extract_patterns_for_module(sig, content)
-                    if patterns:
-                        all_patterns[sig.module_name] = patterns
-                    llm_rounds += 1
-                    self._llm_budget -= 1
-            logger.info(f"Step 3 完成: LLM 调用 {llm_rounds} 轮，提取 {sum(len(v) for v in all_patterns.values())} 个模式")
+            all_patterns = self._extract_patterns_with_llm(clusters, max_llm_rounds)
 
         # Step 4: 缺口检测
         all_gaps = []
@@ -719,13 +950,7 @@ class InnovationPropagationDetector:
                 all_gaps.extend(gaps)
 
         # 去重（同一模式→同一目标只保留一个）
-        seen = set()
-        unique_gaps = []
-        for g in all_gaps:
-            key = (g.pattern.pattern_name, g.target_module)
-            if key not in seen:
-                seen.add(key)
-                unique_gaps.append(g)
+        unique_gaps = _dedupe_gaps(all_gaps)
 
         # ── 缺口价值挑选 ──
         # 候选缺口超过上限时，拉一份完整清单让 LLM 一次看全，由它按真实价值
@@ -738,19 +963,7 @@ class InnovationPropagationDetector:
 
         # ── 预算兜底：为幸存缺口生成 LLM 精建议（受类级 LLM 总预算约束） ──
         if use_llm and self._llm_available:
-            sig_by_module = {s.module_name: s for s in signatures}
-            for g in unique_gaps:
-                if self._llm_budget <= 0:
-                    logger.warning(
-                        f"LLM 总预算耗尽，剩余缺口使用结构建议（{self._llm_budget}）"
-                    )
-                    break
-                target_sig = sig_by_module.get(g.target_module)
-                if target_sig is not None:
-                    llm_suggestion = self._generate_suggestion(g.pattern, target_sig)
-                    if llm_suggestion.strip():
-                        g.suggestion = llm_suggestion
-                    self._llm_budget -= 1
+            self._enrich_gap_suggestions(unique_gaps, signatures)
 
         logger.info(f"Step 4 完成: {len(unique_gaps)} 个传播缺口")
         # 暴露结构化结果，供管线统一收集
@@ -941,110 +1154,10 @@ class InnovationPropagationDetector:
         signatures: List[CapabilitySignature],
         use_llm: bool,
     ) -> str:
-        """生成 Markdown 格式的检测报告"""
-        lines = []
-        lines.append("# 创新传播检测报告")
-        lines.append("")
-        lines.append(f"> 检测时间: 自动生成")
-        lines.append(f"> 分析模式: {'LLM 增强' if use_llm and self._llm_available else '纯结构对比'}")
-        lines.append(f"> 扫描模块: {len(signatures)} 个")
-        lines.append(f"> 有效聚类: {len(clusters)} 个（≥2 模块）")
-        lines.append(f"> 传播缺口: {len(gaps)} 个")
-        lines.append("")
-
-        # ── 摘要 ──
-        if not gaps:
-            lines.append("## ✅ 未发现传播缺口")
-            lines.append("")
-            lines.append("所有同类型模块之间的设计模式传播良好，没有发现遗漏。")
-            lines.append("")
-            if clusters:
-                lines.append("### 模块聚类概览")
-                lines.append("")
-                for i, cluster in enumerate(clusters[:10], 1):
-                    modules = [s.module_name for s in cluster]
-                    shared_tags = set()
-                    for s in cluster:
-                        shared_tags.update(s.tags)
-                    lines.append(f"**聚类 {i}** ({len(cluster)} 模块) — 共享标签: {', '.join(sorted(shared_tags)[:8])}")
-                    lines.append(f"  {' → '.join(modules)}")
-                    lines.append("")
-            return "\n".join(lines)
-
-        # ── 一句话总结 ──
-        # 按模式名分组
-        gaps_by_pattern: Dict[str, List[PropagationGap]] = defaultdict(list)
-        for g in gaps:
-            gaps_by_pattern[g.pattern.pattern_name].append(g)
-
-        lines.append("## 这个功能是做什么的？")
-        lines.append("")
-        lines.append("> 想象这个场景：你的项目里，`research` 模块用了一种「5w1h 问法」来结构化用户输入，效果很好。")
-        lines.append("> 但 `generate` 模块也是做类似的事，却没有用这个方法。")
-        lines.append("> 为什么？——**因为你忘了，AI 也忘了。**")
-        lines.append("> ")
-        lines.append("> 这个检测器就是在自动发现这种遗漏：")
-        lines.append("> 1. 先把所有模块按「能力标签」（有没有 LLM 调用、有没有校验链、有没有重试逻辑等）归类")
-        lines.append("> 2. 然后找出同组里「A 模块有，但 B 模块没有」的能力差异")
-        lines.append("> 3. 如果只有少数模块有某种能力，就建议传播到同类模块")
-        lines.append("> ")
-        lines.append("> **纯结构对比模式**（当前）：只能发现标签级缺口（比如 B 少了校验链）")
-        lines.append("> **LLM 增强模式**（需 API key）：能发现方法论级缺口（比如「5w1h 问法」「TDDDR 骨架降噪」）")
-        lines.append("")
-
-        # ── 按模式分组展示 ──
-        lines.append("## 发现的模式缺口")
-        lines.append("")
-
-        for pattern_name, pattern_gaps in sorted(gaps_by_pattern.items(), key=lambda x: -len(x[1])):
-            first = pattern_gaps[0]
-            source_modules = sorted(set(g.source_module for g in pattern_gaps))
-            target_modules = sorted(set(g.target_module for g in pattern_gaps))
-            missing_count = len(target_modules)
-            actual_have = int(first.adoption_rate * first.cluster_size) if first.adoption_rate > 0 else len(source_modules)
-            # 从 source_location 中提取实际拥有此能力的模块列表（结构模式）
-            have_set = set()
-            if first.pattern.source_location:
-                have_set = set(first.pattern.source_location.split(","))
-            if not have_set:
-                have_set = set(source_modules)
-
-            lines.append(f"### 「{pattern_name}」— {missing_count} 个模块缺失")
-            lines.append("")
-            lines.append(f"**这是什么？** {first.suggestion}")
-            lines.append("")
-            lines.append(f"| 属性 | 值 |")
-            lines.append(f"|------|-----|")
-            lines.append(f"| 采用率 | {first.adoption_rate:.0%}（{first.cluster_size} 个同类模块中仅 {actual_have} 个具备） |")
-            lines.append(f"| 已有此能力的模块 | {', '.join(f'`{m}`' for m in sorted(have_set))} |")
-            lines.append(f"| 建议传播到 | {', '.join(f'`{m}`' for m in target_modules[:8])}{' ...等' if missing_count > 8 else ''} |")
-            lines.append("")
-
-        # ── 聚类概览 ──
-        lines.append("## 聚类依据")
-        lines.append("")
-        lines.append("> 以下展示模块是如何被归为「同类」的。只有同类模块之间才会做模式对比。")
-        lines.append("")
-
-        for i, cluster in enumerate(clusters[:10], 1):
-            shared_tags = set()
-            for s in cluster:
-                shared_tags.update(s.tags)
-            specialized_shared = sorted(shared_tags & self.SPECIALIZED_TAGS)
-            basic_shared = sorted(shared_tags - self.SPECIALIZED_TAGS)
-            lines.append(f"### 聚类 {i} — {len(cluster)} 个模块")
-            lines.append(f"**关键能力**: {', '.join(specialized_shared) if specialized_shared else '(无专业标签)'}")
-            lines.append(f"**基础能力**: {', '.join(basic_shared[:6])}{'...' if len(basic_shared) > 6 else ''}")
-            lines.append("")
-            lines.append(f"模块: {', '.join(f'`{s.module_name}`' for s in cluster)}")
-            lines.append("")
-
-        # ── 免责声明 ──
-        lines.append("---")
-        lines.append("")
-        lines.append("*本报告自动生成，所有建议仅供参考。模式传播不等于强制统一，部分模块的差异可能是有意为之。*")
-
-        return "\n".join(lines)
+        """生成 Markdown 格式的检测报告（渲染逻辑已提取为模块级 _format_propagation_report）"""
+        return _format_propagation_report(
+            gaps, clusters, signatures, use_llm, self._llm_available, self.SPECIALIZED_TAGS
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════
