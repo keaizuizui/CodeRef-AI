@@ -248,6 +248,19 @@ class CodeKnowledgeGraph:
             for cf in getattr(analysis, "files", [])
             if getattr(cf, "file_path", "")
         }
+        # 预收集项目内所有类的「类名→类节点 id」映射（class:<模块>:<类名>），
+        # 供 INHERITS 边做与 IMPORTS 一致的目标存在性过滤：仅当基类是项目内
+        # 已注册的类才建边，排除 str/Enum/unittest.TestCase/HTMLParser 等
+        # 标准库或第三方基类，避免指向不存在节点的孤儿 INHERITS 边。
+        class_ids_by_name: Dict[str, str] = {}
+        for cf in getattr(analysis, "files", []):
+            _rel = getattr(cf, "file_path", "")
+            if not _rel:
+                continue
+            _mod = os.path.splitext(os.path.basename(_rel))[0]
+            for _cls in getattr(cf, "classes", []):
+                class_ids_by_name.setdefault(
+                    _cls.name, f"class:{_mod}:{_cls.name}")
         n = 0
         for cf in getattr(analysis, "files", []):
             rel = getattr(cf, "file_path", "")
@@ -303,9 +316,13 @@ class CodeKnowledgeGraph:
                     n += 1
                     self._upsert_edge(KGEdge(source=cid, target=mid, type="CONTAINS"))
 
-                # 继承边
+                # 继承边：基类须是项目内已注册的类节点才建边（对齐 IMPORTS 的
+                # 目标存在性过滤）。基类名可能带模块前缀（如 unittest.TestCase），
+                # 取最末段标识符参与匹配；标准库/第三方基类不建边，避免孤儿边。
                 for base in getattr(cls, "base_classes", []):
-                    base_id = f"class:{base}"  # 可能跨模块
+                    base_id = class_ids_by_name.get(base.split(".")[-1])
+                    if not base_id:
+                        continue
                     self._upsert_edge(KGEdge(source=cid, target=base_id, type="INHERITS"))
 
             # 导入边

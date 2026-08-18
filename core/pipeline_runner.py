@@ -306,8 +306,9 @@ class Pipe:
                     if ar:
                         ast_results[file_path] = ar
                         parsed_count += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 预热解析失败，跳过该文件
+                    logger.warning(f"AST 预热解析失败 {file_path}: {e}")
 
             total_calls = sum(
                 len(getattr(ar, "calls", [])) for ar in ast_results.values())
@@ -468,8 +469,8 @@ class Pipe:
                     try:
                         st = os.stat(fp)
                         snapshot[fp] = {"mtime": st.st_mtime, "size": st.st_size}
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"读取文件状态用于快照失败，跳过 {fp}: {e}")
                 r.file_snapshot = snapshot
             except Exception:
                 r.file_snapshot = {}
@@ -983,7 +984,8 @@ class Pipe:
                 r.kg_built_at = data.get("kg_built_at", "") or ""
                 r.findings = [self._finding_from_dict(d) for d in data.get("findings", [])]
                 return True
-            except Exception:
+            except Exception as e:
+                logger.warning(f"加载管线缓存候选失败，继续尝试下一个: {e}")
                 continue
         return False
 
@@ -1276,6 +1278,7 @@ class Pipe:
                 return None
             return max(cands, key=os.path.getmtime)
         except Exception:
+            # 报告文件定位失败视为无历史报告
             return None
 
     def _reuse_no_change(self, project_path: str, r: PipeResult,
@@ -1513,6 +1516,14 @@ class Pipe:
                         prev.line_start = prev.line
                     prev.line_end = max(prev.line_end, f.line)
                     prev.line = prev.line_start
+                    # 累加 count：合并掉的每条违规不能在计数层静默丢失
+                    #（内容经 detail 拼接保留，数量也必须保留）。
+                    prev.count = getattr(prev, "count", 1) + 1
+                    # 记录被合并成员的精确行号：count 与 locations 必须同源，
+                    # 否则 _burst_merge 聚合后 count > len(locations)（口径分裂）。
+                    if not prev.locations:
+                        prev.locations = [f"{prev.file_path}:{prev.line_start}"]
+                    prev.locations.append(f"{f.file_path}:{f.line}")
                     if f.detail and f.detail not in prev.detail:
                         prev.detail += " | " + f.detail
                     continue
@@ -1532,6 +1543,13 @@ class Pipe:
         高价值缺陷被同 category 的 flood 合并吞掉顶层位置（chatwiki agent
         的 Go 风险全部归入 tool_misuse，若不细分会被 326 条 Python 噪声
         合并成 1 条，顶层 file/line 被 clawbot 占据）。
+
+        分组键再叠加 severity：同一规则的 high/low 必须分开聚合。
+        否则"7 条 high + 63 条已降级 low"会被合并成一条 count=70、
+        severity=high 的条目——单 severity 字段无法反映组内分层，
+        加权统计（按 tier 分组求和 count）会把 63 条 low 全部计入
+        HIGH，修复效果被聚合层掩盖（自审实测：SEC-08 检测器已把
+        63 条降级 low，聚合后报告仍显示 70 条 high）。
         """
         def _risk_key(f: Finding) -> str:
             t = (f.title or "").lstrip()
@@ -1541,7 +1559,8 @@ class Pipe:
 
         by_key = {}
         for f in findings:
-            k = (f.tool, f.category, _risk_key(f))
+            k = (f.tool, f.category, _risk_key(f),
+                 (f.severity or "medium").lower())
             by_key.setdefault(k, []).append(f)
 
         result = []
@@ -1562,19 +1581,35 @@ class Pipe:
                 first.tier = max_tier
                 first.severity = max_sev
                 # 缺陷 2/3：记录真实数量与全部位置
-                first.count = len(group)
-                locs = [f"{f.file_path}:{f.line}" for f in group if f.file_path]
+                # 用组内 count 加权和而非 len(group)：_dedup_adjacent 已把邻行
+                # 违规合并进单条的 count，len 会把这部分重新丢掉。
+                first.count = sum(getattr(f, "count", 1) for f in group)
+                # locations 与 count 同源：逐成员并入其全部原始位置——
+                # _dedup_adjacent 合并过的成员，其 locations 已含被并邻行的精确行号；
+                # 未合并成员（locations 为空）补自身 file:line。不去重：
+                # 1 次命中对应 1 个位置，len(locations) == count（file_path 为空的除外）。
+                locs: List[str] = []
+                for f in group:
+                    if not f.file_path:
+                        continue
+                    sub = getattr(f, "locations", None) or []
+                    if sub:
+                        locs.extend(sub)
+                    else:
+                        locs.append(f"{f.file_path}:{f.line}")
                 first.locations = locs
-                first.title = f"[共 {len(group)} 条] {first.title}"
+                first.title = f"[共 {first.count} 条] {first.title}"
                 loc_preview = ", ".join(locs[:20])
                 if len(locs) > 20:
                     loc_preview += f" 等 {len(locs)} 处"
                 # 缺陷 5：保留原始 detail（含 gov 附加的"命中代码"，供符号级证据核验），
                 # 在其后追加爆发式统计，避免覆盖 line_content 导致 L3 符号提取失效。
+                # detail 数字与 count 同源（此前用 len(group) 导致 count=70/detail=60 口径分裂）。
                 base_detail = first.detail or ""
-                first.detail = (f"{base_detail}（此项为爆发式重复，共 {len(group)} 次，涉及 "
+                first.detail = (f"{base_detail}（此项为爆发式重复，共 {first.count} 次，涉及 "
                                 f"{len(set(f.file_path for f in group))} 个文件，"
-                                f"组内最高严重度: {max_sev}。全部位置见 locations 字段，示例: {loc_preview}）")
+                                f"组内最高严重度: {max_sev}。全部位置见 locations 字段"
+                                f"（{len(locs)} 处，未去重），示例: {loc_preview}）")
                 result.append(first)
         return result
 

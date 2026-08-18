@@ -846,7 +846,9 @@ class SCAChecker:
             try:
                 with open(fp, "r", encoding="utf-8", errors="ignore") as fh:
                     lines = fh.readlines()
-            except OSError:
+            except OSError as e:
+                # 文件不可读，跳过该文件
+                logger.warning(f"读取文件失败，跳过依赖收集 {fp}: {e}")
                 continue
             for line in lines:
                 m = self._IMPORT_TOP_RE.match(line.strip())
@@ -896,7 +898,9 @@ class SCAChecker:
                 try:
                     with open(fp, "r", encoding="utf-8", errors="ignore") as fh:
                         lines = fh.readlines()
-                except OSError:
+                except OSError as e:
+                    # 文件不可读，跳过该文件
+                    logger.warning(f"读取文件失败，跳过供应链检查 {fp}: {e}")
                     continue
                 for i, line in enumerate(lines, 1):
                     if any(p.search(line) for p in self._SUPPLY_INSTALL_PATTERNS):
@@ -953,7 +957,9 @@ class SCAChecker:
                     try:
                         with open(fp, "r", encoding="utf-8", errors="ignore") as fh:
                             parts.append(fh.read())
-                    except OSError:
+                    except OSError as e:
+                        # 文件不可读，跳过该文件
+                        logger.warning(f"读取文件失败，跳过源码收集 {fp}: {e}")
                         continue
         source = "\n".join(parts)
         with self._source_lock:

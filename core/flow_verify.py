@@ -497,7 +497,9 @@ def cross_lang_contract_scan(project_path: str) -> List[dict]:
             path = os.path.join(root, fn)
             try:
                 lines = open(path, encoding="utf-8", errors="ignore").read().splitlines()
-            except Exception:
+            except Exception as e:
+                # 文件不可读，跳过该文件
+                _log(f"读取文件失败，跳过流程扫描 {path}: {e}")
                 continue
             rel = os.path.relpath(path, project_path).replace("\\", "/")
             # Go 动态插件名/类名注入面（§二.2）：map[string]any{...} 含 plugin/class 键

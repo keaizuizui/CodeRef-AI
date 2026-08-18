@@ -615,8 +615,8 @@ class BusinessAnalyzer:
                 name = result.strip().strip('"').strip("'")
                 if 2 <= len(name) <= 20:
                     return name
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"LLM 业务命名增强失败，回退基本文本清理: {e}")
         
         # 降级：基本文本清理（不依赖任何硬编码映射表）
         clean = re.sub(r'[-_]', ' ', dir_name)
@@ -652,8 +652,8 @@ class BusinessAnalyzer:
                     caps = json.loads(json_match.group())
                     if isinstance(caps, list) and len(caps) > 0:
                         return caps[:8]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"LLM 能力标签提取失败，回退类名/函数名标签: {e}")
         
         # 降级：使用类名/函数名本身作为能力标签（不依赖硬编码映射）
         # 清理名称：去掉下划线，限制长度
@@ -694,8 +694,8 @@ class BusinessAnalyzer:
                 desc = result.strip().strip('"').strip("'")
                 if 10 <= len(desc) <= 100:
                     return desc
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"LLM 描述生成失败，回退简单拼接: {e}")
         
         # 降级：简单拼接（不依赖硬编码模板）
         unique = list(dict.fromkeys(signals))
@@ -968,8 +968,8 @@ class BusinessAnalyzer:
                             ))
                         if roles:
                             return roles
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"LLM 角色识别失败，返回空角色列表: {e}")
         
         # 降级：不做任何假设，返回空（不硬编码 admin/user）
         return roles
@@ -1268,6 +1268,7 @@ class BusinessAnalyzer:
                     try:
                         fp = os.path.relpath(fp, self._project_path)
                     except Exception:
+                        # relpath 失败（跨盘符等），保留绝对路径
                         pass
                 m = self._extract_module_from_path(fp)
                 if m in all_modules:
@@ -1503,8 +1504,9 @@ class BusinessAnalyzer:
                     for child in h.children:
                         if child.module in enrich_map:
                             child.description = enrich_map[child.module]
-        except Exception:
-            pass
+        except Exception as e:
+            # 描述富化失败，保留原始层级
+            logger.warning(f"应用模块描述富化失败，保留原描述: {e}")
         
         return hierarchy
     
@@ -1988,8 +1990,8 @@ UI线索:
                             ))
                         if differences:
                             return differences
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"LLM 差异分析失败，回退基本检测: {e}")
         
         # 降级：基本检测（不硬编码具体的差异描述）
         has_gui = any('gui' in f.file_path.lower() for f in analysis.files)
