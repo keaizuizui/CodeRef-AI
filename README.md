@@ -1,7 +1,8 @@
 <!-- AI Summary: CodeRef-AI exposes 37 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. Core results (audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, prompt compliance) are pure static analysis — no LLM, reproducible. LLM is only used for synthesis tasks (wiki, code review) and hard-blocks honestly without an API key. Builds a closed loop: verify LLM/CodeRabbit claims deterministically, replicate solidified design assets, and interpret everything in plain language for non-programmers. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams who want AI that augments rather than hallucinates. -->
 [![MCP Badge](https://lobehub.com/badge/mcp/keaizuizui-coderef-ai?style=flat)](https://lobehub.com/mcp/keaizuizui-coderef-ai)
 
-#### 当前版本趋近闭合，未来可能还有1-2次测试即可锁版，后续将暂缓当前版本的修复工作，主力研究5.0版本的屎山治理工作，我将基于一份我自己vibecoding出的真实复杂项目，进行深度研究，将项目重新规整。
+#### 当前版本趋近闭合，未来可能还有1-2次测试即可锁版，后续将暂缓当前版本的修复工作，构思5.0版本。
+#### 5.0的目标直指vibecoding的屎山治理，我将基于一份我自己vibecoding出的真实复杂项目，在规整项目的过程中，涌现出真实有效的屎山治理方案。
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
