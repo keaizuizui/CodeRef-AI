@@ -1582,7 +1582,7 @@ class Server:
         with self._lock:
             yield self._tasks
 
-    def _evict_finished_tasks(tasks: Dict[str, Any], max_age: int = 3600, max_size: int = 50):
+    def _evict_finished_tasks(self, tasks: Dict[str, Any], max_age: int = 3600, max_size: int = 50):
         return _evict_finished_tasks(tasks, max_age, max_size)
 
     # ─── request ───
@@ -1647,97 +1647,97 @@ class Server:
             # 任务终态标记完成时间（无论成败），供 _tsk / 调用方判断终态
             rc["finished_at"] = time.time()
 
-    def _scan_tool(a: dict):
+    def _scan_tool(self, a: dict):
         return _scan_tool(a)
 
     def _scan_list(self):
         return _scan_list()
 
-    def _change_guard(a: dict):
+    def _change_guard(self, a: dict):
         return _change_guard(a)
 
-    def _change_report(a: dict):
+    def _change_report(self, a: dict):
         return _change_report(a)
 
     # ── 引擎一 · 记忆层 ─────────────────────────────────────────────
-    def _memory_sync(a: dict):
+    def _memory_sync(self, a: dict):
         return _memory_sync(a)
 
-    def _memory_query(a: dict):
+    def _memory_query(self, a: dict):
         return _memory_query(a)
 
-    def _memory_status(a: dict):
+    def _memory_status(self, a: dict):
         return _memory_status(a)
 
-    def _memory_quality(a: dict):
+    def _memory_quality(self, a: dict):
         return _memory_quality(a)
 
-    def _operation_memory_sync(a: dict):
+    def _operation_memory_sync(self, a: dict):
         return _operation_memory_sync(a)
 
-    def _operation_memory_query(a: dict):
+    def _operation_memory_query(self, a: dict):
         return _operation_memory_query(a)
 
-    def _operation_memory_find(a: dict):
+    def _operation_memory_find(self, a: dict):
         return _operation_memory_find(a)
 
-    def _operation_memory_status(a: dict):
+    def _operation_memory_status(self, a: dict):
         return _operation_memory_status(a)
 
-    def _operation_memory_recover(a: dict):
+    def _operation_memory_recover(self, a: dict):
         return _operation_memory_recover(a)
 
-    def _prompt_mgmt(a: dict):
+    def _prompt_mgmt(self, a: dict):
         return _prompt_mgmt(a)
 
-    def _prompt_audit(a: dict):
+    def _prompt_audit(self, a: dict):
         return _prompt_audit(a)
 
     # ── 引擎三 · OWASP 合规 ────────────────────────────────────────
-    def _owasp(a: dict):
+    def _owasp(self, a: dict):
         return _owasp(a)
 
     # ── 引擎二 · 创新识别 + 资产沉淀 ───────────────────────────────
-    def _innovation(a: dict):
+    def _innovation(self, a: dict):
         return _innovation(a)
 
-    def _asset(a: dict):
+    def _asset(self, a: dict):
         return _asset(a)
 
-    def _registry(a: dict):
+    def _registry(self, a: dict):
         return _registry(a)
 
-    def _replicate(a: dict):
+    def _replicate(self, a: dict):
         return _replicate(a)
 
-    def _replicate_apply(a: dict):
+    def _replicate_apply(self, a: dict):
         return _replicate_apply(a)
 
-    def _innovation_review(a: dict):
+    def _innovation_review(self, a: dict):
         return _innovation_review(a)
 
-    def _asset_blueprint(a: dict):
+    def _asset_blueprint(self, a: dict):
         return _asset_blueprint(a)
 
-    def _govern(a: dict):
+    def _govern(self, a: dict):
         return _govern(a)
 
-    def _interpret(a: dict):
+    def _interpret(self, a: dict):
         return _interpret(a)
 
-    def _docs_read(a: dict):
+    def _docs_read(self, a: dict):
         return _docs_read(a)
 
-    def _flow_verify(a: dict):
+    def _flow_verify(self, a: dict):
         return _flow_verify(a)
 
-    def _arch_audit(a: dict):
+    def _arch_audit(self, a: dict):
         return _arch_audit(a)
 
-    def _verify_findings(a: dict):
+    def _verify_findings(self, a: dict):
         return _verify_findings(a)
 
-    def _validate_project_path(tool: str, p: str):
+    def _validate_project_path(self, tool: str, p: str):
         return _validate_project_path(tool, p)
 
     def _run(self, n, a, progress_cb=None) -> str:
@@ -1844,22 +1844,22 @@ class Server:
             return handler(a)
         return "未知工具: " + n
 
-    def _review(a):
+    def _review(self, a):
         return _review(a)
 
-    def _frontend(a):
+    def _frontend(self, a):
         return _frontend(a)
 
-    def _report(a):
+    def _report(self, a):
         return _report(a)
 
-    def _advisor(a):
+    def _advisor(self, a):
         return _advisor(a)
 
-    def _arch(a):
+    def _arch(self, a):
         return _arch(a)
 
-    def _wl(a):
+    def _wl(self, a):
         return _wl(a)
 
     def _tsk(self, a) -> str:
@@ -1952,10 +1952,10 @@ class Server:
             r = rc.get("result","")
         return json.dumps({"status":"completed","task_id":tid,"content":r}, ensure_ascii=False)
 
-    def _query(a):
+    def _query(self, a):
         return _query(a)
 
-    def _ok(rid, text):
+    def _ok(self, rid, text):
         return _ok(rid, text)
 
     def run(self):
