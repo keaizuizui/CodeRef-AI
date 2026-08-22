@@ -6,7 +6,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.9.6** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.9.7** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -430,6 +430,13 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 | **4.0** | 通过四个引擎和四个支柱，增强工具的功能覆盖，形成逻辑闭环 |
 
 ## 更新日志
+
+### v4.9.7 — 修复 v4.9.6 重构引入的 MCP 工具调用崩溃
+
+- **根因**：v4.9.6 大类模块级化瘦身时，`mcp_server` 的 `class Server` 内 38 个委托壳方法（`_ok` / `_validate_project_path` / `_review` / `_frontend` / `_scan_tool` 等）遗漏 `self` 参数，导致所有经 `self._xxx()` 调用的 MCP 工具在调用瞬间抛 `TypeError`（`Server._ok() takes 2 positional arguments but 3 were given`、`'Server' object has no attribute 'items'`），自举测试 45/45 全失败
+- **修复**：38 个委托壳方法统一补齐 `self` 参数（纯机械修复，委托目标与内部逻辑零改动）
+- **验证**：语法编译零失败；AST 复查 `class Server` 缺 self 方法归零；实测 MCP server 工具调用恢复正常（`coderef_task_status` / `coderef_scan_list` / `coderef_whitelist` 均正常返回）
+- 版本号：4.9.6 → 4.9.7
 
 ### 补充修复（并入 v4.9.6）：CodeRabbit 复审 11 条 findings 全部修复
 
