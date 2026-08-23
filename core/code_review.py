@@ -571,7 +571,7 @@ class CodeReviewer:
             # （deepseek-v4-flash 倾向输出自由文本而非严格 JSON，重试可显著提升命中率；
             #   控制成本，最多重试 1 次）
             logger.warning(
-                f"首次解析未得到 JSON 评论数组，强制重试要求仅返回 JSON；"
+                f"首次解析未得到 JSON 评论数组，散文当思考二次抽取重试；"
                 f"响应片段: {response[:200]}"
             )
             retry_messages = messages + [
@@ -579,9 +579,10 @@ class CodeReviewer:
                 {
                     "role": "user",
                     "content": (
-                        "你上一次的输出不是合法的 JSON 数组。请重新输出，"
-                        "严格只输出 JSON 数组：直接以 [ 开头、以 ] 结尾，"
-                        "不要任何文字、解释或 Markdown 代码块标记（如 ```json 或 ```）。"
+                        "你上一次的输出包含你的分析思考过程，但格式不是 JSON 数组。"
+                        "请把你刚才的思考整理为结构化的 JSON 评论数组：直接以 [ 开头、以 ] 结尾，"
+                        "数组每个元素是 {file, line, severity, dimension, title, detail, suggestion}。"
+                        "不要输出任何解释、叙述或 Markdown 代码块标记（如 ```json 或 ```）。"
                     ),
                 },
             ]

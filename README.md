@@ -6,7 +6,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.9.10** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.9.11** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -430,6 +430,12 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 | **4.0** | 通过四个引擎和四个支柱，增强工具的功能覆盖，形成逻辑闭环 |
 
 ## 更新日志
+
+### v4.9.11 — 修复 Coderef-Test 测试报告（20260823-v4.9.10-r4）遗留项
+
+- **P2 review 散文当思考二次抽取**（`code_review._call_llm`）：r4 复测确认 v4-flash 约 9/14 批首调输出散文触发重试，重试后仍有 2-4 条占位残留（≤5%）。修复：重试提示从"重新输出 JSON"升级为"把你上一次的思考过程整理为结构化 JSON 评论数组"，让 LLM 把散文当思考直接整理成 JSON，不增加调用次数；首调直接成功/空数组合法/重试仍失败降级占位 4 场景验证通过
+- **验证**：skill-guide 一致性核对 server_only=0（SKILL.md 补齐 `coderef_operation_memory_recover` 到测试副本，37 工具完全一致）；coderef_audit 全量维度回归（r4 反例项目 56.7s 完成，12 死函数独立呈现，26 类别正常产出无冲突）；混合类别聚合回归（DEAD 独立 + BUG/SEC 正常聚合不受影响）
+- 版本号：4.9.10 → 4.9.11
 
 ### v4.9.10 — 修复 Coderef-Test 测试报告（20260823-v4.9.9-r3）4 项 P1/P2
 
