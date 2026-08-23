@@ -6,7 +6,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.9.9** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.9.10** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -430,6 +430,15 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 | **4.0** | 通过四个引擎和四个支柱，增强工具的功能覆盖，形成逻辑闭环 |
 
 ## 更新日志
+
+### v4.9.10 — 修复 Coderef-Test 测试报告（20260823-v4.9.9-r3）4 项 P1/P2
+
+- **P1-A 死代码聚合细分组到函数名级**（`pipeline_runner._burst_merge`/`_dedup_adjacent`）：r3 复测确认 r2 的 `[DEAD-*]` 前缀已把死代码从"未使用导入"中拆出，但同类死函数超过 `BURST_THRESHOLD=8` 仍被爆发式合并成单条（12 个死函数合并为 1 条 count=12，标题只留首个函数名），ARC-04/05 无独立 finding。修复：`_risk_key` 对 `DEAD-` 开头的 risk_id 返回完整 title（含函数/导入名），使每个死函数独立分组独立 finding，`_dedup_adjacent` 的 `_rk` 同步保持一致
+- **P1-B v4-flash 对 json_object 约束不足**（`code_review._call_llm`）：r3 复测确认 `response_format=json_object` 被端点接受但首调仍输出自由文本触发重试（14 批 12 失败 11 占位）。修复：system 提示模板强化为"唯一输出必须是合法 JSON 数组，严禁任何解释/Markdown 代码块，直接以 [ 开头以 ] 结尾"；`temperature=0.1` 降低随机性；无意义结果（如截断修复产生的字符串数组）视为解析失败触发重试
+- **P2 max_tokens=4096 截断合法 JSON**（`code_review._call_llm`）：r3 复测确认 4096 仍会截断合法 JSON 导致 parse 失败降级。修复：`max_tokens` 4096 → 8192（首调与重试均生效）
+- **P2-ARC-06 单行死代码 ≥3 行阈值**（`code_simplifier._detect_commented_code`）：r3 反例确认单行注释死代码（如 `# import os` 整行注释掉的代码）因 ≥3 行阈值漏检。修复：注释块检测阈值 3 → 1 行，单行被注释的代码也独立成 finding
+- **验证**：聚合层模拟 12 个不同函数名 DEAD-FUNC finding → 12 条独立输出（count 全为 1）；端到端 `run_single(proj, "simp")` 死函数各自独立 finding；3 文件编译零失败
+- 版本号：4.9.9 → 4.9.10
 
 ### v4.9.9 — 修复 Coderef-Test 测试报告（20260823-v4.9.8-r2）2 个 P0 复测未通过项
 

@@ -203,7 +203,13 @@ def _burst_merge(findings: List[Finding]) -> List[Finding]:
     def _risk_key(f: Finding) -> str:
         t = (f.title or "").lstrip()
         if t.startswith("[") and "]" in t:
-            return t[1:t.index("]")]
+            rid = t[1:t.index("]")]
+            # dead_code 各子类型细分到 TITLE 级（含函数/导入名），使每个死函数独立
+            # finding，避免同类别超过 BURST_THRESHOLD 被爆发合并成 1 条（r3 P1-A：
+            # 12 个死函数被合并为 1 条 count=12，ARC-04/05 无独立 finding）
+            if rid.startswith("DEAD-"):
+                return t
+            return rid
         return ""
 
     by_key = {}
@@ -270,7 +276,11 @@ def _dedup_adjacent(findings: List[Finding]) -> List[Finding]:
     def _rk(f: Finding) -> str:
         t = (f.title or "").lstrip()
         if t.startswith("[") and "]" in t:
-            return t[1:t.index("]")]
+            rid = t[1:t.index("]")]
+            # 与 _burst_merge._risk_key 保持一致：dead_code 子类型细分到 TITLE 级
+            if rid.startswith("DEAD-"):
+                return t
+            return rid
         return ""
     # 排序键叠加 risk_id：同文件同规则同风险类型才相邻
     findings.sort(key=lambda f: (
