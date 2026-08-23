@@ -695,18 +695,18 @@ class CodeSimplifier:
                             current_block_start = i
                         current_block_count += 1
                     else:
-                        if current_block_count >= 3:
+                        if current_block_start is not None:
                             commented_blocks.append((current_block_start, i - 1, current_block_count))
                         current_block_start = None
                         current_block_count = 0
                 else:
-                    if current_block_count >= 3:
+                    if current_block_start is not None:
                         commented_blocks.append((current_block_start, i - 1, current_block_count))
                     current_block_start = None
                     current_block_count = 0
 
             # 处理文件末尾的注释块
-            if current_block_count >= 3 and current_block_start:
+            if current_block_start is not None:
                 commented_blocks.append((current_block_start, len(lines), current_block_count))
 
             for start, end, count in commented_blocks:

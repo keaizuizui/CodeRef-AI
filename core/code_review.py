@@ -536,8 +536,11 @@ class CodeReviewer:
             {
                 "role": "system",
                 "content": (
-                    "你是一位资深代码审查专家，擅长多维度代码审查。"
-                    "你只返回 JSON 数组，不输出任何其它文字或 Markdown 代码块。"
+                    "你是一位资深代码审查专家，擅长多维度代码审查。\n"
+                    "你的唯一输出必须是合法的 JSON 数组，数组的每个元素是一个审查评论对象，"
+                    "字段为：file, line, severity, dimension, title, detail, suggestion。\n"
+                    "严禁输出任何思考过程、解释、叙述、前后缀文字或 Markdown 代码块。"
+                    "直接以 [ 开头、以 ] 结尾。"
                 ),
             },
             {"role": "user", "content": prompt},
@@ -545,7 +548,7 @@ class CodeReviewer:
 
         try:
             response = self.llm.chat_completion(
-                messages, max_tokens=4096, temperature=0.2,
+                messages, max_tokens=8192, temperature=0.1,
                 response_format={"type": "json_object"},
             )
         except Exception as e:
@@ -561,7 +564,8 @@ class CodeReviewer:
         # 交叉验证占位入口：解析 LLM 返回的评论数组
         data = self.llm._try_parse_json(response)
 
-        if not isinstance(data, list):
+        # 无意义结果（如截断修复产生的字符串数组 ["dimens"]）视为解析失败，触发重试
+        if not isinstance(data, list) or not any(isinstance(x, dict) for x in data):
             # 首次解析失败：强制重试一次，要求仅返回 JSON 数组
             # （deepseek-v4-flash 倾向输出自由文本而非严格 JSON，重试可显著提升命中率；
             #   控制成本，最多重试 1 次）
@@ -582,7 +586,7 @@ class CodeReviewer:
             ]
             try:
                 retry_response = self.llm.chat_completion(
-                    retry_messages, max_tokens=4096, temperature=0.2,
+                    retry_messages, max_tokens=8192, temperature=0.1,
                     response_format={"type": "json_object"},
                 )
             except Exception as e:
@@ -593,7 +597,7 @@ class CodeReviewer:
                 logger.warning(f"LLM 重试调用失败：{retry_response[:200]}")
                 retry_response = ""
             data = self.llm._try_parse_json(retry_response)
-            if not isinstance(data, list):
+            if not isinstance(data, list) or not any(isinstance(x, dict) for x in data):
                 reason = "LLM 返回内容不包含合法 JSON 评论数组（重试后仍失败）"
                 logger.warning(f"{reason}; 重试响应片段: {retry_response[:200]}")
                 return [_degraded_comment(default_file, default_line, reason)]
