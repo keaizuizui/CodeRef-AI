@@ -564,8 +564,9 @@ class CodeReviewer:
         # 交叉验证占位入口：解析 LLM 返回的评论数组
         data = self.llm._try_parse_json(response)
 
-        # 无意义结果（如截断修复产生的字符串数组 ["dimens"]）视为解析失败，触发重试
-        if not isinstance(data, list) or not any(isinstance(x, dict) for x in data):
+        # 无意义结果（如截断修复产生的字符串数组 ["dimens"]）视为解析失败，触发重试。
+        # 空数组 [] 是合法"无 findings"结果，不触发重试（CodeRabbit 复审 4541664 major）
+        if not isinstance(data, list) or any(not isinstance(x, dict) for x in data):
             # 首次解析失败：强制重试一次，要求仅返回 JSON 数组
             # （deepseek-v4-flash 倾向输出自由文本而非严格 JSON，重试可显著提升命中率；
             #   控制成本，最多重试 1 次）
@@ -597,7 +598,7 @@ class CodeReviewer:
                 logger.warning(f"LLM 重试调用失败：{retry_response[:200]}")
                 retry_response = ""
             data = self.llm._try_parse_json(retry_response)
-            if not isinstance(data, list) or not any(isinstance(x, dict) for x in data):
+            if not isinstance(data, list) or any(not isinstance(x, dict) for x in data):
                 reason = "LLM 返回内容不包含合法 JSON 评论数组（重试后仍失败）"
                 logger.warning(f"{reason}; 重试响应片段: {retry_response[:200]}")
                 return [_degraded_comment(default_file, default_line, reason)]
