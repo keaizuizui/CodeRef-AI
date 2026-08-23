@@ -206,9 +206,12 @@ def _burst_merge(findings: List[Finding]) -> List[Finding]:
             rid = t[1:t.index("]")]
             # dead_code 各子类型细分到 TITLE 级（含函数/导入名），使每个死函数独立
             # finding，避免同类别超过 BURST_THRESHOLD 被爆发合并成 1 条（r3 P1-A：
-            # 12 个死函数被合并为 1 条 count=12，ARC-04/05 无独立 finding）
+            # 12 个死函数被合并为 1 条 count=12，ARC-04/05 无独立 finding）。
+            # 分组键再叠加 file:line：title 非唯一标识，不同文件的同名死函数
+            # （如两个文件都有 never_used()）与 generic [DEAD-COMMENT] 标题
+            # 仍会被误合并（CodeRabbit 复审 4541664 minor）
             if rid.startswith("DEAD-"):
-                return t
+                return f"{t}|{f.file_path}:{f.line}"
             return rid
         return ""
 
@@ -277,9 +280,10 @@ def _dedup_adjacent(findings: List[Finding]) -> List[Finding]:
         t = (f.title or "").lstrip()
         if t.startswith("[") and "]" in t:
             rid = t[1:t.index("]")]
-            # 与 _burst_merge._risk_key 保持一致：dead_code 子类型细分到 TITLE 级
+            # 与 _burst_merge._risk_key 保持一致：dead_code 子类型细分到 TITLE 级，
+            # 并叠加 file:line 保证同名死函数/相邻注释块不被误合并
             if rid.startswith("DEAD-"):
-                return t
+                return f"{t}|{f.file_path}:{f.line}"
             return rid
         return ""
     # 排序键叠加 risk_id：同文件同规则同风险类型才相邻
