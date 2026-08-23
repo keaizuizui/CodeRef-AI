@@ -192,6 +192,73 @@ STDLIB_REPLACEMENTS = {
 }
 
 
+def _strip_comments_and_strings(code: str) -> str:
+    """剥离注释和字符串字面量，返回代码骨架。
+
+    将注释内容（# 到行尾）和字符串字面量（单/双/三引号，含 f/r/b 前缀）
+    替换为空格，保留换行符，使后续正则只匹配真实代码中的调用/数字，
+    避免注释或字符串中的 `xxx(` / 数字被误统计。
+    """
+    result = []
+    i = 0
+    n = len(code)
+    state = None  # None / 'single' / 'double' / 'triple_single' / 'triple_double'
+    while i < n:
+        ch = code[i]
+        if state is None:
+            if ch == '#':
+                # 注释：跳过到行尾（保留换行符）
+                while i < n and code[i] != '\n':
+                    result.append(' ')
+                    i += 1
+                continue
+            if ch in ('"', "'"):
+                if code[i:i + 3] == ch * 3:
+                    state = 'triple_single' if ch == "'" else 'triple_double'
+                    result.append(' ' * 3)
+                    i += 3
+                else:
+                    state = 'single' if ch == "'" else 'double'
+                    result.append(' ')
+                    i += 1
+                continue
+            result.append(ch)
+            i += 1
+        else:
+            # 字符串内部：保留换行符以维持行号对齐
+            if ch == '\n':
+                result.append('\n')
+                i += 1
+                continue
+            if ch == '\\':
+                result.append(' ')
+                i += 1
+                if i < n:
+                    result.append(' ')
+                    i += 1
+                continue
+            if state == 'single' and ch == "'":
+                state = None
+                result.append(' ')
+                i += 1
+                continue
+            if state == 'double' and ch == '"':
+                state = None
+                result.append(' ')
+                i += 1
+                continue
+            if state in ('triple_single', 'triple_double'):
+                quote = "'" if state == 'triple_single' else '"'
+                if code[i:i + 3] == quote * 3:
+                    state = None
+                    result.append(' ' * 3)
+                    i += 3
+                    continue
+            result.append(' ')
+            i += 1
+    return ''.join(result)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 代码精简器
 # ═══════════════════════════════════════════════════════════════════
@@ -348,7 +415,7 @@ class CodeSimplifier:
                         severity="low",
                         file_path=cf.file_path,
                         line_range=(line_no, line_no),
-                        title=f"未使用的导入: {display}",
+                        title=f"[DEAD-IMPORT] 未使用的导入: {display}",
                         current=stmt,
                         suggestion="删除此导入",
                         savings=1,
@@ -369,6 +436,8 @@ class CodeSimplifier:
 
         # 辅助：从原始内容中提取函数调用（排除关键字和内置函数）
         call_pattern = re.compile(r'([a-z_][a-zA-Z0-9_]*)\s*\(', re.IGNORECASE)
+        # 函数定义行模式：def/async def 中的函数名不是调用，需从统计中扣除
+        def_pattern = re.compile(r'^\s*(?:async\s+)?def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', re.MULTILINE)
         KEYWORD_BLACKLIST = {
             'if', 'for', 'while', 'with', 'return', 'print', 'def', 'class', 'import',
             'from', 'try', 'except', 'raise', 'assert', 'yield', 'lambda', 'not', 'and',
@@ -377,10 +446,19 @@ class CodeSimplifier:
         }
         for cf in analysis.files:
             raw = cf.raw_content or ""
-            for m in call_pattern.finditer(raw):
+            # 先剥离注释和字符串字面量，避免注释/字符串中的 xxx( 被误统计为调用
+            skeleton = _strip_comments_and_strings(raw)
+            for m in call_pattern.finditer(skeleton):
                 name = m.group(1)
                 if name not in KEYWORD_BLACKLIST:
                     all_calls[name] += 1
+            # 函数定义行中的函数名不是调用，从统计中扣除
+            for m in def_pattern.finditer(skeleton):
+                name = m.group(1)
+                if name in all_calls:
+                    all_calls[name] -= 1
+                    if all_calls[name] <= 0:
+                        del all_calls[name]
 
         for cf in analysis.files:
             for func in cf.functions:
@@ -399,7 +477,7 @@ class CodeSimplifier:
                         severity="medium" if func_lines > 20 else "low",
                         file_path=cf.file_path,
                         line_range=(func.start_line, func.end_line),
-                        title=f"未调用的函数: {func.name}()",
+                        title=f"[DEAD-FUNC] 未调用的函数: {func.name}()",
                         current=f"函数 {func.name}（{func_lines}行）未被任何地方调用",
                         suggestion="确认是否为公共 API，否则删除",
                         savings=func_lines,
@@ -438,7 +516,7 @@ class CodeSimplifier:
                         severity="high" if cls_lines > 100 else "medium",
                         file_path=cf.file_path,
                         line_range=(cls.start_line, cls.end_line),
-                        title=f"未使用的类: {cls.name}",
+                        title=f"[DEAD-CLASS] 未使用的类: {cls.name}",
                         current=f"类 {cls.name}（{cls_lines}行）未被引用",
                         suggestion="确认是否为公共 API，否则删除",
                         savings=cls_lines,
@@ -637,7 +715,7 @@ class CodeSimplifier:
                     severity="low",
                     file_path=cf.file_path,
                     line_range=(start, end),
-                    title=f"注释掉的代码块（{count}行）",
+                    title=f"[DEAD-COMMENT] 注释掉的代码块（{count}行）",
                     current=f"第 {start}-{end} 行有 {count} 行注释掉的代码",
                     suggestion="如果不再需要，直接删除（Git 保留了历史）",
                     savings=count,
@@ -662,6 +740,8 @@ class CodeSimplifier:
                 continue
             raw = cf.raw_content or ""
             lines = raw.split("\n")
+            # 剥离注释和字符串字面量，避免字符串/注释中的数字被误报为魔法数字
+            skeleton_lines = _strip_comments_and_strings(raw).split("\n")
 
             for i, line in enumerate(lines, 1):
                 stripped = line.strip()
@@ -688,7 +768,68 @@ class CodeSimplifier:
                             risk="safe",
                             ponytail_rung=6,
                         ))
+                # 检查魔法数字（在剥离注释/字符串后的代码骨架上）
+                code_line = skeleton_lines[i - 1] if i - 1 < len(skeleton_lines) else ""
+                for m in magic_number_pattern.finditer(code_line):
+                    num_text = m.group(1)
+                    if self._is_common_magic_constant(code_line, num_text):
+                        continue
+                    # 检查 cache 白名单（用户标记为可接受的硬编码值）
+                    if SharedFilter.is_magic_whitelisted(num_text, cf.file_path):
+                        continue
+                    items.append(SimplificationItem(
+                        category="config_hardcode",
+                        severity="low",
+                        file_path=cf.file_path,
+                        line_range=(i, i),
+                        title=f"魔法数字: {num_text}",
+                        current=stripped[:80],
+                        suggestion="提取到配置文件或环境变量",
+                        savings=0,
+                        risk="safe",
+                        ponytail_rung=6,
+                    ))
         return items
+
+    def _is_common_magic_constant(self, line: str, num_text: str) -> bool:
+        """判断魔法数字是否为常见合理常量（保守过滤，避免误报）。
+
+        注意：1000 等整十整百整千不再无条件白名单（可能是魔法数字）；
+        也不因文件名含 settings/config 而整体跳过（由调用方保证）。
+        """
+        try:
+            num = int(num_text)
+        except ValueError:
+            return True
+        # 0 和 1 是布尔值/索引/默认值
+        if num in (0, 1):
+            return True
+        # 小于 100 的整数通常是循环次数、分页大小、默认值
+        if num < 100:
+            return True
+        # HTTP 状态码
+        if num in (100, 200, 201, 202, 204, 400, 401, 403, 404, 500, 502, 503):
+            return True
+        # 时间常量（小时、天、周）
+        if num in (3600, 86400, 604800):
+            return True
+        # 2 的幂（内存/缓冲区大小）
+        if num in (1024, 2048, 4096, 8192, 16384, 32768, 65536):
+            return True
+        # 版本号 / CWE / OWASP 编号
+        if re.search(r'version|__version__|VERSION', line, re.IGNORECASE):
+            return True
+        if re.search(r'CWE[-\s]?\d+', line, re.IGNORECASE):
+            return True
+        if re.search(r'A\d{2}:\d{4}', line):
+            return True
+        # 赋值给明显常量名（THRESHOLD/LIMIT/MAX/MIN/SIZE 等）
+        if re.search(
+            r'(?:_THRESHOLD|_threshold|_LIMIT|_limit|_MAX|_max|_MIN|_min|_SIZE|_size)\s*[:=]\s*\d+',
+            line, re.IGNORECASE
+        ):
+            return True
+        return False
 
     def _detect_todo_fixme(self, analysis) -> List[SimplificationItem]:
         """检测 TODO/FIXME/HACK 积压"""
@@ -705,7 +846,7 @@ class CodeSimplifier:
                             severity="low",
                             file_path=cf.file_path,
                             line_range=(i, i),
-                            title=f"{tag} 标记: {stripped[stripped.index(tag)+len(tag):].strip()[:60]}",
+                            title=f"[DEAD-TODO] {tag} 标记: {stripped[stripped.index(tag)+len(tag):].strip()[:60]}",
                             current=stripped[:80],
                             suggestion="处理或删除（超过 30 天的 TODO 通常不会被处理）",
                             savings=1,

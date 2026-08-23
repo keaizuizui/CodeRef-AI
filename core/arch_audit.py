@@ -22,6 +22,7 @@ arch_audit — 架构腐化诊断（coderef_arch_audit）
 - 低风险：只读图谱，无副作用。
 """
 
+import ast
 import os
 from collections import defaultdict
 from typing import Dict, List
@@ -182,17 +183,45 @@ def _find_cycles(mod_adj: Dict[str, List[str]], self_edges: set, sc_min: int) ->
     return cycles
 
 
-def _fan_stats(mod_adj: Dict[str, List[str]], fo_t: int) -> tuple:
-    """计算各模块扇出/扇入，返回 (god_modules, fan_top10)。"""
+def _module_symbol_counts(nodes: dict, project_path: str) -> Dict[str, int]:
+    """各模块的函数/方法/类符号数（上帝模块判定与异常规模共用的规模度量）。"""
+    mod_symbols: Dict[str, int] = defaultdict(int)
+    for nid, n in nodes.items():
+        if n.get("type") in ("function", "method", "class"):
+            mod_symbols[module_of(n, project_path)] += 1
+    return dict(mod_symbols)
+
+
+def _fan_stats(mod_adj: Dict[str, List[str]], fo_t: int,
+               mod_symbols: Dict[str, int] = None,
+               fi_t: int = 2, ratio_t: float = 0.25) -> tuple:
+    """计算各模块扇出/扇入，返回 (god_modules, fan_top10)。
+
+    上帝模块判定（保守，结合模块规模与扇入/扇出综合判断）：
+    1. 高扇出：fan_out > fo_t（依赖过多下游，原有标准）；
+    2. 高扇入 + 相对规模大：fan_in >= fi_t 且 符号数占比 >= ratio_t
+       （被多个模块依赖，且相对项目规模功能庞杂 → 上帝模块）。
+    符号数占比以项目内全部函数/方法/类符号数为基准，避免小项目
+    绝对符号数阈值失真、大项目正常工具模块被误判。
+    """
     fan_out = {m: len(mod_adj.get(m, [])) for m in mod_adj}
     fan_in: Dict[str, int] = defaultdict(int)
     for m, tars in mod_adj.items():
         for t in tars:
             fan_in[t] += 1
     all_mods = set(fan_out) | set(fan_in.keys())
+    total = sum((mod_symbols or {}).values()) or 1
     row = lambda m: {"module": m, "fan_out": fan_out.get(m, 0), "fan_in": fan_in.get(m, 0)}
-    god = sorted((row(m) for m in all_mods if fan_out.get(m, 0) > fo_t),
-                 key=lambda x: -x["fan_out"])
+    god = []
+    for m in all_mods:
+        if fan_out.get(m, 0) > fo_t:
+            god.append(row(m))
+            continue
+        if mod_symbols and fan_in.get(m, 0) >= fi_t:
+            ratio = mod_symbols.get(m, 0) / total
+            if ratio >= ratio_t:
+                god.append(row(m))
+    god.sort(key=lambda x: -x["fan_out"])
     top = sorted((row(m) for m in all_mods), key=lambda x: -x["fan_out"])[:10]
     return god, top
 
@@ -219,10 +248,7 @@ def _layer_violations(nodes: dict, mod_adj: Dict[str, List[str]], project_path: 
 
 def _large_modules(nodes: dict, project_path: str, ls_t: int) -> list:
     """符号数超过阈值的异常规模模块。"""
-    mod_symbols: Dict[str, int] = defaultdict(int)
-    for nid, n in nodes.items():
-        if n.get("type") in ("function", "method", "class"):
-            mod_symbols[module_of(n, project_path)] += 1
+    mod_symbols = _module_symbol_counts(nodes, project_path)
     return sorted(
         ({"module": m, "symbols": c} for m, c in mod_symbols.items() if c > ls_t),
         key=lambda x: -x["symbols"])
@@ -243,6 +269,243 @@ def _health_summary(cycles: list, god: list, layer_viol: list, large: list) -> d
         "cycles": len(cycles), "god_modules": len(god),
         "layer_violations": len(layer_viol), "large_modules": len(large),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 函数级递归检测（ARC-08）：AST 扫描源码，构建函数调用图，检测环
+# ═══════════════════════════════════════════════════════════════════
+# 背景：模块级 CALLS 图只能报告"模块间"循环依赖，无法回答"函数 A 是否
+# 直接/间接调用自身"（直接递归 A→A、间接递归 A→B→A）。无限递归是运行时
+# 崩溃级缺陷，需在函数粒度单独检测。本检测直接扫描项目源码（AST），
+# 复用模块级 SCC 算法检测函数调用图上的环，输出 finding。
+
+# 扫描时跳过的噪声目录（与 ast_signals 保持一致）
+_FUNC_SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules",
+                   ".tox", ".idea", "dist", "build", ".mypy_cache", ".pytest_cache"}
+# 函数级递归扫描的文件数上限（与 AstProjectParser 一致，防超大项目卡死）
+_FUNC_MAX_FILES = 5000
+
+
+def _iter_py_files(project_path: str):
+    """遍历项目内所有 .py 文件（跳过噪声目录）。"""
+    for root, dirs, files in os.walk(project_path):
+        dirs[:] = [d for d in dirs if d not in _FUNC_SKIP_DIRS]
+        for fn in files:
+            if fn.endswith(".py"):
+                yield os.path.join(root, fn)
+
+
+def _parse_py(path: str):
+    """读取并解析 Python 源码，失败返回 None（utf-8/gbk 双编码回退）。"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            src = f.read()
+    except (UnicodeDecodeError, OSError):
+        try:
+            with open(path, "r", encoding="gbk") as f:
+                src = f.read()
+        except Exception:
+            return None
+    try:
+        return ast.parse(src)
+    except SyntaxError:
+        return None
+
+
+def _rel_path(project_path: str, path: str) -> str:
+    """项目内相对路径（正斜杠）。"""
+    try:
+        return os.path.relpath(path, project_path).replace("\\", "/")
+    except Exception:
+        return path.replace("\\", "/")
+
+
+def _collect_imports(tree) -> Dict[str, tuple]:
+    """收集模块级导入映射 {别名: (模块路径, 符号名)}。
+
+    - import a / import a as b → {a: ("a", None), b: ("a", None)}
+    - from a import a1 / from a import a1 as x → {a1: ("a", "a1"), x: ("a", "a1")}
+    符号名为 None 表示"别名指向模块"；非 None 表示"别名指向模块内符号"。
+    """
+    imports: Dict[str, tuple] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                asname = alias.asname or alias.name.split(".")[0]
+                imports[asname] = (alias.name, None)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                asname = alias.asname or alias.name
+                imports[asname] = (module, alias.name)
+    return imports
+
+
+def _module_to_file(project_path: str, module_path: str):
+    """把模块路径（如 core.helper）映射到文件路径（如 core/helper.py）。"""
+    rel = module_path.replace(".", "/") + ".py"
+    candidate = os.path.join(project_path, rel)
+    if os.path.isfile(candidate):
+        return candidate
+    pkg = os.path.join(project_path, module_path.replace(".", "/"), "__init__.py")
+    if os.path.isfile(pkg):
+        return pkg
+    return None
+
+
+def _resolve_call_target(func_node, rel: str, imports: Dict[str, tuple],
+                         funcs: Dict[tuple, dict], project_path: str) -> list:
+    """解析调用目标，返回 [(rel, name)] 列表（仅项目内已定义模块级函数）。
+
+    只解析三类确定性的调用：
+    - 直接调用 ast.Name（如 helper_aux()）：同文件内查找同名函数；
+    - from-import 符号直接调用（from a import a1 后 a1()）：解析到 a.py 的 a1；
+    - 模块属性调用 ast.Attribute（如 helper.helper_aux()）：经导入映射
+      解析模块别名 → 目标文件 → 查找属性名函数。
+    忽略方法调用（data.decode() / self.method()）与标准库/第三方调用，
+    避免把字符串方法等误判为函数递归。
+    """
+    if isinstance(func_node, ast.Name):
+        name = func_node.id
+        if (rel, name) in funcs:
+            return [(rel, name)]
+        # from a import a1 → a1() 调用 a.py 的 a1
+        entry = imports.get(name)
+        if entry:
+            module_path, symbol = entry
+            if symbol and symbol == name:
+                target_file = _module_to_file(project_path, module_path)
+                if target_file:
+                    target_rel = _rel_path(project_path, target_file)
+                    if (target_rel, symbol) in funcs:
+                        return [(target_rel, symbol)]
+    elif isinstance(func_node, ast.Attribute):
+        if isinstance(func_node.value, ast.Name):
+            mod_alias = func_node.value.id
+            attr = func_node.attr
+            entry = imports.get(mod_alias)
+            if entry:
+                module_path, symbol = entry
+                # 别名可能指向模块（import a）或模块内符号（from a import b，
+                # b 可能是子模块也可能是符号）——按候选模块路径逐一尝试
+                candidates = []
+                if symbol is None:
+                    candidates.append(module_path)
+                else:
+                    candidates.append(f"{module_path}.{symbol}")
+                    candidates.append(module_path)
+                for mp in candidates:
+                    target_file = _module_to_file(project_path, mp)
+                    if target_file:
+                        target_rel = _rel_path(project_path, target_file)
+                        if (target_rel, attr) in funcs:
+                            return [(target_rel, attr)]
+    return []
+
+
+def _extract_cycle(graph: Dict[str, List[str]], comp: List[str]):
+    """从强连通分量中提取一条环路径（首尾相同），失败返回 None。"""
+    if len(comp) == 1:
+        n = comp[0]
+        if n in graph.get(n, []):
+            return [n, n]
+        return None
+    start = comp[0]
+    stack = [(start, [start])]
+    while stack:
+        node, path = stack.pop()
+        for nxt in graph.get(node, []):
+            if nxt not in comp:
+                continue
+            if nxt == start:
+                return path + [start]
+            if nxt not in path:
+                stack.append((nxt, path + [nxt]))
+    return None
+
+
+def _scan_function_recursion(project_path: str) -> list:
+    """扫描项目源码，检测函数级递归调用（直接/间接），返回 finding 列表。
+
+    用 AST 解析每个模块级函数的调用（直接调用 + 模块属性调用），
+    构建函数调用图，检测环（直接递归 A→A、间接递归 A→B→A）。
+    输出遵循 finding 结构：severity / category / file / line / message / chain。
+    """
+    # 1) 收集模块级函数定义 + 导入映射
+    funcs: Dict[tuple, dict] = {}            # (rel, name) -> {"file": rel, "line": lineno}
+    imports: Dict[str, Dict[str, str]] = {}  # rel -> {alias: module_path}
+    count = 0
+    for path in _iter_py_files(project_path):
+        if count >= _FUNC_MAX_FILES:
+            break
+        count += 1
+        tree = _parse_py(path)
+        if tree is None:
+            continue
+        rel = _rel_path(project_path, path)
+        imports[rel] = _collect_imports(tree)
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                funcs[(rel, node.name)] = {"file": rel, "line": node.lineno}
+
+    # 2) 构建函数调用图
+    graph: Dict[tuple, set] = defaultdict(set)
+    count = 0
+    for path in _iter_py_files(project_path):
+        if count >= _FUNC_MAX_FILES:
+            break
+        count += 1
+        tree = _parse_py(path)
+        if tree is None:
+            continue
+        rel = _rel_path(project_path, path)
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            caller = (rel, node.name)
+            for call_node in ast.walk(node):
+                if isinstance(call_node, ast.Call):
+                    for tgt in _resolve_call_target(
+                            call_node.func, rel, imports.get(rel, {}),
+                            funcs, project_path):
+                        graph[caller].add(tgt)
+
+    # 3) 检测环（复用模块级 SCC 算法）
+    str_graph = {f"{r}:{n}": sorted(f"{tr}:{tn}" for tr, tn in tgts)
+                 for (r, n), tgts in graph.items()}
+    findings = []
+    for comp in find_sccs(str_graph):
+        is_cycle = len(comp) >= 2
+        if len(comp) == 1:
+            n = comp[0]
+            is_cycle = n in str_graph.get(n, [])
+        if not is_cycle:
+            continue
+        chain = _extract_cycle(str_graph, comp)
+        if not chain:
+            continue
+        rel, _, name = chain[0].rpartition(":")
+        info = funcs.get((rel, name), {})
+        # 直接递归（A→A）可能是正常的树遍历/解析递归，需人工确认终止条件；
+        # 间接递归（A→B→A）通常是逻辑错误，判 high。
+        direct = len(chain) == 2 and chain[0] == chain[1]
+        if direct:
+            severity, message = "medium", (
+                f"函数直接递归调用自身：{rel}:{name}（需人工确认是否有终止条件，避免无限递归）")
+        else:
+            severity, message = "high", (
+                "函数级递归调用链：" + " → ".join(chain) + "（可能无限递归）")
+        findings.append({
+            "severity": severity,
+            "category": "recursion",
+            "file": rel,
+            "line": info.get("line", 0),
+            "message": message,
+            "chain": chain,
+        })
+    return findings
 
 
 def audit(project_path: str, db_path: str = None,
@@ -285,8 +548,9 @@ def audit(project_path: str, db_path: str = None,
     # 1) 循环依赖（模块级 SCC）
     result["cycles"] = _find_cycles(mod_adj, self_edges, sc_min)
 
-    # 2) 扇出 / 扇入
-    result["god_modules"], result["fan_top"] = _fan_stats(mod_adj, fo_t)
+    # 2) 扇出 / 扇入 + 上帝模块（结合模块规模综合判定）
+    mod_symbols = _module_symbol_counts(nodes, project_path)
+    result["god_modules"], result["fan_top"] = _fan_stats(mod_adj, fo_t, mod_symbols)
 
     # 3) 分层违例
     layer_viol = _layer_violations(nodes, mod_adj, project_path)
@@ -295,8 +559,12 @@ def audit(project_path: str, db_path: str = None,
     # 4) 异常模块规模（函数/方法/类符号数）
     result["large_modules"] = _large_modules(nodes, project_path, ls_t)
 
-    # 5) 架构健康度（0-10）
+    # 5) 函数级递归（ARC-08）：AST 扫描源码，检测函数级递归调用（直接/间接）
+    result["function_recursions"] = _scan_function_recursion(project_path)
+
+    # 6) 架构健康度（0-10）
     result["summary"] = _health_summary(
         result["cycles"], result["god_modules"], layer_viol, result["large_modules"])
+    result["summary"]["function_recursions"] = len(result["function_recursions"])
     result["ok"] = True
     return result

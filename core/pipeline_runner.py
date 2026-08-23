@@ -1280,7 +1280,7 @@ def _gov(p: str, r: PipeResult, done: set):
                     category=v.category, severity=v.severity,
                     file_path=v.file_path, line=v.line_number,
                     title=f"[{v.rule_id}] {v.rule_name}", detail=det,
-                    suggestion=v.suggestion, tier=Tier.MEDIUM))
+                    suggestion=v.suggestion, tier=_tier_for(v.severity)))
         done.add("gov"); _save(p, list(done))
     except Exception as e: r.errors.append(f"gov: {e}")
 

@@ -88,6 +88,49 @@ _SEC53_WRITE_RE = re.compile(
     r'\s*\(.{0,200}?\b(?:req|body)\.[A-Za-z_]+', re.IGNORECASE)
 
 
+# ─── LLM 上下文场景过滤（AGENT-* 规则只对 LLM/AI 相关代码生效） ───
+# 纯 HTTP 库/认证/网络请求等非 LLM 场景不应触发 Agent 特有规则（如 AGENT-SEC-01
+# 提示注入、AGENT-SEC-09 不受控网络请求、AGENT-SEC-14 API Key 明文传递），否则
+# 产生大量上下文误报。判定：命中行或整个文件含 LLM/AI 特征词（prompt/llm/agent/
+# chat/completion 等）才触发；user agent 等 HTTP 库常见词先剔除，避免误判。
+_LLM_CONTEXT_RE = re.compile(
+    r'\b(?:prompt|llm|openai|anthropic|langchain|completion|completions|'
+    r'system_prompt|sys_prompt|system_message|user_message|messages|assistant|'
+    r'embeddings|tokenizer|chatgpt|claude|gemini|llama|chat_completion|chat\.completions)\b'
+    r'|\bchat\b'
+    r'|(?<![-_])agent\b',
+    re.IGNORECASE)
+_USER_AGENT_RE = re.compile(r'user[-_ ]agent(?:s)?\b', re.IGNORECASE)
+
+# 仅 LLM 上下文生效的 Agent 特有规则：非 LLM 项目（纯 HTTP 库/认证/网络请求等）
+# 中这些规则无意义，触发前须确认命中行或文件含 LLM/AI 特征。
+_AGENT_LLM_ONLY_RULES = frozenset({
+    # 提示注入 / 角色混淆
+    "AGENT-SEC-01", "AGENT-SEC-02",
+    # 上下文操纵 / 知识投毒
+    "AGENT-SEC-03", "AGENT-SEC-04", "AGENT-SEC-05",
+    # 不受控网络请求（requests 库误报源）
+    "AGENT-SEC-09",
+    # 预算/资源耗尽
+    "AGENT-SEC-10", "AGENT-SEC-11", "AGENT-SEC-12",
+    # 数据泄露（prompt 日志 / API Key 明文 / 敏感数据外传）
+    "AGENT-SEC-13", "AGENT-SEC-14", "AGENT-SEC-15",
+    # 自主行为
+    "AGENT-SEC-16", "AGENT-SEC-17",
+    # LLM 调用缺少限流
+    "AGENT-SEC-26",
+    # LLM 工具执行滥用 / 查询注入
+    "AGENT-SEC-42", "AGENT-SEC-LMEXEC",
+    # 浏览器沙箱
+    "AGENT-SEC-SANDBOX",
+})
+
+
+def _has_llm_context(text: str) -> bool:
+    """判断文本是否含 LLM/AI 特征（先剔除 user agent 等 HTTP 库常见词）。"""
+    return bool(_LLM_CONTEXT_RE.search(_USER_AGENT_RE.sub(' ', text)))
+
+
 # ==================== 模块级规则常量区（自 AgentSecurityAuditor 提取，规则数据与检测逻辑分离） ====================
 # ─── 提示注入检测 ───
 PROMPT_INJECTION_PATTERNS = [
@@ -567,6 +610,14 @@ PATH_TRAVERSAL_PATTERNS = [
      "AGENT-SEC-PT", "路径穿越", "high",
      "检测到 os.path.join 将工作目录与 f-string 插值变量（如 LLM 生成的 identifier）拼接构造路径，未净化 ../ 可穿越工作目录",
      "对插值 segment 调用净化函数（如 safe_path_component），校验拼接后路径位于工作目录内"),
+    # os.path.join 动态拼接：目录根与"变量 + 字符串"混合表达式拼接
+    # （如 os.path.join(base, key + ".db")），用户可控输入参与路径构造。
+    # 逐行正则无法区分静态/动态段，命中后由 _refine_secpt 回溯判定：纯静态
+    # 拼接降级 low，含函数参数/用户输入痕迹维持 high。
+    (re.compile(r'os\.path\.join\s*\([^)]*\+[^)]*\)', re.IGNORECASE),
+     "AGENT-SEC-PT", "路径穿越", "high",
+     "检测到 os.path.join 拼接中包含变量 + 字符串的混合表达式（如 os.path.join(base, key + '.db')），用户可控输入可能参与路径构造，未净化 ../ 可越权读写任意文件",
+     "清洗用户可控 segment（拒绝 .. 与绝对路径），校验拼接后绝对路径位于允许根目录内"),
 ]
 
 # ─── 反序列化检测 ───
@@ -1070,6 +1121,8 @@ class AgentSecurityAuditor:
             # AST 级参数透传失效检测（AGENT-SEC-27）：仅 Python（AST 解析器为 Python 专用）
             if ext == ".py":
                 risks.extend(self._scan_param_shadow(fpath, content))
+                # AST 级路径穿越动态拼接检测（AGENT-SEC-PT 正则盲区补充）
+                risks.extend(self._scan_path_traversal_ast(fpath, content))
 
         # 项目级防御层级韧性缺口检测（检查缺失的防御模式）
         resilience_gaps = self._check_resilience_gaps(project_path)
@@ -1080,6 +1133,19 @@ class AgentSecurityAuditor:
             r for r in risks
             if not SharedFilter.is_security_whitelisted(r.risk_id, r.file_path, r.line_number)
         ]
+
+        # 去重：regex 层（_scan_file）与 AST 层（_scan_path_traversal_ast）可能对同一行
+        # 重复产生 AGENT-SEC-PT，按 (file_path, line_number, risk_id) 去重，避免重复条目
+        # 与 severity 计数错误
+        seen: set = set()
+        deduped: list = []
+        for r in risks:
+            key = (r.file_path, r.line_number, r.risk_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(r)
+        risks = deduped
 
         # 按严重程度排序
         risks.sort(key=lambda r: (SEVERITY_ORDER.get(r.severity, 99), r.file_path, r.line_number))
@@ -1183,6 +1249,10 @@ class AgentSecurityAuditor:
     def _scan_param_shadow(self, filepath: str, content: str):
         """拆分说明：实现已移至模块级 _scan_param_shadow，此处保留方法签名做委托"""
         return _scan_param_shadow(filepath, content)
+
+    def _scan_path_traversal_ast(self, filepath: str, content: str):
+        """拆分说明：实现已移至模块级 _scan_path_traversal_ast，此处保留方法签名做委托"""
+        return _scan_path_traversal_ast(filepath, content)
 
     def _scan_function_param_shadow(self, node, filepath: str, content: str):
         """拆分说明：实现已移至模块级 _scan_function_param_shadow，此处保留方法签名做委托"""
@@ -1365,6 +1435,10 @@ def _scan_file(filepath: str, content: str, ext: str = ".py") -> List[AgentSecur
         r'\b(?:timeout|deadline|max_wait_seconds?|give_up)\b|while\s+.*\b(?:timeout|deadline)\b',
         content, re.IGNORECASE))
 
+    # AGENT-* 特有规则 LLM 场景过滤：文件含 LLM/AI 特征才允许触发（命中行本身
+    # 含特征时也放行，见规则循环内判断）
+    file_has_llm = _has_llm_context(content)
+
     # SEC-58/59 自产数据消费信号（整文件级）：数据根指向工具自管目录
     # （cache/coderef-report/coderef-wiki/.gitnexus/data/memory_state 等，
     # 含 MEMORY_STATE 快照类常量）时，"RAG 投毒"威胁模型错配——加载的是
@@ -1442,6 +1516,11 @@ def _scan_file(filepath: str, content: str, ext: str = ".py") -> List[AgentSecur
                 if m:
                     # 跳过模式定义自身（如类中的正则表达式定义）
                     if _is_pattern_definition(stripped, risk_name):
+                        continue
+                    # AGENT-* 特有规则仅对 LLM 相关代码生效：命中行与文件均无
+                    # LLM/AI 特征（纯 HTTP 库/认证/网络请求等非 LLM 场景）则跳过
+                    if risk_id in _AGENT_LLM_ONLY_RULES \
+                            and not (file_has_llm or _has_llm_context(stripped)):
                         continue
                     # 提示注入/上下文操纵：噪声行（logger/print/raise 描述性消息）不明判注入
                     if category_key in ("prompt_injection", "context_manipulation") and i in noise_lines:
@@ -2252,6 +2331,98 @@ def _crosslang_ssrf_signal_lines(content: str, hit_re: re.Pattern) -> set:
     return result
 
 
+def _scan_path_traversal_ast(filepath: str, content: str) -> List[AgentSecurityRisk]:
+    """AST 级检测 os.path.join 动态路径拼接（用户可控输入参与路径构造）。
+
+    覆盖 PATH_TRAVERSAL_PATTERNS 正则盲区：`os.path.join(base, key + ".db")`
+    这类目录根与用户可控变量（函数参数）动态拼接构造文件路径，未净化 ../ 可
+    越权读写任意文件。逐行正则只认特定变量名（data_dir/*_root/working_dir）
+    或含 + 的混合表达式，无法识别"参数直接拼进 join"的通用形态（如
+    os.path.join(base, key)），需 AST 分析函数参数引用。含 + 的混合表达式
+    已由正则层覆盖，此处只补正则盲区，避免重复上报。
+    """
+    risks: List[AgentSecurityRisk] = []
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return risks
+    source_lines = content.splitlines()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        params: Set[str] = {a.arg for a in node.args.args}
+        params |= {a.arg for a in node.args.kwonlyargs}
+        if not params:
+            continue
+        # 收集函数体内赋值（var -> RHS），支持一层间接引用（name = key + ".db"）
+        local_assigns: dict = {}
+        for stmt in _iter_body_assigns(node.body):
+            if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 \
+                    and isinstance(stmt.targets[0], ast.Name):
+                local_assigns[stmt.targets[0].id] = stmt.value
+            elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None \
+                    and isinstance(stmt.target, ast.Name):
+                local_assigns[stmt.target.id] = stmt.value
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Call):
+                continue
+            # os.path.join：func 为 Attribute(Attribute(Name('os'), 'path'), 'join')
+            func = sub.func
+            if not (isinstance(func, ast.Attribute) and func.attr == "join"
+                    and isinstance(func.value, ast.Attribute)
+                    and func.value.attr == "path"
+                    and isinstance(func.value.value, ast.Name)
+                    and func.value.value.id == "os"):
+                continue
+            # 含 + 的混合表达式拼接已由 PATH_TRAVERSAL_PATTERNS 正则层覆盖，
+            # 此处只补正则盲区：无 + 的直接变量拼接（os.path.join(base, key)）
+            if any(isinstance(a, ast.BinOp) and isinstance(a.op, ast.Add)
+                   for a in sub.args):
+                continue
+            # join 参数中任一引用函数参数（直接或经赋值链）即判定动态拼接
+            if not any(_expr_references_params(a, params, local_assigns)
+                       for a in sub.args):
+                continue
+            line_no = getattr(sub, "lineno", 0)
+            line_content = source_lines[line_no - 1].strip()[:150] \
+                if 0 < line_no <= len(source_lines) else ""
+            risks.append(AgentSecurityRisk(
+                risk_id="AGENT-SEC-PT",
+                risk_name="路径穿越",
+                category="path_traversal",
+                severity="high",
+                file_path=filepath,
+                line_number=line_no,
+                line_content=line_content,
+                detail=(
+                    "检测到 os.path.join 将目录根与用户可控输入（函数参数）动态"
+                    "拼接构造文件路径，未净化 ../ 可越权读写任意文件"
+                ),
+                suggestion=(
+                    "清洗用户可控 segment（拒绝 .. 与绝对路径），校验拼接后绝对"
+                    "路径位于允许根目录内"
+                ),
+            ))
+    return risks
+
+
+def _expr_references_params(expr, params: Set[str], local_assigns: dict,
+                            _seen: "Set[str] | None" = None) -> bool:
+    """判断表达式是否（直接或经赋值链）引用函数参数。"""
+    if expr is None:
+        return False
+    if _seen is None:
+        _seen = set()
+    if any(isinstance(n, ast.Name) and n.id in params for n in ast.walk(expr)):
+        return True
+    for n in ast.walk(expr):
+        if isinstance(n, ast.Name) and n.id in local_assigns and n.id not in _seen:
+            _seen.add(n.id)
+            if _expr_references_params(local_assigns[n.id], params, local_assigns, _seen):
+                return True
+    return False
+
+
 def _scan_param_shadow(filepath: str, content: str) -> List[AgentSecurityRisk]:
     """AST 级扫描单个文件：检测函数参数被配置读取静默覆盖。"""
     risks: List[AgentSecurityRisk] = []
@@ -2307,8 +2478,9 @@ def _scan_function_param_shadow(node, filepath: str, content: str) -> List[Agent
             line_number=line_no,
             line_content=line_content,
             detail=(
-                f"函数参数「{param}」从未使用，函数体从配置容器「{match}」读取同名值，"
-                f"调用方传入的实参被静默忽略。父代理会基于错误前提做判断（如误以为派了某模型）。"
+                f"函数参数「{param}」从未使用，函数体从配置容器「{match}」读取配置值"
+                f"（key 与参数同名或语义相关），调用方传入的实参被静默忽略。"
+                f"父代理会基于错误前提做判断（如误以为派了某模型）。"
             ),
             suggestion=(
                 f"要么删除未生效的参数「{param}」，要么让函数体真正使用参数值；"
@@ -2361,6 +2533,33 @@ def _contains_name(value, name: str) -> bool:
     return any(isinstance(n, ast.Name) and n.id == name for n in ast.walk(value))
 
 
+# 配置读取方法名（Call 形态 func.attr 命中即视为从配置容器读取值）
+_CONFIG_READ_METHODS = frozenset({
+    "get", "getenv", "read", "config_read", "get_config", "read_config",
+    "load_config", "get_setting", "get_param", "get_value", "fetch_config",
+})
+# 强配置读取方法：方法名本身即表明配置读取语义，容器名可放宽
+# （如 db.config_read("default_password")，容器 db 不含 config 特征）
+_STRONG_CONFIG_READ_METHODS = frozenset({
+    "config_read", "get_config", "read_config", "load_config",
+    "get_setting", "get_param", "get_value", "fetch_config",
+})
+
+
+def _key_matches_param(key: str, param: str) -> bool:
+    """判断配置 key 与参数名是否语义相关（同名或参数名为 key 后缀）。
+
+    放宽"key 与参数同名"的严格要求：`db.config_read("default_password")`
+    覆盖参数 `password` 时，key 含参数名作为后缀（default_password 的
+    后缀是 password），视为同一语义字段的配置覆盖。
+    """
+    if not key or not param:
+        return False
+    if key == param:
+        return True
+    return key.endswith(param)
+
+
 def _match_config_shadow(value, param: str):
     """判断 value 是否为「从配置容器读取同名参数」的表达式，命中返回容器标识，否则返回 None。
 
@@ -2368,8 +2567,10 @@ def _match_config_shadow(value, param: str):
       - container["param"]          （Subscript）
       - container.param            （Attribute）
       - container.get("param")     （Call，含 os.environ.get / self.config.get）
-    容器名需含配置来源特征（config/cred/settings/env/...），且 key/属性与参数同名。
-    容器名从 Name 或 Attribute 链取叶子名：self.config → config、os.environ → environ。
+    容器名需含配置来源特征（config/cred/settings/env/...），且 key/属性与参数
+    同名或语义相关（参数名为 key 后缀）。强配置读取方法（config_read 等）本身
+    即表明配置读取语义，容器名可放宽。容器名从 Name 或 Attribute 链取叶子名：
+    self.config → config、os.environ → environ。
     """
     if isinstance(value, ast.Subscript):
         base = value.value
@@ -2380,7 +2581,7 @@ def _match_config_shadow(value, param: str):
         elif getattr(ast, 'Str', None) is not None and isinstance(sl, ast.Str):
             key = sl.s
         container = _container_leaf_name(base)
-        if container and key == param and _is_config_container(container):
+        if container and _key_matches_param(key, param) and _is_config_container(container):
             return container
     elif isinstance(value, ast.Attribute):
         base = value.value
@@ -2389,14 +2590,18 @@ def _match_config_shadow(value, param: str):
             return container
     elif isinstance(value, ast.Call):
         func = value.func
-        if isinstance(func, ast.Attribute) and func.attr in ("get", "getenv"):
+        if isinstance(func, ast.Attribute):
             base = func.value
             container = _container_leaf_name(base)
-            if container and _is_config_container(container):
+            method = func.attr.lower()
+            if method in _CONFIG_READ_METHODS:
                 if value.args and isinstance(value.args[0], ast.Constant) \
                         and isinstance(value.args[0].value, str) \
-                        and value.args[0].value == param:
-                    return container
+                        and _key_matches_param(value.args[0].value, param):
+                    # 强配置读取方法（config_read 等）容器判定放宽；通用读取
+                    # 方法（get/getenv/read）仍要求容器名含配置来源特征
+                    if method in _STRONG_CONFIG_READ_METHODS or _is_config_container(container):
+                        return container
     return None
 
 
