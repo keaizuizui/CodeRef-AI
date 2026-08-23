@@ -252,6 +252,87 @@ def _repair_truncated_json(text: str) -> str:
     return "".join(out)
 
 
+def _normalize_nonstandard_json(text: str) -> str:
+    """将非标准 JSON 规范化：单引号字符串→双引号、Python 字面量→JSON 字面量。
+
+    处理 LLM 常见的两种非标准输出：
+    1. 单引号字符串（如 {'a': 'x'}）→ 双引号字符串；
+    2. Python 风格字面量 True/False/None → JSON 的 true/false/null。
+
+    仅在字符串字面量之外处理，避免破坏双引号字符串内部内容；
+    单引号字符串内部的双引号会被转义为 \\"，内部 \\' 还原为 '。
+    无任何改动时返回原文本（由调用方判定是否生效）。
+    """
+    if not text:
+        return text
+    out: List[str] = []
+    i = 0
+    n = len(text)
+    changed = False
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            # 双引号字符串：原样复制直到闭合（含转义）
+            out.append(ch)
+            i += 1
+            while i < n:
+                c = text[i]
+                out.append(c)
+                if c == "\\" and i + 1 < n:
+                    out.append(text[i + 1])
+                    i += 2
+                    continue
+                if c == '"':
+                    i += 1
+                    break
+                i += 1
+            continue
+        if ch == "'":
+            # 单引号字符串：转为双引号，内部双引号转义、\' 还原为 '
+            out.append('"')
+            changed = True
+            i += 1
+            while i < n:
+                c = text[i]
+                if c == "\\" and i + 1 < n:
+                    nxt = text[i + 1]
+                    if nxt == "'":
+                        out.append("'")
+                    else:
+                        out.append("\\")
+                        out.append(nxt)
+                    i += 2
+                    continue
+                if c == "'":
+                    out.append('"')
+                    i += 1
+                    break
+                if c == '"':
+                    out.append('\\"')
+                    i += 1
+                    continue
+                out.append(c)
+                i += 1
+            continue
+        if ch.isalpha():
+            # 字符串外的裸 token：True/False/None → JSON 字面量
+            j = i
+            while j < n and text[j].isalpha():
+                j += 1
+            tok = text[i:j]
+            mapping = {"True": "true", "False": "false", "None": "null"}
+            if tok in mapping:
+                out.append(mapping[tok])
+                changed = True
+            else:
+                out.append(tok)
+            i = j
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out) if changed else text
+
+
 class LLMIntegration:
     """LLM集成管理器"""
     # 结构化错误串统一前缀：预算拒绝/缺Key/初始化失败/调用失败等非正常内容
@@ -411,11 +492,12 @@ class LLMIntegration:
     def _strip_code_block(text: str) -> str:
         """剥离 LLM 返回的 Markdown 代码块包裹。
 
-        兼容 ```json ... ``` 与 ``` ... ``` 两种形式；未命中代码块时原样返回。
+        兼容 ```json ... ``` 与 ``` ... ``` 两种形式，且允许 ``` 后紧跟 JSON
+        （不强制换行，如 ```json{...}```）；未命中代码块时原样返回。
         """
         if not text or "```" not in text:
             return text
-        m = re.search(r"```(?:json)?\s*\n", text, re.IGNORECASE)
+        m = re.search(r"```(?:json)?\s*", text, re.IGNORECASE)
         if not m:
             return text
         end = text.find("```", m.end())
@@ -428,49 +510,75 @@ class LLMIntegration:
         """尝试从 LLM 返回文本中解析出 JSON 对象/数组。
 
         依次尝试：
-        1. 整体解析；
-        2. 截取花括号/方括号平衡的合法片段后再解析；
-        3. 修复截断值（LLM 常因 max_tokens 截断）：补全字符串引号、
+        1. 整体解析（原始文本，避免误剥离合法 JSON 内部的 ``` 等）；
+        2. 剥离 Markdown 代码块包裹（```json ... ``` / ``` ... ```）后整体解析；
+        3. 规范化非标准 JSON（单引号字符串、True/False/None 字面量），
+           使后续片段提取/截断修复能正确处理非标准字面量；
+        4. 截取花括号/方括号平衡的合法片段后再解析（处理前后自然语言）；
+        5. 修复截断值（LLM 常因 max_tokens 截断）：补全字符串引号、
            裸 token（tru→true/fals→false/nul→null）与未闭合括号后解析。
         解析失败返回 None。
         """
         if not text:
             return None
-        # 0. 剥离 Markdown 代码块包裹（```json ... ``` 或 ``` ... ```），露出纯 JSON
-        stripped = cls._strip_code_block(text)
-        if stripped != text:
-            text = stripped
-        # 1. 整体解析
+        # 1. 整体解析（原始文本）
         try:
             return json.loads(text)
         except (json.JSONDecodeError, ValueError):
             pass
-        # 2. 截取平衡片段。定位整个响应中最早出现的结构分隔符（'[' 或 '{'），
-        #    以更靠前的那个作为优先顶层类型：若数组先出现说明期望顶层是数组，
-        #    应先按数组截取完整内容（否则对象优先会把数组截成第一个元素对象，导致
-        #    调用方期望 list 却拿到 dict，误判"解析失败"）。
-        #    不能只看首字符——LLM 常在 JSON 前加说明文字（如 "Here is the list:"）。
-        i_open = text.find('[')
-        i_brace = text.find('{')
-        if i_open < 0:
-            i_open = len(text) + 1
-        if i_brace < 0:
-            i_brace = len(text) + 1
-        order = ('[', '{') if i_open < i_brace else ('{', '[')
-        for open_char, close_char in ((c, ']' if c == '[' else '}') for c in order):
-            fragment = cls._extract_balanced_json_fragment(text, open_char, close_char)
-            if fragment:
-                try:
-                    return json.loads(fragment)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-        # 3. 修复截断值后重试
-        repaired = cls._repair_truncated_json(text)
-        if repaired and repaired != text:
+        # 2. 剥离 Markdown 代码块包裹（```json ... ``` 或 ``` ... ```），露出纯 JSON
+        stripped = cls._strip_code_block(text)
+        if stripped != text:
             try:
-                return json.loads(repaired)
+                return json.loads(stripped)
             except (json.JSONDecodeError, ValueError):
                 pass
+            text = stripped
+        # 3. 规范化非标准 JSON（单引号字符串、Python 字面量 True/False/None）。
+        #    提前规范化可避免"内嵌合法片段被误判为顶层"：若单引号对象解析失败，
+        #    其内部的双引号/标准数组片段（如 [1,2]）可能被步骤 4 误提取为顶层。
+        #    同时保留原始文本：散文撇号（如 user's）等被规范化转成双引号后可能
+        #    破坏片段提取，需在规范化失败时回退原始文本重试。
+        original = text
+        normalized = cls._normalize_nonstandard_json(text)
+        if normalized != text:
+            text = normalized
+
+        def _extract_parse(t: str) -> Optional[Any]:
+            # 4. 截取平衡片段。定位整个响应中最早出现的结构分隔符（'[' 或 '{'），
+            #    以更靠前的那个作为优先顶层类型：若数组先出现说明期望顶层是数组，
+            #    应先按数组截取完整内容（否则对象优先会把数组截成第一个元素对象，导致
+            #    调用方期望 list 却拿到 dict，误判"解析失败"）。
+            #    不能只看首字符——LLM 常在 JSON 前加说明文字（如 "Here is the list:"）。
+            i_open = t.find('[')
+            i_brace = t.find('{')
+            if i_open < 0:
+                i_open = len(t) + 1
+            if i_brace < 0:
+                i_brace = len(t) + 1
+            order = ('[', '{') if i_open < i_brace else ('{', '[')
+            for open_char, close_char in ((c, ']' if c == '[' else '}') for c in order):
+                fragment = cls._extract_balanced_json_fragment(t, open_char, close_char)
+                if fragment:
+                    try:
+                        return json.loads(fragment)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+            # 5. 修复截断值后重试（t 已规范化，覆盖"单引号 + 截断"组合）
+            repaired = cls._repair_truncated_json(t)
+            if repaired and repaired != t:
+                try:
+                    return json.loads(repaired)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            return None
+
+        result = _extract_parse(text)
+        if result is not None:
+            return result
+        # 6. 规范化文本失败时回退原始文本（规范化可能破坏散文撇号等场景）
+        if original != text:
+            return _extract_parse(original)
         return None
 
     @staticmethod
@@ -482,6 +590,11 @@ class LLMIntegration:
     def _repair_truncated_json(cls, text: str) -> str:
         """尽力修复被截断的 JSON 文本（实现已拆分至模块级 _repair_truncated_json）。"""
         return _repair_truncated_json(text)
+
+    @staticmethod
+    def _normalize_nonstandard_json(text: str) -> str:
+        """规范化非标准 JSON（实现已拆分至模块级 _normalize_nonstandard_json）。"""
+        return _normalize_nonstandard_json(text)
 
     @staticmethod
     def _validate_analysis_dict(data: Any) -> bool:
@@ -575,12 +688,20 @@ class LLMIntegration:
         last_error = None
         # DeepSeek V4 推理模型：允许调用方显式传 thinking 参数，否则不强制
         extra_body = kwargs.get('extra_body') or {}
+        # JSON 模式：调用方可通过 response_format={"type": "json_object"} 强制模型输出
+        # 合法 JSON，从 API 层约束比 prompt 提示更可靠。端点不支持时自动回退。
+        response_format = kwargs.get('response_format')
+        rf_active = response_format is not None
+        try:
+            from openai import BadRequestError
+        except ImportError:
+            BadRequestError = None
         for attempt in range(max_retries + 1):
             if attempt > 0:
                 time.sleep(delay)
                 delay *= 2  # 指数退避：1s、2s
             try:
-                response = self.client.chat.completions.create(
+                create_kwargs = dict(
                     model=kwargs.get('model', self.config.model),
                     messages=messages,
                     temperature=kwargs.get('temperature', self.config.temperature),
@@ -588,6 +709,9 @@ class LLMIntegration:
                     timeout=timeout,
                     extra_body=extra_body or None,
                 )
+                if rf_active:
+                    create_kwargs['response_format'] = response_format
+                response = self.client.chat.completions.create(**create_kwargs)
                 message = response.choices[0].message
                 content = message.content or ""
                 # DeepSeek V4 空 content 回退：推理内容在 reasoning_content
@@ -597,6 +721,13 @@ class LLMIntegration:
                 self._call_count += 1
                 return self._cap_output(content)
             except Exception as e:
+                # response_format 不被端点支持（参数错误）：去掉该参数回退重试一次，
+                # 避免 JSON 约束反而导致整体调用失败
+                if (rf_active and BadRequestError is not None
+                        and isinstance(e, BadRequestError)):
+                    logger.warning(f"端点不支持 response_format，回退为普通调用重试: {e}")
+                    rf_active = False
+                    continue
                 last_error = e
                 # 永久性错误（认证失败、API Key 缺失、参数错误等）不重试
                 if not self._is_retryable_llm_error(e) or attempt == max_retries:
@@ -629,7 +760,7 @@ class LLMIntegration:
 """
         
         response = self.chat_completion([
-            {"role": "system", "content": "你是专业的代码分析专家，只返回JSON格式的分析结果。"},
+            {"role": "system", "content": "你是专业的代码分析专家。只输出合法的 JSON 对象，不要输出任何解释、前后缀文字或 Markdown 代码块。"},
             {"role": "user", "content": prompt}
         ])
 
@@ -711,30 +842,34 @@ class LLMIntegration:
 """
         
         response = self.chat_completion([
-            {"role": "system", "content": "你是专业的代码顾问，擅长将开源代码和论文思路融入现有项目。只返回JSON。"},
+            {"role": "system", "content": "你是专业的代码顾问，擅长将开源代码和论文思路融入现有项目。只输出合法的 JSON，不要任何解释、前后缀文字或 Markdown 代码块。"},
             {"role": "user", "content": prompt}
         ])
         
+        result = None
         try:
             json_start = response.find('{')
             json_end = response.rfind('}') + 1
             if json_start >= 0 and json_end > json_start:
                 result = json.loads(response[json_start:json_end])
-                
-                import uuid
-                return CodeSuggestion(
-                    suggestion_id=str(uuid.uuid4())[:8],
-                    title=result.get('title', '代码优化建议'),
-                    description=result.get('description', ''),
-                    insert_position=result.get('insert_position', {}),
-                    code_snippet=result.get('code_snippet', ''),
-                    modification_notes=result.get('modification_notes', []),
-                    risk_warnings=result.get('risk_warnings', []),
-                    test_suggestions=result.get('test_suggestions', []),
-                    source_reference=reference_source
-                )
         except Exception as e:
             logger.error(f"解析LLM响应失败: {e}, 响应: {response[:200]}")
+        # 回退：使用增强的容错解析（代码块包裹/前后文字/单引号/截断等）
+        if not isinstance(result, dict):
+            result = self._try_parse_json(response)
+        if isinstance(result, dict):
+            import uuid
+            return CodeSuggestion(
+                suggestion_id=str(uuid.uuid4())[:8],
+                title=result.get('title', '代码优化建议'),
+                description=result.get('description', ''),
+                insert_position=result.get('insert_position', {}),
+                code_snippet=result.get('code_snippet', ''),
+                modification_notes=result.get('modification_notes', []),
+                risk_warnings=result.get('risk_warnings', []),
+                test_suggestions=result.get('test_suggestions', []),
+                source_reference=reference_source
+            )
         
         # 返回默认建议
         return CodeSuggestion(
@@ -883,7 +1018,7 @@ class LLMIntegration:
 """
         
         response = self.chat_completion([
-            {"role": "system", "content": "你是技术研究员，擅长从论文和开源项目中提取精华。只返回JSON。"},
+            {"role": "system", "content": "你是技术研究员，擅长从论文和开源项目中提取精华。只输出合法的 JSON 数组，不要任何解释、前后缀文字或 Markdown 代码块。"},
             {"role": "user", "content": prompt}
         ])
 

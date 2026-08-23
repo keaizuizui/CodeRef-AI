@@ -6,7 +6,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.9.7** | Python 3.10+ | MCP Protocol | MIT License
+**Version 4.9.9** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -430,6 +430,27 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 | **4.0** | 通过四个引擎和四个支柱，增强工具的功能覆盖，形成逻辑闭环 |
 
 ## 更新日志
+
+### v4.9.9 — 修复 Coderef-Test 测试报告（20260823-v4.9.8-r2）2 个 P0 复测未通过项
+
+- **P0-A 死代码聚合层吞没**（`code_simplifier` + `pipeline_runner._burst_merge`）：r2 复测确认底层检测已修对（`def_pattern` 扣除定义行），但聚合层 `_burst_merge` 分组键 `(tool, category, risk_id, severity)` 把"未使用的导入"与"未调用的函数"（同 `dead_code` + 同 severity + 无 risk_id）合并成单条，标题被覆盖为"未使用的导入"，函数级死代码在最终用户可见结果中被吞没。修复：5 种 dead_code 子类型 title 加 `[DEAD-IMPORT]`/`[DEAD-FUNC]`/`[DEAD-CLASS]`/`[DEAD-COMMENT]`/`[DEAD-TODO]` 前缀，`_dedup_adjacent`/`_burst_merge` 按 risk_id 细分，死代码独立呈现
+- **P0-B coderef_review JSON 降级不闭环**（`llm_integration` + `code_review`）：r2 复测确认重试机制正确但仅偶发成功（3 跑仅 1 跑产出真实评论），且 run3 全部批次触发重试叠加导致 900s 轮询超时整体无结果。根因是 deepseek-v4-flash 对 prompt 层"严格只输出 JSON"约束服从性差。修复：`chat_completion` 支持 `response_format={"type":"json_object"}` 透传（API 层强制 JSON，比 prompt 约束可靠），端点不支持时自动回退普通调用重试一次；`code_review._call_llm` 首次调用与重试均传 response_format
+- **验证**：死代码检测层 12 个真实死函数 + 3 个预埋死函数独立成条（不再混入"未使用导入"）；聚合层模拟 `_dedup_adjacent`+`_burst_merge` 后 `[DEAD-FUNC]`/`[DEAD-IMPORT]`/`[DEAD-CLASS]` 独立呈现；response_format 透传/不传/端点不支持回退三场景 mock 验证通过；3 文件编译零失败
+- 版本号：4.9.8 → 4.9.9
+
+### v4.9.8 — 修复 Coderef-Test 测试报告（20260823-v4.9.7-r1）2 P0 + 4 P1 + 3 P2
+
+- **P0-1 死代码检测器 bug**（`code_simplifier._detect_dead_functions`）：原正则把 `def xxx():` 定义行、注释/字符串里的 `xxx(` 误统计为调用，导致死代码全漏报（ARC-04/05/06）。修复：剥离注释与字符串字面量后再统计调用，并扣除函数定义行
+- **P0-2 coderef_review JSON 解析降级**（`code_review._call_llm`）：deepseek-v4-flash 倾向输出自由文本而非严格 JSON，`_try_parse_json` 失败后不重试直接占位，真实审查结论 0 条。修复：首次解析失败后增加一次"强制仅返回 JSON"重试（最多 1 次）
+- **P1 规则场景过滤**：IRON-SEC-17 PHP 规则按文件语言过滤（纯 Python 不再误报 `platform.system()`）；AGENT-* 规则仅对含 LLM 特征的代码生效（纯 HTTP 库/认证不再误报 AGENT-SEC-01/09/14）
+- **P1 检测模式盲区**：路径穿越扩展 `os.path.join(base, key+".db")` 动态拼接模式（正则 + AST 双层）；参数覆盖放宽 key 与参数同名要求（覆盖 `db.config_read("default_password")`）
+- **P1 docs OVERVIEW 归属错位**（`wiki_generator`）：coderef_docs 未指定 output_dir 时默认写 cwd 侧 txt（多项目共用互相覆盖）。修复：纠正为 project_path 侧 `docs/wiki`，缓存命中增加 project_path 校验
+- **P2 检测能力**：`arch_audit` 新增函数级递归检测（AST 调用图 + SCC 环，直接递归 medium / 间接递归 high）；上帝模块改双标准综合判定（高扇出 或 高扇入+符号占比）
+- **P2 魔法数字过滤**（`code_simplifier`）：1000 不再无条件白名单，`settings`/`config` 文件名不再整体跳过
+- **P2 统计口径**（`pipeline_runner._gov`）：gov findings 的 `tier=Tier.MEDIUM` 硬编码改为 `tier=_tier_for(v.severity)`，summary 与 findings severity 口径对齐
+- **P2 LLM 输出鲁棒性**（`llm_integration`）：`_try_parse_json` 增强（代码块包裹/前后文字/单引号/Python 字面量/截断修复），强化 JSON 相关 system prompt
+- **验证**：8 文件编译零失败；死代码检测修复后 3 个预埋死代码全部识别；MCP server 工具调用正常；CodeRabbit 复审 0 问题
+- 版本号：4.9.7 → 4.9.8
 
 ### v4.9.7 — 修复 v4.9.6 重构引入的 MCP 工具调用崩溃
 

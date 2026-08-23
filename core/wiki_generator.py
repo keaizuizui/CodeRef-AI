@@ -726,6 +726,17 @@ def _generate_prepare(self, project_path: str, output_dir: str, wiki_style: str)
 
     if not output_dir:
         output_dir = os.path.join(project_path, "docs", "wiki")
+    else:
+        # P1 修复：pipeline_runner._wiki 在调用方未指定 output_dir 时，会默认传入
+        # cwd 侧路径 {CodeRef安装目录}/txt（而非 project_path 侧），导致多个项目
+        # 共用同一输出目录、文档互相覆盖/残留（OVERVIEW 描述他项目、audit 报缺
+        # docs/）。识别该默认路径并纠正为 project_path 侧默认输出，保证文档归属
+        # 严格跟随当前 project_path。
+        _install_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        _default_txt = os.path.join(_install_dir, "txt")
+        if os.path.normcase(os.path.abspath(output_dir)) == os.path.normcase(
+                os.path.abspath(_default_txt)):
+            output_dir = os.path.join(project_path, "docs", "wiki")
 
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(os.path.join(output_dir, "MODULES"), exist_ok=True)
@@ -1329,7 +1340,10 @@ def _build_code_metadata(self, modules: List[WikiModule], project_path: str,
             with open(cache_file, "r", encoding="utf-8") as f:
                 raw = json.load(f)
             meta = self._metadata_from_dict(raw)
-            if meta and len(meta.modules) == len(modules):
+            # P1 修复：缓存校验必须同时确认 project_path 归属当前项目，
+            # 防止缓存目录被误用/哈希碰撞时读到其他项目的元数据（OVERVIEW 错位根因之一）。
+            if (meta and meta.project_path == project_path
+                    and len(meta.modules) == len(modules)):
                 return meta
         except Exception as e:
             logger.warning(f"读取元数据缓存失败，重新探测: {e}")

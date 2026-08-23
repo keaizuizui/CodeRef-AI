@@ -545,7 +545,8 @@ class CodeReviewer:
 
         try:
             response = self.llm.chat_completion(
-                messages, max_tokens=4096, temperature=0.2
+                messages, max_tokens=4096, temperature=0.2,
+                response_format={"type": "json_object"},
             )
         except Exception as e:
             # 不静默吞掉：记录日志并降级
@@ -561,9 +562,41 @@ class CodeReviewer:
         data = self.llm._try_parse_json(response)
 
         if not isinstance(data, list):
-            reason = "LLM 返回内容不包含合法 JSON 评论数组"
-            logger.warning(f"{reason}; 响应片段: {response[:200]}")
-            return [_degraded_comment(default_file, default_line, reason)]
+            # 首次解析失败：强制重试一次，要求仅返回 JSON 数组
+            # （deepseek-v4-flash 倾向输出自由文本而非严格 JSON，重试可显著提升命中率；
+            #   控制成本，最多重试 1 次）
+            logger.warning(
+                f"首次解析未得到 JSON 评论数组，强制重试要求仅返回 JSON；"
+                f"响应片段: {response[:200]}"
+            )
+            retry_messages = messages + [
+                {"role": "assistant", "content": response},
+                {
+                    "role": "user",
+                    "content": (
+                        "你上一次的输出不是合法的 JSON 数组。请重新输出，"
+                        "严格只输出 JSON 数组：直接以 [ 开头、以 ] 结尾，"
+                        "不要任何文字、解释或 Markdown 代码块标记（如 ```json 或 ```）。"
+                    ),
+                },
+            ]
+            try:
+                retry_response = self.llm.chat_completion(
+                    retry_messages, max_tokens=4096, temperature=0.2,
+                    response_format={"type": "json_object"},
+                )
+            except Exception as e:
+                # 不静默吞掉：记录日志并降级
+                logger.error(f"LLM 重试调用抛出异常: {e}")
+                retry_response = ""
+            if retry_response.startswith("LLM调用错误"):
+                logger.warning(f"LLM 重试调用失败：{retry_response[:200]}")
+                retry_response = ""
+            data = self.llm._try_parse_json(retry_response)
+            if not isinstance(data, list):
+                reason = "LLM 返回内容不包含合法 JSON 评论数组（重试后仍失败）"
+                logger.warning(f"{reason}; 重试响应片段: {retry_response[:200]}")
+                return [_degraded_comment(default_file, default_line, reason)]
 
         comments: List[Dict[str, Any]] = []
         for item in data:
