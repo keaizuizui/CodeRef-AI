@@ -1058,6 +1058,27 @@ def _match_import_to_file(imp: str, all_files: List[str]) -> List[str]:
     return matched
 
 
+def _cross_lang_rule_applies(rule_name: str, cf) -> bool:
+    """判断跨语言命令执行子规则是否适用于当前文件语言。
+
+    IRON-SEC-17 是跨语言规则（Go/PHP/Java/Node），各子规则的正则关键词
+    （如 PHP 的 system()）在 Python 等语言中可能作为普通 API 名出现
+    （如 platform.system()），必须按文件语言过滤，避免 PHP 专属规则
+    误报 Python 代码（缺陷 1）。Python 的命令执行风险由
+    COMMAND_INJECTION_PATTERNS / UNSAFE_SUBPROCESS 等规则覆盖。
+    """
+    lang = str(getattr(cf, "language", "") or "").lower()
+    if "exec.Command" in rule_name:      # Go 子规则
+        return lang == "go"
+    if "PHP" in rule_name:               # PHP 子规则
+        return lang == "php"
+    if "Java" in rule_name:              # Java 子规则
+        return lang == "java"
+    if "Node" in rule_name:              # Node 子规则
+        return lang in ("javascript", "typescript")
+    return True
+
+
 def _check_security(cf) -> List[GovernanceViolation]:
     """检测安全铁律违规"""
     violations = []
@@ -1173,6 +1194,10 @@ def _check_security(cf) -> List[GovernanceViolation]:
         # 跨语言系统命令执行（Go/PHP/Java/Node）—— 缺陷 7：非 Python 项目危险命令漏检
         for pattern, rule_id, rule_name, severity, detail, suggestion in CROSS_LANG_COMMAND_EXEC:
             if pattern.search(line_stripped):
+                # 缺陷 1：跨语言子规则只对对应语言文件生效，避免
+                # platform.system() 等 Python 调用被 PHP system() 规则误报
+                if not _cross_lang_rule_applies(rule_name, cf):
+                    continue
                 violations.append(GovernanceViolation(
                     rule_id=rule_id, rule_name=rule_name, category="security",
                     severity=severity, file_path=cf.file_path, line_number=i,
