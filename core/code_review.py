@@ -201,6 +201,31 @@ def _degraded_comment(file: str, line: int, reason: str) -> Dict[str, Any]:
     }
 
 
+def _degraded_comment_from_text(file: str, line: int, reason: str,
+                                llm_text: str) -> Dict[str, Any]:
+    """从 LLM 散文响应中提取线索，构造更有信息量的降级评论。
+
+    当 LLM 重试后仍返回非 JSON 内容时，其散文往往包含有价值的线索
+    （如"文件内容被截断"、疑似问题文件/行号）。把这些线索压缩进
+    detail，帮助人工定位，而非仅输出"待人工确认"占位。
+    """
+    detail = reason
+    snippet = (llm_text or "").strip()
+    if snippet:
+        compact = re.sub(r"\s+", " ", snippet)[:300]
+        detail = f"{reason}；LLM 原始反馈：{compact}"
+    return {
+        "file": file,
+        "line": line,
+        "severity": "low",
+        "dimension": "maintainability",
+        "title": "LLM 审查未返回结构化结果",
+        "detail": detail,
+        "suggestion": "请人工核对此处变更，或重试 LLM 审查。",
+        "evidence": EVIDENCE_PENDING,
+    }
+
+
 def _llm_available(llm: LLMIntegration) -> bool:
     """判断 LLM 是否真正可用（客户端已初始化且存在有效 API Key）。"""
     if llm is None:
@@ -540,7 +565,9 @@ class CodeReviewer:
                     "你的唯一输出必须是合法的 JSON 数组，数组的每个元素是一个审查评论对象，"
                     "字段为：file, line, severity, dimension, title, detail, suggestion。\n"
                     "严禁输出任何思考过程、解释、叙述、前后缀文字或 Markdown 代码块。"
-                    "直接以 [ 开头、以 ] 结尾。"
+                    "直接以 [ 开头、以 ] 结尾。\n"
+                    "注意：提供的文件内容可能因长度限制被截断，请基于可见内容进行审查，"
+                    "不要因内容不完整而拒绝输出或输出散文。"
                 ),
             },
             {"role": "user", "content": prompt},
@@ -602,7 +629,9 @@ class CodeReviewer:
             if not isinstance(data, list) or any(not isinstance(x, dict) for x in data):
                 reason = "LLM 返回内容不包含合法 JSON 评论数组（重试后仍失败）"
                 logger.warning(f"{reason}; 重试响应片段: {retry_response[:200]}")
-                return [_degraded_comment(default_file, default_line, reason)]
+                return [_degraded_comment_from_text(
+                    default_file, default_line, reason, retry_response
+                )]
 
         comments: List[Dict[str, Any]] = []
         for item in data:
@@ -642,6 +671,7 @@ class CodeReviewer:
 - "detail": 详细说明
 - "suggestion": 修改建议
 
+注意：文件内容可能因长度限制被截断，请基于可见内容进行审查，不要因内容不完整而拒绝输出或输出散文。
 严格只返回 JSON 数组，不要输出任何其它内容。
 """
 
@@ -669,6 +699,7 @@ class CodeReviewer:
 - "detail": 详细说明
 - "suggestion": 修改建议
 
+注意：文件内容可能因长度限制被截断，请基于可见内容进行审查，不要因内容不完整而拒绝输出或输出散文。
 严格只返回 JSON 数组，不要输出任何其它内容。
 """
 
