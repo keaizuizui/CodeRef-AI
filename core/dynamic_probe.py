@@ -44,12 +44,14 @@ def _rel_path(root: str, path: str) -> str:
     return os.path.relpath(path, root).replace("\\", "/")
 
 
-def _collect_py_files(root: str) -> List[str]:
+def _collect_py_files(root: str, include_tests: bool = False) -> List[str]:
     files = []
+    # include_tests=True 时保留 tests 目录，且不按 test_ 前缀过滤
+    ignore = _IGNORE_DIRS - ({"tests"} if include_tests else set())
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in _IGNORE_DIRS]
+        dirnames[:] = [d for d in dirnames if d not in ignore]
         for fn in filenames:
-            if fn.endswith(".py") and not fn.startswith("test_"):
+            if fn.endswith(".py") and (include_tests or not fn.startswith("test_")):
                 files.append(os.path.join(dirpath, fn))
     return files
 
@@ -153,7 +155,7 @@ def _scan_entry_points(root: str) -> List[dict]:
 def probe(project_path: str, include_tests: bool = False) -> Dict[str, Any]:
     """动态探针主入口（静态层，零执行）。"""
     root = os.path.abspath(project_path)
-    files = _collect_py_files(root)
+    files = _collect_py_files(root, include_tests=include_tests)
     vis = _Visitor()
     imports, regs, indirect = [], [], []
     for f in files:

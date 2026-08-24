@@ -13,6 +13,7 @@ HealthCycle.start_cycle 开新周期 + 导入差距 + 产出报告 JSON/HTML）�
 """
 
 import os
+import shlex
 import textwrap
 from datetime import date, datetime
 from typing import Any, Dict, List
@@ -184,16 +185,19 @@ def render(project_path: str, cron_expr: str = "0 6 * * 1",
         logger.warning(f"写出 run_cycle.py 失败: {e}")
         script_path, script_ok = "", False
 
-    run_cmd = (f"python {script_path} --project {project_path} "
-               f"--name \"体检 $(date +%F)\"" if script_ok else "")
+    # crontab 里 % 需转义为 \% 否则被当作换行截断命令；路径用引号防空格拆参
+    _sp = shlex.quote(script_path)
+    _pp = shlex.quote(project_path)
+    run_cmd = (f"python {_sp} --project {_pp} "
+               f"--name \"体检 $(date +\\%F)\"" if script_ok else "")
 
     cron_block = f"""# CodeRef 5.2 定期体检调度片段（由 coderef_gov_schedule 生成）
 # 项目: {project_path}
 # 周期: 每周一次（默认周一 06:00，可按需改 cron_expr）
 # 触发入口: {script_path or '（脚本写出失败）'}
-{cron_expr}  {run_cmd or f"cd {project_path} && coderef scan {command} --project {project_path}"}
+{cron_expr}  {run_cmd or f"cd {_pp} && coderef scan {command} --project {_pp}"}
 # 离期检查（仅报告不建档，可单独调度）:
-#   python {script_path} --project {project_path} --check
+#   python {_sp} --project {_pp} --check
 # 触发后建议动作:
 #   coderef_gov_report  查看跨期趋势，确认是否需要补治理"""
 
@@ -208,7 +212,7 @@ def render(project_path: str, cron_expr: str = "0 6 * * 1",
         "runnable_script": script_path,
         "script_written": script_ok,
         "run_command": run_cmd,
-        "check_command": (f"python {script_path} --project {project_path} --check"
+        "check_command": (f"python {_sp} --project {_pp} --check"
                           if script_ok else ""),
         "cron_block": cron_block,
         "ci_note": f"建议在 cron/CI 外层触发，CodeRef 本身不做后台定时（{date.today()}）。",

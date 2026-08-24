@@ -1,7 +1,7 @@
 <!-- AI Summary: CodeRef-AI exposes 48 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. Core results (audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, prompt compliance) are pure static analysis — no LLM, reproducible. LLM is only used for synthesis tasks (wiki, code review) and hard-blocks honestly without an API key. Builds a closed loop: verify LLM/CodeRabbit claims deterministically, replicate solidified design assets, and interpret everything in plain language for non-programmers. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams who want AI that augments rather than hallucinates. -->
 [![MCP Badge](https://lobehub.com/badge/mcp/keaizuizui-coderef-ai?style=flat)](https://lobehub.com/mcp/keaizuizui-coderef-ai)
 
-#### 5.2 开发中：三项预想落地（符号级职责越界检测 / Web 看板应用态 / 定时体检实跑）+ 治理自动化流水线贯通（当前 v5.2.0）。
+#### 5.2 开发中：三项预想落地（符号级职责越界检测 / Web 看板应用态 / 定时体检实跑）+ 治理自动化流水线贯通（当前 v5.2.1，含 CodeRabbit 复审加固：webdash 序列化/主机限制/XSS 转义、pipeline 状态机严格化、workspace 路径校验、cron 转义）。
 #### 5.1 已交付 v5.1.0：从"一次性重构"升级为"定期体检"，治理运营闭环已落地（借鉴 plane 项目管理模型：体检周期/工作项/状态机）。
 #### 5.0 已交付 v5.0.0：架构推回正轨工作台（目标架构 + 差距分析 + 重构任务卡 + 对齐验证）。
 #### 4.X 系列已定版（v4.9.12），完整更新日志归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。

@@ -82,8 +82,12 @@ class GovPipeline:
 
         # 1. 进入 Fixing（Detected/Confirmed → Fixing）
         if old in (STATUS_DETECTED, STATUS_CONFIRMED):
-            self.store.transition(issue_id, STATUS_FIXING, actor="pipeline",
-                                  detail="进入治理流水线")
+            ok, msg = self.store.transition(issue_id, STATUS_FIXING,
+                                            actor="pipeline",
+                                            detail="进入治理流水线")
+            if not ok:
+                return {"issue_id": issue_id, "ok": False,
+                        "message": f"无法进入 Fixing: {msg}"}
 
         # 2. 凭差距快照生成任务卡（供编程 AI 执行）
         gap = self._load_gap(iss)
@@ -95,8 +99,12 @@ class GovPipeline:
 
         verified = verdict["met"] and auto_verified
         if verified:
-            self.store.transition(issue_id, STATUS_VERIFIED, actor="pipeline",
-                                  detail="复验达标自动流向 Verified")
+            ok, msg = self.store.transition(issue_id, STATUS_VERIFIED,
+                                            actor="pipeline",
+                                            detail="复验达标自动流向 Verified")
+            if not ok:
+                verified = False
+                verdict["reason"] = f"{verdict['reason']}；状态流转被拒: {msg}"
 
         return {
             "issue_id": issue_id,
