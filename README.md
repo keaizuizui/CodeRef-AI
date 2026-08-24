@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.2.2** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.2.3** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -453,6 +453,12 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.2.3 — 真实屎山扫描落点修复（r6 红线段落）
+
+- **P1-1 `coderef_architecture` 报告落点可控**：报告默认落 `<project_path>/coderef-report/`（不再写 MCP 进程 cwd 的 `coderef-report/`），支持 `output_dir` 显式外置——避免真实多项目/跨仓协作污染对方主仓
+- **P2-1 知识图谱库跟随被检项目**：`cache/kg/*.db` 由安装根迁移至 `<project_path>/cache/kg/`，读方经 `CodeKnowledgeGraph.db_path` 一致定位，不再把 9.7MB+ 图谱库写进调用方 cwd
+- **版本号**：5.2.2 → 5.2.3
 
 ### v5.2.0 — 5.2 三项预想落地 + 治理自动化流水线贯通
 

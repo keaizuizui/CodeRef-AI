@@ -199,6 +199,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
+                            "output_dir": {"type": "string", "description": "报告输出目录（默认 <project_path>/coderef-report/，可选外置）"},
                             "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
                         }, "required": ["project_path"]},
                     },
@@ -2016,7 +2017,8 @@ def _advisor(a) -> str:
 
 def _arch(a) -> str:
     from core.pipeline_runner import Pipe
-    r = Pipe().architecture(a["project_path"])
+    r = Pipe().architecture(a["project_path"],
+                            output_dir=a.get("output_dir") or None)
     # 结构化返回，与 coderef_audit 一致
     return json.dumps({
         "status": "completed",
