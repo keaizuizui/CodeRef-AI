@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.3.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.3.2** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -453,6 +453,12 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.3.2 —  集成加固：图谱 db 直喂洞察，消除二次探测竞态
+
+- ** 集成加固**（r8 反馈）：`Pipe.architecture` 把 `_build_kg` 刚构建的图谱 `db_path` 直接传给 `insight_markdown`，消除 insight 内部二次 `ensure_kg` 探测/重建的时序竞态——MCP 长驻进程下首调即出洞察（不再偶发 790B 壳）
+- **洞察为空不再静默**：若图谱不可用导致洞察为空，`errors` 明确记录原因（"洞察为空（图谱 … 不可用）"），不再无声产出壳报告
+- **版本号**：5.3.1 → 5.3.2
 
 ### v5.3.1 —  修复：MCP 中文路径编解码
 

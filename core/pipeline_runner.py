@@ -1806,23 +1806,28 @@ class Pipe:
             tf, tl, analysis = self._scan(project_path)
             r.total_files, r.total_lines = tf, tl
 
-            # 构建知识图谱
-            self._build_kg(project_path, analysis)
+            # 构建知识图谱（同步执行，返回 stats 含 db_path）
+            kg_stats = self._build_kg(project_path, analysis)
 
             self._workflow(project_path, r)
 
             r.report = self._fmt(r, "架构分析报告")
             #  架构洞察（管线/真身/重复，静态为主，LLM 可选）：插入到报告尾部 HTML 路径之前，
             # 让 coderef_architecture 不再只是"790B 壳"，自动产出人话结构化结论。
+            # 复用刚构建的图谱 db_path 直喂 insight，避免 insight 内二次 ensure_kg 探测/重建竞态
+            # （r8 实测：MCP 长驻进程下二次探测时序不稳会拿不到节点 → 洞察空 → 报告壳）。
             try:
                 from core.arch_insight import insight_markdown
-                insight = insight_markdown(project_path, use_llm=insight_llm)
+                kg_db = (kg_stats or {}).get("db_path")
+                insight = insight_markdown(project_path, db_path=kg_db, use_llm=insight_llm)
                 if insight:
                     tail = f"---\n{r.report_path or ''}"
                     if r.report.endswith(tail):
                         r.report = r.report[:-len(tail)] + insight + "\n" + tail
                     else:
                         r.report += "\n" + insight
+                else:
+                    r.errors.append(f"insight: 洞察为空（图谱 {kg_db or '未知'} 不可用，未产出人话结论）")
             except Exception as e:
                 r.errors.append(f"insight: {e}")
                 r.report += f"\n\n## 🧭 架构洞察（）\n\n> 洞察生成失败：{e}\n"
