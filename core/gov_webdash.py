@@ -28,6 +28,9 @@ from loguru import logger
 from core.governance_store import ALL_STATUSES
 from core.healthcycle import HealthCycle
 
+# 已启动的看板服务句柄注册表（key=project_path；句柄不参与 JSON 序列化）
+_SERVERS: Dict[str, Dict[str, Any]] = {}
+
 # 每个状态的合法流转目标（对齐 governance_store 状态机，供前端渲染流转按钮）
 ALLOWED_NEXT: Dict[str, List[str]] = {
     "Detected": ["Confirmed", "Rejected"],
@@ -128,7 +131,10 @@ def render_board(project_path: str, output_dir: str = "",
     """
     payload = _build_payload(project_path, cid)
     payload["interactive"] = interactive
-    data_json = json.dumps(payload, ensure_ascii=False, default=str)
+    # 内联进 <script> 的 JSON 必须转义 < > &，防止治理数据里的 </script> 造成 XSS
+    data_json = (json.dumps(payload, ensure_ascii=False, default=str)
+                 .replace("<", "\\u003c").replace(">", "\\u003e")
+                 .replace("&", "\\u0026"))
     cyc = payload.get("active_cycle") or {}
     summary = payload.get("summary") or {}
     counts = payload.get("status_counts") or {}
@@ -362,6 +368,11 @@ def _make_handler(project_path: str):
             path = (self.path or "").split("?")[0].rstrip("/") or "/"
             qs = parse_qs((self.path or "").split("?", 1)[1]
                           if "?" in (self.path or "") else "")
+            # 所有 API 端点（读+写）仅允许本机访问，防止治理数据暴露到局域网
+            if path.startswith("/api/") and not self._host_allowed():
+                return self._json({"ok": False,
+                                   "message": "治理看板接口仅允许本机访问(127.0.0.1)"},
+                                  403)
             if "api" not in payload_cache:
                 payload_cache["api"] = _build_payload(project_path)
             api = payload_cache["api"]
@@ -435,7 +446,14 @@ def _transition(project_path: str, body: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def serve(project_path: str, host: str = "127.0.0.1", port: int = 0) -> Dict[str, Any]:
-    """启动可交互治理看板服务（线程守护），返回访问地址。"""
+    """启动可交互治理看板服务（线程守护），返回访问地址。
+
+    仅允许回环绑定（127.0.0.1 / ::1 / localhost），防止治理数据暴露到局域网；
+    服务句柄存入模块级 _SERVERS 注册表，返回值只含可 JSON 序列化元数据。
+    """
+    if host not in ("127.0.0.1", "::1", "localhost"):
+        logger.warning(f"治理看板仅允许回环绑定，已强制 127.0.0.1（收到 host={host}）")
+        host = "127.0.0.1"
     handler = _make_handler(project_path)
     httpd = ThreadingHTTPServer((host, port), handler)
     actual_port = httpd.server_address[1]
@@ -443,8 +461,9 @@ def serve(project_path: str, host: str = "127.0.0.1", port: int = 0) -> Dict[str
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
     logger.info(f"治理看板服务已启动: {url}")
+    _SERVERS[project_path] = {"httpd": httpd, "thread": t, "url": url,
+                              "port": actual_port}
     return {"ok": True, "url": url, "host": host, "port": actual_port,
             "interactive": True,
             "endpoints": ["/api/report", "/api/issues", "/api/cycles",
-                          "/api/issue/<id>", "POST /api/transition"],
-            "server": httpd, "thread": t}
+                          "/api/issue/<id>", "POST /api/transition"]}

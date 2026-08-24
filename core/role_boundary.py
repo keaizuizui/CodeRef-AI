@@ -224,11 +224,11 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
         "boundary_issues": [],
         "semantic_note": None,
     }
-    if not db or not os.path.exists(db):
-        result["summary"]["message"] = ("知识图谱不存在，需先构建"
-                                        "（coderef_audit / coderef_memory_sync）")
-        return result
-    result["has_kg"] = True
+    # 图谱仅用于 graph_stats 元数据；符号级检测基于 AST，图谱缺失不阻断扫描
+    result["has_kg"] = bool(db and os.path.exists(db))
+    if not result["has_kg"]:
+        result["kg_note"] = ("知识图谱不存在，仅缺少 graph_stats 元数据；"
+                             "符号级检测基于 AST，仍照常执行")
 
     # —— 目标架构（含 role_keywords）——
     if target_arch is None:
@@ -292,6 +292,10 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
             continue
         mod_path = os.path.splitext(rel)[0]
         module_role_id, module_role_name = _module_role(mod_path, spec_map)
+        # 目标架构未列出该模块时，模块归属本身就是差距（arch_gap_analyzer 已报），
+        # 在此把符号当"职责越界"只会制造噪音，直接跳过未归属模块
+        if not module_role_id:
+            continue
         syms = _scan_symbols(tree)
         if not syms:
             continue
@@ -328,7 +332,7 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
                 "kind": sym.kind,
                 "module": mod_path,
                 "module_role_id": module_role_id,
-                "module_role_name": module_role_name or "UNASSIGNED",
+                "module_role_name": module_role_name,
                 "type": ("definition" if "keyword_definition" in signals
                          else "call"),
                 "suspected_role_id": suspected_id,

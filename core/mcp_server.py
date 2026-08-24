@@ -1874,7 +1874,12 @@ def _gov_board(a: dict) -> str:
 def _gov_workspace(a: dict) -> str:
     """多代码库聚合治理（coderef_gov_workspace）"""
     from core.gov_workspace import aggregate
-    r = aggregate(a.get("projects") or [])
+    raw = a.get("projects") or []
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("coderef_gov_workspace: projects 必须是非空数组")
+    # 逐个做绝对路径 + 存在性校验，防 ../ 穿越读取治理库
+    projects = [_validate_project_path("coderef_gov_workspace", p) for p in raw]
+    r = aggregate(projects)
     r["tool"] = "coderef_gov_workspace"
     return json.dumps(r, ensure_ascii=False)
 
