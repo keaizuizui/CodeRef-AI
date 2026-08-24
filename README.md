@@ -15,7 +15,7 @@
 
 ## 它是什么
 
-CodeRef-AI 通过 MCP 协议暴露 **40 个工具**，同时服务两类人：
+CodeRef-AI 通过 MCP 协议暴露 **43 个工具**，同时服务两类人：
 
 - **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险；持有一条 LLM/CodeRabbit 论断时，还能用静态图谱做确定性核验，再决定采不采信。
 - **非编程人员的技术助理**：把看不懂的代码变成通俗的健康仪表盘、Wiki 文档和流程确证，让你不用读代码，也能确认项目有没有按你的设想运转。
@@ -60,7 +60,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | **变更守护引擎** | 拦截 AI 把代码改坏，输出人能看懂的变更报告 | `coderef_change_guard` `coderef_change_report` |
 | **人话解读平台** | 把确定性格子结论翻译成非编程人员听得懂的"人话" | `coderef_interpret` |
 
-## 40 个 MCP 工具
+## 43 个 MCP 工具
 
 ### 审计引擎
 
@@ -76,6 +76,9 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_target_arch_set` | 设置/更新目标架构 JSON（5.0 架构推回正轨的参照系），校验后落盘 `<project>/.coderef/target_arch.json`。纯确定性校验，不依赖 LLM | 否 |
 | `coderef_target_arch_get` | 获取当前目标架构 JSON | 否 |
 | `coderef_arch_gap` | 架构差距分析（5.0 核心）：对比现状知识图谱与目标架构，输出 7 类确定性差距（职责缺失/依赖违例/循环依赖/业务断链/游离模块/上帝模块/异常规模）。纯静态、复用 arch_audit，不依赖 LLM | 否 |
+| `coderef_arch_canvas` | 可视化架构画布（5.0 Phase 1）：自包含 HTML 三层画布（业务/技术/代码层），拖拽定义归属、业务→技术连线、差距高亮、导出目标架构 JSON | 否 |
+| `coderef_refactor_plan` | 重构任务卡（5.0 Phase 2）：把差距清单转为编程 AI 可执行的任务卡（create_module/fix_dependency/break_cycle/implement_flow/move_module/split_module + 影响范围 + 验证标准） | 否 |
+| `coderef_arch_verify` | 架构对齐验证（5.0 Phase 2）：四维对齐度评分（职责40%+依赖30%+业务20%+健康10%）+ 差距复检；支持 changed_files 增量模式 | 否 |
 | `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 否 |
 | `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 是 |
 | `coderef_docs_read` | 按需读取已生成 Wiki 文档正文（返回内容而非路径，解决 AI 无法 fs 访问外部文件夹） | 否 |
@@ -325,6 +328,9 @@ coderef-ai/
 │   ├── arch_audit.py                 # 架构腐化诊断（循环依赖/上帝模块/分层违例）
 │   ├── target_arch_schema.py         # 目标架构 JSON Schema（5.0：人定义的正轨）
 │   ├── arch_gap_analyzer.py          # 架构差距分析器（5.0：现状 vs 目标架构）
+│   ├── canvas_generator.py           # 可视化架构画布（5.0 Phase 1：三层拖拽画布）
+│   ├── refactor_task_generator.py    # 重构任务卡生成器（5.0 Phase 2）
+│   ├── arch_alignment_verifier.py    # 架构对齐验证器（5.0 Phase 2：四维评分）
 │   ├── graph_closure.py              # 调用闭包计算（flow_verify 与 wiki_cross_verify 共用）
 │   ├── workflow_graph.py             # 架构图生成器（vis-network）
 │   ├── diagram_generator.py          # 图表/画布生成
@@ -439,13 +445,16 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
 
-### v5.0.0 — 5.0 启动：架构推回正轨（Phase 0 骨架）
+### v5.0.0 — 5.0 启动：架构推回正轨（Phase 0-2 核心闭环）
 
 - **目标架构 JSON Schema**（新增 `target_arch_schema`）：定义"人定义的正轨"标准结构（业务层 business_flows / 技术层 tech_roles / 约束 constraints），零依赖手写校验，结构化错误返回
 - **架构差距分析器**（新增 `arch_gap_analyzer`）：对比现状知识图谱与目标架构，输出 7 类确定性差距（missing 职责缺失 / dependency_violation 依赖违例 / cycle 循环依赖 / business_gap 业务断链 / unassigned 游离模块 / god_module 上帝模块 / large_module 异常规模），复用 arch_audit 不重写
-- **新增 MCP 工具**：`coderef_target_arch_set`（设置目标架构，落盘 `<project>/.coderef/target_arch.json`）/ `coderef_target_arch_get`（获取）/ `coderef_arch_gap`（差距分析），全部纯静态、确定性、轻量同步
-- **开发计划**：`docs/5.0-plan.md`（Phase 0 详细设计 + 8 个设计疑点决策 + 验证方案）
-- 版本号：4.9.12 → 5.0.0
+- **可视化架构画布**（新增 `canvas_generator`，Phase 1）：自包含 HTML 三层画布（业务/技术/代码层），拖拽定义归属、业务→技术连线、差距高亮、导出目标架构 JSON，零外部依赖离线可用
+- **重构任务卡生成器**（新增 `refactor_task_generator`，Phase 2）：差距清单 → 编程 AI 可执行任务卡（create_module/fix_dependency/break_cycle/implement_flow/move_module/split_module + 图谱影响范围 + 验证标准）
+- **架构对齐验证器**（新增 `arch_alignment_verifier`，Phase 2）：四维对齐度评分（职责40%+依赖30%+业务20%+健康10%）+ 差距复检，支持 changed_files 增量模式
+- **新增 MCP 工具**（6 个）：`coderef_target_arch_set` / `coderef_target_arch_get` / `coderef_arch_gap` / `coderef_arch_canvas` / `coderef_refactor_plan` / `coderef_arch_verify`，全部纯静态、确定性、轻量同步
+- **开发计划**：`docs/5.0-plan.md`（Phase 0-2 详细设计 + 设计疑点决策 + 验证方案）
+- **版本号**：4.9.12 → 5.0.0（工具数 37 → 43）
 
 ### v4.9.12 — 修复 Coderef-Test 测试报告（20260823-v4.9.11-r5）遗留项
 
