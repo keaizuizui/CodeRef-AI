@@ -88,6 +88,30 @@ def _jaccard(a: str, b: str) -> float:
     return len(sa & sb) / len(union) if union else 0.0
 
 
+def _partition_copies(copies: List[Dict], sim_threshold: float):
+    """把副本按函数体相似度 ≥ 阈值贪心聚类。
+
+    返回 (dup_clusters, singles)：
+    - dup_clusters: [[copy, ...], ...]，每个簇 ≥2 副本且簇内成员与簇中某成员相似度 ≥ 阈值
+    - singles: [copy, ...]，未配对（与任何已聚簇副本相似度 < 阈值）的副本
+    """
+    clusters: List[List[Dict]] = []
+    for c in copies:
+        best_idx, best_sim = -1, 0.0
+        for i, cl in enumerate(clusters):
+            for m in cl:
+                s = _jaccard(c["body"], m["body"])
+                if s > best_sim:
+                    best_sim, best_idx = s, i
+        if best_idx >= 0 and best_sim >= sim_threshold:
+            clusters[best_idx].append(c)
+        else:
+            clusters.append([c])
+    dup_clusters = [cl for cl in clusters if len(cl) >= 2]
+    singles = [cl[0] for cl in clusters if len(cl) == 1]
+    return dup_clusters, singles
+
+
 # ═══════════════════════════════════════════════════════════════════
 # P0-A 管线梳理
 # ═══════════════════════════════════════════════════════════════════
@@ -256,9 +280,10 @@ def duplicate_insight(project_path: str, db_path: Optional[str] = None,
                       max_clusters: int = 20, sim_threshold: float = 0.6) -> Dict:
     """P0-C：重复/同构识别。
 
-    同名函数/方法跨模块（不同目录）实现 → 先按函数体相似度区分：
-    - 相似度 ≥ sim_threshold → "重复实现簇"（kind=duplicate，推荐收敛）
-    - 相似度 < sim_threshold → "同名候选"（kind=candidate，仅同名、契约可能不同，不推荐合并）
+    同名函数/方法跨模块（不同目录）实现 → 先按函数体相似度分区：
+    - 相似度 ≥ sim_threshold 的副本聚成独立"重复实现簇"（kind=duplicate，推荐收敛）
+    - 未配对（与任何副本相似度 < 阈值）的副本归入"同名候选"（kind=candidate，
+      仅同名、契约可能不同，不推荐合并）
     返回 {"ok", "clusters":[{name, kind, max_sim, copies:[{file,line,mod}]}]}。
     """
     fv = _verifier(project_path, db_path)
@@ -289,18 +314,24 @@ def duplicate_insight(project_path: str, db_path: Optional[str] = None,
             mods.add(mod)
         if len(mods) < 2:  # 跨模块才算"重复/同名候选"
             continue
-        # 簇内两两函数体相似度，取最大值作为簇相似度
-        max_sim = 0.0
-        for i in range(len(copies)):
-            for j in range(i + 1, len(copies)):
-                s = _jaccard(copies[i]["body"], copies[j]["body"])
-                if s > max_sim:
-                    max_sim = s
-        kind = "duplicate" if max_sim >= sim_threshold else "candidate"
-        for c in copies:
-            c.pop("body", None)
-        clusters.append({"name": name, "kind": kind, "max_sim": round(max_sim, 2),
-                         "copies": copies})
+        # 按函数体相似度分区：相似度 ≥ 阈值的副本聚成独立重复簇，未配对副本作同名候选
+        dup_clusters, singles = _partition_copies(copies, sim_threshold)
+        for cl in dup_clusters:
+            max_sim = 0.0
+            for i in range(len(cl)):
+                for j in range(i + 1, len(cl)):
+                    s = _jaccard(cl[i]["body"], cl[j]["body"])
+                    if s > max_sim:
+                        max_sim = s
+            for c in cl:
+                c.pop("body", None)
+            clusters.append({"name": name, "kind": "duplicate",
+                             "max_sim": round(max_sim, 2), "copies": cl})
+        if singles:
+            for c in singles:
+                c.pop("body", None)
+            clusters.append({"name": name, "kind": "candidate",
+                             "max_sim": 0.0, "copies": singles})
 
     clusters.sort(key=lambda c: (-len(c["copies"]), c["kind"] != "duplicate"))
     return {"ok": True, "clusters": clusters[:max_clusters]}
