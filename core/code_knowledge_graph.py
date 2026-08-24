@@ -211,13 +211,18 @@ class CodeKnowledgeGraph:
 
     @staticmethod
     def _kg_dir() -> str:
-        d = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "cache", "kg")
+        # 缺省图谱库跟随被检项目自身（project_path/cache/kg），而非安装根：
+        # 避免多项目/跨仓协作时把 9.7MB+ 图谱库写进对方 cwd（真实红线段落，r6）。
+        # 静态法无法拿 project_path，故仅由 _make_db_path 覆写，此处保留兜底。
+        d = os.path.join(os.getcwd(), "cache", "kg")
         os.makedirs(d, exist_ok=True)
         return d
 
     def _make_db_path(self) -> str:
-        return os.path.join(self._kg_dir(), f"{self._phash}.db")
+        # 图谱库落在被检项目内，随项目走、不污染其他仓库；先建父目录避免 sqlite 打不开
+        d = os.path.join(self.project_path, "cache", "kg")
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, f"{self._phash}.db")
 
     @property
     def db_path(self) -> str:

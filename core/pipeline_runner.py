@@ -1798,8 +1798,9 @@ class Pipe:
         """架构图管线：GitNexus + Workflow"""
         self._t0 = time.time()
         r = PipeResult(project_path=project_path)
-        out = output_dir or os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "coderef-report")
+        # 报告默认落 project_path/coderef-report/（对齐 audit/docs），不再落 MCP 进程 cwd：
+        # 避免真实多项目/跨仓协作时把 coderef_arch_*.md 写进对方主仓（r6 红线段落）
+        out = output_dir or os.path.join(project_path, "coderef-report")
 
         try:
             tf, tl, analysis = self._scan(project_path)
