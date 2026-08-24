@@ -2656,12 +2656,18 @@ class Server:
         return _ok(rid, text)
 
     def run(self):
-        # 强制 stdout 为 UTF-8，解决 Windows 下中文乱码
+        # 强制 stdin/stdout 为 UTF-8，解决 Windows 下中文参数/输出乱码
+        # （TRAE 经 stdio 发送的 JSON 是 UTF-8 字节，stdin 若按 GBK 解码，
+        #   中文 output_dir 等参数会变成乱码目录名，见 ）
         import io
         if hasattr(sys.stdout, 'reconfigure'):
             sys.stdout.reconfigure(encoding='utf-8')
         else:
             sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+        if hasattr(sys.stdin, 'reconfigure'):
+            sys.stdin.reconfigure(encoding='utf-8')
+        else:
+            sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8')
         logger.info(f"CodeRef MCP v{PKG_VERSION} (audit|arch|docs) 启动")
         try:
             # 手动 readline 阻塞读，替代 `for line in sys.stdin`：

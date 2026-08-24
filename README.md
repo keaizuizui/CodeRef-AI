@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.3.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.3.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -453,6 +453,11 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.3.1 —  修复：MCP 中文路径编解码
+
+- ** MCP 中文 output_dir 写盘乱码**：`Server.run()` 强制 stdin/stdout 为 UTF-8——TRAE 经 stdio 发送的 JSON 是 UTF-8 字节，Windows 下 stdin 若按 GBK 解码，中文 output_dir（如"测试归档"）会被误解码成乱码目录名（如 `娴嬭瘯褰掓。`）。修复后中文路径正确落盘
+- **版本号**：5.3.0 → 5.3.1
 
 ### v5.3.0 — 架构洞察：管线/真身/重复自动产出人话结论（，P0 级）
 
