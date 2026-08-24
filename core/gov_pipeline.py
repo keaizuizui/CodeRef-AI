@@ -35,7 +35,7 @@ class GovPipeline:
         """对一批工作项执行治理流水线。
 
         Args:
-            issue_ids: 治理工作项 id 列表（须为 Detected/Confirmed/Fixing 的在途项）。
+            issue_ids: 治理工作项 id 列表（须为 Confirmed/Fixing 的在途项；Detected 需先人工确认）。
             changed_files: 本次已执行的改动文件集合（增量复验）；None = 全量复验。
             auto_verified: 达标判定通过后是否自动流转 Verified。
 
