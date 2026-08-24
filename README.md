@@ -1,13 +1,14 @@
 <!-- AI Summary: CodeRef-AI exposes 48 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. Core results (audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, prompt compliance) are pure static analysis — no LLM, reproducible. LLM is only used for synthesis tasks (wiki, code review) and hard-blocks honestly without an API key. Builds a closed loop: verify LLM/CodeRabbit claims deterministically, replicate solidified design assets, and interpret everything in plain language for non-programmers. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams who want AI that augments rather than hallucinates. -->
 [![MCP Badge](https://lobehub.com/badge/mcp/keaizuizui-coderef-ai?style=flat)](https://lobehub.com/mcp/keaizuizui-coderef-ai)
 
-#### 5.1 开发中：从"一次性重构"升级为"定期体检"（当前 v5.1.0，治理运营闭环已落地，借鉴 plane 项目管理模型：体检周期/工作项/状态机）。
+#### 5.2 开发中：三项预想落地（符号级职责越界检测 / Web 看板应用态 / 定时体检实跑）+ 治理自动化流水线贯通（当前 v5.2.0）。
+#### 5.1 已交付 v5.1.0：从"一次性重构"升级为"定期体检"，治理运营闭环已落地（借鉴 plane 项目管理模型：体检周期/工作项/状态机）。
 #### 5.0 已交付 v5.0.0：架构推回正轨工作台（目标架构 + 差距分析 + 重构任务卡 + 对齐验证）。
 #### 4.X 系列已定版（v4.9.12），完整更新日志归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.1.0** | Python 3.10+ | MCP Protocol | MIT License
+**Version 5.2.0** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -15,7 +16,7 @@
 
 ## 它是什么
 
-CodeRef-AI 通过 MCP 协议暴露 **48 个工具**，同时服务两类人：
+CodeRef-AI 通过 MCP 协议暴露 **54 个工具**，同时服务两类人：
 
 - **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险；持有一条 LLM/CodeRabbit 论断时，还能用静态图谱做确定性核验，再决定采不采信。
 - **非编程人员的技术助理**：把看不懂的代码变成通俗的健康仪表盘、Wiki 文档和流程确证，让你不用读代码，也能确认项目有没有按你的设想运转。
@@ -60,7 +61,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | **变更守护引擎** | 拦截 AI 把代码改坏，输出人能看懂的变更报告 | `coderef_change_guard` `coderef_change_report` |
 | **人话解读平台** | 把确定性格子结论翻译成非编程人员听得懂的"人话" | `coderef_interpret` |
 
-## 48 个 MCP 工具
+## 54 个 MCP 工具
 
 ### 审计引擎
 
@@ -84,6 +85,12 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_gov_issues` | 查询治理工作项（预置视图 open/all/high/recurred/rejected/archived/overdue/assigned/recent） | 否 |
 | `coderef_gov_transition` | 治理工作项状态流转（Detected→Confirmed→Fixing→Verified→Archived/Rejected）+ 豁免 | 否 |
 | `coderef_gov_report` | 体检报告（单期 + 跨期趋势 + 自包含 HTML） | 否 |
+| `coderef_gov_pipeline` | 治理自动化流水线（5.2）：在途工作项 → 任务卡 → 复验 → Verified/附缺口，全程审计轨迹 | 否 |
+| `coderef_dynamic_probe` | 动态探针（5.2）：静态挖掘动态信号（动态导入/装饰器注册/间接索引/entry_points），零执行被检项目 | 否 |
+| `coderef_gov_board` | 治理 Web 看板（5.2）：自包含交互 HTML 看板 + 只读服务 + 状态流转回写 | 否 |
+| `coderef_gov_workspace` | 多代码库聚合治理（5.2）：跨仓汇总治理状态与整体健康度 | 否 |
+| `coderef_gov_schedule` | 定时体检（5.2）：生成可执行触发脚本 run_cycle.py + 离期检查 | 否 |
+| `coderef_role_boundary` | 符号级职责越界检测（5.2）：模块归属正确但符号逾越角色边界（静态信号 + 可选语义） | 可选 |
 | `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 否 |
 | `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 是 |
 | `coderef_docs_read` | 按需读取已生成 Wiki 文档正文（返回内容而非路径，解决 AI 无法 fs 访问外部文件夹） | 否 |
@@ -311,7 +318,7 @@ coderef_asset(project_path="/path/to/project", action="list")
 ```
 coderef-ai/
 ├── core/                             # 核心引擎
-│   ├── mcp_server.py                 # MCP Server 入口（43 个工具）
+│   ├── mcp_server.py                 # MCP Server 入口（54 个工具）
 │   ├── pipeline_runner.py            # 管线引擎（audit/architecture/docs + 知识图谱）
 │   ├── tool_registry.py              # 工具注册中心（收敛管线引擎的上帝模块职责）
 │   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
@@ -449,6 +456,28 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.2.0 — 5.2 三项预想落地 + 治理自动化流水线贯通
+
+- **符号级职责越界检测**（新增 `role_boundary`）：模块归属正确但符号逾越角色边界（如 waiter.py 里有 cook()），静态信号（定义/调用关键词命中）+ 可选语义判定接口，纯静态确定性
+- **治理自动化流水线**（新增 `gov_pipeline`）：把在途工作项串成可追踪闭环——状态→Fixing、凭差距快照生成任务卡（复用 refactor_task_generator）、调 arch_alignment_verifier 复验、达标自动 Verified / 未达标保持 Fixing 附缺口，全程写活动日志
+- **动态探针**（新增 `dynamic_probe`）：补全静态图谱盲区，挖掘动态信号（动态导入 / 装饰器注册 / 间接索引 / entry_points），默认零执行被检项目代码
+- **Web 看板应用态增强**（`gov_webdash`）：自包含交互 HTML 看板（筛选 / 详情 / 状态流转按钮）+ `/api/transition` 数据回写接口（仅限本机）
+- **多代码库聚合治理**（新增 `gov_workspace`）：跨仓汇总治理状态，输出整体健康度视图
+- **定时体检实跑落地**（`gov_schedule`）：从"产出 cron 片段"升级为生成可直接运行的 `run_cycle.py` 触发脚本 + `--check` 离期检查
+- **新增 MCP 工具**（6 个）：`coderef_gov_pipeline` / `coderef_dynamic_probe` / `coderef_gov_board` / `coderef_gov_workspace` / `coderef_gov_schedule` / `coderef_role_boundary`
+- **开发计划**：`docs/5.2-plan.md`
+- **版本号**：5.1.0 → 5.2.0（工具数 48 → 54）
+
+### v5.1.0 — 5.1 定期体检：从"一次性重构"升级为"定期体检"
+
+- **治理持久层**（新增 `governance_store`）：SQLite 存储体检周期 / 治理工作项 / 活动日志，状态机 Detected→Confirmed→Fixing→Verified→Archived/Rejected + 去重/复发/豁免语义
+- **体检周期编排**（新增 `healthcycle`）：建档 / 导入差距 / 流转 / 豁免 / 收尾 / 报告
+- **预置视图**（新增 `gov_view`）：open / all / high / recurred / rejected / archived / overdue / assigned / recent 固定查询入口
+- **报告与趋势**（新增 `gov_dashboard`）：单期报告 + 跨期趋势 + 自包含 HTML（零 CDN）
+- **新增 MCP 工具**（5 个）：`coderef_gov_start` / `coderef_gov_close` / `coderef_gov_issues` / `coderef_gov_transition` / `coderef_gov_report`
+- **开发计划**：`docs/5.1-plan.md`
+- **版本号**：5.0.0 → 5.1.0（工具数 43 → 48）
 
 ### v5.0.0 — 5.0 启动：架构推回正轨（Phase 0-2 核心闭环）
 

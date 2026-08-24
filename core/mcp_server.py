@@ -976,6 +976,110 @@ BUILTIN_TOOLS: List[Dict] = [
                         "out_format": {"type": "string", "enum": ["json","text","html"], "default": "json"},
                         "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
                     }, "required": ["project_path"]},
+                },
+        # ── 5.2 治理运营收尾：自动化流水线 / 动态探针 / Web 看板 / 多仓聚合 / 定时实跑 / 符号级职责越界 ──
+        {
+                    "name": "coderef_gov_pipeline",
+                    "description": (
+                        "治理自动化流水线（5.2）：把工作项治理串成可追踪闭环。\n"
+                        "对每个在途工作项（Detected/Confirmed/Fixing）：\n"
+                        "  1) 状态 → Fixing；\n"
+                        "  2) 凭差距快照生成任务卡（含影响范围/验证标准，复用 refactor_task_generator）；\n"
+                        "  3) 调 arch_alignment_verifier 复验（changed_files 增量或全量）；\n"
+                        "  4) 复验达标（差距不再复现）→ Verified；未达标保持 Fixing 附缺口。\n"
+                        "全程写活动日志形成审计轨迹。issue_ids 为治理工作项 id 列表。\n"
+                        "纯静态、确定性，不依赖 LLM。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "issue_ids": {"type": "array", "items": {"type": "string"}, "description": "治理工作项 id 列表"},
+                            "changed_files": {"type": "array", "items": {"type": "string"}, "description": "本次已执行改动文件集合（可选，增量复验）"},
+                            "auto_verified": {"type": "boolean", "description": "达标判定通过后是否自动流转 Verified", "default": True},
+                        }, "required": ["project_path", "issue_ids"]},
+                },
+        {
+                    "name": "coderef_dynamic_probe",
+                    "description": (
+                        "动态探针（5.2）：补全静态盲区，挖掘运行时才成立的动态信号，零执行。\n"
+                        "静态层扫描：动态导入（importlib/__import__/pkgutil）、装饰器注册（@app.route/registry.register）、\n"
+                        "工厂/回调登记（getattr/globals 索引字面量符号）、setuptools entry_points 组件发现。\n"
+                        "输出 probe 信号（dynamic_imports/registrations/indirect_lookups/entry_points）+ hints。\n"
+                        "危险操作隔离：不 import、不 subprocess 被检项目代码，executed=false 显式声明。\n"
+                        "纯静态、确定性，不依赖 LLM。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "include_tests": {"type": "boolean", "description": "是否包含测试目录（默认否）", "default": False},
+                        }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_gov_board",
+                    "description": (
+                        "治理 Web 看板（5.2）：生成自包含交互 HTML 看板（可应用态）。\n"
+                        "含 KPI（完成率/复发/剩余）、状态分布、按角色/模块分布、跨期趋势折线、\n"
+                        "工作项表格（按视图/状态/角色筛选、点击行展开详情、状态流转按钮）。\n"
+                        "interactive=true（默认）启用前端流转回写治理库（/api/transition，仅 127.0.0.1）；\n"
+                        "false 退化为只读。open=true 可起本地 http.server 服务（进程常驻，返回 URL）。\n"
+                        "纯静态、确定性，不依赖 LLM。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "output_dir": {"type": "string", "description": "看板输出目录（可选，默认 <project>/.coderef/）"},
+                            "cid": {"type": "string", "description": "指定周期 id（可选，缺省当前 open 周期）"},
+                            "interactive": {"type": "boolean", "description": "启用交互应用态（默认 true）", "default": True},
+                            "open": {"type": "boolean", "description": "是否同时启动本地 http.server 服务（进程常驻）", "default": False},
+                            "host": {"type": "string", "description": "服务监听地址（open=true 时）", "default": "127.0.0.1"},
+                            "port": {"type": "integer", "description": "服务端口（open=true 时，0=自动分配）", "default": 0},
+                        }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_gov_workspace",
+                    "description": (
+                        "多代码库聚合治理（5.2）：跨仓汇总治理状态。\n"
+                        "projects 为多个项目路径列表；跨仓聚合 open/high/复发/归档统计，\n"
+                        "给出跨仓 TOP 风险（repos_sorted 按高危数降序）。\n"
+                        "对应 plane 的 Workspace：一组 project 的聚合治理边界。\n"
+                        "纯静态、确定性，不依赖 LLM。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "projects": {"type": "array", "items": {"type": "string"}, "description": "目标项目路径列表（≥1）"},
+                        }, "required": ["projects"]},
+                },
+        {
+                    "name": "coderef_gov_schedule",
+                    "description": (
+                        "定时体检（5.2）：cron/CI 触发片段 + 可运行触发脚本 + 离期检查。\n"
+                        "生成可直接运行的入口脚本 run_cycle.py（调用 HealthCycle.start_cycle 开新周期\n"
+                        "+ 导入差距 + 产出报告 JSON/HTML），供 cron/CI/人工直接调用。\n"
+                        "离期检查：存在已过 end_date 仍未收尾的 open 周期时提醒复检。\n"
+                        "不内置后台驻留（延续决策），触发交给外层 cron/CI/任务计划。\n"
+                        "纯静态、确定性，不依赖 LLM。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "cron_expr": {"type": "string", "description": "建议触发时刻（5 段标准 cron；默认每周一 06:00）", "default": "0 6 * * 1"},
+                            "command": {"type": "string", "description": "每次体检触发的 MCP 动作（默认 coderef_scan）", "default": "coderef_scan"},
+                            "output_dir": {"type": "string", "description": "触发脚本输出目录（可选，默认 <project>/.coderef/）"},
+                        }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_role_boundary",
+                    "description": (
+                        "符号级职责越界检测（5.2）：模块归属正确，但符号职责逾越所属角色边界。\n"
+                        "静态层职责信号（确定性，零 LLM）：\n"
+                        "  - 命名语义：符号名与 tech_roles.role_keywords 匹配 → 判定符号疑似属于某角色；\n"
+                        "  - 调用边界：本角色模块调用属于其他角色的符号/入口 → 跨角色调用；\n"
+                        "  - 复用信号：符号在其他角色 target_modules 中作为核心符号存在却定义在本模块。\n"
+                        "semantic=true 时对 top 候选做可选语义判定（需 LLM）；缺省 false 只给静态信号 + uncertainty。\n"
+                        "基于已有知识图谱 + 目标架构 role_keywords；无图谱/无 role_keywords 时诚实提示。\n"
+                        "纯静态、确定性（语义可选）。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径（须已构建知识图谱）"},
+                            "target_arch": {"type": "object", "description": "目标架构 JSON（可选，缺省读已存储）"},
+                            "max_issues": {"type": "integer", "description": "越界符号报出上限", "default": 200},
+                            "semantic": {"type": "boolean", "description": "是否启用可选语义判定（需 LLM）", "default": False},
+                        }, "required": ["project_path"]},
                 }
 ]
 
@@ -1728,6 +1832,80 @@ def _gov_report(a: dict) -> str:
     return json.dumps(r, ensure_ascii=False)
 
 
+def _gov_pipeline(a: dict) -> str:
+    """治理自动化流水线（coderef_gov_pipeline）"""
+    from core.gov_pipeline import GovPipeline
+    pp = a["project_path"]
+    r = GovPipeline(pp).run(
+        issue_ids=a.get("issue_ids") or [],
+        changed_files=a.get("changed_files"),
+        auto_verified=a.get("auto_verified", True))
+    r["tool"] = "coderef_gov_pipeline"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _dynamic_probe(a: dict) -> str:
+    """动态探针（coderef_dynamic_probe）"""
+    from core.dynamic_probe import probe
+    pp = a["project_path"]
+    r = probe(pp, include_tests=a.get("include_tests", False))
+    r["tool"] = "coderef_dynamic_probe"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _gov_board(a: dict) -> str:
+    """治理 Web 看板（coderef_gov_board）"""
+    from core.gov_webdash import render_board, serve
+    pp = a["project_path"]
+    interactive = a.get("interactive", True)
+    r = render_board(pp, output_dir=a.get("output_dir", ""),
+                     cid=a.get("cid", ""), interactive=interactive)
+    r["tool"] = "coderef_gov_board"
+    r["project_path"] = pp
+    if a.get("open"):
+        srv = serve(pp, host=a.get("host", "127.0.0.1"),
+                    port=a.get("port", 0))
+        r["server"] = srv
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _gov_workspace(a: dict) -> str:
+    """多代码库聚合治理（coderef_gov_workspace）"""
+    from core.gov_workspace import aggregate
+    r = aggregate(a.get("projects") or [])
+    r["tool"] = "coderef_gov_workspace"
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _gov_schedule(a: dict) -> str:
+    """定时体检（coderef_gov_schedule）"""
+    from core.gov_schedule import render
+    pp = a["project_path"]
+    r = render(pp, cron_expr=a.get("cron_expr", "0 6 * * 1"),
+               command=a.get("command", "coderef_scan"),
+               output_dir=a.get("output_dir", ""))
+    r["tool"] = "coderef_gov_schedule"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _role_boundary(a: dict) -> str:
+    """符号级职责越界检测（coderef_role_boundary）"""
+    from core.role_boundary import detect
+    pp = a["project_path"]
+    ta = a.get("target_arch")
+    if ta is not None:
+        ta = _coerce_target_arch("coderef_role_boundary", ta)
+    r = detect(pp, target_arch=ta,
+               max_issues=a.get("max_issues", 200),
+               semantic=a.get("semantic", False))
+    r["tool"] = "coderef_role_boundary"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
 def _verify_findings(a: dict) -> str:
     """确定性核验 LLM / CodeRabbit 论断（coderef_verify_findings）"""
     from core.verify_findings import verify_findings, render_report, render_html
@@ -1954,6 +2132,12 @@ class Server:
             "coderef_gov_issues": self._gov_issues,
             "coderef_gov_transition": self._gov_transition,
             "coderef_gov_report": self._gov_report,
+            "coderef_gov_pipeline": self._gov_pipeline,
+            "coderef_dynamic_probe": self._dynamic_probe,
+            "coderef_gov_board": self._gov_board,
+            "coderef_gov_workspace": self._gov_workspace,
+            "coderef_gov_schedule": self._gov_schedule,
+            "coderef_role_boundary": self._role_boundary,
             "coderef_verify_findings": self._verify_findings,
             "coderef_change_guard": self._change_guard,
             "coderef_change_report": self._change_report,
@@ -2214,6 +2398,24 @@ class Server:
     def _gov_report(self, a: dict):
         return _gov_report(a)
 
+    def _gov_pipeline(self, a: dict):
+        return _gov_pipeline(a)
+
+    def _dynamic_probe(self, a: dict):
+        return _dynamic_probe(a)
+
+    def _gov_board(self, a: dict):
+        return _gov_board(a)
+
+    def _gov_workspace(self, a: dict):
+        return _gov_workspace(a)
+
+    def _gov_schedule(self, a: dict):
+        return _gov_schedule(a)
+
+    def _role_boundary(self, a: dict):
+        return _role_boundary(a)
+
     def _verify_findings(self, a: dict):
         return _verify_findings(a)
 
@@ -2224,9 +2426,10 @@ class Server:
         from core.pipeline_runner import Pipe
         # 部分工具（如 coderef_scan_list）不依赖 project_path，用容错读取避免误抛 KeyError
         p, o = a.get("project_path", ""), a.get("output_dir")
-        # P1高-3：project_path 校验与规范化（coderef_scan_list 不依赖路径，跳过）。
+        # P1高-3：project_path 校验与规范化（coderef_scan_list 不依赖路径，跳过；
+        # coderef_gov_workspace 用 projects 数组而非 project_path，也跳过）。
         # 无效路径返回结构化错误而非空成功；相对路径（../空串）拒绝，禁止越权扫描。
-        if n != "coderef_scan_list":
+        if n not in ("coderef_scan_list", "coderef_gov_workspace"):
             p = self._validate_project_path(n, p)
             a["project_path"] = p
         logger.info(f"[{n}] {p}")

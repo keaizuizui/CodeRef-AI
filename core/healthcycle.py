@@ -66,9 +66,11 @@ class HealthCycle:
         gap_res = _run_gap(self.project_path, target_arch, max_unassigned)
         if not gap_res.get("ok"):
             self.store.close_cycle(cyc["id"], note="无目标架构，周期空跑关闭")
-            return {"ok": False, "cycle": cyc,
-                    "message": gap_res.get("summary", {}).get(
-                        "error", "差距分析失败")}
+            # summary 可能是 dict 或字符串（arch_gap_analyzer 失败路径），类型容错
+            _sum = gap_res.get("summary", {})
+            _msg = (_sum.get("error", "差距分析失败") if isinstance(_sum, dict)
+                    else str(_sum) or "差距分析失败")
+            return {"ok": False, "cycle": cyc, "message": _msg}
         imported = self.import_gaps(gap_res, cycle_id=cyc["id"])
         cyc["imported_new"] = imported["new"]
         cyc["kept"] = imported["kept"]
@@ -88,6 +90,9 @@ class HealthCycle:
             self.store.open_cycle() or {}).get("id") or ""
         for g in gap_result.get("gaps") or []:
             _, action = self.store.upsert_issue(g, cycle_id=open_cyc)
+            # upsert_issue 返回 "created"，映射到统计键 "new"
+            if action == "created":
+                action = "new"
             if action in stats:
                 stats[action] += 1
         return stats
