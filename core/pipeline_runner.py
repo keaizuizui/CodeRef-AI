@@ -1825,6 +1825,7 @@ class Pipe:
                         r.report += "\n" + insight
             except Exception as e:
                 r.errors.append(f"insight: {e}")
+                r.report += f"\n\n## 🧭 架构洞察（）\n\n> 洞察生成失败：{e}\n"
             os.makedirs(out, exist_ok=True)
             fn = f"coderef_arch_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
             r.report_path = os.path.join(out, fn)
