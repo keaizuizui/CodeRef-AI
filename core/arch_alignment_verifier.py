@@ -124,6 +124,13 @@ class ArchAlignmentVerifier:
         for role in roles:
             assigned_ids |= _match_module_ids(nodes, project_path,
                                               role.get("target_modules", []))
+        # 排除 test 模块，避免与 total_mods 口径不一致导致 responsibility > 1.0
+        assigned_ids = {
+            nid for nid in assigned_ids
+            if not _is_test_module(
+                module_of(nodes.get(nid, {}), project_path)
+                or nodes.get(nid, {}).get("name", ""))
+        }
         responsibility = len(assigned_ids) / total_mods if total_mods else 1.0
 
         # 依赖健康：违例边 / 文件级模块依赖边

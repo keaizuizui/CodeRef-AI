@@ -353,7 +353,11 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
     # 对齐度（Phase 0 简化：角色覆盖度 + 模块归属度）
     total_roles = len(roles)
     impl_roles = sum(1 for v in role_has_impl.values() if v)
-    total_mods = sum(1 for n in nodes.values() if n.get("type") == "module")
+    # 口径与 unassigned/`arch_verify` 对齐：total_mods 与 assigned_ids 均排除 test 模块
+    total_mods = sum(
+        1 for n in nodes.values()
+        if n.get("type") == "module"
+        and not _is_test_module(module_of(n, project_path) or n.get("name", "")))
     result["alignment"] = {
         "role_coverage": round(impl_roles / total_roles, 2) if total_roles else 1.0,
         "module_assigned": round(len(assigned_ids) / total_mods, 2) if total_mods else 1.0,
