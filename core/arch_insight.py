@@ -53,6 +53,41 @@ def _mod_of(fp: str) -> str:
     return os.path.basename(d) or ""
 
 
+def _abs_path(project_path: str, fp: str) -> str:
+    """图谱节点 file_path 可能是相对路径，拼回绝对路径读取源码。"""
+    if not fp:
+        return ""
+    if os.path.isabs(fp):
+        return fp
+    return os.path.join(project_path, fp)
+
+
+def _norm_body(fp: str, start: int, end: int) -> str:
+    """读取并规范化函数体源码（去注释/字符串/空白），供相似度比较。"""
+    try:
+        with open(fp, encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+        body = "".join(lines[start - 1:end])
+    except Exception:
+        return ""
+    body = re.sub(r"#.*", "", body)
+    body = re.sub(r'"[^"]*"|\'[^\']*\'', "", body)
+    body = re.sub(r"\s+", "", body)
+    return body
+
+
+def _jaccard(a: str, b: str) -> float:
+    """字符 bigram 集合 Jaccard 相似度（0~1）。"""
+    if not a or not b:
+        return 0.0
+    sa = {a[i:i + 2] for i in range(len(a) - 1)}
+    sb = {b[i:i + 2] for i in range(len(b) - 1)}
+    if not sa and not sb:
+        return 1.0
+    union = sa | sb
+    return len(sa & sb) / len(union) if union else 0.0
+
+
 # ═══════════════════════════════════════════════════════════════════
 # P0-A 管线梳理
 # ═══════════════════════════════════════════════════════════════════
@@ -165,16 +200,26 @@ def identity_insight(project_path: str, db_path: Optional[str] = None,
                 "mod": _mod_of(n.get("file_path") or ""),
                 "callers": len(inbound),
                 "active": len(inbound) > 0,
+                "is_root": len(inbound) == 0,
             })
         copies.sort(key=lambda c: (-c["callers"], c["file"]))
-        # 判定：被引用最多 → 生产入口候选；无引用 → 死/备选
-        for i, c in enumerate(copies):
-            if c["callers"] > 0 and i == 0:
-                c["verdict"] = "生产入口候选"
+        roots = [c for c in copies if c["is_root"]]
+        # 判定：生产入口通常无图内调用者（root），故仅 root 副本可标"生产入口候选"；
+        # dunder 特殊方法（__init__/__repr__ 等）即使无调用者也不是业务入口，单独标注；
+        # 无 root 副本时，被引用最多者只标"被引用最多的副本"（事实陈述，不推断入口）。
+        is_dunder = name.startswith("__") and name.endswith("__")
+        for c in copies:
+            if c["is_root"]:
+                if is_dunder:
+                    c["verdict"] = "特殊方法（无被调用者）"
+                else:
+                    c["verdict"] = "生产入口候选（无被调用者）"
             elif c["callers"] > 0:
                 c["verdict"] = "活跃副本"
             else:
                 c["verdict"] = "无引用（死/备选）"
+        if not roots and copies and copies[0]["callers"] > 0:
+            copies[0]["verdict"] = "被引用最多的副本"
         items.append({"name": name, "copies": copies})
 
     items.sort(key=lambda it: -len(it["copies"]))
@@ -208,11 +253,13 @@ def _identity_markdown(data: Dict) -> str:
 # ═══════════════════════════════════════════════════════════════════
 
 def duplicate_insight(project_path: str, db_path: Optional[str] = None,
-                      max_clusters: int = 20) -> Dict:
+                      max_clusters: int = 20, sim_threshold: float = 0.6) -> Dict:
     """P0-C：重复/同构识别。
 
-    同名函数/方法跨模块（不同目录）实现 → 重复实现簇。返回
-    {"ok", "clusters":[{name, copies:[{file,line,mod}]}]}。
+    同名函数/方法跨模块（不同目录）实现 → 先按函数体相似度区分：
+    - 相似度 ≥ sim_threshold → "重复实现簇"（kind=duplicate，推荐收敛）
+    - 相似度 < sim_threshold → "同名候选"（kind=candidate，仅同名、契约可能不同，不推荐合并）
+    返回 {"ok", "clusters":[{name, kind, max_sim, copies:[{file,line,mod}]}]}。
     """
     fv = _verifier(project_path, db_path)
     if fv is None:
@@ -234,12 +281,28 @@ def duplicate_insight(project_path: str, db_path: Optional[str] = None,
             n = fv.nodes[nid]
             fp = (n.get("file_path") or "").replace("\\", "/")
             mod = _mod_of(n.get("file_path") or "")
-            copies.append({"file": fp, "line": n.get("start_line", 0), "mod": mod})
+            copies.append({
+                "file": fp, "line": n.get("start_line", 0), "mod": mod,
+                "body": _norm_body(_abs_path(project_path, fp),
+                                   n.get("start_line", 0), n.get("end_line", 0)),
+            })
             mods.add(mod)
-        if len(mods) >= 2:  # 跨模块重复才算"重复实现簇"
-            clusters.append({"name": name, "copies": copies})
+        if len(mods) < 2:  # 跨模块才算"重复/同名候选"
+            continue
+        # 簇内两两函数体相似度，取最大值作为簇相似度
+        max_sim = 0.0
+        for i in range(len(copies)):
+            for j in range(i + 1, len(copies)):
+                s = _jaccard(copies[i]["body"], copies[j]["body"])
+                if s > max_sim:
+                    max_sim = s
+        kind = "duplicate" if max_sim >= sim_threshold else "candidate"
+        for c in copies:
+            c.pop("body", None)
+        clusters.append({"name": name, "kind": kind, "max_sim": round(max_sim, 2),
+                         "copies": copies})
 
-    clusters.sort(key=lambda c: -len(c["copies"]))
+    clusters.sort(key=lambda c: (-len(c["copies"]), c["kind"] != "duplicate"))
     return {"ok": True, "clusters": clusters[:max_clusters]}
 
 
@@ -251,20 +314,32 @@ def _duplicate_markdown(data: Dict) -> str:
 
     clusters = data.get("clusters") or []
     if not clusters:
-        lines.append("> 未发现跨模块同名重复实现簇。")
+        lines.append("> 未发现跨模块同名实现（每个符号仅一处定义）。")
         return "\n".join(lines) + "\n"
 
-    lines.append("| 符号 | 实现数 | 模块 | 文件:行 |")
-    lines.append("|------|--------|------|---------|")
-    for c in clusters:
-        first = c["copies"][0]
-        rest = c["copies"][1:]
-        mods = "、".join(f"`{x['mod']}`" for x in c["copies"])
-        locs = f"`{first['file']}:{first['line']}`"
-        if rest:
-            locs += " 等 " + "、".join(f"`{x['file']}:{x['line']}`" for x in rest[:4])
-        lines.append(f"| `{c['name']}` | {len(c['copies'])} | {mods} | {locs} |")
-    lines.append("")
+    dup = [c for c in clusters if c.get("kind") == "duplicate"]
+    cand = [c for c in clusters if c.get("kind") != "duplicate"]
+    if dup:
+        lines.append(f"### 重复实现簇（函数体相似度 ≥ 60%，建议收敛）")
+        lines.append("| 符号 | 实现数 | 相似度 | 模块 | 文件:行 |")
+        lines.append("|------|--------|--------|------|---------|")
+        for c in dup:
+            first = c["copies"][0]
+            rest = c["copies"][1:]
+            mods = "、".join(f"`{x['mod']}`" for x in c["copies"])
+            locs = f"`{first['file']}:{first['line']}`"
+            if rest:
+                locs += " 等 " + "、".join(f"`{x['file']}:{x['line']}`" for x in rest[:4])
+            lines.append(f"| `{c['name']}` | {len(c['copies'])} | {c.get('max_sim', 0)} | {mods} | {locs} |")
+        lines.append("")
+    if cand:
+        lines.append("### 同名候选（仅同名、契约可能不同，不推荐合并）")
+        lines.append("| 符号 | 实现数 | 相似度 | 模块 |")
+        lines.append("|------|--------|--------|------|")
+        for c in cand:
+            mods = "、".join(f"`{x['mod']}`" for x in c["copies"])
+            lines.append(f"| `{c['name']}` | {len(c['copies'])} | {c.get('max_sim', 0)} | {mods} |")
+        lines.append("")
 
     return "\n".join(lines) + "\n"
 

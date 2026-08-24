@@ -985,7 +985,7 @@ BUILTIN_TOOLS: List[Dict] = [
                     "name": "coderef_gov_pipeline",
                     "description": (
                         "治理自动化流水线（5.2）：把工作项治理串成可追踪闭环。\n"
-                        "对每个在途工作项（Detected/Confirmed/Fixing）：\n"
+                        "对每个在途工作项（Confirmed/Fixing；Detected 需先人工确认，不直接进流水线）：\n"
                         "  1) 状态 → Fixing；\n"
                         "  2) 凭差距快照生成任务卡（含影响范围/验证标准，复用 refactor_task_generator）；\n"
                         "  3) 调 arch_alignment_verifier 复验（changed_files 增量或全量）；\n"
@@ -2019,9 +2019,12 @@ def _advisor(a) -> str:
 
 def _arch(a) -> str:
     from core.pipeline_runner import Pipe
+    insight_llm = a.get("insight_llm", False)
+    if insight_llm is not True and insight_llm is not False:
+        raise ValueError("coderef_architecture: insight_llm 必须是布尔值")
     r = Pipe().architecture(a["project_path"],
                             output_dir=a.get("output_dir") or None,
-                            insight_llm=bool(a.get("insight_llm")))
+                            insight_llm=insight_llm)
     # 结构化返回，与 coderef_audit 一致
     return json.dumps({
         "status": "completed",

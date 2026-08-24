@@ -208,8 +208,8 @@ def render_board(project_path: str, output_dir: str = "",
     function nextBtn(id,st){
       const allowed=(DATA.allowed_next||{})[st]||[];
       if(!DATA.interactive||!allowed.length) return '';
-      return allowed.map(t=>`<button class="t" data-to="${t}"
-        onclick="event.stopPropagation();act('${id}','${t}')">→${t}</button>`).join('');}
+      return allowed.map(t=>`<button class="t" data-to="${esc(t)}"
+        data-id="${esc(id)}" onclick="event.stopPropagation();act(this)">→${esc(t)}</button>`).join('');}
     function rows(list){
       return list.map((i,idx)=>`<tr class="click" data-idx="${idx}"
         onclick="toggle(this)">
@@ -226,7 +226,8 @@ def render_board(project_path: str, output_dir: str = "",
       current=DATA.issues.filter(i=>(!st||i.status===st)&&(!sv||i.severity===sv)&&(!role||i.role_id===role));
       document.getElementById('board-body').innerHTML=rows(current);
       document.getElementById('cnt').textContent=current.length+' / '+DATA.issues.length;}
-    async function act(id,to){
+    async function act(btn){
+      const id=btn.dataset.id, to=btn.dataset.to;
       const j=await post('/api/transition',{issue_id:id,to_state:to,actor:'board'});
       if(j&&j.ok){toast('→ '+to+' ✓',true);setTimeout(()=>location.reload(),500);}
       else toast((j&&j.message)||'流转失败',false);}

@@ -76,12 +76,12 @@ class GovPipeline:
         if iss is None:
             return {"issue_id": issue_id, "ok": False, "message": "工作项不存在"}
         old = iss["status"]
-        if old not in (STATUS_DETECTED, STATUS_CONFIRMED, STATUS_FIXING):
+        if old not in (STATUS_CONFIRMED, STATUS_FIXING):
             return {"issue_id": issue_id, "ok": False,
-                    "message": f"状态 {old} 不在治理流水线内（仅限在途项）"}
+                    "message": f"状态 {old} 不在治理流水线内（仅限 Confirmed/Fixing；Detected 需先人工确认）"}
 
-        # 1. 进入 Fixing（Detected/Confirmed → Fixing）
-        if old in (STATUS_DETECTED, STATUS_CONFIRMED):
+        # 1. 进入 Fixing（Confirmed → Fixing）
+        if old == STATUS_CONFIRMED:
             ok, msg = self.store.transition(issue_id, STATUS_FIXING,
                                             actor="pipeline",
                                             detail="进入治理流水线")
