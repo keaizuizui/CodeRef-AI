@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.2.3** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.3.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -453,6 +453,16 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.3.0 — 架构洞察：管线/真身/重复自动产出人话结论（，P0 级）
+
+- **P0-A 管线自动梳理**（新增 `core/arch_insight.py`）：自动发现入口（无被调用方 + 启发式），沿 CALLS 归纳阶段序管线（x→y→z 带文件/行号/说明），输出 Markdown 表格；另附跨模块业务数据流
+- **P0-B 真身/入口判定**：同名多目录实现（如 check_plan_coverage 同时存在于多个子系统），报告各副本被谁引用 / 是否活跃 / 哪个是生产入口候选
+- **P0-C 重复/同构识别**：同名函数跨模块实现 → 重复实现簇
+- **`coderef_architecture` 报告升级**：不再只是"790B 壳"，自动追加三段洞察；`insight_llm` 参数可选追加 LLM 人话总结（需 API Key，缺省静态结果完整可用）
+- ** `coderef_arch_canvas` 后台化**：加入 HEAVY_TOOLS 默认后台执行（超大项目不再同步撞 MCP 超时），支持 `background=false` 强制同步
+- ** cache 收口**：清理主仓历史残留图谱库（10.9MB），图谱库已随 project_path 落位
+- **版本号**：5.2.3 → 5.3.0
 
 ### v5.2.3 — 真实屎山扫描落点修复（r6 红线段落）
 

@@ -200,6 +200,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
                             "output_dir": {"type": "string", "description": "报告输出目录（默认 <project_path>/coderef-report/，可选外置）"},
+                            "insight_llm": {"type": "boolean", "description": "架构洞察（管线/真身/重复）追加 LLM 人话总结（需配置 API Key，缺省静态结果完整可用）", "default": False},
                             "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
                         }, "required": ["project_path"]},
                     },
@@ -466,12 +467,13 @@ BUILTIN_TOOLS: List[Dict] = [
                         "交互：把代码模块拖入技术角色定义目标归属；业务步骤点击后点角色建立业务→技术映射；\n"
                         "差距高亮（游离灰底/依赖违例红连线/缺失角色红虚线/循环黄框）；导出/复制目标架构 JSON。\n"
                         "数据层完全复用 arch_gap_analyzer + 知识图谱。输出 HTML 文件路径。\n"
-                        "纯静态、确定性、轻量同步，不依赖 LLM。"
+                        "纯静态、确定性，不依赖 LLM。超大项目同步可能超时，默认后台执行。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
                             "target_arch": {"type": "object", "description": "目标架构 JSON（可选，缺省读已存储）"},
                             "output_dir": {"type": "string", "description": "画布输出目录（可选，默认 <project>/.coderef/）"},
+                            "background": {"type": "boolean", "description": "后台执行（超大项目同步可能超时，默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
                         }, "required": ["project_path"]},
                 },
         {
@@ -2018,7 +2020,8 @@ def _advisor(a) -> str:
 def _arch(a) -> str:
     from core.pipeline_runner import Pipe
     r = Pipe().architecture(a["project_path"],
-                            output_dir=a.get("output_dir") or None)
+                            output_dir=a.get("output_dir") or None,
+                            insight_llm=bool(a.get("insight_llm")))
     # 结构化返回，与 coderef_audit 一致
     return json.dumps({
         "status": "completed",
@@ -2183,6 +2186,7 @@ class Server:
         self.HEAVY_TOOLS = {
             "coderef_audit", "coderef_docs", "coderef_review", "coderef_frontend",
             "coderef_report", "coderef_audit_advisor", "coderef_architecture",
+            "coderef_arch_canvas",
             "coderef_memory_sync", "coderef_memory_quality", "coderef_memory_status",
             "coderef_operation_memory_sync",
             "coderef_owasp",

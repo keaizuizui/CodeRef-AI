@@ -1794,7 +1794,7 @@ class Pipe:
         return run_single(self, project_path, tool)
 
     def architecture(self, project_path: str, output_dir: str = None,
-                     resume: bool = False) -> PipeResult:
+                     resume: bool = False, insight_llm: bool = False) -> PipeResult:
         """架构图管线：GitNexus + Workflow"""
         self._t0 = time.time()
         r = PipeResult(project_path=project_path)
@@ -1812,6 +1812,19 @@ class Pipe:
             self._workflow(project_path, r)
 
             r.report = self._fmt(r, "架构分析报告")
+            #  架构洞察（管线/真身/重复，静态为主，LLM 可选）：插入到报告尾部 HTML 路径之前，
+            # 让 coderef_architecture 不再只是"790B 壳"，自动产出人话结构化结论。
+            try:
+                from core.arch_insight import insight_markdown
+                insight = insight_markdown(project_path, use_llm=insight_llm)
+                if insight:
+                    tail = f"---\n{r.report_path or ''}"
+                    if r.report.endswith(tail):
+                        r.report = r.report[:-len(tail)] + insight + "\n" + tail
+                    else:
+                        r.report += "\n" + insight
+            except Exception as e:
+                r.errors.append(f"insight: {e}")
             os.makedirs(out, exist_ok=True)
             fn = f"coderef_arch_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
             r.report_path = os.path.join(out, fn)
