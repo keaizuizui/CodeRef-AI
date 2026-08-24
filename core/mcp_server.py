@@ -457,6 +457,56 @@ BUILTIN_TOOLS: List[Dict] = [
                         }, "required": ["project_path"]},
                 },
         {
+                    "name": "coderef_arch_canvas",
+                    "description": (
+                        "生成可视化架构画布 HTML（5.0 Phase 1：架构推回正轨工作台的可视化前端）。\n"
+                        "纯 HTML/CSS/JS + SVG 自包含、零外部依赖、离线可用。三层布局：\n"
+                        "业务层（业务流程步骤）→ 技术层（技术角色容器）→ 代码层（代码模块节点）。\n"
+                        "交互：把代码模块拖入技术角色定义目标归属；业务步骤点击后点角色建立业务→技术映射；\n"
+                        "差距高亮（游离灰底/依赖违例红连线/缺失角色红虚线/循环黄框）；导出/复制目标架构 JSON。\n"
+                        "数据层完全复用 arch_gap_analyzer + 知识图谱。输出 HTML 文件路径。\n"
+                        "纯静态、确定性、轻量同步，不依赖 LLM。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "target_arch": {"type": "object", "description": "目标架构 JSON（可选，缺省读已存储）"},
+                            "output_dir": {"type": "string", "description": "画布输出目录（可选，默认 <project>/.coderef/）"},
+                        }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_refactor_plan",
+                    "description": (
+                        "生成重构任务卡列表（5.0 Phase 2：差距→任务卡）。\n"
+                        "把 coderef_arch_gap 差距清单转化为编程 AI 可执行的重构任务卡。\n"
+                        "每张任务卡含：type（create_module/fix_dependency/break_cycle/implement_flow/\n"
+                        "move_module/split_module）、operations（具体操作）、impact（图谱确定性影响范围）、\n"
+                        "verify（架构+功能验证标准）。按执行顺序排序。\n"
+                        "纯静态、确定性，影响范围来自知识图谱调用闭包，不依赖 LLM。\n"
+                        "target_arch 可选：不传则读取已存储目标架构。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "target_arch": {"type": "object", "description": "目标架构 JSON（可选，缺省读已存储）"},
+                            "gap_result": {"type": "object", "description": "差距清单（可选，缺省内部自动分析）"},
+                        }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_arch_verify",
+                    "description": (
+                        "架构对齐验证（5.0 Phase 2：重构后确定性验证对齐）。\n"
+                        "输出 0–100 对齐度评分（四维：职责对齐40%+依赖健康30%+业务覆盖20%+代码健康10%）\n"
+                        "与差距复检清单。\n"
+                        "增量模式：传 changed_files（本次改动文件集合）时只对该子集影响的差距复检，\n"
+                        "快速反馈单张任务卡是否达标；不传则全量验证。\n"
+                        "纯静态、确定性，复用 arch_gap_analyzer 与 arch_audit，不依赖 LLM。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "target_arch": {"type": "object", "description": "目标架构 JSON（可选，缺省读已存储）"},
+                            "changed_files": {"type": "array", "items": {"type": "string"}, "description": "本次改动文件集合（可选，增量验证）"},
+                        }, "required": ["project_path"]},
+                },
+        {
                     "name": "coderef_verify_findings",
                     "description": (
                         "确定性核验 LLM / CodeRabbit 论断（爬取翼咽喉 + 诚实话解读护栏）。\n"
@@ -1436,6 +1486,53 @@ def _arch_gap(a: dict) -> str:
     return json.dumps(r, ensure_ascii=False)
 
 
+def _arch_canvas(a: dict) -> str:
+    """可视化架构画布（coderef_arch_canvas）"""
+    from core.canvas_generator import ArchCanvas
+    pp = a["project_path"]
+    ta = a.get("target_arch")
+    if ta is not None:
+        ta = _coerce_target_arch("coderef_arch_canvas", ta)
+    output_dir = a.get("output_dir")
+    filepath = ArchCanvas().generate(project_path=pp, target_arch=ta,
+                                     output_dir=output_dir)
+    return json.dumps({
+        "status": "completed",
+        "tool": "coderef_arch_canvas",
+        "project_path": pp,
+        "result_path": filepath,
+        "message": "画布已生成，浏览器打开即可拖拽编辑、导出目标架构 JSON",
+    }, ensure_ascii=False)
+
+
+def _refactor_plan(a: dict) -> str:
+    """重构任务卡生成（coderef_refactor_plan）"""
+    from core.refactor_task_generator import RefactorTaskGenerator
+    pp = a["project_path"]
+    ta = a.get("target_arch")
+    if ta is not None:
+        ta = _coerce_target_arch("coderef_refactor_plan", ta)
+    gap_result = a.get("gap_result")
+    r = RefactorTaskGenerator().generate(pp, gap_result=gap_result,
+                                         target_arch=ta)
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _arch_verify(a: dict) -> str:
+    """架构对齐验证（coderef_arch_verify）"""
+    from core.arch_alignment_verifier import ArchAlignmentVerifier
+    pp = a["project_path"]
+    ta = a.get("target_arch")
+    if ta is not None:
+        ta = _coerce_target_arch("coderef_arch_verify", ta)
+    changed_files = a.get("changed_files")
+    r = ArchAlignmentVerifier().verify(pp, target_arch=ta,
+                                       changed_files=changed_files)
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
 def _verify_findings(a: dict) -> str:
     """确定性核验 LLM / CodeRabbit 论断（coderef_verify_findings）"""
     from core.verify_findings import verify_findings, render_report, render_html
@@ -1654,6 +1751,9 @@ class Server:
             "coderef_target_arch_set": self._target_arch_set,
             "coderef_target_arch_get": self._target_arch_get,
             "coderef_arch_gap": self._arch_gap,
+            "coderef_arch_canvas": self._arch_canvas,
+            "coderef_refactor_plan": self._refactor_plan,
+            "coderef_arch_verify": self._arch_verify,
             "coderef_verify_findings": self._verify_findings,
             "coderef_change_guard": self._change_guard,
             "coderef_change_report": self._change_report,
@@ -1889,6 +1989,15 @@ class Server:
 
     def _arch_gap(self, a: dict):
         return _arch_gap(a)
+
+    def _arch_canvas(self, a: dict):
+        return _arch_canvas(a)
+
+    def _refactor_plan(self, a: dict):
+        return _refactor_plan(a)
+
+    def _arch_verify(self, a: dict):
+        return _arch_verify(a)
 
     def _verify_findings(self, a: dict):
         return _verify_findings(a)
