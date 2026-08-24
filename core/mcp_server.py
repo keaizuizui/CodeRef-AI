@@ -2199,6 +2199,21 @@ class Server:
     def _arch_verify(self, a: dict):
         return _arch_verify(a)
 
+    def _gov_start(self, a: dict):
+        return _gov_start(a)
+
+    def _gov_close(self, a: dict):
+        return _gov_close(a)
+
+    def _gov_issues(self, a: dict):
+        return _gov_issues(a)
+
+    def _gov_transition(self, a: dict):
+        return _gov_transition(a)
+
+    def _gov_report(self, a: dict):
+        return _gov_report(a)
+
     def _verify_findings(self, a: dict):
         return _verify_findings(a)
 
