@@ -410,6 +410,53 @@ BUILTIN_TOOLS: List[Dict] = [
                         }, "required": ["project_path"]},
                 },
         {
+                    "name": "coderef_target_arch_set",
+                    "description": (
+                        "设置/更新目标架构 JSON（5.0 架构推回正轨的参照系）。\n"
+                        "目标架构由人定义（业务层 + 技术层 + 约束），CodeRef 负责对比现状并输出差距。\n"
+                        "target_arch 传目标架构 JSON（对象或字符串），结构：\n"
+                        "  version（必填）/ project / business_flows（业务流程+步骤+tech_roles）/ \n"
+                        "  tech_roles（角色 id/name/target_modules/depends_on/depended_by）/ \n"
+                        "  constraints（角色间禁止依赖，rule=no_dependency）。\n"
+                        "校验通过后写入 <project>/.coderef/target_arch.json（进 git 版本控制）。\n"
+                        "纯确定性校验，不依赖 LLM。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "target_arch": {"type": "object", "description": "目标架构 JSON 对象"},
+                        }, "required": ["project_path", "target_arch"]},
+                },
+        {
+                    "name": "coderef_target_arch_get",
+                    "description": (
+                        "获取当前目标架构（coderef_target_arch_get）。\n"
+                        "返回 <project>/.coderef/target_arch.json 的内容；尚未设置时明确反馈 not_set。\n"
+                        "纯确定性读取，不依赖 LLM。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                        }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_arch_gap",
+                    "description": (
+                        "架构差距分析 —— 对比现状知识图谱与目标架构，输出结构化差距清单（5.0 核心）。\n"
+                        "差距类型：missing=职责缺失（目标角色声明的模块不存在）；\n"
+                        "dependency_violation=依赖违例（模块依赖违反角色约束）；cycle=循环依赖；\n"
+                        "business_gap=业务断链（业务步骤关联角色无实现）；unassigned=游离模块（未归属）；\n"
+                        "god_module=上帝模块；large_module=异常规模。\n"
+                        "纯静态、确定性，复用 arch_audit 与知识图谱，不依赖 LLM。\n"
+                        "target_arch 可选：不传则读取已存储的目标架构（coderef_target_arch_set）。\n"
+                        "max_unassigned 控制游离模块报出上限（默认 50）。\n"
+                        "图谱不存在时会明确反馈需先构建（coderef_audit / coderef_memory_sync）。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "target_arch": {"type": "object", "description": "目标架构 JSON（可选，缺省读已存储）"},
+                            "max_unassigned": {"type": "integer", "description": "游离模块报出上限", "default": 50},
+                        }, "required": ["project_path"]},
+                },
+        {
                     "name": "coderef_verify_findings",
                     "description": (
                         "确定性核验 LLM / CodeRabbit 论断（爬取翼咽喉 + 诚实话解读护栏）。\n"
@@ -1292,6 +1339,103 @@ def _arch_audit(a: dict) -> str:
     return json.dumps(r, ensure_ascii=False)
 
 
+def _target_arch_path(project_path: str) -> str:
+    """目标架构 JSON 存储路径：<project>/.coderef/target_arch.json"""
+    return os.path.join(project_path, ".coderef", "target_arch.json")
+
+
+def _load_target_arch(pp: str) -> dict:
+    """读取已存储的目标架构；未设置时抛结构化错误。"""
+    path = _target_arch_path(pp)
+    if not os.path.exists(path):
+        raise ValueError(
+            "项目尚未设置目标架构，请先用 coderef_target_arch_set 设置，"
+            "或在本工具参数中直接传入 target_arch")
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _coerce_target_arch(tool: str, ta) -> dict:
+    """把 target_arch 参数规范化为 dict（支持对象或 JSON 字符串）。"""
+    if isinstance(ta, str):
+        try:
+            ta = json.loads(ta)
+        except Exception as e:
+            raise ValueError(f"{tool}: target_arch 不是合法 JSON: {e}")
+    if not isinstance(ta, dict):
+        raise ValueError(f"{tool}: target_arch 必须是 JSON 对象")
+    return ta
+
+
+def _target_arch_set(a: dict) -> str:
+    """设置/更新目标架构 JSON（coderef_target_arch_set）"""
+    from core.target_arch_schema import normalize_arch, validate_target_arch
+    pp = a["project_path"]
+    ta = a.get("target_arch")
+    if ta is None:
+        raise ValueError(
+            "coderef_target_arch_set: 缺少 target_arch 参数，请传入目标架构 JSON")
+    ta = _coerce_target_arch("coderef_target_arch_set", ta)
+    ok, errors = validate_target_arch(ta)
+    if not ok:
+        raise ValueError(
+            f"coderef_target_arch_set: 目标架构校验失败: {'; '.join(errors)}")
+    ta = normalize_arch(ta)
+    path = _target_arch_path(pp)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(ta, f, ensure_ascii=False, indent=2)
+    return json.dumps({
+        "status": "completed",
+        "tool": "coderef_target_arch_set",
+        "project_path": pp,
+        "path": path,
+        "summary": {
+            "roles": len(ta.get("tech_roles", [])),
+            "flows": len(ta.get("business_flows", [])),
+            "constraints": len(ta.get("constraints", [])),
+        },
+    }, ensure_ascii=False)
+
+
+def _target_arch_get(a: dict) -> str:
+    """获取当前目标架构（coderef_target_arch_get）"""
+    pp = a["project_path"]
+    path = _target_arch_path(pp)
+    if not os.path.exists(path):
+        return json.dumps({
+            "status": "not_set",
+            "tool": "coderef_target_arch_get",
+            "project_path": pp,
+            "message": "尚未设置目标架构，请先用 coderef_target_arch_set 设置",
+        }, ensure_ascii=False)
+    with open(path, "r", encoding="utf-8") as f:
+        ta = json.load(f)
+    return json.dumps({
+        "status": "completed",
+        "tool": "coderef_target_arch_get",
+        "project_path": pp,
+        "path": path,
+        "target_arch": ta,
+    }, ensure_ascii=False)
+
+
+def _arch_gap(a: dict) -> str:
+    """架构差距分析（coderef_arch_gap）"""
+    from core.arch_gap_analyzer import analyze_gap
+    pp = a["project_path"]
+    ta = a.get("target_arch")
+    if ta is None:
+        ta = _load_target_arch(pp)
+    else:
+        ta = _coerce_target_arch("coderef_arch_gap", ta)
+    max_unassigned = a.get("max_unassigned", 50)
+    r = analyze_gap(pp, ta, max_unassigned=max_unassigned)
+    r["tool"] = "coderef_arch_gap"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
 def _verify_findings(a: dict) -> str:
     """确定性核验 LLM / CodeRabbit 论断（coderef_verify_findings）"""
     from core.verify_findings import verify_findings, render_report, render_html
@@ -1507,6 +1651,9 @@ class Server:
             "coderef_scan_list": lambda a: self._scan_list(),
             "coderef_flow_verify": self._flow_verify,
             "coderef_arch_audit": self._arch_audit,
+            "coderef_target_arch_set": self._target_arch_set,
+            "coderef_target_arch_get": self._target_arch_get,
+            "coderef_arch_gap": self._arch_gap,
             "coderef_verify_findings": self._verify_findings,
             "coderef_change_guard": self._change_guard,
             "coderef_change_report": self._change_report,
@@ -1733,6 +1880,15 @@ class Server:
 
     def _arch_audit(self, a: dict):
         return _arch_audit(a)
+
+    def _target_arch_set(self, a: dict):
+        return _target_arch_set(a)
+
+    def _target_arch_get(self, a: dict):
+        return _target_arch_get(a)
+
+    def _arch_gap(self, a: dict):
+        return _arch_gap(a)
 
     def _verify_findings(self, a: dict):
         return _verify_findings(a)
