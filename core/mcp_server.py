@@ -507,6 +507,103 @@ BUILTIN_TOOLS: List[Dict] = [
                         }, "required": ["project_path"]},
                 },
         {
+                    "name": "coderef_gov_start",
+                    "description": (
+                        "建档体检周期并导入差距为治理工作项（5.1 定期体检）。\n"
+                        "借鉴 plane 的 Cycle：把一次差距扫描变成可追踪、可回顾的体检周期。\n"
+                        "建档一个 open 的 HealthCycle，并调用 arch_gap 把当前差距全量导入为 Detected 工作项（去重/复发检测/豁免生效）。\n"
+                        "name 指定周期名（缺省自动按日期）；end_date 可选截止；target_arch 可选，缺省读已存储。\n"
+                        "治理状态持久化到 <project>/.coderef/governance.db（随项目进 git）。\n"
+                        "纯静态、确定性，不依赖 LLM。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "name": {"type": "string", "description": "体检周期名（可选，缺省按日期）"},
+                            "description": {"type": "string", "description": "周期描述（可选）"},
+                            "end_date": {"type": "string", "description": "截止日期 YYYY-MM-DD（可选）"},
+                            "target_arch": {"type": "object", "description": "目标架构 JSON（可选，缺省读已存储）"},
+                            "max_unassigned": {"type": "integer", "description": "游离模块报出上限（可选）", "default": 50},
+                        }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_gov_close",
+                    "description": (
+                        "收尾体检周期并输出本期统计（5.1）。\n"
+                        "把指定周期标记为 closed 并记录收尾 end_date 与 note，\n"
+                        "返回本期完成率/剩余/复发/豁免统计，作为单期体检报告的基础数据。\n"
+                        "cid 指定周期 id，缺省关闭当前 open 周期。\n"
+                        "纯静态、确定性，不依赖 LLM。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "cid": {"type": "string", "description": "周期 id（可选，缺省当前 open 周期）"},
+                            "note": {"type": "string", "description": "收尾备注（可选）"},
+                        }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_gov_issues",
+                    "description": (
+                        "查询治理工作项（预置视图/过滤）（5.1）。\n"
+                        "借鉴 plane 的 View：通过固定视图快速查看治理项。\n"
+                        "可用视图：open=未闭环在途项；all=全部；high=高严重级在途项；\n"
+                        "recent=最近出现；recurred=复发项；rejected=已豁免项；archived=已归档项；\n"
+                        "overdue=已过截止未闭环；assigned=已分配负责人。\n"
+                        "也可用 status（Detected/Confirmed/Fixing/Verified/Archived/Rejected）直接过滤，\n"
+                        "或用 cycle_id/assignee/limit。返回结构化工作项列表与状态分布。\n"
+                        "纯静态、确定性，不依赖 LLM。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "view": {"type": "string", "description": "预置视图名（open/all/high/recent/recurred/rejected/archived/overdue/assigned）", "default": "open"},
+                            "status": {"type": "string", "description": "按状态直接过滤（可选，优先于 view）"},
+                            "cycle_id": {"type": "string", "description": "限定周期（可选）"},
+                            "assignee": {"type": "string", "description": "限定负责人（可选）"},
+                            "limit": {"type": "integer", "description": "返回条数上限", "default": 500},
+                        }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_gov_transition",
+                    "description": (
+                        "治理工作项状态流转 / 豁免（5.1）。\n"
+                        "借鉴 plane 的 Workflow State：把一条工作项沿状态机推进。\n"
+                        "状态机：Detected→Confirmed→Fixing→Verified→Archived；另可豁免为 Rejected。\n"
+                        "约束：仅可从 Confirmed 进入 Fixing；仅可在 Verified 后归档（Archived 前须复验达标）。\n"
+                        "action=transition + to_state 做流转；action=reject + reason(必留) 做豁免；\n"
+                        "action=meta 更新优先级/负责人/截止/备注。每次流转写活动日志形成审计轨迹。\n"
+                        "issue_id 为工作项 id。纯静态、确定性，不依赖 LLM。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "issue_id": {"type": "string", "description": "治理工作项 id"},
+                            "action": {"type": "string", "enum": ["transition", "reject", "meta"], "default": "transition"},
+                            "to_state": {"type": "string", "description": "目标状态（action=transition 时必填）"},
+                            "reason": {"type": "string", "description": "豁免原因（action=reject 时必填）"},
+                            "priority": {"type": "string", "description": "优先级 high/medium/low（action=meta）"},
+                            "assignee": {"type": "string", "description": "负责人（action=meta）"},
+                            "due_date": {"type": "string", "description": "截止日期 YYYY-MM-DD（action=meta）"},
+                            "note": {"type": "string", "description": "备注（action=meta）"},
+                            "actor": {"type": "string", "description": "操作者/调用方标识（可选）"},
+                            "detail": {"type": "string", "description": "流转说明（可选）"},
+                        }, "required": ["project_path", "issue_id"]},
+                },
+        {
+                    "name": "coderef_gov_report",
+                    "description": (
+                        "体检报告（单期 + 跨期趋势）（5.1）。\n"
+                        "借鉴 plane 的 Dashboard/Analytics：持续监控健康状态。\n"
+                        "返回当前 open 周期（或指定 cid）的完成率/剩余/复发/豁免统计 + 跨期趋势\n"
+                        "（各已关闭周期的整改量曲线）。可选写出自包含 HTML 报告（含内联 SVG 趋势图，零 CDN）。\n"
+                        "out_format=json 返回结构化；out_format=html 额外写出 gov_report.html 并返回路径。\n"
+                        "纯静态、确定性，趋势由治理库聚合，不依赖 LLM。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "cid": {"type": "string", "description": "指定周期 id（可选，缺省当前 open 周期）"},
+                            "out_format": {"type": "string", "enum": ["json", "html"], "default": "json"},
+                            "output_dir": {"type": "string", "description": "报告输出目录（可选，默认 <project>/.coderef/）"},
+                        }, "required": ["project_path"]},
+                },
+        {
                     "name": "coderef_verify_findings",
                     "description": (
                         "确定性核验 LLM / CodeRabbit 论断（爬取翼咽喉 + 诚实话解读护栏）。\n"
@@ -1535,6 +1632,102 @@ def _arch_verify(a: dict) -> str:
     return json.dumps(r, ensure_ascii=False)
 
 
+def _gov_start(a: dict) -> str:
+    """建档体检周期并导入差距为治理工作项（coderef_gov_start）"""
+    from core.healthcycle import HealthCycle
+    pp = a["project_path"]
+    ta = a.get("target_arch")
+    if ta is not None:
+        ta = _coerce_target_arch("coderef_gov_start", ta)
+    hc = HealthCycle(pp)
+    r = hc.start_cycle(
+        name=a.get("name", ""), description=a.get("description", ""),
+        end_date=a.get("end_date", ""), target_arch=ta,
+        max_unassigned=a.get("max_unassigned", 50))
+    r["tool"] = "coderef_gov_start"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _gov_close(a: dict) -> str:
+    """收尾体检周期（coderef_gov_close）"""
+    from core.healthcycle import HealthCycle
+    pp = a["project_path"]
+    hc = HealthCycle(pp)
+    r = hc.close_cycle(a.get("cid", ""), note=a.get("note", ""))
+    r["tool"] = "coderef_gov_close"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _gov_issues(a: dict) -> str:
+    """查询治理工作项（coderef_gov_issues）"""
+    from core.healthcycle import HealthCycle
+    pp = a["project_path"]
+    hc = HealthCycle(pp)
+    status = a.get("status", "")
+    if status:
+        r = {"ok": True, "view": "status",
+             "count": 0, "status_counts": hc.store.status_counts(),
+             "issues": hc.store.list_issues(
+                 cycle_id=a.get("cycle_id", ""), status=status,
+                 assignee=a.get("assignee", ""), limit=a.get("limit", 500))}
+        r["ok"] = True
+        r["count"] = len(r["issues"])
+    else:
+        r = hc.issues(cycle_id=a.get("cycle_id", ""), view=a.get("view", "open"),
+                      assignee=a.get("assignee", ""), limit=a.get("limit", 500))
+    r["tool"] = "coderef_gov_issues"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _gov_transition(a: dict) -> str:
+    """治理工作项状态流转/豁免（coderef_gov_transition）"""
+    from core.healthcycle import HealthCycle
+    pp = a["project_path"]
+    iid = a["issue_id"]
+    act = a.get("action", "transition")
+    hc = HealthCycle(pp)
+    if act == "reject":
+        if not a.get("reason"):
+            return json.dumps({"ok": False,
+                               "message": "豁免必须提供 reason（防掩盖真实问题）"},
+                              ensure_ascii=False)
+        r = hc.reject_issue(iid, reason=a.get("reason", ""),
+                            actor=a.get("actor", ""), detail=a.get("detail", ""))
+    elif act == "meta":
+        r = hc.set_issue_meta(iid, priority=a.get("priority"),
+                              assignee=a.get("assignee"),
+                              due_date=a.get("due_date"),
+                              note=a.get("note"), actor=a.get("actor", ""))
+    else:
+        if not a.get("to_state"):
+            return json.dumps({"ok": False, "message": "transition 需提供 to_state"},
+                              ensure_ascii=False)
+        r = hc.transition_issue(iid, a.get("to_state", ""),
+                                actor=a.get("actor", ""), detail=a.get("detail", ""))
+    r["tool"] = "coderef_gov_transition"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _gov_report(a: dict) -> str:
+    """体检报告（coderef_gov_report）"""
+    from core.gov_dashboard import render_report
+    pp = a["project_path"]
+    if a.get("out_format", "json") == "html":
+        r = render_report(pp, output_dir=a.get("output_dir", ""),
+                          cid=a.get("cid", ""))
+    else:
+        from core.healthcycle import HealthCycle
+        hc = HealthCycle(pp)
+        r = hc.report(cid=a.get("cid") or "")
+        r["tool"] = "coderef_gov_report"
+        r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
 def _verify_findings(a: dict) -> str:
     """确定性核验 LLM / CodeRabbit 论断（coderef_verify_findings）"""
     from core.verify_findings import verify_findings, render_report, render_html
@@ -1756,6 +1949,11 @@ class Server:
             "coderef_arch_canvas": self._arch_canvas,
             "coderef_refactor_plan": self._refactor_plan,
             "coderef_arch_verify": self._arch_verify,
+            "coderef_gov_start": self._gov_start,
+            "coderef_gov_close": self._gov_close,
+            "coderef_gov_issues": self._gov_issues,
+            "coderef_gov_transition": self._gov_transition,
+            "coderef_gov_report": self._gov_report,
             "coderef_verify_findings": self._verify_findings,
             "coderef_change_guard": self._change_guard,
             "coderef_change_report": self._change_report,
