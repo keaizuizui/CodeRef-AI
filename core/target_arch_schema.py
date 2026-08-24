@@ -51,12 +51,14 @@ def validate_target_arch(arch: Any) -> Tuple[bool, List[str]]:
     if not isinstance(arch, dict):
         return False, ["目标架构必须是 JSON 对象（dict）"]
 
-    # 顶层必填键
+    # 顶层必填键：仅检查存在性；类型/非空由下面专项校验
     for k in REQUIRED_TOP_KEYS:
         if k not in arch:
             errors.append(f"缺少顶层必填键: {k}")
-    if arch.get("version") is not None and not isinstance(arch["version"], str):
-        errors.append("version 必须是字符串")
+    if "version" in arch:
+        ver = arch.get("version")
+        if not isinstance(ver, str) or not ver.strip():
+            errors.append("version 必须是非空字符串")
     if arch.get("project") is not None and not isinstance(arch["project"], str):
         errors.append("project 必须是字符串")
 

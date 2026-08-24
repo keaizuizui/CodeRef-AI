@@ -199,8 +199,16 @@ class ArchCanvas:
     # ────────────────────────────────────────────────
 
     def _render_html(self, title: str, data_json: str) -> str:
+        # 防止注入 JSON 中的 </script> 等闭合脚本标签，也防止内插的 & 破坏实体
+        safe_json = (
+            data_json.replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+            .replace("\u2028", "\\u2028")
+            .replace("\u2029", "\\u2029")
+        )
         return _HTML_TEMPLATE.replace("__TITLE__", html.escape(title)).replace(
-            "__DATA_JSON__", data_json)
+            "__DATA_JSON__", safe_json)
 
 
 _HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -313,7 +321,7 @@ function renderBiz(){
       const linked = (st.tech_roles||[]).length > 0;
       html += `<div class="biz-step ${linked?'role-linked':''}" data-flow="${esc(f.id)}" data-step="${esc(st.id)}" onclick="selectStep(this)">
         <span class="flow-name">${esc(f.name||f.id)}</span>${esc(st.name||st.id)}
-        <span style="color:#64748B;font-size:10px">${(st.tech_roles||[]).join(',')}</span>
+        <span style="color:#64748B;font-size:10px">${esc((st.tech_roles||[]).join(','))}</span>
       </div>`;
     });
   });
@@ -330,8 +338,8 @@ function renderTech(){
     html += `<div class="role-box ${r.missing?'missing':''}" data-role="${esc(r.id)}"
         ondragover="event.preventDefault();this.classList.add('drag-over')"
         ondragleave="this.classList.remove('drag-over')"
-        ondrop="dropToRole(event,'${esc(r.id)}')"
-        onclick="clickRole('${esc(r.id)}')">
+        ondrop="dropToRole(event,this.dataset.role)"
+        onclick="clickRole(this.dataset.role)">
       <div class="role-name">${esc(r.name)} ${r.missing?'<span style="color:#EF4444;font-size:10px">(缺实现)</span>':''}</div>
       <div class="role-modules">${mods || '<span style="color:#475569;font-size:10px">空</span>'}</div>
     </div>`;

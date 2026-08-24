@@ -1515,6 +1515,7 @@ def _refactor_plan(a: dict) -> str:
     gap_result = a.get("gap_result")
     r = RefactorTaskGenerator().generate(pp, gap_result=gap_result,
                                          target_arch=ta)
+    r["tool"] = "coderef_refactor_plan"
     r["project_path"] = pp
     return json.dumps(r, ensure_ascii=False)
 
@@ -1529,6 +1530,7 @@ def _arch_verify(a: dict) -> str:
     changed_files = a.get("changed_files")
     r = ArchAlignmentVerifier().verify(pp, target_arch=ta,
                                        changed_files=changed_files)
+    r["tool"] = "coderef_arch_verify"
     r["project_path"] = pp
     return json.dumps(r, ensure_ascii=False)
 
