@@ -1,12 +1,13 @@
 <!-- AI Summary: CodeRef-AI exposes 37 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. Core results (audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, prompt compliance) are pure static analysis — no LLM, reproducible. LLM is only used for synthesis tasks (wiki, code review) and hard-blocks honestly without an API key. Builds a closed loop: verify LLM/CodeRabbit claims deterministically, replicate solidified design assets, and interpret everything in plain language for non-programmers. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams who want AI that augments rather than hallucinates. -->
 [![MCP Badge](https://lobehub.com/badge/mcp/keaizuizui-coderef-ai?style=flat)](https://lobehub.com/mcp/keaizuizui-coderef-ai)
 
-#### 4.X 系列已定版（当前 v4.9.12），后续将暂缓当前版本的修复工作，构思 5.0 版本。
+#### 5.0 开发中（当前 v5.0.0，Phase 0 骨架已落地）。
 #### 5.0的目标直指vibecoding的屎山治理，我将基于一份我自己vibecoding出的真实复杂项目，在规整项目的过程中，涌现出真实有效的屎山治理方案。
+#### 4.X 系列已定版（v4.9.12），完整更新日志归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 4.9.12** | Python 3.10+ | MCP Protocol | MIT License
+**Version 5.0.0** | Python 3.10+ | MCP Protocol | MIT License
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -14,7 +15,7 @@
 
 ## 它是什么
 
-CodeRef-AI 通过 MCP 协议暴露 **37 个工具**，同时服务两类人：
+CodeRef-AI 通过 MCP 协议暴露 **40 个工具**，同时服务两类人：
 
 - **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险；持有一条 LLM/CodeRabbit 论断时，还能用静态图谱做确定性核验，再决定采不采信。
 - **非编程人员的技术助理**：把看不懂的代码变成通俗的健康仪表盘、Wiki 文档和流程确证，让你不用读代码，也能确认项目有没有按你的设想运转。
@@ -59,7 +60,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | **变更守护引擎** | 拦截 AI 把代码改坏，输出人能看懂的变更报告 | `coderef_change_guard` `coderef_change_report` |
 | **人话解读平台** | 把确定性格子结论翻译成非编程人员听得懂的"人话" | `coderef_interpret` |
 
-## 37 个 MCP 工具
+## 40 个 MCP 工具
 
 ### 审计引擎
 
@@ -72,6 +73,9 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_verify_findings` | 确定性核验 LLM/CodeRabbit 论断：论断引用的代码目标是否真实存在、是否在关键管线内。verdict（确证/证伪/部分确证/存疑）由静态图谱打出，诚实话标签来源分离，LLM 无权改结论 | 否 |
 | `coderef_prompt_governance` | Prompt 治理平台：一次调用编排 资产生命周期 × 合规审计 × 跨模块一致性（overview / assets / audit / cross_module）。`audit` 即原 `coderef_prompt_audit` 的注入风险 + 一致性检测。纯规则、确定性、不依赖 LLM | 否 |
 | `coderef_arch_audit` | 架构腐化诊断：复用知识图谱 CALLS 边做模块级静态诊断（循环依赖/上帝模块/分层违例/异常模块规模），聚合 0–10 架构健康度。纯静态、不依赖 LLM | 否 |
+| `coderef_target_arch_set` | 设置/更新目标架构 JSON（5.0 架构推回正轨的参照系），校验后落盘 `<project>/.coderef/target_arch.json`。纯确定性校验，不依赖 LLM | 否 |
+| `coderef_target_arch_get` | 获取当前目标架构 JSON | 否 |
+| `coderef_arch_gap` | 架构差距分析（5.0 核心）：对比现状知识图谱与目标架构，输出 7 类确定性差距（职责缺失/依赖违例/循环依赖/业务断链/游离模块/上帝模块/异常规模）。纯静态、复用 arch_audit，不依赖 LLM | 否 |
 | `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 否 |
 | `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 是 |
 | `coderef_docs_read` | 按需读取已生成 Wiki 文档正文（返回内容而非路径，解决 AI 无法 fs 访问外部文件夹） | 否 |
@@ -299,7 +303,7 @@ coderef_asset(project_path="/path/to/project", action="list")
 ```
 coderef-ai/
 ├── core/                             # 核心引擎
-│   ├── mcp_server.py                 # MCP Server 入口（37 个工具）
+│   ├── mcp_server.py                 # MCP Server 入口（40 个工具）
 │   ├── pipeline_runner.py            # 管线引擎（audit/architecture/docs + 知识图谱）
 │   ├── tool_registry.py              # 工具注册中心（收敛管线引擎的上帝模块职责）
 │   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
@@ -319,6 +323,8 @@ coderef-ai/
 │   ├── wiki_cross_verify.py          # Wiki 模块级交叉验证（确证徽章 + Mermaid 自愈）
 │   ├── flow_verify.py                # 流程合规验证（步骤级，coderef_flow_verify）
 │   ├── arch_audit.py                 # 架构腐化诊断（循环依赖/上帝模块/分层违例）
+│   ├── target_arch_schema.py         # 目标架构 JSON Schema（5.0：人定义的正轨）
+│   ├── arch_gap_analyzer.py          # 架构差距分析器（5.0：现状 vs 目标架构）
 │   ├── graph_closure.py              # 调用闭包计算（flow_verify 与 wiki_cross_verify 共用）
 │   ├── workflow_graph.py             # 架构图生成器（vis-network）
 │   ├── diagram_generator.py          # 图表/画布生成
@@ -432,6 +438,14 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.0.0 — 5.0 启动：架构推回正轨（Phase 0 骨架）
+
+- **目标架构 JSON Schema**（新增 `target_arch_schema`）：定义"人定义的正轨"标准结构（业务层 business_flows / 技术层 tech_roles / 约束 constraints），零依赖手写校验，结构化错误返回
+- **架构差距分析器**（新增 `arch_gap_analyzer`）：对比现状知识图谱与目标架构，输出 7 类确定性差距（missing 职责缺失 / dependency_violation 依赖违例 / cycle 循环依赖 / business_gap 业务断链 / unassigned 游离模块 / god_module 上帝模块 / large_module 异常规模），复用 arch_audit 不重写
+- **新增 MCP 工具**：`coderef_target_arch_set`（设置目标架构，落盘 `<project>/.coderef/target_arch.json`）/ `coderef_target_arch_get`（获取）/ `coderef_arch_gap`（差距分析），全部纯静态、确定性、轻量同步
+- **开发计划**：`docs/5.0-plan.md`（Phase 0 详细设计 + 8 个设计疑点决策 + 验证方案）
+- 版本号：4.9.12 → 5.0.0
 
 ### v4.9.12 — 修复 Coderef-Test 测试报告（20260823-v4.9.11-r5）遗留项
 
