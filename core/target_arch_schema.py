@@ -86,6 +86,9 @@ def validate_target_arch(arch: Any) -> Tuple[bool, List[str]]:
             errors.append(f"tech_roles[{i}].id 必须是非空字符串")
         if "target_modules" in role and not _is_str_list(role.get("target_modules")):
             errors.append(f"tech_roles[{i}].target_modules 必须是非空字符串数组")
+        # role_keywords：角色职责关键词表（可选），供符号级职责越界检测匹配符号职责。
+        if "role_keywords" in role and not _is_str_list(role.get("role_keywords")):
+            errors.append(f"tech_roles[{i}].role_keywords 必须是非空字符串数组")
         if "depends_on" in role and not _is_str_list(role.get("depends_on")):
             errors.append(f"tech_roles[{i}].depends_on 必须是非空字符串数组")
         if "depended_by" in role and not _is_str_list(role.get("depended_by")):
@@ -187,6 +190,7 @@ def normalize_arch(arch: Dict[str, Any]) -> Dict[str, Any]:
     for role in out.get("tech_roles", []):
         if isinstance(role, dict):
             role.setdefault("target_modules", [])
+            role.setdefault("role_keywords", [])
             role.setdefault("depends_on", [])
             role.setdefault("depended_by", [])
     return out

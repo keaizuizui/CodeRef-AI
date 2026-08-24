@@ -23,6 +23,7 @@ logs/
 
 # ─── 测试实例（测试资料统一放 Coderef-Test，不入库）───
 demo-app/
+samples/
 
 # ─── 报告输出 ───
 coderef-report/
