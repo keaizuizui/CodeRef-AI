@@ -8,7 +8,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.2.0** | Python 3.10+ | MCP Protocol | MIT License
+**Version 5.2.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -386,7 +386,8 @@ coderef-ai/
 ├── setup.bat                         # Windows 配置向导
 ├── requirements.txt
 ├── MCP_SETUP.md                      # 详细配置指南
-└── LICENSE
+├── LICENSE                          # 5.0+ 采用 PolyForm Noncommercial 1.0.0
+└── LICENSE-MIT-v4.md                # 4.X 系列（v4.9.12 及更早）仍按 MIT 授权
 ```
 
 ## 设计特性
@@ -511,4 +512,14 @@ CodeRef-AI v4.9 的 Wiki 工具增强层（`wiki_generator` 增量同步 / `wiki
 
 ## 许可证
 
-MIT License — 详见 [LICENSE](LICENSE)。
+CodeRef-AI 从 **5.0** 起采用 **PolyForm Noncommercial 1.0.0**（[LICENSE](LICENSE)）：
+
+- **欢迎大家使用**：任何非商业目的（个人学习、研究、开源项目、非营利机构、教育机构、
+  政府机构等）均可自由下载、使用、修改、分发，无需付费或授权。
+- **禁止商用**：不得售卖本软件，也不得将本软件（或经你修改的衍生版本）集成进任何
+  **商业服务 / 商业产品 / 商业内部用途**——包括其他编程软件、IDE、商业 SaaS 等
+  以盈利为目的的整合。详见 LICENSE 的 “Noncommercial Purposes” 条款。
+- 完整许可文本见 [LICENSE](LICENSE)；需要商业授权的合作请与作者联系。
+
+**版本分界**：`v4.9.12` 及更早的 **4.X 系列** 仍按 **MIT License** 授权
+（[LICENSE-MIT-v4.md](LICENSE-MIT-v4.md)），从任何 v4.* 归档检出的代码可按 MIT 使用。
