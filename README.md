@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.3.2** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.3.3** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -453,6 +453,14 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.3.3 —  业务级判定增强：真身/重复聚焦业务类，目录级同构识别
+
+- ** P0-B 真身判定业务级增强**（r9 交叉对比反馈）：聚合范围从"通用方法名"改为"业务级同名类"——过滤 `__init__`/`to_dict`/`execute`/`render` 等通用方法名噪音与 Config/Result/TestCase 等通用类名；每个副本报告引用方详情（文件:行 + 符号名，排除测试文件），判定区分"生产入口候选（无被调用者）" / "活跃真身" / "仅测试引用"；业务类名（Bot/Engine/Workflow 等后缀）优先展示，避免双真身被 3+ 副本通用类挤出 top 列表
+- ** P0-C 重复识别目录级同构**：新增目录级同构比对——按相对目录聚合文件清单 + 函数签名，双指标 Jaccard 相似度 ≥ 阈值判定"同构重复候选"（如 `调研工具/` 与 `source_engine/` 全目录同构：文件 0.83 / 函数 0.96），报告目录 A/B、相似度、文件数
+- **图谱节点 ID 相对路径化**（真实屎山治理发现）：模块/函数/类/方法节点 ID 前缀由 basename 改为相对 project_path 的路径，修复跨目录同名文件（如 `source_engine/engine.py` 与 `调研工具/engine.py`）被 `INSERT OR REPLACE` 互相覆盖导致的图谱漏扫；`_resolve_import_target` 支持点分路径精确匹配 + 跨目录同名模块兜底
+- **FlowVerifier 函数体提取修复**：`graph_closure.load_graph` 节点查询补 `end_line` 字段，修复函数体切片为空导致的重复识别失真
+- **版本号**：5.3.2 → 5.3.3
 
 ### v5.3.2 —  集成加固：图谱 db 直喂洞察，消除二次探测竞态
 

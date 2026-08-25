@@ -202,15 +202,18 @@ def _degraded_comment(file: str, line: int, reason: str) -> Dict[str, Any]:
 
 
 def _degraded_comment_from_text(file: str, line: int, reason: str,
-                                llm_text: str) -> Dict[str, Any]:
+                                llm_text: str,
+                                first_text: Optional[str] = None) -> Dict[str, Any]:
     """从 LLM 散文响应中提取线索，构造更有信息量的降级评论。
 
     当 LLM 重试后仍返回非 JSON 内容时，其散文往往包含有价值的线索
     （如"文件内容被截断"、疑似问题文件/行号）。把这些线索压缩进
     detail，帮助人工定位，而非仅输出"待人工确认"占位。
+    优先取重试响应（llm_text）；为空时回退首次"散文当思考"响应
+    （first_text），避免首次线索丢失（ 补充）。
     """
     detail = reason
-    snippet = (llm_text or "").strip()
+    snippet = (llm_text or "").strip() or (first_text or "").strip()
     if snippet:
         compact = re.sub(r"\s+", " ", snippet)[:300]
         detail = f"{reason}；LLM 原始反馈：{compact}"
@@ -630,7 +633,8 @@ class CodeReviewer:
                 reason = "LLM 返回内容不包含合法 JSON 评论数组（重试后仍失败）"
                 logger.warning(f"{reason}; 重试响应片段: {retry_response[:200]}")
                 return [_degraded_comment_from_text(
-                    default_file, default_line, reason, retry_response
+                    default_file, default_line, reason, retry_response,
+                    first_text=response
                 )]
 
         comments: List[Dict[str, Any]] = []

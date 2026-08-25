@@ -71,6 +71,24 @@ class KGQueryResult:
 # 节点构造与 id 预收集逻辑（不依赖 self 状态）
 # ═══════════════════════════════════════════════════════════════════
 
+def _module_key(project_path: str, rel: str) -> str:
+    """模块 id 前缀：相对 project_path 的路径去扩展名（正斜杠）。
+
+    用相对路径而非 basename 作 id 前缀，避免跨目录同名文件（如
+    source_engine/engine.py 与 调研工具/engine.py）生成相同 id 被
+    INSERT OR REPLACE 互相覆盖，导致图谱漏扫（真实屎山治理发现）。
+    """
+    if not rel:
+        return ""
+    if project_path and os.path.isabs(rel):
+        try:
+            rel = os.path.relpath(rel, project_path)
+        except Exception:
+            pass
+    rel = rel.replace("\\", "/")
+    return os.path.splitext(rel)[0]
+
+
 def _collect_analysis_ids(analysis):
     """预收集项目内模块节点 id 与「类名→类节点 id」映射。
 
@@ -81,8 +99,9 @@ def _collect_analysis_ids(analysis):
     基类是项目内已注册的类才建边，排除 str/Enum/unittest.TestCase/HTMLParser
     等标准库或第三方基类，避免指向不存在节点的孤儿 INHERITS 边。
     """
+    proj = getattr(analysis, "project_path", "") or ""
     mod_ids = {
-        f"mod:{os.path.splitext(os.path.basename(getattr(cf, 'file_path', '')))[0]}"
+        f"mod:{_module_key(proj, getattr(cf, 'file_path', ''))}"
         for cf in getattr(analysis, "files", [])
         if getattr(cf, "file_path", "")
     }
@@ -91,23 +110,23 @@ def _collect_analysis_ids(analysis):
         _rel = getattr(cf, "file_path", "")
         if not _rel:
             continue
-        _mod = os.path.splitext(os.path.basename(_rel))[0]
+        _key = _module_key(proj, _rel)
         for _cls in getattr(cf, "classes", []):
             class_ids_by_name.setdefault(
-                _cls.name, f"class:{_mod}:{_cls.name}")
+                _cls.name, f"class:{_key}:{_cls.name}")
     return mod_ids, class_ids_by_name
 
 
-def _kg_module_node(cf, rel: str, module_name: str) -> KGNode:
-    """构造模块节点（mod:<文件名>）"""
+def _kg_module_node(cf, rel: str, module_key: str, module_name: str) -> KGNode:
+    """构造模块节点（mod:<相对路径>，name 保留 basename）"""
     return KGNode(
-        id=f"mod:{module_name}", type="module", name=module_name,
+        id=f"mod:{module_key}", type="module", name=module_name,
         file_path=rel, props={"language": getattr(cf, "language", "")})
 
 
-def _kg_function_node(rel: str, module_name: str, func) -> KGNode:
-    """构造函数节点（func:<模块>:<函数名>）"""
-    fid = f"func:{module_name}:{func.name}"
+def _kg_function_node(rel: str, module_key: str, func) -> KGNode:
+    """构造函数节点（func:<相对路径>:<函数名>）"""
+    fid = f"func:{module_key}:{func.name}"
     return KGNode(
         id=fid, type="function", name=func.name,
         file_path=rel,
@@ -118,9 +137,9 @@ def _kg_function_node(rel: str, module_name: str, func) -> KGNode:
                "return_type": getattr(func, "return_type", "") or ""})
 
 
-def _kg_class_node(rel: str, module_name: str, cls) -> KGNode:
-    """构造类节点（class:<模块>:<类名>）"""
-    cid = f"class:{module_name}:{cls.name}"
+def _kg_class_node(rel: str, module_key: str, cls) -> KGNode:
+    """构造类节点（class:<相对路径>:<类名>）"""
+    cid = f"class:{module_key}:{cls.name}"
     return KGNode(
         id=cid, type="class", name=cls.name,
         file_path=rel,
@@ -130,9 +149,9 @@ def _kg_class_node(rel: str, module_name: str, cls) -> KGNode:
                "doc": (getattr(cls, "docstring", "") or "")[:200]})
 
 
-def _kg_method_node(rel: str, module_name: str, cls, m) -> KGNode:
-    """构造方法节点（method:<模块>:<类名>.<方法名>）"""
-    mid = f"method:{module_name}:{cls.name}.{m.name}"
+def _kg_method_node(rel: str, module_key: str, cls, m) -> KGNode:
+    """构造方法节点（method:<相对路径>:<类名>.<方法名>）"""
+    mid = f"method:{module_key}:{cls.name}.{m.name}"
     return KGNode(
         id=mid, type="method", name=f"{cls.name}.{m.name}",
         file_path=rel,
@@ -145,14 +164,21 @@ def _kg_method_node(rel: str, module_name: str, cls, m) -> KGNode:
 def _resolve_import_target(imp: str, mod_ids: set) -> str:
     """解析 import 语句的项目内目标模块 id；未命中返回空串。
 
-    依次尝试完整点分路径的每一段（从后往前），命中项目内模块即建边。
-    例如 `from core.code_review import parse_diff` 会依次尝试
-    `mod:code_review`、`mod:core`，命中项目内真实模块才建边，
-    避免标准库/第三方导入产生孤儿边。
+    先按点分路径转斜杠逐段精确匹配（如 `source_engine.engine` →
+    `mod:source_engine/engine`），再按最后一段模糊匹配跨目录同名模块
+    （如 `import engine` 命中 `mod:source_engine/engine`）。避免标准库/
+    第三方导入产生孤儿边。
     """
-    for seg in reversed(imp.split(".")):
-        if f"mod:{seg}" in mod_ids:
-            return f"mod:{seg}"
+    parts = [p for p in imp.split(".") if p]
+    for i in range(len(parts), 0, -1):
+        key = "/".join(parts[:i])
+        if f"mod:{key}" in mod_ids:
+            return f"mod:{key}"
+    if parts:
+        tail = parts[-1]
+        for mid in mod_ids:
+            if mid == f"mod:{tail}" or mid.endswith(f"/{tail}"):
+                return mid
     return ""
 
 
@@ -173,10 +199,10 @@ def _go_receiver_type(recv: str) -> str:
     return ""
 
 
-def _go_func_kgnode(fp: str, module_name: str, node_name: str,
+def _go_func_kgnode(fp: str, module_key: str, node_name: str,
                     start_line: int, end_line: int, params, body: str) -> KGNode:
-    """构造 Go 函数节点（gofunc:<模块>:<名称>），函数体截断存入 props['doc']"""
-    nid = f"gofunc:{module_name}:{node_name}"
+    """构造 Go 函数节点（gofunc:<相对路径>:<名称>），函数体截断存入 props['doc']"""
+    nid = f"gofunc:{module_key}:{node_name}"
     return KGNode(
         id=nid, type="go_func", name=node_name,
         file_path=fp, start_line=start_line, end_line=end_line,
@@ -376,35 +402,37 @@ class CodeKnowledgeGraph:
         节点/边内容与建边过滤语义与拆分前逐字段一致。
         """
         mod_ids, class_ids_by_name = _collect_analysis_ids(analysis)
+        proj = getattr(analysis, "project_path", "") or ""
         n = 0
         for cf in getattr(analysis, "files", []):
             rel = getattr(cf, "file_path", "")
             if not rel:
                 continue
 
-            # 模块节点
+            # 模块节点（id 前缀用相对路径，跨目录同名文件不冲突）
             module_name = os.path.splitext(os.path.basename(rel))[0]
-            module_id = f"mod:{module_name}"
-            self._upsert_node(_kg_module_node(cf, rel, module_name))
+            module_key = _module_key(proj, rel)
+            module_id = f"mod:{module_key}"
+            self._upsert_node(_kg_module_node(cf, rel, module_key, module_name))
             n += 1
 
             # 函数节点 + CONTAINS 边
             for func in getattr(cf, "functions", []):
-                fid = f"func:{module_name}:{func.name}"
-                self._upsert_node(_kg_function_node(rel, module_name, func))
+                fid = f"func:{module_key}:{func.name}"
+                self._upsert_node(_kg_function_node(rel, module_key, func))
                 n += 1
                 self._upsert_edge(KGEdge(source=module_id, target=fid, type="CONTAINS"))
 
             # 类节点 + 方法节点 + CONTAINS/INHERITS 边
             for cls in getattr(cf, "classes", []):
-                cid = f"class:{module_name}:{cls.name}"
-                self._upsert_node(_kg_class_node(rel, module_name, cls))
+                cid = f"class:{module_key}:{cls.name}"
+                self._upsert_node(_kg_class_node(rel, module_key, cls))
                 n += 1
                 self._upsert_edge(KGEdge(source=module_id, target=cid, type="CONTAINS"))
 
                 for m in getattr(cls, "methods", []):
-                    mid = f"method:{module_name}:{cls.name}.{m.name}"
-                    self._upsert_node(_kg_method_node(rel, module_name, cls, m))
+                    mid = f"method:{module_key}:{cls.name}.{m.name}"
+                    self._upsert_node(_kg_method_node(rel, module_key, cls, m))
                     n += 1
                     self._upsert_edge(KGEdge(source=cid, target=mid, type="CONTAINS"))
 
@@ -435,16 +463,15 @@ class CodeKnowledgeGraph:
         """从 AstParser 批量解析结果构建调用关系和配置节点"""
         n = 0
         for file_path, ar in ast_results.items():
-            module_name = os.path.splitext(os.path.basename(file_path))[0]
+            module_key = _module_key(self.project_path, file_path)
             rel = file_path
 
             # 调用关系 → CALLS 边
             for call in getattr(ar, "calls", []):
-                caller_module = module_name
                 # 尝试找到调用所在的函数
                 caller_id = self._find_containing_node(rel, call.line)
                 if not caller_id:
-                    caller_id = f"mod:{caller_module}"
+                    caller_id = f"mod:{module_key}"
 
                 # 被调用者
                 callee_name = call.func_name.split(".")[-1]
@@ -461,7 +488,7 @@ class CodeKnowledgeGraph:
                 cat = assign.category
                 if cat in ("constant", "config", "hardcoded"):
                     node_type = "config" if cat in ("config", "hardcoded") else "constant"
-                    aid = f"{node_type}:{module_name}:{assign.target}"
+                    aid = f"{node_type}:{module_key}:{assign.target}"
                     self._upsert_node(KGNode(
                         id=aid, type=node_type, name=assign.target,
                         file_path=rel, start_line=assign.line,
@@ -518,7 +545,7 @@ class CodeKnowledgeGraph:
                     continue
                 lines = content.splitlines()
                 funcs = list(self._GO_FUNC_RE.finditer(content))
-                module_name = os.path.splitext(fn)[0]
+                module_key = _module_key(project_path, fp)
                 for i, m in enumerate(funcs):
                     recv = m.group(1)
                     name = m.group(2)
@@ -531,7 +558,7 @@ class CodeKnowledgeGraph:
                     recv_type = _go_receiver_type(recv)
                     node_name = f"{recv_type}.{name}" if recv_type else name
                     go_node = _go_func_kgnode(
-                        fp, module_name, node_name, start_line, end_line,
+                        fp, module_key, node_name, start_line, end_line,
                         self._go_params(content, m.end()), body)
                     self._upsert_node(go_node)
                     n_nodes += 1

@@ -113,6 +113,177 @@ def _partition_copies(copies: List[Dict], sim_threshold: float):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# ：业务级判定辅助（通用名过滤 / 测试文件 / 集合相似度 / 相对目录）
+# ═══════════════════════════════════════════════════════════════════
+
+# Python 通用方法名（构造/序列化/执行/渲染/CRUD 等噪音），P0-B/P0-C 聚合时过滤，
+# 聚焦业务级类名/函数名（如 FusionResearchBot / BrandMasterEngine / CatchphraseEngine）。
+_GENERIC_NAMES = {
+    # dunder
+    "__init__", "__new__", "__repr__", "__str__", "__eq__", "__ne__",
+    "__hash__", "__lt__", "__le__", "__gt__", "__ge__", "__bool__",
+    "__len__", "__getitem__", "__setitem__", "__delitem__", "__contains__",
+    "__iter__", "__next__", "__call__", "__enter__", "__exit__",
+    "__getattr__", "__setattr__", "__delattr__", "__getattribute__",
+    "__add__", "__sub__", "__mul__", "__truediv__", "__floordiv__",
+    "__mod__", "__pow__", "__and__", "__or__", "__xor__", "__lshift__",
+    "__rshift__", "__iadd__", "__isub__", "__imul__", "__itruediv__",
+    "__neg__", "__pos__", "__abs__", "__invert__", "__int__", "__float__",
+    "__bytes__", "__format__", "__sizeof__", "__reduce__", "__reduce_ex__",
+    "__copy__", "__deepcopy__", "__init_subclass__", "__class_getitem__",
+    "__del__", "__dir__", "__slots__", "__subclasshook__",
+    "__instancecheck__", "__subclasscheck__",
+    # 通用方法名（测试  清单 + 常见）
+    "to_dict", "from_dict", "to_json", "from_json", "to_markdown",
+    "from_markdown", "to_string", "from_string", "to_list", "from_list",
+    "execute", "render", "search", "get", "set", "save", "clear", "load",
+    "main", "run", "start", "stop", "close", "open", "read", "write",
+    "setup", "teardown", "set_up", "tear_down", "get_stats", "available",
+    "generate", "process", "parse", "format", "validate", "check",
+    "update", "delete", "add", "remove", "create", "init", "reset",
+    "print", "log", "info", "copy", "clone", "equals", "hash_code",
+    "name", "value", "items", "keys", "values", "get_item", "set_item",
+    "handle", "dispatch", "register", "unregister", "notify", "subscribe",
+    "on_click", "on_change", "on_event", "callback", "handler",
+    "apply", "call", "invoke", "emit", "trigger", "fire",
+    "configure", "config", "default", "defaults", "initialize", "finalize",
+    "is_valid", "is_empty", "is_none", "has_key", "contains",
+    "append", "extend", "insert", "pop", "index", "count", "reverse",
+    "sort", "upper", "lower", "strip", "replace", "split", "join",
+    "find", "rfind", "startswith", "endswith", "encode", "decode",
+    "test", "tests", "assert", "assert_equal", "entry", "main_entry",
+    # unittest 标准方法（setUp/tearDown/assert* 等，测试类噪音）
+    "setUp", "tearDown", "setUpClass", "tearDownClass", "setUpModule",
+    "tearDownModule", "runTest", "assertEqual", "assertNotEqual",
+    "assertTrue", "assertFalse", "assertIs", "assertIsNot", "assertIsNone",
+    "assertIsNotNone", "assertIn", "assertNotIn", "assertIsInstance",
+    "assertNotIsInstance", "assertRaises", "assertRaisesRegex",
+    "assertAlmostEqual", "assertNotAlmostEqual", "assertGreater",
+    "assertGreaterEqual", "assertLess", "assertLessEqual", "assertRegex",
+    "assertNotRegex", "assertCountEqual", "assertMultiLineEqual",
+    "assertSequenceEqual", "assertListEqual", "assertTupleEqual",
+    "assertSetEqual", "assertDictEqual", "assertLogs", "assertWarns",
+    "assertWarnsRegex", "assertNoLogs", "addCleanup", "addClassCleanup",
+    "addModuleCleanup", "doCleanups", "doClassCleanups", "doModuleCleanups",
+    "skipTest", "subTest", "debug", "shortDescription", "id",
+    "assert_", "fail", "failIf", "failUnless", "failUnlessEqual",
+    "failIfEqual", "failUnlessRaises", "failUnlessAlmostEqual",
+    "failIfAlmostEqual", "failUnlessIs", "failIfIs", "failUnlessIsNone",
+    "failIfIsNone", "failUnlessIn", "failIfIn", "failUnlessIsInstance",
+    "failIfIsInstance", "failUnlessNotEqual", "failIfNotEqual",
+    # 下划线前缀通用（_parse_json/_format_markdown 等）
+    "_parse_json", "_format_markdown", "_load", "_save", "_read", "_write",
+    "_get", "_set", "_init", "_reset", "_process", "_handle", "_run",
+    "_main", "_start", "_stop", "_close", "_open", "_check", "_validate",
+    "_update", "_delete", "_create", "_build", "_make", "_prepare",
+    "_extract", "_merge", "_split", "_join", "_filter", "_sort",
+    "_convert", "_transform", "_normalize", "_clean", "_trim",
+    "_to_dict", "_from_dict", "_to_json", "_from_json", "_to_markdown",
+    "_execute", "_render", "_search", "_generate", "_parse", "_format",
+    "_apply", "_call", "_invoke", "_emit", "_trigger", "_fire",
+    "_configure", "_initialize", "_finalize", "_is_valid", "_is_empty",
+    "_append", "_extend", "_insert", "_pop", "_index", "_count",
+    "_setup", "_teardown", "_cleanup", "_reset", "_clear",
+    "_get_stats", "_available", "_copy", "_clone",
+}
+
+
+def _is_generic_name(name: str) -> bool:
+    """判断是否为通用方法名噪音（构造/序列化/执行/渲染等），供 P0-B/P0-C 过滤。"""
+    if name.startswith("__") and name.endswith("__"):
+        return True
+    return name in _GENERIC_NAMES
+
+
+# 通用类名（配置/结果/测试/数据载体等），P0-B 真身判定时过滤，
+# 聚焦业务级类名（FusionResearchBot / BrandMasterEngine / CatchphraseEngine）。
+# 仅完全匹配才过滤，避免误伤 LLMClient / ZhihuAdapter / DAGScheduler 等业务类。
+_GENERIC_CLASS_NAMES = {
+    "Config", "Configuration", "Settings", "Options", "Setting",
+    "Result", "Results", "Response", "Request",
+    "Test", "Tests", "TestCase", "TestResult", "TestReport", "TestSuite",
+    "Base", "BaseClass", "Object", "Model", "Models", "Data", "Item",
+    "Error", "Exception", "State", "Status", "Event", "Context",
+    "Manager", "Service", "Controller", "Handler", "Helper", "Util", "Utils",
+    "Info", "Meta", "Metadata", "Constants", "Constant", "Colors", "Color",
+    "Node", "Edge", "Graph", "Tree", "List", "Dict", "Map", "Set",
+    "DTO", "VO", "Entity", "Schema", "Record", "Entry",
+}
+
+
+# 通用类名后缀（配置/结果/状态/测试/数据载体等），P0-B 真身判定时过滤，
+# 聚焦业务级类名（FusionResearchBot / BrandMasterEngine / CatchphraseEngine）。
+# 仅对明确通用的后缀做匹配，避免误伤 LLMClient / ZhihuAdapter / DAGScheduler 等业务类。
+_GENERIC_CLASS_SUFFIXES = (
+    "Config", "Configuration", "Settings", "Options",
+    "Result", "Results", "Response", "Request",
+    "Context", "Status", "State", "Event",
+    "TestCase", "TestResult", "TestReport", "TestSuite",
+    "DTO", "VO", "Entity", "Schema", "Record",
+    "Node", "Edge", "Graph", "Tree",
+    "Error", "Exception", "Data", "Item", "Info", "Meta",
+)
+
+
+def _is_generic_class_name(name: str) -> bool:
+    """判断是否为通用类名噪音（Config/Result/Test 等），供 P0-B 真身判定过滤。"""
+    if name in _GENERIC_CLASS_NAMES:
+        return True
+    return name.endswith(_GENERIC_CLASS_SUFFIXES)
+
+
+# 业务类名后缀：P0-B 真身判定排序时优先展示业务级类（FusionResearchBot /
+# BrandMasterEngine / CatchphraseEngine 等），避免 2 副本双真身被 3+ 副本
+# 通用类挤出 top 列表。仅保留强业务后缀（Bot/Engine/Workflow 等），
+# Adapter/Client/Store 等宽泛后缀不参与优先（避免 LLMClient x4 类噪音压过双真身）。
+_BUSINESS_CLASS_SUFFIXES = (
+    "Bot", "Engine", "Workflow", "Generator", "Extractor", "Master",
+    "Analyzer", "Planner", "Scheduler", "Simulator", "Agent", "Pipeline",
+    "Compiler", "Scraper", "Crawler", "Collector", "Evaluator",
+    "Optimizer", "Validator", "Detector", "Auditor", "Verifier",
+    "Processor", "Renderer", "Exporter", "Importer", "Loader", "Parser",
+    "Fetcher", "Tracker", "Monitor", "Builder", "Factory", "Strategy",
+)
+
+
+def _business_class_score(name: str) -> int:
+    """业务类名相关度：含业务后缀返回 1，否则 0（供真身判定优先展示）。"""
+    return 1 if name.endswith(_BUSINESS_CLASS_SUFFIXES) else 0
+
+
+def _is_test_file(fp: str) -> bool:
+    """判断文件是否测试文件（test_/tests/测试 等），供"生产入口"判定排除测试引用。"""
+    fp = (fp or "").replace("\\", "/")
+    base = os.path.basename(fp).lower()
+    if base.startswith("test_") or base.startswith("test-"):
+        return True
+    if "/tests/" in fp or "\\tests\\" in fp or "/test/" in fp:
+        return True
+    if "/测试/" in fp or base.startswith("测试"):
+        return True
+    return False
+
+
+def _jaccard_set(a: set, b: set) -> float:
+    """集合 Jaccard 相似度（0~1）。"""
+    if not a and not b:
+        return 1.0
+    u = a | b
+    return len(a & b) / len(u) if u else 0.0
+
+
+def _rel_dir(project_path: str, fp: str) -> str:
+    """文件相对 project_path 的目录（相对路径，避免不同父目录下同名子目录被合并）。"""
+    fp = (fp or "").replace("\\", "/")
+    if os.path.isabs(fp):
+        try:
+            fp = os.path.relpath(fp, project_path).replace("\\", "/")
+        except Exception:
+            pass
+    return os.path.dirname(fp) or ""
+
+
+# ═══════════════════════════════════════════════════════════════════
 # P0-A 管线梳理
 # ═══════════════════════════════════════════════════════════════════
 
@@ -194,10 +365,13 @@ def _pipeline_markdown(data: Dict) -> str:
 
 def identity_insight(project_path: str, db_path: Optional[str] = None,
                      max_items: int = 20) -> Dict:
-    """P0-B：真身/入口判定。
+    """P0-B：真身/入口判定（ 业务级增强）。
 
     同名多目录实现（>1 个文件），对每个副本统计 inbound CALLS（被谁引用）、活跃度，
-    判定哪个是生产入口候选。返回 {"ok", "items":[{name, copies:[{file,line,callers,active}]}]}。
+    报告各副本的引用方（文件:行 + 符号名），判定哪个是生产入口候选。
+    聚合范围：业务级类名（type=class，聚焦同名业务类双真身，如 FusionResearchBot；
+    方法名/函数名噪音由 P0-C 重复识别承载，不在此聚合，避免 chat x24 类噪音淹没类名）。
+    返回 {"ok", "items":[{name, copies:[{file,line,mod,callers,active,is_root,refs,is_test,verdict}]}]}。
     """
     fv = _verifier(project_path, db_path)
     if fv is None:
@@ -205,9 +379,11 @@ def identity_insight(project_path: str, db_path: Optional[str] = None,
 
     by_name: Dict[str, List[str]] = defaultdict(list)
     for nid, n in fv.nodes.items():
-        if n.get("type") not in ("function", "method"):
-            continue
-        by_name[n["name"].split(".")[-1]].append(nid)
+        if n.get("type") == "class":
+            nm = n["name"].split(".")[-1]
+            if _is_generic_class_name(nm):
+                continue
+            by_name[nm].append(nid)
 
     items = []
     for name, ids in by_name.items():
@@ -217,6 +393,18 @@ def identity_insight(project_path: str, db_path: Optional[str] = None,
         for nid in ids:
             n = fv.nodes[nid]
             inbound = [src for src, tgts in fv.adj.items() if nid in tgts]
+            # 引用方详情：文件:行 + 符号名（排除测试文件引用）
+            refs = []
+            for src in inbound:
+                sn = fv.nodes.get(src, {})
+                sfile = (sn.get("file_path") or "").replace("\\", "/")
+                if _is_test_file(sfile):
+                    continue
+                refs.append({
+                    "file": sfile,
+                    "line": sn.get("start_line", 0),
+                    "sym": sn.get("name", ""),
+                })
             copies.append({
                 "id": nid,
                 "file": (n.get("file_path") or "").replace("\\", "/"),
@@ -225,28 +413,32 @@ def identity_insight(project_path: str, db_path: Optional[str] = None,
                 "callers": len(inbound),
                 "active": len(inbound) > 0,
                 "is_root": len(inbound) == 0,
+                "refs": refs[:6],
+                "is_test": _is_test_file(n.get("file_path") or ""),
             })
         copies.sort(key=lambda c: (-c["callers"], c["file"]))
         roots = [c for c in copies if c["is_root"]]
         # 判定：生产入口通常无图内调用者（root），故仅 root 副本可标"生产入口候选"；
-        # dunder 特殊方法（__init__/__repr__ 等）即使无调用者也不是业务入口，单独标注；
-        # 无 root 副本时，被引用最多者只标"被引用最多的副本"（事实陈述，不推断入口）。
-        is_dunder = name.startswith("__") and name.endswith("__")
+        # 有生产引用（非测试）的副本标"活跃真身"；仅测试引用的副本标"仅测试引用"。
         for c in copies:
+            prod_refs = [r for r in c["refs"] if not _is_test_file(r["file"])]
             if c["is_root"]:
-                if is_dunder:
-                    c["verdict"] = "特殊方法（无被调用者）"
+                if c["is_test"]:
+                    c["verdict"] = "仅测试文件（无被调用者）"
                 else:
                     c["verdict"] = "生产入口候选（无被调用者）"
+            elif prod_refs:
+                c["verdict"] = "活跃真身"
             elif c["callers"] > 0:
-                c["verdict"] = "活跃副本"
+                c["verdict"] = "仅测试引用"
             else:
                 c["verdict"] = "无引用（死/备选）"
         if not roots and copies and copies[0]["callers"] > 0:
             copies[0]["verdict"] = "被引用最多的副本"
         items.append({"name": name, "copies": copies})
 
-    items.sort(key=lambda it: -len(it["copies"]))
+    items.sort(key=lambda it: (-_business_class_score(it["name"]),
+                               -len(it["copies"])))
     return {"ok": True, "items": items[:max_items]}
 
 
@@ -261,12 +453,15 @@ def _identity_markdown(data: Dict) -> str:
         lines.append("> 未发现同名多目录实现（每个符号仅一处定义）。")
         return "\n".join(lines) + "\n"
 
+    lines.append("> 聚焦业务级同名类（已过滤 `__init__`/`to_dict`/`execute` 等通用方法名噪音）。")
     for it in items:
         lines.append(f"**`{it['name']}`**（{len(it['copies'])} 处实现）")
-        lines.append("| 判定 | 模块 | 文件 | 行 | 被引用 |")
-        lines.append("|------|------|------|----|--------|")
+        lines.append("| 判定 | 模块 | 文件 | 行 | 被引用 | 引用方（文件:行 符号） |")
+        lines.append("|------|------|------|----|--------|------------------------|")
         for c in it["copies"]:
-            lines.append(f"| {c['verdict']} | `{c['mod']}` | `{c['file']}` | {c['line']} | {c['callers']} |")
+            refs = "、".join(
+                f"`{r['file']}:{r['line']} {r['sym']}`" for r in c.get("refs") or []) or "—"
+            lines.append(f"| {c['verdict']} | `{c['mod']}` | `{c['file']}` | {c['line']} | {c['callers']} | {refs} |")
         lines.append("")
 
     return "\n".join(lines) + "\n"
@@ -276,25 +471,73 @@ def _identity_markdown(data: Dict) -> str:
 # P0-C 重复/同构识别
 # ═══════════════════════════════════════════════════════════════════
 
+def _dir_inventory(project_path: str, fv) -> Dict[str, Dict]:
+    """按相对目录聚合：文件 basename 集 + 函数签名集（供目录级同构比对）。"""
+    dirs: Dict[str, Dict] = defaultdict(lambda: {"files": set(), "funcs": set()})
+    for nid, n in fv.nodes.items():
+        fp = (n.get("file_path") or "").replace("\\", "/")
+        d = _rel_dir(project_path, fp)
+        if not d:
+            continue
+        dirs[d]["files"].add(os.path.basename(fp))
+        if n.get("type") in ("function", "method"):
+            dirs[d]["funcs"].add(n["name"].split(".")[-1])
+    return dict(dirs)
+
+
+def _dir_isomorph_insight(project_path: str, fv, max_pairs: int = 10,
+                          file_threshold: float = 0.5,
+                          func_threshold: float = 0.5) -> List[Dict]:
+    """目录级同构比对（）：文件清单相似度 + 函数签名相似度。
+
+    对目录两两比较，双指标均 ≥ 阈值视为"同构重复候选"（如 调研工具/engine vs
+    source_engine/engine 全目录同构、round2/round2_v2/round2_fast 多版本并存）。
+    返回 [{dir_a, dir_b, file_sim, func_sim, n_files_a, n_files_b}]，按综合相似度降序。
+    """
+    dirs = _dir_inventory(project_path, fv)
+    names = sorted(dirs.keys())
+    pairs = []
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            a, b = names[i], names[j]
+            fa, fb = dirs[a]["files"], dirs[b]["files"]
+            sa, sb = dirs[a]["funcs"], dirs[b]["funcs"]
+            file_sim = _jaccard_set(fa, fb)
+            func_sim = _jaccard_set(sa, sb)
+            if file_sim >= file_threshold and func_sim >= func_threshold:
+                pairs.append({
+                    "dir_a": a, "dir_b": b,
+                    "file_sim": round(file_sim, 2), "func_sim": round(func_sim, 2),
+                    "n_files_a": len(fa), "n_files_b": len(fb),
+                })
+    pairs.sort(key=lambda p: -(p["file_sim"] + p["func_sim"]))
+    return pairs[:max_pairs]
+
+
 def duplicate_insight(project_path: str, db_path: Optional[str] = None,
                       max_clusters: int = 20, sim_threshold: float = 0.6) -> Dict:
-    """P0-C：重复/同构识别。
+    """P0-C：重复/同构识别（ 业务级增强）。
 
     同名函数/方法跨模块（不同目录）实现 → 先按函数体相似度分区：
     - 相似度 ≥ sim_threshold 的副本聚成独立"重复实现簇"（kind=duplicate，推荐收敛）
     - 未配对（与任何副本相似度 < 阈值）的副本归入"同名候选"（kind=candidate，
       仅同名、契约可能不同，不推荐合并）
-    返回 {"ok", "clusters":[{name, kind, max_sim, copies:[{file,line,mod}]}]}。
+    过滤通用方法名噪音（__init__/to_dict 等），并附加目录级同构比对
+    （dir_isomorph: 文件清单 + 函数签名相似度，识别全目录同构重复）。
+    返回 {"ok", "clusters":[...], "dir_isomorph":[...]}。
     """
     fv = _verifier(project_path, db_path)
     if fv is None:
-        return {"ok": False, "clusters": []}
+        return {"ok": False, "clusters": [], "dir_isomorph": []}
 
     by_name: Dict[str, List[str]] = defaultdict(list)
     for nid, n in fv.nodes.items():
         if n.get("type") not in ("function", "method"):
             continue
-        by_name[n["name"].split(".")[-1]].append(nid)
+        nm = n["name"].split(".")[-1]
+        if _is_generic_name(nm):
+            continue
+        by_name[nm].append(nid)
 
     clusters = []
     for name, ids in by_name.items():
@@ -334,7 +577,9 @@ def duplicate_insight(project_path: str, db_path: Optional[str] = None,
                              "max_sim": 0.0, "copies": singles})
 
     clusters.sort(key=lambda c: (-len(c["copies"]), c["kind"] != "duplicate"))
-    return {"ok": True, "clusters": clusters[:max_clusters]}
+    dir_isomorph = _dir_isomorph_insight(project_path, fv)
+    return {"ok": True, "clusters": clusters[:max_clusters],
+            "dir_isomorph": dir_isomorph}
 
 
 def _duplicate_markdown(data: Dict) -> str:
@@ -344,14 +589,16 @@ def _duplicate_markdown(data: Dict) -> str:
         return "\n".join(lines) + "\n"
 
     clusters = data.get("clusters") or []
-    if not clusters:
-        lines.append("> 未发现跨模块同名实现（每个符号仅一处定义）。")
+    dir_isomorph = data.get("dir_isomorph") or []
+    if not clusters and not dir_isomorph:
+        lines.append("> 未发现跨模块同名实现或目录级同构（每个符号仅一处定义）。")
         return "\n".join(lines) + "\n"
 
+    lines.append("> 聚焦业务级同名函数（已过滤 `__init__`/`to_dict`/`execute` 等通用方法名噪音）。")
     dup = [c for c in clusters if c.get("kind") == "duplicate"]
     cand = [c for c in clusters if c.get("kind") != "duplicate"]
     if dup:
-        lines.append(f"### 重复实现簇（函数体相似度 ≥ 60%，建议收敛）")
+        lines.append("### 重复实现簇（函数体相似度 ≥ 60%，建议收敛）")
         lines.append("| 符号 | 实现数 | 相似度 | 模块 | 文件:行 |")
         lines.append("|------|--------|--------|------|---------|")
         for c in dup:
@@ -370,6 +617,13 @@ def _duplicate_markdown(data: Dict) -> str:
         for c in cand:
             mods = "、".join(f"`{x['mod']}`" for x in c["copies"])
             lines.append(f"| `{c['name']}` | {len(c['copies'])} | {c.get('max_sim', 0)} | {mods} |")
+        lines.append("")
+    if dir_isomorph:
+        lines.append("### 目录级同构重复（文件清单 + 函数签名相似度，可合并候选）")
+        lines.append("| 目录 A | 目录 B | 文件相似度 | 函数相似度 | 文件数 A/B |")
+        lines.append("|--------|--------|-----------|-----------|-----------|")
+        for p in dir_isomorph:
+            lines.append(f"| `{p['dir_a']}` | `{p['dir_b']}` | {p['file_sim']} | {p['func_sim']} | {p['n_files_a']}/{p['n_files_b']} |")
         lines.append("")
 
     return "\n".join(lines) + "\n"
@@ -390,11 +644,12 @@ def _llm_summary(project_path: str, data: Dict) -> str:
         n_flows = len(data.get("pipeline", {}).get("flows", []))
         n_identity = len(data.get("identity", {}).get("items", []))
         n_dup = len(data.get("duplicate", {}).get("clusters", []))
+        n_dir = len(data.get("duplicate", {}).get("dir_isomorph", []))
         prompt = (
             f"项目 {project_path} 的架构静态洞察：\n"
             f"- 管线梳理：{n_entries} 条入口管线，{n_flows} 条跨模块数据流\n"
-            f"- 真身判定：{n_identity} 组同名多实现\n"
-            f"- 重复识别：{n_dup} 组跨模块重复实现簇\n"
+            f"- 真身判定：{n_identity} 组同名业务级多实现\n"
+            f"- 重复识别：{n_dup} 组跨模块重复实现簇，{n_dir} 组目录级同构重复\n"
             f"请用 3-5 句话概括该项目的架构健康状况与治理重点（通俗中文，面向治理屎山代码的工程师）。"
         )
         return llm.chat_completion([
