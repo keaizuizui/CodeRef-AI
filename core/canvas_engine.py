@@ -59,6 +59,8 @@ MAX_NODES_PER_ROW = 12
 MAX_LAYER_WIDTH = DEFAULT_WIDTH - 160
 # 「适应」缩放后节点最小可辨像素下限
 MIN_NODE_READABLE_PX = 24
+# ：三层泳道标题区高度（泳道顶部预留标题渲染空间）
+_LANE_TITLE_H = 44
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -78,6 +80,7 @@ def _norm_node(n: Dict[str, Any]) -> Dict[str, Any]:
         "color": n.get("color", "#3B82F6"),
         "icon": n.get("icon", ""),
         "layer": n.get("layer", n.get("type", "default")),
+        "tier": n.get("tier", ""),          #  泳道：business|service|code；空=不区分层
         "props": n.get("props") or {},
         "ports": n.get("ports") or ["top", "right", "bottom", "left"],
     }
@@ -92,6 +95,7 @@ def _norm_edge(e: Dict[str, Any]) -> Dict[str, Any]:
         "toPort": e.get("toPort", ""),
         "label": e.get("label", ""),
         "type": e.get("type", "edge"),
+        "rel": e.get("rel", ""),            #  边类型：flow|align|land|depends
         "color": e.get("color", "#94A3B8"),
         "dashed": bool(e.get("dashed", False)),
     }
@@ -111,6 +115,7 @@ def normalize(canvas_data: Dict[str, Any]) -> Dict[str, Any]:
         "nodes": nodes,
         "edges": edges,
         "meta": canvas_data.get("meta") or {},
+        "tier_order": canvas_data.get("tier_order") or None,
     }
 
 
@@ -169,14 +174,19 @@ def _node_depths(node_ids: List[str], edges: List[Dict]) -> Dict[str, int]:
 _NODE_GAP_DEFAULT = 28
 
 
-def _split_layer_rows(items: List[Dict], edges: List[Dict]) -> List[List[Dict]]:
+def _split_layer_rows(items: List[Dict], edges: List[Dict],
+                      topo_always: bool = False) -> List[List[Dict]]:
     """把某层节点拆成多行：先按拓扑深度浅→深排，再用行宽/行数上限截断。
 
     解决 ：全部节点归入同一层时，避免横排成一条超宽线；深度相近的
     依赖方优先同行，深一层自动换行，让 Y 维展开、首屏可读。
+    topo_always=True（ 泳道）：即使节点少也按拓扑深度排序，保证泳道内
+    业务 flow 链路（如 进门→点餐→吃饭→结账）从左到右可读，而不是回退按
+    名字排序把链路打乱。
     """
     ids = [n["id"] for n in items]
-    depth = _node_depths(ids, edges) if len(ids) > MAX_NODES_PER_ROW else {}
+    use_depth = topo_always or len(ids) > MAX_NODES_PER_ROW
+    depth = _node_depths(ids, edges) if use_depth else {}
     ordered = sorted(items, key=lambda n: (depth.get(n["id"], 0), n.get("label", n["id"])))
     rows: List[List[Dict]] = []
     cur: List[Dict] = []
@@ -193,14 +203,64 @@ def _split_layer_rows(items: List[Dict], edges: List[Dict]) -> List[List[Dict]]:
     return rows
 
 
+def _tier_order(nodes: List[Dict]) -> List[str]:
+    """：tier 泳道顺序（business→service→code 优先，其余按出现顺序延后）。"""
+    fixed = ("business", "service", "code")
+    uniq: List[str] = []
+    for n in nodes:
+        t = n.get("tier") or ""
+        if t and t not in uniq:
+            uniq.append(t)
+    return [t for t in fixed if t in uniq] + [t for t in uniq if t not in fixed]
+
+
+def _layout_lanes(nodes: List[Dict], edges: List[Dict],
+                  lane_gap: float = 200, node_gap: float = 28,
+                  margin: float = 80) -> None:
+    """：按 tier 分组为横向泳道（business 上 → service 中 → code 下）。
+
+    泳道内横向多行排节点（沿用 _split_layer_rows），泳道顶部预留标题区
+    （_LANE_TITLE_H），泳道间留大间距容纳泳道标题与跨层 align/land trace 边。
+    仅布局未定位节点（x=0 且 y=0）。
+    """
+    by_tier: Dict[str, List[Dict]] = {}
+    for n in nodes:
+        if n["x"] != 0 or n["y"] != 0:
+            continue
+        by_tier.setdefault(n.get("tier") or "default", []).append(n)
+    y = margin
+    for t in _tier_order(nodes):
+        items = by_tier.get(t)
+        if not items:
+            continue
+        # 只取本 tier 内部边算拓扑深度，避免跨层 align/land 边污染泳道内排列，
+        # 保证业务 flow 链路从左到右可读。
+        ids_set = {n["id"] for n in items}
+        interior = [e for e in edges if e.get("from") in ids_set and e.get("to") in ids_set]
+        rows = _split_layer_rows(items, interior, topo_always=True)
+        for row in rows:
+            total_w = sum(n.get("w", _DEF_W) for n in row) + node_gap * (len(row) - 1)
+            x = margin + max(0, (DEFAULT_WIDTH - 2 * margin - total_w) / 2)
+            row_h = max((n.get("h", _DEF_H) for n in row), default=_DEF_H)
+            for n in row:
+                n["x"] = x
+                n["y"] = y + _LANE_TITLE_H
+                x += n.get("w", _DEF_W) + node_gap
+            y += row_h + node_gap
+        y += (lane_gap - node_gap) + _LANE_TITLE_H
+
+
 def _layout_layered(nodes: List[Dict], edges: List[Dict],
                     layer_gap: float = 150, node_gap: float = 28,
                     margin: float = 80) -> None:
-    """分层布局：按 layer 分组，主层间垂直排列，层内再按拓扑深度子行展开。
+    """分层布局：按 tier 泳道（）或 layer 分组，主层间垂直排列，层内再按深度子行展开。
 
     仅给未定位节点（x=0 且 y=0）赋坐标；已显式定位的节点保留原位。
     单层内节点过多或过宽时，按 DAG 深度拆成多行（），避免 Y 轴坍缩成线。
     """
+    if any(n.get("tier") for n in nodes):
+        _layout_lanes(nodes, edges, node_gap=node_gap, margin=margin)
+        return
     order: List[str] = []
     layers: Dict[str, List[Dict]] = {}
     for n in nodes:
@@ -344,11 +404,18 @@ body { font-family:"Segoe UI","Noto Sans CJK SC",sans-serif; background:#0F172A;
 #edgeLayer path:hover { stroke-width:4 !important; }
 #edgeLayer .edge-label { font-size:10px; fill:#94A3B8; pointer-events:none; }
 #nodeLayer { position:absolute; top:0; left:0; width:0; height:0; }
+#laneLayer { position:absolute; top:0; left:0; width:0; height:0; pointer-events:none; }
+#laneLayer svg { overflow:visible; }
+#laneLayer rect, #laneLayer text { pointer-events:none; user-select:none; }
+.node.tier-business { border-color:#3B82F6; }
+.node.tier-service { border-color:#F59E0B; }
+.node.tier-code { border-color:#10B981; }
+#nodeLayer.lod-state .node-label, #nodeLayer.lod-state .node-sub { display:none; }
 .node { position:absolute; background:#1E293B; border:2px solid #334155; border-radius:10px; display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:move; user-select:none; transition:box-shadow .15s; }
 .node:hover { box-shadow:0 0 0 1px rgba(59,130,246,.4); }
 .node.selected { box-shadow:0 0 0 2px #3B82F6; }
 .node .node-icon { font-size:18px; line-height:1; }
-.node .node-label { font-size:11px; color:#E2E8F0; text-align:center; padding:2px 6px; word-break:break-all; max-height:36px; overflow:hidden; }
+.node .node-label { font-size:11px; color:#E2E8F0; text-align:center; padding:2px 6px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:help; }
 .node .node-sub { font-size:9px; color:#64748B; max-width:90%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .node .port { position:absolute; width:10px; height:10px; border-radius:50%; background:#0F172A; border:2px solid #64748B; opacity:0; transition:opacity .15s; cursor:crosshair; }
 .node:hover .port { opacity:1; }
@@ -406,6 +473,7 @@ body { font-family:"Segoe UI","Noto Sans CJK SC",sans-serif; background:#0F172A;
 </div>
 <div id="canvasWrap">
   <div id="viewport">
+    <svg id="laneLayer"></svg>
     <svg id="edgeLayer"></svg>
     <div id="nodeLayer"></div>
   </div>
@@ -431,6 +499,7 @@ let propTarget = null;   // 属性面板目标 {kind:'node'|'edge', id}
 
 const wrap = document.getElementById('canvasWrap');
 const viewport = document.getElementById('viewport');
+const laneLayer = document.getElementById('laneLayer');
 const nodeLayer = document.getElementById('nodeLayer');
 const edgeLayer = document.getElementById('edgeLayer');
 const mmCanvas = document.getElementById('mmCanvas');
@@ -449,6 +518,8 @@ function toWorld(cx, cy){
 }
 function applyView(){
   viewport.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
+  // ：LOD 标签分级——缩放过小时隐藏文字只留色块/图标，避免马赛克不可读
+  nodeLayer.classList.toggle('lod-state', view.scale < 0.30);
   renderMiniMap();
 }
 function zoomAt(cx, cy, factor){
@@ -514,14 +585,14 @@ function renderNodes(){
   nodeLayer.innerHTML = '';
   nodes.forEach(n => {
     const el = document.createElement('div');
-    el.className = 'node' + (selected.has(n.id) ? ' selected' : '');
+    el.className = 'node' + (selected.has(n.id) ? ' selected' : '') + (n.tier ? ' tier-'+n.tier : '');
     el.style.left = n.x+'px'; el.style.top = n.y+'px';
     el.style.width = n.w+'px'; el.style.height = n.h+'px';
     el.style.borderColor = n.color || '#334155';
     el.dataset.id = n.id;
     const sub = n.props && (n.props.file || n.props.desc || '');
     el.innerHTML = `<div class="node-icon">${esc(n.icon||'')}</div>
-      <div class="node-label">${esc(n.label)}</div>
+      <div class="node-label" title="${esc(n.label)}">${esc(n.label)}</div>
       ${sub ? `<div class="node-sub" title="${esc(sub)}">${esc(sub)}</div>` : ''}`;
     (n.ports||['top','right','bottom','left']).forEach(p => {
       const port = document.createElement('div');
@@ -555,10 +626,17 @@ function renderEdges(){
     const p2 = portPos(to, e.toPort || autoPort(from,to).toPort);
     const path = document.createElementNS('http://www.w3.org/2000/svg','path');
     path.setAttribute('d', bezierPath(p1,p2));
-    path.setAttribute('stroke', e.color || '#94A3B8');
+    // ：边 rel 配色/线型——flow 同层流程 / align 业务→技术 / land 技术→代码 / depends 代码内部
+    let stroke = e.color || '#94A3B8';
+    let dash = e.dashed;
+    if (e.rel==='align'){ stroke = '#F59E0B'; dash = true; }
+    else if (e.rel==='land'){ stroke = '#10B981'; dash = true; }
+    else if (e.rel==='flow'){ stroke = '#3B82F6'; }
+    else if (e.rel==='depends'){ stroke = '#94A3B8'; }
+    path.setAttribute('stroke', stroke);
     path.setAttribute('stroke-width', e.selected ? 3 : 2);
     path.setAttribute('fill','none');
-    if (e.dashed) path.setAttribute('stroke-dasharray','6 4');
+    if (dash) path.setAttribute('stroke-dasharray', e.rel==='align'?'4 4':(e.rel==='land'?'2 4':'6 4'));
     path.setAttribute('marker-end','url(#arrow)');
     path.setAttribute('data-id', e.id);
     path.addEventListener('click', ev => { ev.stopPropagation(); selectEdge(e.id); });
@@ -574,6 +652,47 @@ function renderEdges(){
     }
   });
 }
+function tierOrder(){
+  const fixed = ['business','service','code'];
+  const uniq = [];
+  nodes.forEach(n => { const t = n.tier||''; if (t && !uniq.includes(t)) uniq.push(t); });
+  return fixed.filter(t => uniq.includes(t)).concat(uniq.filter(t => !fixed.includes(t)));
+}
+function tierTitle(t){
+  return ({'business':'业务层 · 业务/用户旅程','service':'技术层 · 服务/技术角色','code':'代码层 · 落地构件'})[t] || t;
+}
+function renderLanes(){
+  laneLayer.innerHTML = '';
+  if (!nodes.some(n => n.tier)) return;
+  const svgns = 'http://www.w3.org/2000/svg';
+  const ns = document.createElementNS(svgns,'svg');
+  ns.setAttribute('width','20000'); ns.setAttribute('height','20000');
+  ns.style.position = 'absolute'; ns.style.left = '0'; ns.style.top = '0'; ns.style.overflow = 'visible';
+  const xs = nodes.map(n => n.x), xe = nodes.map(n => n.x + n.w);
+  const minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xe);
+  const laneFill = {'business':'rgba(59,130,246,.08)','service':'rgba(245,158,11,.07)','code':'rgba(16,185,129,.07)'};
+  const laneStroke = {'business':'#1D4ED8','service':'#B45309','code':'#047857'};
+  tierOrder().forEach(t => {
+    const items = nodes.filter(n => n.tier === t);
+    if (!items.length) return;
+    const top = Math.min.apply(null, items.map(n => n.y)) - 26;
+    const bottom = Math.max.apply(null, items.map(n => n.y + n.h)) + 16;
+    const rect = document.createElementNS(svgns,'rect');
+    rect.setAttribute('x', minX-80); rect.setAttribute('y', top);
+    rect.setAttribute('width', maxX-minX+160); rect.setAttribute('height', bottom-top);
+    rect.setAttribute('rx', 10);
+    rect.setAttribute('fill', laneFill[t] || 'rgba(100,116,139,.06)');
+    rect.setAttribute('stroke', laneStroke[t] || '#334155');
+    rect.setAttribute('stroke-width', '1'); rect.setAttribute('stroke-dasharray','4 3');
+    ns.appendChild(rect);
+    const tt = document.createElementNS(svgns,'text');
+    tt.setAttribute('x', minX-68); tt.setAttribute('y', top+18);
+    tt.setAttribute('fill','#CBD5E1'); tt.setAttribute('font-size','13'); tt.setAttribute('font-weight','600');
+    tt.textContent = tierTitle(t);
+    ns.appendChild(tt);
+  });
+  laneLayer.appendChild(ns);
+}
 function renderStats(){
   const s = (DATA.meta && DATA.meta.summary) || {};
   let html = `节点 ${nodes.length} | 连线 ${edges.length}`;
@@ -581,7 +700,7 @@ function renderStats(){
   document.getElementById('stats').innerHTML = html;
 }
 function render(){
-  renderNodes(); renderEdges(); renderStats(); renderMiniMap();
+  renderNodes(); renderEdges(); renderLanes(); renderStats(); renderMiniMap();
 }
 function renderMiniMap(){
   if (!nodes.length) return;
@@ -987,7 +1106,43 @@ function redo(){
 // ═══════════ 自动布局（JS 端） ═══════════
 const MIN_READABLE_PX = 24;   // ：「适应」缩放后节点最小可辨像素下限
 const MAX_ROW_NODES = 12;     // ：单行节点数上限（与 Python 端 MAX_NODES_PER_ROW 一致）
+function layoutLanes(){
+  const TITLE_H = 44, GAP = 200, NGAP = 28;
+  const by = {};
+  nodes.forEach(n => { if (n.x===0 && n.y===0) (by[n.tier||'default'] = by[n.tier||'default']||[]).push(n); });
+  let y = 80;
+  tierOrder().forEach(t => {
+    const items = by[t]; if (!items || !items.length) return;
+    // 依赖 DAG 深度排序（Kahn）后按行宽/行数拆行——沿用  兜底逻辑
+    const ids = new Set(items.map(n=>n.id));
+    const indeg = {}, succ = {};
+    items.forEach(n => { indeg[n.id]=0; succ[n.id]=[]; });
+    edges.forEach(e => { const f=e.from, to=e.to; if(ids.has(f)&&ids.has(to)&&f!==to){ succ[f].push(to); indeg[to]=(indeg[to]||0)+1; } });
+    const depth = {};
+    const q = items.filter(n=>indeg[n.id]===0).map(n=>n.id);
+    q.forEach(i=>depth[i]=0);
+    while(q.length){ const u=q.shift(); (succ[u]||[]).forEach(v=>{ depth[v]=Math.max(depth[v]||0,(depth[u]||0)+1); if(--indeg[v]===0) q.push(v); }); }
+    items.forEach(n => { if (depth[n.id]===undefined) depth[n.id]=0; });
+    const sorted = items.slice().sort((a,b)=> (depth[a.id]-depth[b.id]) || (a.label<b.label?-1:a.label>b.label?1:0));
+    const rows = [], cur = [];
+    sorted.forEach(n => {
+      const curW = cur.reduce((s,x)=>s+x.w,0) + NGAP*(cur.length-1);
+      if (cur.length && (cur.length>=MAX_ROW_NODES || curW + n.w + NGAP > (CANVAS.width-160))){ rows.push(cur); cur.length=0; }
+      cur.push(n);
+    });
+    if (cur.length) rows.push(cur);
+    rows.forEach(row => {
+      const total = row.reduce((s,x)=>s+x.w,0) + NGAP*(row.length-1);
+      let x = Math.max(80,(CANVAS.width-total)/2);
+      let rh = 0;
+      row.forEach(n => { n.x=x; n.y=y+TITLE_H; x+=n.w+NGAP; rh=Math.max(rh,n.h); });
+      y += rh + NGAP;
+    });
+    y += (GAP-NGAP) + TITLE_H;
+  });
+}
 function layoutLayered(){
+  if (nodes.some(n=>n.tier)){ layoutLanes(); commitChange(); render(); fitView(); toast('已分层布局(三层泳道)'); return; }
   const order = [];
   const layers = {};
   nodes.forEach(n => {
