@@ -582,7 +582,9 @@ class ChangeGuard:
                 ))
 
             # 2) 逻辑削弱：重试/超时能力消失或减弱（新增行无等价重试/超时）
-            if (new_sig.has_validation_chain and not new_sig.has_retry
+            #    不依赖校验链：网络客户端可能只有重试/超时保护而无输入校验，
+            #    删除重试循环时同样应被检出（CodeRabbit  评审）。
+            if (not new_sig.has_retry
                     and self._has_retry_delete(deleted_lines)
                     and not self._has_retry_delete(added_lines)):
                 findings.append(DegradationFinding(
@@ -714,13 +716,34 @@ class ChangeGuard:
         return p
 
     @staticmethod
+    def _is_decl_or_comment(line: str) -> bool:
+        """识别 SQL 建表/字段声明行、纯注释行或空行。
+
+        这些行的 retry/timeout/assert 等词是字段名或注释，不是可执行的重试/
+        校验逻辑，不应被 _has_*_delete 误判为能力删除（如 SQL 字段
+        `retry_count INTEGER DEFAULT 0` 含 retry 但并非重试逻辑）。
+        """
+        s = line.strip().lower()
+        if not s:
+            return True
+        if s.startswith(("#", "--", "//", "/*", "*")):
+            return True
+        if re.search(r'\b(?:create\s+table|integer|text|real|primary\s+key|'
+                     r'default|not\s+null|references|foreign\s+key|unique|'
+                     r'varchar|blob|boolean|timestamp|datetime)\b', s):
+            return True
+        return False
+
+    @staticmethod
     def _has_validation_delete(deleted_lines: List[str]) -> bool:
         """被删除的行里是否包含校验相关关键词或防御性校验模式。
 
         与 extract_signature 的 AST 判定保持一致：不仅看 validate/sanitize/assert，
         也识别 isinstance 类型守卫与 raise ValueError/TypeError/AssertionError 等。
+        排除 SQL/声明/注释行，避免字段名（如 retry_count）误判。
         """
-        text = "\n".join(deleted_lines).lower()
+        code_lines = [l for l in deleted_lines if not ChangeGuard._is_decl_or_comment(l)]
+        text = "\n".join(code_lines).lower()
         if any(kw in text for kw in ("validate", "sanitize", "normalize",
                                      "assert", "check")):
             return True
@@ -735,15 +758,17 @@ class ChangeGuard:
 
     @staticmethod
     def _has_retry_delete(deleted_lines: List[str]) -> bool:
-        """被删除的行里是否包含重试/超时相关关键词。"""
-        text = "\n".join(deleted_lines).lower()
+        """被删除的行里是否包含重试/超时相关关键词（排除 SQL/声明/注释行）。"""
+        code_lines = [l for l in deleted_lines if not ChangeGuard._is_decl_or_comment(l)]
+        text = "\n".join(code_lines).lower()
         return any(kw in text for kw in ("retry", "backoff", "retries",
                                          "max_attempts", "timeout"))
 
     @staticmethod
     def _has_constraint_delete(deleted_lines: List[str]) -> bool:
-        """被删除的行里是否包含约束相关关键词。"""
-        text = "\n".join(deleted_lines).lower()
+        """被删除的行里是否包含约束相关关键词（排除 SQL/声明/注释行）。"""
+        code_lines = [l for l in deleted_lines if not ChangeGuard._is_decl_or_comment(l)]
+        text = "\n".join(code_lines).lower()
         return any(kw in text for kw in ("assert", "len(", "max_", "min_",
                                          "limit", "range", "bound"))
 
