@@ -565,12 +565,15 @@ class CodeReviewer:
                 "role": "system",
                 "content": (
                     "你是一位资深代码审查专家，擅长多维度代码审查。\n"
-                    "你的唯一输出必须是合法的 JSON 数组，数组的每个元素是一个审查评论对象，"
-                    "字段为：file, line, severity, dimension, title, detail, suggestion。\n"
-                    "严禁输出任何思考过程、解释、叙述、前后缀文字或 Markdown 代码块。"
-                    "直接以 [ 开头、以 ] 结尾。\n"
-                    "注意：提供的文件内容可能因长度限制被截断，请基于可见内容进行审查，"
-                    "不要因内容不完整而拒绝输出或输出散文。"
+                    "你的输出会被程序直接解析，因此必须且只能输出一个合法的 JSON 数组，"
+                    "数组的每个元素是一个审查评论对象，字段为："
+                    "file, line, severity, dimension, title, detail, suggestion。\n"
+                    "硬性要求（违反任一即解析失败）：\n"
+                    "1. 输出必须以 [ 开头、以 ] 结尾，除 JSON 数组外不得输出任何字符，"
+                    "包括 Markdown 代码块标记（```json、```）、思考过程、解释、叙述或前后缀文字。\n"
+                    "2. 即使没有发现问题，也必须输出空数组 []，不得用散文说明。\n"
+                    "3. 提供的文件内容可能因长度限制被截断，请基于可见内容审查；"
+                    "内容不完整时仍须输出 JSON 数组（可为空），不得拒绝输出或输出散文。"
                 ),
             },
             {"role": "user", "content": prompt},
@@ -609,10 +612,11 @@ class CodeReviewer:
                 {
                     "role": "user",
                     "content": (
-                        "你上一次的输出包含你的分析思考过程，但格式不是 JSON 数组。"
-                        "请把你刚才的思考整理为结构化的 JSON 评论数组：直接以 [ 开头、以 ] 结尾，"
-                        "数组每个元素是 {file, line, severity, dimension, title, detail, suggestion}。"
-                        "不要输出任何解释、叙述或 Markdown 代码块标记（如 ```json 或 ```）。"
+                        "你上一次的输出包含你的分析思考过程，但格式不是 JSON 数组。\n"
+                        "现在请只输出一个合法的 JSON 数组（以 [ 开头、以 ] 结尾），"
+                        "数组每个元素是 {file, line, severity, dimension, title, detail, suggestion}。\n"
+                        "严禁输出任何解释、叙述、Markdown 代码块标记（如 ```json 或 ```）或其他文字；"
+                        "若确无问题，输出空数组 []。"
                     ),
                 },
             ]
