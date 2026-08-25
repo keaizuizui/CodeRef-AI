@@ -255,13 +255,10 @@ def _is_test_file(fp: str) -> bool:
     """判断文件是否测试文件（test_/tests/测试 等），供"生产入口"判定排除测试引用。"""
     fp = (fp or "").replace("\\", "/")
     base = os.path.basename(fp).lower()
-    if base.startswith("test_") or base.startswith("test-"):
+    if base.startswith("test_") or base.startswith("test-") or base.startswith("测试"):
         return True
-    if "/tests/" in fp or "\\tests\\" in fp or "/test/" in fp:
-        return True
-    if "/测试/" in fp or base.startswith("测试"):
-        return True
-    return False
+    segs = [s for s in fp.split("/") if s]
+    return any(s in ("test", "tests", "测试") for s in segs[:-1])
 
 
 def _jaccard_set(a: set, b: set) -> float:
@@ -502,6 +499,8 @@ def _dir_isomorph_insight(project_path: str, fv, max_pairs: int = 10,
             a, b = names[i], names[j]
             fa, fb = dirs[a]["files"], dirs[b]["files"]
             sa, sb = dirs[a]["funcs"], dirs[b]["funcs"]
+            if not sa or not sb:  # 任一侧无函数签名时跳过，避免空集 Jaccard=1.0 误判同构
+                continue
             file_sim = _jaccard_set(fa, fb)
             func_sim = _jaccard_set(sa, sb)
             if file_sim >= file_threshold and func_sim >= func_threshold:
@@ -544,7 +543,7 @@ def duplicate_insight(project_path: str, db_path: Optional[str] = None,
         if len(ids) < 2:
             continue
         copies = []
-        mods = set()
+        dirs = set()
         for nid in ids:
             n = fv.nodes[nid]
             fp = (n.get("file_path") or "").replace("\\", "/")
@@ -554,8 +553,10 @@ def duplicate_insight(project_path: str, db_path: Optional[str] = None,
                 "body": _norm_body(_abs_path(project_path, fp),
                                    n.get("start_line", 0), n.get("end_line", 0)),
             })
-            mods.add(mod)
-        if len(mods) < 2:  # 跨模块才算"重复/同名候选"
+            # 跨目录判定用相对路径目录（避免 apps/worker 与 legacy/worker 同名
+            # basename 被 _mod_of 合并误判同目录）；_mod_of 仅用于报告展示
+            dirs.add(_rel_dir(project_path, n.get("file_path") or ""))
+        if len(dirs) < 2:  # 跨目录才算"重复/同名候选"
             continue
         # 按函数体相似度分区：相似度 ≥ 阈值的副本聚成独立重复簇，未配对副本作同名候选
         dup_clusters, singles = _partition_copies(copies, sim_threshold)
