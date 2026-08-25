@@ -640,3 +640,9 @@ CodeRef-AI 从 **5.0** 起采用 **PolyForm Noncommercial 1.0.0**（[LICENSE](LI
 
 **版本分界**：`v4.9.12` 及更早的 **4.X 系列** 仍按 **MIT License** 授权
 （[LICENSE-MIT-v4.md](LICENSE-MIT-v4.md)），从任何 v4.* 归档检出的代码可按 MIT 使用。
+
+## 贡献指引（Contributing）
+
+欢迎通过 **Issues** 报告缺陷、提出建议或参与讨论；**本仓库暂不接收外部代码合并
+（Pull Request）**，以保留未来商业化（商业授权）空间并规避外部贡献的版权归属问题。
+详见 [贡献指引](CONTRIBUTING.md)。
