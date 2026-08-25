@@ -584,7 +584,7 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 - **多代码库聚合治理**（新增 `gov_workspace`）：跨仓汇总治理状态，输出整体健康度视图
 - **定时体检实跑落地**（`gov_schedule`）：从"产出 cron 片段"升级为生成可直接运行的 `run_cycle.py` 触发脚本 + `--check` 离期检查
 - **新增 MCP 工具**（6 个）：`coderef_gov_pipeline` / `coderef_dynamic_probe` / `coderef_gov_board` / `coderef_gov_workspace` / `coderef_gov_schedule` / `coderef_role_boundary`
-- **开发计划**：`docs/5.2-plan.md`
+- **开发计划**：`docs/5.2-plan.md`（内部规划，未公开）
 - **版本号**：5.1.0 → 5.2.0（工具数 48 → 54）
 
 ### v5.1.0 — 5.1 定期体检：从"一次性重构"升级为"定期体检"
@@ -594,7 +594,7 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 - **预置视图**（新增 `gov_view`）：open / all / high / recurred / rejected / archived / overdue / assigned / recent 固定查询入口
 - **报告与趋势**（新增 `gov_dashboard`）：单期报告 + 跨期趋势 + 自包含 HTML（零 CDN）
 - **新增 MCP 工具**（5 个）：`coderef_gov_start` / `coderef_gov_close` / `coderef_gov_issues` / `coderef_gov_transition` / `coderef_gov_report`
-- **开发计划**：`docs/5.1-plan.md`
+- **开发计划**：`docs/5.1-plan.md`（内部规划，未公开）
 - **版本号**：5.0.0 → 5.1.0（工具数 43 → 48）
 
 ### v5.0.0 — 5.0 启动：架构推回正轨（Phase 0-2 核心闭环）
@@ -605,7 +605,7 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 - **重构任务卡生成器**（新增 `refactor_task_generator`，Phase 2）：差距清单 → 编程 AI 可执行任务卡（create_module/fix_dependency/break_cycle/implement_flow/move_module/split_module + 图谱影响范围 + 验证标准）
 - **架构对齐验证器**（新增 `arch_alignment_verifier`，Phase 2）：四维对齐度评分（职责40%+依赖30%+业务20%+健康10%）+ 差距复检，支持 changed_files 增量模式
 - **新增 MCP 工具**（6 个）：`coderef_target_arch_set` / `coderef_target_arch_get` / `coderef_arch_gap` / `coderef_arch_canvas` / `coderef_refactor_plan` / `coderef_arch_verify`，全部纯静态、确定性、轻量同步
-- **开发计划**：`docs/5.0-plan.md`（Phase 0-2 详细设计 + 设计疑点决策 + 验证方案）
+- **开发计划**：`docs/5.0-plan.md`（内部规划，Phase 0-2 详细设计，未公开）
 - **版本号**：4.9.12 → 5.0.0（工具数 37 → 43）
 
 ### v4.9.12 — 修复 Coderef-Test 测试报告（20260823-v4.9.11-r5）遗留项
@@ -625,7 +625,7 @@ CodeRef-AI v4.9 的 Wiki 工具增强层（`wiki_generator` 增量同步 / `wiki
 - **langchain-ai/openwiki**（MIT）—— 提供了增量同步（`.last-update.json` + 快照比对，仅重建受影响文档）与结构化元数据（front matter 头 + 确定性 index）的思路；同时以其成本失控、限流重试不健壮、输出截断静默失败等真实缺陷警示我们为增量模式补上开销封顶与诚实失败。参考：[https://github.com/langchain-ai/openwiki](https://github.com/langchain-ai/openwiki)
 - **tt-a1i/archify**（Apache-2.0）—— 提供了「生成/校验分离」（LLM 先产出结构化 JSON-IR → schema 校验 → 确定性渲染）与 Last-good 门控（校验通过的产物备份，失败时保留上次可用版本）的思路。参考：[https://github.com/tt-a1i/archify](https://github.com/tt-a1i/archify)
 
-与上述项目不同，CodeRef 保留了自己的差异化主轴：以静态知识图谱交叉验证徽章为文档可信来源，而不是依赖宿主 LLM 的自我断言。完整取舍分析见 [操作记忆层设计文档](docs/operation-memory-design/operation-memory-design.html) 与 Wiki 增强评估报告 `wiki-tool-enhancement-evaluation.html`。
+与上述项目不同，CodeRef 保留了自己的差异化主轴：以静态知识图谱交叉验证徽章为文档可信来源，而不是依赖宿主 LLM 的自我断言。
 
 ## 许可证
 

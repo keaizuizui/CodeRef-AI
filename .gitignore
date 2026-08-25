@@ -48,3 +48,13 @@ Thumbs.db
 # 重构回退备份（不入库）
 core/mcp_server.py.bak
 *.bak_u11
+
+# ─── 内部交接/设计/规程文件（已从远端移出，本地保留，不再公开）───
+交接/
+HANDOFF_编程AI.md
+CODEREF.md
+AGENTS.md
+docs/operation-memory-design/
+docs/5.0-plan.md
+docs/5.1-plan.md
+docs/5.2-plan.md
