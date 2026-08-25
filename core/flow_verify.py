@@ -122,6 +122,29 @@ class FlowVerifier:
                 return nid
         return None
 
+    def suggest_entries(self, spec: str, top_n: int = 5) -> List[str]:
+        """：入口未命中时给出相近符号候选（按名称模糊匹配 top N）。
+
+        取 spec 最后一段为关键词，双向子串匹配（名称含关键词 / 关键词含名称），
+        按 精确>前缀>子串 排序，返回节点 id 列表（最多 top_n 个）。
+        """
+        spec = spec.strip()
+        name = spec.split(".")[-1].lower() if "." in spec else spec.lower()
+        scored: List[Tuple[int, str]] = []
+        for nid, n in self.nodes.items():
+            nm = n["name"].lower()
+            if not name or not (name in nm or nm in name):
+                continue
+            if nm == name:
+                score = 0
+            elif nm.startswith(name) or name.startswith(nm):
+                score = 1
+            else:
+                score = 2
+            scored.append((score, nid))
+        scored.sort(key=lambda x: (x[0], x[1]))
+        return [nid for _, nid in scored[:top_n]]
+
     # ─── 步骤匹配（三层） ───
 
     def match_step_nodes(self, keyword: str) -> List[str]:
@@ -330,9 +353,18 @@ class FlowVerifier:
         """
         entry = self.find_entry(entry_spec)
         if not entry:
-            return {"entry": {"spec": entry_spec, "found": False},
+            # ：未命中时附带相近符号候选，减少试错
+            suggestions = [
+                f"{self.nodes[s]['name']} ({file_base(self.nodes[s])}:{self.nodes[s]['start_line']})"
+                for s in self.suggest_entries(entry_spec)]
+            summary = f"入口未找到: {entry_spec}"
+            if suggestions:
+                summary += (f"；相近符号: {'、'.join(suggestions)}"
+                            "（请用 相对目录名.符号名 精确指定，如 调研工具.run_bot）")
+            return {"entry": {"spec": entry_spec, "found": False,
+                              "suggestions": suggestions},
                     "steps": [], "ok": False,
-                    "summary": f"入口未找到: {entry_spec}",
+                    "summary": summary,
                     "cross_lang": self._cross_lang_nodes()}
 
         en = self.nodes[entry]

@@ -551,53 +551,62 @@ class ChangeGuard:
             file_rel = unit["file"]
             if not file_rel:
                 continue
+            # ：去掉 a/ b/ 前缀并解码 UTF-8 字节转义，输出可读相对路径
+            file_rel = self._clean_diff_path(file_rel)
             abs_path = os.path.join(project_path, file_rel)
             new_content = _read_file_content(abs_path)
 
             # 新代码能力签名
             new_sig = extract_signature(file_rel, new_content)
 
-            # 从 diff 中提取被删除的行（旧代码里被删掉的校验/约束）
+            # 从 diff 中提取被删除 / 新增的行（旧代码删掉的校验/约束 vs 新代码等价替代）
             deleted_lines = self._extract_deleted_lines(unit)
+            added_lines = self._extract_added_lines(unit)
 
-            # 1) 能力缺失：新代码完全没有校验链，但 diff 里明显删除了校验相关行
-            if not new_sig.has_validation_chain and self._has_validation_delete(deleted_lines):
+            # ：删除行须在新增行中无等价替代才报退化——重构/移动/新增校验
+            # （+ 行含等价关键词）不判为删除，避免把"改位置/改形式"误判成"删能力"。
+            # 1) 能力缺失：新代码完全没有校验链，且 diff 删除了校验行且新增行无等价校验
+            if (not new_sig.has_validation_chain
+                    and self._has_validation_delete(deleted_lines)
+                    and not self._has_validation_delete(added_lines)):
                 findings.append(DegradationFinding(
                     kind=DegradationKind.CAPABILITY_MISSING,
                     file_path=file_rel,
                     line=min(unit.get("changed_lines") or [1]),
                     title="校验链疑似被删除",
                     detail=(f"{file_rel} 新代码未检测到校验链（validate/assert/sanitize），"
-                            f"但本次变更删除了包含校验关键词的行，疑似把输入校验改没了。"),
+                            f"本次变更删除了包含校验关键词的行且新增行无等价校验，"
+                            f"疑似把输入校验改没了。"),
                     suggestion="请确认是否误删校验逻辑；若需移除请说明原因并补充等价校验。",
                     tier=ChangeGuardTier.HIGH,
                 ))
 
-            # 2) 逻辑削弱：重试/超时能力消失或减弱
-            if new_sig.has_validation_chain and not new_sig.has_retry:
-                # 仅当 diff 删除了重试相关行时提示
-                if self._has_retry_delete(deleted_lines):
-                    findings.append(DegradationFinding(
-                        kind=DegradationKind.LOGIC_WEAKENED,
-                        file_path=file_rel,
-                        line=min(unit.get("changed_lines") or [1]),
-                        title="重试/超时逻辑可能被削弱",
-                        detail=(f"{file_rel} 本次变更删除了重试/超时相关代码，"
-                                f"新代码未检测到明确的重试或超时控制。"),
-                        suggestion="确认是否保留原有重试与超时保护，避免网络/瞬态故障处理退化。",
-                        tier=ChangeGuardTier.MEDIUM,
-                    ))
+            # 2) 逻辑削弱：重试/超时能力消失或减弱（新增行无等价重试/超时）
+            if (new_sig.has_validation_chain and not new_sig.has_retry
+                    and self._has_retry_delete(deleted_lines)
+                    and not self._has_retry_delete(added_lines)):
+                findings.append(DegradationFinding(
+                    kind=DegradationKind.LOGIC_WEAKENED,
+                    file_path=file_rel,
+                    line=min(unit.get("changed_lines") or [1]),
+                    title="重试/超时逻辑可能被削弱",
+                    detail=(f"{file_rel} 本次变更删除了重试/超时相关代码且新增行无等价替代，"
+                            f"新代码未检测到明确的重试或超时控制。"),
+                    suggestion="确认是否保留原有重试与超时保护，避免网络/瞬态故障处理退化。",
+                    tier=ChangeGuardTier.MEDIUM,
+                ))
 
-            # 3) 约束移除：删除了 assert/长度/边界约束
-            constraint_deleted = self._has_constraint_delete(deleted_lines)
-            if constraint_deleted and new_sig.constraint_terms == 0:
+            # 3) 约束移除：删除了 assert/长度/边界约束（新增行无等价约束）
+            if (self._has_constraint_delete(deleted_lines)
+                    and new_sig.constraint_terms == 0
+                    and not self._has_constraint_delete(added_lines)):
                 findings.append(DegradationFinding(
                     kind=DegradationKind.CONSTRAINT_REMOVED,
                     file_path=file_rel,
                     line=min(unit.get("changed_lines") or [1]),
                     title="输入约束疑似被移除",
-                    detail=(f"{file_rel} 本次变更删除了含 assert/长度/边界限制的代码，"
-                            f"新代码未检测到约束，可能导致非法输入直接进入。"),
+                    detail=(f"{file_rel} 本次变更删除了含 assert/长度/边界限制的代码且新增行"
+                            f"无等价约束，新代码未检测到约束，可能导致非法输入直接进入。"),
                     suggestion="确认是否误删校验约束；建议保留输入长度/边界限制。",
                     tier=ChangeGuardTier.MEDIUM,
                 ))
@@ -665,6 +674,44 @@ class ChangeGuard:
                 if c.get("type") == "del":
                     deleted.append(c.get("text", ""))
         return deleted
+
+    @staticmethod
+    def _extract_added_lines(unit: Dict[str, Any]) -> List[str]:
+        """：从变更单元中提取所有「新增」的行文本（用于等价替代判定）。"""
+        added = []
+        for hunk in unit.get("hunks", []):
+            for c in hunk.get("changes", []):
+                if c.get("type") == "add":
+                    added.append(c.get("text", ""))
+        return added
+
+    @staticmethod
+    def _clean_diff_path(path: str) -> str:
+        """：清理 git diff 路径——去掉两端引号、a/ b/ 前缀，解码 UTF-8 八进制字节转义。
+
+        git diff 的路径可能形如 `b/\\345\\210\\233...`（中文以 \\ddd 八进制转义），
+        或含特殊字符时被引号包裹（`"b/调研工具/xxx.py"`），用户无法直接定位文件；
+        这里还原为可读相对路径（如 `创意引擎/engine_v3.py`）。
+        """
+        p = path.strip()
+        # 去掉 git 对含特殊字符路径加的引号包裹（"b/xxx" 或 "xxx"）
+        if len(p) >= 2 and p[0] == '"' and p[-1] == '"':
+            p = p[1:-1]
+        for prefix in ("a/", "b/"):
+            if p.startswith(prefix):
+                p = p[len(prefix):]
+                break
+
+        def _decode(m):
+            try:
+                raw = bytes(int(x, 8) for x in re.findall(r"\\([0-7]{3})", m.group(0)))
+                return raw.decode("utf-8")
+            except Exception:
+                return m.group(0)
+
+        if "\\" in p:
+            p = re.sub(r"(?:\\[0-7]{3})+", _decode, p)
+        return p
 
     @staticmethod
     def _has_validation_delete(deleted_lines: List[str]) -> bool:
