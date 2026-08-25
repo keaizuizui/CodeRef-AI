@@ -18,6 +18,14 @@ CodeRef-AI 通过 MCP 协议暴露 **55 个工具**，同时服务两类人：
 
 它不替代 AI，而是让它看到用静态事实核验过的世界——核心结论来自代码事实，而不是大模型的猜测。
 
+今天的能力地图上有五条主线，全部基于静态事实、确定且可复现：
+
+1. **静态审计与知识图谱**：11 个确定性检测器把工程体检成结构化 SQLite 图谱，编程 AI 用结构化查询替代 grep 与逐文件阅读（省 10-100 倍 token），非编程人员看降噪后的重点清单。
+2. **架构推回正轨（5.0）**：你定义目标架构（业务层 / 技术层 / 约束），CodeRef 对比现状图谱产出 7 类确定性差距、生成可视化自由布局画布、可执行重构任务卡，并四维打分验证是否真正回到正轨。
+3. **定期治理体检（5.1 / 5.2）**：把差距转成治理工作项，走「检出 → 确认 → 修复 → 验证 → 归档」状态闭环，配历史趋势报告、Web 看板、跨仓聚合治理与定时体检——让"正确状态"可维护、可追踪，而不是一次性的重构。
+4. **记忆层与操作记忆**：项目记忆（增量同步 + 语义检索 + 盲区地图 + 质量评估）与操作记忆（工具位置 / 约定 / 陷阱 + 崩溃恢复），让 AI 跨会话"记得住项目、找得回自己"。
+5. **人话解读（4.6+）**：把确定性格子结论翻译成健康仪表盘与 Wiki，让非编程人员第一次能"看懂"自己的项目。
+
 ## 核心优势
 
 ### 1. 确定性优先：关键能力不靠 LLM，靠静态事实
@@ -257,6 +265,31 @@ coderef_asset(project_path="/path/to/project", action="list")
 
 # 9. 审查/治理：请求你的编程 AI 阅读报告，把误报写进白名单，
 #    并把问题归类为 4 种：① AI 可自行处理 ② 需要你介入 ③ 复杂需讨论 ④ 新建暂存区待定
+
+# 10. 架构推回正轨（5.0，可选）：目标架构 → 差距分析 → 可视化画布 → 重构任务卡 → 对齐验证
+coderef_target_arch_set(project_path="/path/to/project", target_arch={...})  # 一次定义"正轨"
+coderef_arch_gap(project_path="/path/to/project")                              # 现状 vs 正轨的确定性差距
+coderef_arch_canvas(project_path="/path/to/project")                           # 自由布局画布，浏览器里核对/微调
+coderef_refactor_plan(project_path="/path/to/project")                         # 差距 → 可执行任务卡
+coderef_arch_verify(project_path="/path/to/project")                           # 修复后四维打分验证是否回正轨
+
+# 11. 定期治理体检（5.1/5.2，可选）：建档 → 导入差距 → 流转 → 收尾 → 报告 → 自动化流水线
+coderef_gov_start(project_path="/path/to/project")
+coderef_gov_issues(project_path="/path/to/project", view="open")
+coderef_gov_transition(project_path="/path/to/project", issue_id="...", to="Fixing")
+coderef_gov_pipeline(project_path="/path/to/project")  # 在途项 → 任务卡 → 复验 → Verified/附缺口
+coderef_gov_close(project_path="/path/to/project")     # 收尾周期，输出完成率/复发/豁免统计
+coderef_gov_report(project_path="/path/to/project")    # 单期 + 跨期趋势报告
+
+# 12. 记忆层 / 操作记忆：了解 AI 记住了什么；上下文丢失后恢复「工具位置 / 约定 / 陷阱」
+coderef_memory_status(project_path="/path/to/project")            # 项目认知覆盖度 + 盲区地图
+coderef_operation_memory_status(project_path="/path/to/project")  # 操作记忆概览
+coderef_operation_memory_find(project_path="/path/to/project", keyword="布局算法")
+coderef_operation_memory_recover(project_path="/path/to/project") # 恢复关键工具位置/约定摘要/待确认项
+
+# 13. 人话解读（4.6+，可选）：健康仪表盘 / 健康总览（Wiki 需 LLM）
+coderef_interpret(project_path="/path/to/project", action="dashboard")
+coderef_interpret(project_path="/path/to/project", action="health")
 ```
 
 ## 审计管线
@@ -455,6 +488,29 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
 
+### v5.4.4 —  修复：自由画布分层布局/默认视图 Y 轴坍缩
+
+> 解决 （前端渲染缺陷，首屏即不可用）：分层布局与默认初始视图把全部节点压成一条水平线。
+
+- **`core/canvas_engine.py` 分层布局 Y 轴坍缩修复**：根因是节点 layer 趋同（`_norm_node` 把 `layer` 回退到 `type`，arch_canvas 产出的节点 type 多为 module/default），`_layout_layered` 把所有节点归入同一层 → 只 X 分布、Y 全相等 → 一条线；默认初始布局即坏。新增按依赖 DAG 最长链深度（Kahn 拓扑）对单层/超宽节点排序并拆子行（`_node_depths` + `_split_layer_rows`，Python 端与 JS 端 `layoutLayered` 同步），Y 维逐行二维展开；单行上限 12 节点、总宽限幅占画布可辨宽；已显式定位的节点仍保留为锚点
+- **「适应」最小可辨识尺寸下限**：`fitView` 加缩放后节点最小可辨像素下限（24px），防止超大图把节点缩成不可辨，首屏与「适应」后均保持可读
+- **验证**：84 节点同层场景由 1 行坍缩 → 拆 7 行，Y 展开 [230,1490]，X 轴每行 12 节点；力导向对照（二维展开正常）不受影响
+- **版本号**：5.4.3 → 5.4.4
+
+### v5.4.3 —  强化：review 首调 JSON 命中率（零额外 LLM 耗时）
+
+- **`core/code_review.py` 首调命中强化**：system prompt 更强制（明确"输出会被程序直接解析、违反即失败、无问题输出 []"）+ 重试 prompt 更严格（只输出 JSON 数组、禁 Markdown 标记），从根因减少 v4-flash 输出散文导致的 JSON 解析失败
+- **零额外成本**：不增加 LLM 调用次数、不增加耗时，仅提升首调直接命中 JSON 的概率（冒烟验证：首调即命中、未触发重试）
+- **版本号**：5.4.2 → 5.4.3
+
+### v5.4.2 — RAE 记忆 × coderef 执行记忆双向落地
+
+> 解决"RAE 记忆与 coderef 执行记忆零互通"：开发 AI 的架构规则与操作规程印不进执行记忆，可恢复性差。
+
+- **方向 A（投放页，主）**：新增 `CODEREF.md` 操作红线与规程投放页，`AGENTS.md` 引入之——任何编程 AI 读仓即自然读到操作守则，规则随项目天然传播到执行记忆
+- **方向 B（自动同步，辅）**：`config/settings.py` 新增 `OMEM_AUTO_SYNC_ON_GOV` 开关，治理流程（audit/scan 等）收尾时后台线程增量同步操作记忆（`pipeline_runner._auto_sync_om_on_gov()`，30s 去重，不阻塞高频路径）
+- **版本号**：5.4.1 → 5.4.2
+
 ### v5.4.1 — CodeRabbit 复审 4 findings：撤销语义/坐标偏移/自动布局不动已定位/角色高亮
 
 > 对 v5.4.0 自由布局画布进行 CodeRabbit 复审，采纳 4 findings（2 critical / 1 major / 1 minor）。
@@ -465,9 +521,9 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 - **`core/canvas_generator.py` 角色节点高亮**（critical）：缺角色判定由 `id.endswith(":")` 改为 `id.startswith("role:")`，缺失角色节点恢复红色高亮
 - **版本号**：5.4.0 → 5.4.1
 
-### v5.4.0 — 自由布局画布引擎：架构图/流程图可自由拖拽（参考 smart-flow 交互理念）
+### v5.4.0 — 自由布局画布引擎：架构图/流程图可自由拖拽
 
-> 参考 [smart-flow](https://github.com/MrXujiang/smart-flow)（GPL-3.0，仅参考交互理念、不拷贝代码）的自由布局画布能力，自研轻量实现。
+> 自研轻量实现纯 HTML/CSS/JS + SVG 自由布局画布，零外部依赖、离线可用。拖拽、任意连线、平移缩放、缩略图、右键菜单、自动布局等交互能力为业界自由/流程画布工具的通用范式，实现为独立编写的自有代码，不复制或翻译任何第三方实现。
 
 - **`core/canvas_engine.py` 自由布局画布引擎**（新增）：纯 HTML/CSS/JS + SVG 自包含、零外部依赖、离线可用。完整交互：节点自由拖拽（网格 + 节点边缘对齐吸附）、端口拖出任意连线成流（自动选端口）、画布平移/缩放（滚轮 + 按钮）、缩略图导航（mini-map 点击跳转）、右键菜单（添加/复制/删除节点、连线样式、自动布局、导出 JSON）、快捷键（Ctrl+Z 撤销 / Ctrl+Shift+Z 重做 / Delete 删除 / Ctrl+A 全选 / 方向键微调 / Ctrl+± 缩放）、属性面板（编辑节点/连线 label、颜色、props JSON）、分层/力导向自动布局、导出/导入画布 JSON、撤销/重做历史栈
 - **`core/canvas_generator.py` 架构画布升级为自由布局版**：三层布局（业务步骤 → 技术角色 → 代码模块）改为自由画布节点 + 连线；差距高亮保留（游离灰/循环黄/缺失红虚线/依赖违例红连线）；业务步骤→角色映射、角色→模块归属、模块→模块依赖均以可拖拽连线呈现
