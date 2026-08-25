@@ -38,6 +38,7 @@ FreeCanvas — 自由布局画布引擎（5.4）
 
 import json
 import html
+from collections import defaultdict, deque
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -49,6 +50,14 @@ DEFAULT_HEIGHT = 2200
 # 节点默认尺寸
 _DEF_W = 180
 _DEF_H = 60
+
+# 布局兜底（：单层/超宽时按 DAG 深度子行二维展开 + 适应最小可辨尺寸）
+# 每行节点数上限：避免单层节点横排成一条超宽线
+MAX_NODES_PER_ROW = 12
+# 每行总宽上限（占画布可用宽）
+MAX_LAYER_WIDTH = DEFAULT_WIDTH - 160
+# 「适应」缩放后节点最小可辨像素下限
+MIN_NODE_READABLE_PX = 24
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -131,15 +140,66 @@ def _is_unpositioned(n: Dict) -> bool:
     return n["x"] == 0 and n["y"] == 0
 
 
+def _node_depths(node_ids: List[str], edges: List[Dict]) -> Dict[str, int]:
+    """按依赖 DAG 的最长链深度给节点编号层（Kahn 拓扑）。 兜底。"""
+    indeg = {i: 0 for i in node_ids}
+    succ = defaultdict(list)
+    for e in edges:
+        f, t = e.get("from"), e.get("to")
+        if f in indeg and t in indeg and f != t:
+            succ[f].append(t)
+            indeg[t] += 1
+    depth: Dict[str, int] = {}
+    queue = deque([i for i in node_ids if indeg[i] == 0])
+    for i in queue:
+        depth[i] = 0
+    while queue:
+        u = queue.popleft()
+        for v in succ[u]:
+            depth[v] = max(depth.get(v, 0), depth[u] + 1)
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                queue.append(v)
+    for i in node_ids:
+        depth.setdefault(i, 0)  # 环内/孤立节点：归入浅层
+    return depth
+
+
+_NODE_GAP_DEFAULT = 28
+
+
+def _split_layer_rows(items: List[Dict], edges: List[Dict]) -> List[List[Dict]]:
+    """把某层节点拆成多行：先按拓扑深度浅→深排，再用行宽/行数上限截断。
+
+    解决 ：全部节点归入同一层时，避免横排成一条超宽线；深度相近的
+    依赖方优先同行，深一层自动换行，让 Y 维展开、首屏可读。
+    """
+    ids = [n["id"] for n in items]
+    depth = _node_depths(ids, edges) if len(ids) > MAX_NODES_PER_ROW else {}
+    ordered = sorted(items, key=lambda n: (depth.get(n["id"], 0), n.get("label", n["id"])))
+    rows: List[List[Dict]] = []
+    cur: List[Dict] = []
+    for n in ordered:
+        nw = n.get("w", _DEF_W)
+        if cur and (len(cur) >= MAX_NODES_PER_ROW
+                    or sum(x.get("w", _DEF_W) for x in cur) + _NODE_GAP_DEFAULT * (len(cur) - 1)
+                    + nw + _NODE_GAP_DEFAULT > MAX_LAYER_WIDTH):
+            rows.append(cur)
+            cur = []
+        cur.append(n)
+    if cur:
+        rows.append(cur)
+    return rows
+
+
 def _layout_layered(nodes: List[Dict], edges: List[Dict],
                     layer_gap: float = 150, node_gap: float = 28,
                     margin: float = 80) -> None:
-    """分层布局：按 layer 分组，层间垂直排列，层内水平排列。
+    """分层布局：按 layer 分组，主层间垂直排列，层内再按拓扑深度子行展开。
 
-    仅给未定位节点（x=0 且 y=0）赋坐标；已显式定位的节点保留原位，
-    其占位宽度仍计入层宽计算，避免与自动布局节点重叠。
+    仅给未定位节点（x=0 且 y=0）赋坐标；已显式定位的节点保留原位。
+    单层内节点过多或过宽时，按 DAG 深度拆成多行（），避免 Y 轴坍缩成线。
     """
-    # 层分组（保持节点出现顺序）
     order: List[str] = []
     layers: Dict[str, List[Dict]] = {}
     for n in nodes:
@@ -154,22 +214,22 @@ def _layout_layered(nodes: List[Dict], edges: List[Dict],
         unpositioned = [n for n in items if n["x"] == 0 and n["y"] == 0]
         if not unpositioned:
             continue
-        # 已定位节点的最大底边作为该层起点，避免重叠
         placed_bottom = margin
         for n in items:
             if n["x"] != 0 or n["y"] != 0:
                 placed_bottom = max(placed_bottom, n["y"] + n.get("h", _DEF_H))
         y = max(y, placed_bottom + layer_gap)
-        total_w = sum(n.get("w", _DEF_W) for n in items) + node_gap * (len(items) - 1)
-        x = margin + max(0, (DEFAULT_WIDTH - 2 * margin - total_w) / 2)
-        row_h = 0
-        for n in items:
-            if n["x"] == 0 and n["y"] == 0:
+
+        rows = _split_layer_rows(unpositioned, edges)
+        for row in rows:
+            total_w = sum(n.get("w", _DEF_W) for n in row) + node_gap * (len(row) - 1)
+            x = margin + max(0, (DEFAULT_WIDTH - 2 * margin - total_w) / 2)
+            row_h = max((n.get("h", _DEF_H) for n in row), default=_DEF_H)
+            for n in row:
                 n["x"] = x
                 n["y"] = y
-            x += n.get("w", _DEF_W) + node_gap
-            row_h = max(row_h, n.get("h", _DEF_H))
-        y += row_h + layer_gap
+                x += n.get("w", _DEF_W) + node_gap
+            y += row_h + layer_gap
 
 
 def _layout_force(nodes: List[Dict], edges: List[Dict],
@@ -410,6 +470,10 @@ function fitView(){
   minX-=pad; minY-=pad; maxX+=pad; maxY+=pad;
   const w = maxX-minX, h = maxY-minY;
   view.scale = Math.min(wrap.clientWidth/w, wrap.clientHeight/h, 1.5);
+  // ：适应后节点最小可辨尺寸下限，防止超大图把节点缩成不可辨
+  const maxNW = Math.max(...nodes.map(n=>n.w));
+  const minScale = MIN_READABLE_PX / Math.max(maxNW, 1);
+  view.scale = Math.max(view.scale, minScale);
   view.x = (wrap.clientWidth - w*view.scale)/2 - minX*view.scale;
   view.y = (wrap.clientHeight - h*view.scale)/2 - minY*view.scale;
   applyView();
@@ -920,6 +984,8 @@ function redo(){
 }
 
 // ═══════════ 自动布局（JS 端） ═══════════
+const MIN_READABLE_PX = 24;   // ：「适应」缩放后节点最小可辨像素下限
+const MAX_ROW_NODES = 12;     // ：单行节点数上限（与 Python 端 MAX_NODES_PER_ROW 一致）
 function layoutLayered(){
   const order = [];
   const layers = {};
@@ -931,12 +997,44 @@ function layoutLayered(){
   recordPre();
   let y = 80;
   order.forEach(l => {
-    const items = layers[l];
-    const total = items.reduce((s,n) => s + n.w, 0) + 28*(items.length-1);
-    let x = Math.max(80, (CANVAS.width - total)/2);
-    let rowH = 0;
-    items.forEach(n => { n.x = x; n.y = y; x += n.w + 28; rowH = Math.max(rowH, n.h); });
-    y += rowH + 150;
+    const placed = layers[l].filter(n => !(n.x===0 && n.y===0));
+    const unpos = layers[l].filter(n => n.x===0 && n.y===0);
+    if (!unpos.length) return;
+    // 依赖 DAG 深度（Kahn）——：单层/超宽节点按深度浅→深排序再拆行
+    const ids = new Set(unpos.map(n=>n.id));
+    const indeg = {}, succ = {};
+    unpos.forEach(n => { indeg[n.id]=0; succ[n.id]=[]; });
+    edges.forEach(e => {
+      const f=e.from, t=e.to;
+      if (ids.has(f) && ids.has(t) && f!==t){ succ[f].push(t); indeg[t]=(indeg[t]||0)+1; }
+    });
+    const depth = {};
+    const q = unpos.filter(n=>indeg[n.id]===0).map(n=>n.id);
+    q.forEach(i=>depth[i]=0);
+    while (q.length){
+      const u = q.shift();
+      (succ[u]||[]).forEach(v => { depth[v]=Math.max(depth[v]||0,(depth[u]||0)+1); if(--indeg[v]===0) q.push(v); });
+    }
+    unpos.forEach(n => { if (depth[n.id]===undefined) depth[n.id]=0; });
+    const sorted = unpos.slice().sort((a,b)=> (depth[a.id]-depth[b.id]) || (a.label<b.label?-1:a.label>b.label?1:0));
+    // 拆行：每行 ≤12 且总宽 ≤ 画布可用宽
+    const rows = [], cur = [];
+    sorted.forEach(n => {
+      const curW = cur.reduce((s,x)=>s+x.w,0) + 28*(cur.length-1);
+      if (cur.length && (cur.length>=MAX_ROW_NODES || curW + n.w + 28 > (CANVAS.width-160))){ rows.push(cur); cur.length=0; }
+      cur.push(n);
+    });
+    if (cur.length) rows.push(cur);
+    let placedBottom = 80;
+    placed.forEach(n => placedBottom = Math.max(placedBottom, n.y + n.h));
+    y = Math.max(y, placedBottom + 150);
+    rows.forEach(row => {
+      const total = row.reduce((s,n)=>s+n.w,0) + 28*(row.length-1);
+      let x = Math.max(80,(CANVAS.width - total)/2);
+      let rowH=0;
+      row.forEach(n => { n.x=x; n.y=y; x+=n.w+28; rowH=Math.max(rowH,n.h); });
+      y += rowH + 150;
+    });
   });
   commitChange();
   render();
