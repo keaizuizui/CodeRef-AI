@@ -160,6 +160,12 @@ OMEM_WSL_PROBE_RETRIES = 2
 # 支持环境变量 / 直接改本文件两种方式。
 OMEM_DATA_DIR = ""
 
+# ═══ 操作记忆：治理流程自动收尾同步（方向 B：memory_sync 收紧为强制收尾步骤） ═══
+# 走 coderef_audit / coderef_scan 等治理流程后，自动对该项目做一次操作记忆增量同步
+# （mode="incr", with_llm=False），让"记忆始终新鲜"，供后续 recover/query 取到最新约定。
+# best-effort：失败仅静默记日志，绝不破坏主流程结果；置 False 可一键关闭。
+OMEM_AUTO_SYNC_ON_GOV = True
+
 # ═══ 操作记忆原子写并发稳定性（operation_memory.py） ═══
 # 跨进程互斥写：同一目标文件在多个进程并发替换时，Windows 上 os.replace 覆盖
 # 正在被其他进程打开/读写的目标可能触发 WinError 5/32（拒绝访问/文件被占用）。
