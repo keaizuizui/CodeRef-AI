@@ -417,9 +417,13 @@ BUILTIN_TOOLS: List[Dict] = [
                         "设置/更新目标架构 JSON（5.0 架构推回正轨的参照系）。\n"
                         "目标架构由人定义（业务层 + 技术层 + 约束），CodeRef 负责对比现状并输出差距。\n"
                         "target_arch 传目标架构 JSON（对象或字符串），结构：\n"
-                        "  version（必填）/ project / business_flows（业务流程+步骤+tech_roles）/ \n"
-                        "  tech_roles（角色 id/name/target_modules/depends_on/depended_by）/ \n"
-                        "  constraints（角色间禁止依赖，rule=no_dependency）。\n"
+                        "  version（必填，字符串）/ project（可选，字符串）/ \n"
+                        "  business_flows（可选，数组）：每项必填 id/name/steps；\n"
+                        "    steps 每项必须是 {id,name} 对象（不是字符串），可选 tech_roles 引用已定义角色 id。\n"
+                        "  tech_roles（必填，数组）：每项必填 id/name/target_modules，\n"
+                        "    可选 depends_on/depended_by/role_keywords（字符串数组）。\n"
+                        "  constraints（可选，数组）：每项必填 from/to/rule，rule=no_dependency。\n"
+                        "校验失败返回 status=error + errors 明细（含具体字段），不会静默成功。\n"
                         "校验通过后写入 <project>/.coderef/target_arch.json（进 git 版本控制）。\n"
                         "纯确定性校验，不依赖 LLM。"
                     ),
@@ -1647,13 +1651,30 @@ def _target_arch_set(a: dict) -> str:
     pp = a["project_path"]
     ta = a.get("target_arch")
     if ta is None:
-        raise ValueError(
-            "coderef_target_arch_set: 缺少 target_arch 参数，请传入目标架构 JSON")
-    ta = _coerce_target_arch("coderef_target_arch_set", ta)
+        return json.dumps({
+            "status": "error",
+            "tool": "coderef_target_arch_set",
+            "project_path": pp,
+            "error": "缺少 target_arch 参数，请传入目标架构 JSON",
+        }, ensure_ascii=False)
+    try:
+        ta = _coerce_target_arch("coderef_target_arch_set", ta)
+    except ValueError as e:
+        return json.dumps({
+            "status": "error",
+            "tool": "coderef_target_arch_set",
+            "project_path": pp,
+            "error": str(e),
+        }, ensure_ascii=False)
     ok, errors = validate_target_arch(ta)
     if not ok:
-        raise ValueError(
-            f"coderef_target_arch_set: 目标架构校验失败: {'; '.join(errors)}")
+        return json.dumps({
+            "status": "error",
+            "tool": "coderef_target_arch_set",
+            "project_path": pp,
+            "error": f"目标架构校验失败（{len(errors)} 条），请按 schema 修正后重试",
+            "errors": errors,
+        }, ensure_ascii=False)
     ta = normalize_arch(ta)
     path = _target_arch_path(pp)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1697,12 +1718,38 @@ def _target_arch_get(a: dict) -> str:
 def _arch_gap(a: dict) -> str:
     """架构差距分析（coderef_arch_gap）"""
     from core.arch_gap_analyzer import analyze_gap
+    from core.target_arch_schema import validate_target_arch
     pp = a["project_path"]
     ta = a.get("target_arch")
     if ta is None:
-        ta = _load_target_arch(pp)
+        try:
+            ta = _load_target_arch(pp)
+        except ValueError as e:
+            return json.dumps({
+                "status": "error",
+                "tool": "coderef_arch_gap",
+                "project_path": pp,
+                "error": str(e),
+            }, ensure_ascii=False)
     else:
-        ta = _coerce_target_arch("coderef_arch_gap", ta)
+        try:
+            ta = _coerce_target_arch("coderef_arch_gap", ta)
+        except ValueError as e:
+            return json.dumps({
+                "status": "error",
+                "tool": "coderef_arch_gap",
+                "project_path": pp,
+                "error": str(e),
+            }, ensure_ascii=False)
+    ok, errors = validate_target_arch(ta)
+    if not ok:
+        return json.dumps({
+            "status": "error",
+            "tool": "coderef_arch_gap",
+            "project_path": pp,
+            "error": f"目标架构无效（{len(errors)} 条），请先用 coderef_target_arch_set 设置合法目标架构",
+            "errors": errors,
+        }, ensure_ascii=False)
     max_unassigned = a.get("max_unassigned", 50)
     r = analyze_gap(pp, ta, max_unassigned=max_unassigned)
     r["tool"] = "coderef_arch_gap"

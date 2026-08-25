@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.5.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.5.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -487,6 +487,16 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.5.1 —  修复：target_arch_set 校验错误透传 + 描述与 schema 对齐 + arch_gap 显式提示
+
+> 治理决策链核心入口（目标架构 → 差距分析）的"静默返空"根因修复：校验失败不再被 TRAE 吞成空 `[]`，调用方不再误判"无差距"。
+
+- **校验错误透传（`core/mcp_server.py` `_target_arch_set`）**：校验失败由 `raise ValueError`（走 JSON-RPC error，TRAE 客户端吞成空 `[]`）改为返回结构化 `{status:error, error, errors:[...]}`（走 result.content 成功通道），调用方可读到含具体字段的可读错误（如 `business_flows[0] 缺少必填键: id`、`steps[0] 必须是对象`），不再与"成功返回空"混淆
+- **描述与 schema 对齐（`coderef_target_arch_set` description）**：明确 `business_flows` 每项必填 `id/name/steps`、`steps` 每项必须是 `{id,name}` 对象（非字符串）、可选 `tech_roles` 引用已定义角色 id；`tech_roles` 每项必填 `id/name/target_modules`；`constraints` 每项必填 `from/to/rule`——按描述构造即能通过校验
+- **arch_gap 显式提示（`core/mcp_server.py` `_arch_gap`）**：目标架构未设置（读存储抛错）或传入的 target_arch 无效（校验失败）时，返回 `{status:error, error:"目标架构无效（N 条）..."}` 显式提示，不再静默空、不再链式污染为"无差距"
+- **验证**：非法样例（flow+字符串 steps）返回 7 条可读错误；合法样例（id/name + {id,name} 步骤）成功落盘 `{roles:3, flows:1, constraints:3}`；arch_gap 未设置/无效 target 均返回显式 error
+- **版本号**：5.5.0 → 5.5.1
 
 ### v5.5.0 —  + ：画布标签可读性揭示策略 + 业务/技术/代码三层架构对齐
 
