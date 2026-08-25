@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.3.4** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.4.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -11,7 +11,7 @@
 
 ## 它是什么
 
-CodeRef-AI 通过 MCP 协议暴露 **54 个工具**，同时服务两类人：
+CodeRef-AI 通过 MCP 协议暴露 **55 个工具**，同时服务两类人：
 
 - **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险；持有一条 LLM/CodeRabbit 论断时，还能用静态图谱做确定性核验，再决定采不采信。
 - **非编程人员的技术助理**：把看不懂的代码变成通俗的健康仪表盘、Wiki 文档和流程确证，让你不用读代码，也能确认项目有没有按你的设想运转。
@@ -56,7 +56,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | **变更守护引擎** | 拦截 AI 把代码改坏，输出人能看懂的变更报告 | `coderef_change_guard` `coderef_change_report` |
 | **人话解读平台** | 把确定性格子结论翻译成非编程人员听得懂的"人话" | `coderef_interpret` |
 
-## 54 个 MCP 工具
+## 55 个 MCP 工具
 
 ### 审计引擎
 
@@ -72,7 +72,8 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_target_arch_set` | 设置/更新目标架构 JSON（5.0 架构推回正轨的参照系），校验后落盘 `<project>/.coderef/target_arch.json`。纯确定性校验，不依赖 LLM | 否 |
 | `coderef_target_arch_get` | 获取当前目标架构 JSON | 否 |
 | `coderef_arch_gap` | 架构差距分析（5.0 核心）：对比现状知识图谱与目标架构，输出 7 类确定性差距（职责缺失/依赖违例/循环依赖/业务断链/游离模块/上帝模块/异常规模）。纯静态、复用 arch_audit，不依赖 LLM | 否 |
-| `coderef_arch_canvas` | 可视化架构画布（5.0 Phase 1）：自包含 HTML 三层画布（业务/技术/代码层），拖拽定义归属、业务→技术连线、差距高亮、导出目标架构 JSON | 否 |
+| `coderef_arch_canvas` | 可视化架构画布（5.0 Phase 1，5.4 自由布局版）：自包含 HTML 自由画布（业务/技术/代码三层节点），节点自由拖拽、任意连线、平移缩放、对齐吸附、缩略图、右键菜单、差距高亮、导出目标架构 JSON | 否 |
+| `coderef_flow_canvas` | 交互式流程画布（5.4）：从代码自动提取业务管线（P0-A 入口管线）+ 跨模块数据流，渲染为可自由拖拽的流程图（同一自由布局引擎） | 否 |
 | `coderef_refactor_plan` | 重构任务卡（5.0 Phase 2）：把差距清单转为编程 AI 可执行的任务卡（create_module/fix_dependency/break_cycle/implement_flow/move_module/split_module + 影响范围 + 验证标准） | 否 |
 | `coderef_arch_verify` | 架构对齐验证（5.0 Phase 2）：四维对齐度评分（职责40%+依赖30%+业务20%+健康10%）+ 差距复检；支持 changed_files 增量模式 | 否 |
 | `coderef_gov_start` | 建档体检周期并导入差距为治理工作项（5.1 定期体检，借鉴 plane 的 Cycle） | 否 |
@@ -313,7 +314,7 @@ coderef_asset(project_path="/path/to/project", action="list")
 ```
 coderef-ai/
 ├── core/                             # 核心引擎
-│   ├── mcp_server.py                 # MCP Server 入口（54 个工具）
+│   ├── mcp_server.py                 # MCP Server 入口（55 个工具）
 │   ├── pipeline_runner.py            # 管线引擎（audit/architecture/docs + 知识图谱）
 │   ├── tool_registry.py              # 工具注册中心（收敛管线引擎的上帝模块职责）
 │   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
@@ -453,6 +454,16 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.4.0 — 自由布局画布引擎：架构图/流程图可自由拖拽（参考 smart-flow 交互理念）
+
+> 参考 [smart-flow](https://github.com/MrXujiang/smart-flow)（GPL-3.0，仅参考交互理念、不拷贝代码）的自由布局画布能力，自研轻量实现。
+
+- **`core/canvas_engine.py` 自由布局画布引擎**（新增）：纯 HTML/CSS/JS + SVG 自包含、零外部依赖、离线可用。完整交互：节点自由拖拽（网格 + 节点边缘对齐吸附）、端口拖出任意连线成流（自动选端口）、画布平移/缩放（滚轮 + 按钮）、缩略图导航（mini-map 点击跳转）、右键菜单（添加/复制/删除节点、连线样式、自动布局、导出 JSON）、快捷键（Ctrl+Z 撤销 / Ctrl+Shift+Z 重做 / Delete 删除 / Ctrl+A 全选 / 方向键微调 / Ctrl+± 缩放）、属性面板（编辑节点/连线 label、颜色、props JSON）、分层/力导向自动布局、导出/导入画布 JSON、撤销/重做历史栈
+- **`core/canvas_generator.py` 架构画布升级为自由布局版**：三层布局（业务步骤 → 技术角色 → 代码模块）改为自由画布节点 + 连线；差距高亮保留（游离灰/循环黄/缺失红虚线/依赖违例红连线）；业务步骤→角色映射、角色→模块归属、模块→模块依赖均以可拖拽连线呈现
+- **`core/flow_canvas.py` 交互式流程画布**（新增，MCP `coderef_flow_canvas`）：从代码自动提取业务管线（`pipeline_insight` P0-A 入口管线，沿 CALLS 归纳阶段序）+ 跨模块业务数据流（`cross_module_flows`），渲染为可自由拖拽的流程图；每条管线一个图层，步骤按序连线，跨模块数据流带调用次数标签
+- **MCP 工具**：`coderef_arch_canvas` 升级为自由布局版；新增 `coderef_flow_canvas`（project_path / output_dir / max_entries / max_depth，默认后台执行，加入 HEAVY_TOOLS）
+- **版本号**：5.3.4 → 5.4.0
 
 ### v5.3.4 — CodeRabbit 复审 4 findings：测试目录识别/跨目录判定/import 歧义/同构空集
 
