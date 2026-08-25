@@ -85,5 +85,5 @@
 
 **落地结果（v5.4.2，方向 A 为主 + B 为辅）**：
 - **方向 A（主，已落地）**：把操作红线/规程投放到项目根 `CODEREF.md`，再由 `AGENTS.md` 一行引入 → 记忆进入所有认 AGENTS.md 的 AI 的自然读取路径（"送上门"）。CODEREF.md 含第 6 节「记忆守则」，显式要求取/存/强制 gate，把 A+B 串成双向闭环。
-- **方向 B（辅，已落地）**：把 `operation_memory` 增量同步收紧为治理流程强制收尾——`core/pipeline_runner.py` 新增 `_auto_sync_om_on_gov()`，在 `coderef_audit`（`Pipe.audit`）与 `coderef_scan`（`run_single`）收尾自动增量同步 `mode="incr", with_llm=False`；开关 `settings.OMEM_AUTO_SYNC_ON_GOV`（默认 True），best-effort 失败仅记日志不破坏主流程。解决"存"，让记忆始终新鲜供 recover/query。
+- **方向 B（辅，已落地）**：把 `operation_memory` 增量同步收紧为治理流程强制收尾——`core/pipeline_runner.py` 新增 `_auto_sync_om_on_gov()`，在 `coderef_audit`（`Pipe.audit`）与 `coderef_scan`（`run_single`）收尾自动增量同步 `mode="incr", with_llm=False`；**后台 daemon 线程执行，不阻塞工具返回，同一项目 30s 内去重**；开关 `settings.OMEM_AUTO_SYNC_ON_GOV`（默认 True），best-effort 失败仅记日志不破坏主流程。解决"存"，让记忆始终新鲜供 recover/query。`coderef_review/architecture/docs` 等 LLM/重型路径不走自动同步，可显式 sync。
 - **待观察**：方向 A 是否真被"陌生编程 AI"自然读到（用多 agent 实测），以及 CODEREF.md 多 AI 并发时的写入治理（当前由我统一维护，暂未开放多 AI 写）。

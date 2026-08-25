@@ -47,7 +47,7 @@ git -c user.name="CodeRef" -c user.email="coderef@local" commit -m "..."
 
 ## 6. 记忆守则（方向 A+B 落地：存 + 取双向闭环）
 - **取（上下文丢失/工具定位/约定类操作前）——强制 gate**：涉及 git / push / CodeRabbit / Release 或约定类操作，先调 `coderef_operation_memory_recover`（一次拿回工具位置+约定/踩坑/决策）→ 按需 `coderef_operation_memory_query`/`find`/`status`。勿满 PATH 找工具、勿未查记忆直接抓外部连接器。coderabbit 等 CLI 常装 WSL `~/.local/bin`，不在 Windows PATH，`where` 找不到不代表没装。
-- **存（规模化沉淀）——强制收尾**：走 `coderef_audit` / `coderef_scan` / `coderef_review` 等治理流程后，coderef 已自动做操作记忆增量同步（best-effort）。你也可随时显式 `coderef_operation_memory_sync` 沉淀最新决策。
+- **存（规模化沉淀）——强制收尾**：`coderef_audit` / `coderef_scan` 走完后，coderef 已自动做操作记忆增量同步（`mode="incr", with_llm=False`，**后台线程**执行，不阻塞工具返回；同一项目 30s 内去重；开关 `settings.OMEM_AUTO_SYNC_ON_GOV`）。`coderef_review`/`coderef_architecture`/`coderef_docs` 等 LLM 或重型路径不走自动同步（避免叠加耗时/依赖抖动），需要沉淀时可显式 `coderef_operation_memory_sync`。
 - 被治理的项目各有独立操作记忆目录（`data/operation_memory/<项目hash>/`），产出 `ledger.json + BRAIN.md + timeline.md`。
 - 本页与 `AGENTS.md` 属「送上门」的生效件；operation_memory 属「要取才取」的辅助件——两者都认，互为补充。
 
