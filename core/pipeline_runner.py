@@ -17,6 +17,23 @@ from typing import Dict, List, Optional
 from enum import Enum
 from core import tool_registry
 
+
+def _auto_sync_om_on_gov(project_path: str) -> None:
+    """方向 B：治理流程收尾强制自动增量同步操作记忆。
+
+    让"记忆始终新鲜"（解决存），供后续 recover/query 取到最新约定/工具定位。
+    best-effort：尊重 OMEM_AUTO_SYNC_ON_GOV 开关，失败仅记日志，绝不破坏主流程。
+    """
+    try:
+        from config import settings
+        if not getattr(settings, "OMEM_AUTO_SYNC_ON_GOV", True):
+            return
+        from core.operation_memory import operation_memory
+        operation_memory.sync(project_path, mode="incr", with_llm=False)
+    except Exception as e:
+        logger.warning(f"[gov] 操作记忆自动收尾同步跳过: {e}")
+
+
 class Tier(Enum):
     HIGH = "high"
     MEDIUM = "medium"
@@ -1121,6 +1138,7 @@ def run_single(pipe: "Pipe", project_path: str, tool: str) -> PipeResult:
         r.errors.append(str(e))
     r.health_score = _compute_health(r)
     r.elapsed = round(time.time() - pipe._t0, 1)
+    _auto_sync_om_on_gov(project_path)
     return r
 
 def docs(project_path: str, output_dir: str = None,
@@ -1772,6 +1790,7 @@ class Pipe:
 
         r.health_score = self._compute_health(r)
         r.elapsed = round(time.time() - self._t0, 1)
+        _auto_sync_om_on_gov(project_path)
         return r
 
     # ─── 单工具运行（供 MCP: coderef_scan_* 调用）───
