@@ -492,8 +492,8 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 
 > 专项工具对账（20260826）暴露的工具可信度问题集中修复：owasp 静态检测 8/8 误报、change_guard 4/4 误报降噪，flow_verify 入口指引与相近符号提示，target_arch_set 描述补 role_keywords 说明。
 
-- ** owasp 静态检测降噪（`core/owasp_compliance.py`）**：新增 `_is_false_positive` 上下文识别，过滤 mock/测试桩、错误码常量、内部路径拼接、临时文件清理、标准库导入、台账 JSON 写入、角色顺序正确、密钥从配置读取等 8 类静态启发式误报；总量 906→717；summary 明确标注"静态启发式规则误报率较高，需人工复核"
-- ** change_guard 退化误报修复（`core/change_guard.py`）**：按行方向区分新增/删除校验（`+` 新增、`-` 删除），删除行须在新增行中无等价替代才报退化，避免把"重构/移动/新增校验"误判为"删能力"；4 个误报文件（canvas.py/db_schema.py/engine_v3.py/research_bridge.py）全部消除，真实退化仍能检出
+- ** owasp 静态检测降噪（`core/owasp_compliance.py`）**：新增 `_is_false_positive` 上下文识别，过滤 mock/测试桩、错误码常量、内部路径拼接、临时文件清理、标准库导入、台账 JSON 写入、角色顺序正确、密钥从配置读取等 8 类静态启发式误报；总量 906→726；summary 明确标注"静态启发式规则误报率较高，需人工复核"。CodeRabbit 评审后修订：临时文件清理需临时/缓存路径证据（`_has_temp_evidence`，避免抑制 `os.remove(request.args["path"])` 等破坏性删除）；角色扫描回溯方向修正（从 line_no 向文件开头回溯、遇 def/class 边界停止，原 `start=i+1` 更新无效导致 system append 在 def 之后时漏检）
+- ** change_guard 退化误报修复（`core/change_guard.py`）**：按行方向区分新增/删除校验（`+` 新增、`-` 删除），删除行须在新增行中无等价替代才报退化，避免把"重构/移动/新增校验"误判为"删能力"；4 个误报文件（canvas.py/db_schema.py/engine_v3.py/research_bridge.py）全部消除，真实退化仍能检出。CodeRabbit 评审后修订：重试削弱检测移除校验链前置条件（无校验链的客户端删除重试同样检出）；新增 `_is_decl_or_comment` 排除 SQL 建表/字段声明行、纯注释行，避免 SQL 字段名（如 `retry_count`）误判为删重试逻辑
 - ** change_guard 路径可读性（`core/change_guard.py`）**：`_clean_diff_path` 去掉 git diff 路径两端引号、`a/`/`b/` 前缀，解码 UTF-8 八进制字节转义，输出可读相对路径（如 `创意引擎/engine_v3.py`）
 - ** flow_verify 入口指引（`core/mcp_server.py` + `core/flow_verify.py`）**：description 补充 `相对目录名.符号名`（如 `调研工具.run_bot`）写法指引；入口未命中时新增 `suggest_entries` 相近符号候选（名称模糊匹配 top N，带文件路径+行号），summary 附候选减少试错
 - ** target_arch_set 描述补全（`core/mcp_server.py`）**：description 明确 `tech_roles.role_keywords`（可选，角色职责关键词表，供 coderef_role_boundary 符号级职责判定；缺省时 role_boundary 会提示未配置）

@@ -426,18 +426,42 @@ class OWASPCompliance:
         """检查 line_no 之前（同函数内）是否已有 system 角色 append。
 
         用于角色混淆误报降噪：system 消息先于 user 追加是正确顺序，非混淆。
+        从当前行向文件开头回溯，遇到函数/类定义边界即停止，只检查当前
+        函数体内的 system append，避免跨函数误判。
         """
         lines = self._line_cache.get(filepath, [])
-        start = max(0, line_no - 61)
-        for i in range(start, line_no - 1):
+        for i in range(line_no - 2, -1, -1):
             if i >= len(lines):
                 break
             s = lines[i].strip()
-            if re.search(r'messages\.append\s*\(\s*\{.*role.*system', s):
-                return True
             # 遇到函数/类定义边界即停止回溯，避免跨函数误判
             if s.startswith(("def ", "class ", "async def ")):
-                start = i + 1
+                break
+            if re.search(r'messages\.append\s*\(\s*\{.*role.*system', s):
+                return True
+        return False
+
+    def _has_temp_evidence(self, filepath: str, line_no: int) -> bool:
+        """检查当前行及前 6 行是否有临时/缓存文件证据。
+
+        用于临时文件清理误报降噪：只有目标是受控临时/缓存路径（tempfile API、
+        "临时/清理"注释、tmp/temp/cache 变量或路径）才视为清理，避免抑制
+        os.remove(request.args["path"]) 等对用户输入的破坏性删除。
+        """
+        lines = self._line_cache.get(filepath, [])
+        start = max(0, line_no - 7)
+        ctx = "\n".join(lines[start:line_no]).lower()
+        if not ctx:
+            return False
+        # tempfile 模块 / 临时目录 API
+        if re.search(r'(?:tempfile|namedtemporaryfile|temporarydirectory|mkstemp|mkdtemp)', ctx):
+            return True
+        # 注释含"临时/清理/缓存"
+        if re.search(r'#.*(?:临时|清理|缓存)', ctx):
+            return True
+        # 变量名/路径含 tmp/temp/cache（独立词或下划线/点/横线形式）
+        if re.search(r'\b(?:tmp|temp|cache)\b|[_\-.](?:tmp|temp|cache)\b|\b(?:tmp|temp|cache)[_\-. ]', ctx):
+            return True
         return False
 
     def _is_false_positive(self, filepath: str, line_no: int, title: str) -> bool:
@@ -469,9 +493,10 @@ class OWASPCompliance:
         # 3) 内部目录路径拼接（self.xxx_dir/self.output_dir 等 + 固定文件名）
         if re.search(r'os\.path\.join\s*\(\s*self\.\w*(?:dir|path|folder|root)\b', s):
             return True
-        # 4) 临时文件清理
+        # 4) 临时文件清理（需临时/缓存路径证据，避免抑制 os.remove(request.args["path"]) 等破坏性操作）
         if re.search(r'\bos\.(?:unlink|remove|rmdir|rmtree)\s*\(', s):
-            return True
+            if self._has_temp_evidence(filepath, line_no):
+                return True
         # 5) 日志/字符串中的 pip install 提示（非实际执行）
         if re.search(r'pip\s+install\b', s) and re.search(r'(?:logger\.|print|["\'])', s):
             return True
