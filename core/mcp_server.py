@@ -461,11 +461,12 @@ BUILTIN_TOOLS: List[Dict] = [
         {
                     "name": "coderef_arch_canvas",
                     "description": (
-                        "生成可视化架构画布 HTML（5.0 Phase 1：架构推回正轨工作台的可视化前端）。\n"
+                        "生成可视化架构画布 HTML（5.4 自由布局版：架构推回正轨工作台的可视化前端）。\n"
                         "纯 HTML/CSS/JS + SVG 自包含、零外部依赖、离线可用。三层布局：\n"
                         "业务层（业务流程步骤）→ 技术层（技术角色容器）→ 代码层（代码模块节点）。\n"
-                        "交互：把代码模块拖入技术角色定义目标归属；业务步骤点击后点角色建立业务→技术映射；\n"
-                        "差距高亮（游离灰底/依赖违例红连线/缺失角色红虚线/循环黄框）；导出/复制目标架构 JSON。\n"
+                        "自由布局交互：节点自由拖拽（对齐吸附）、端口拖出任意连线成流、画布平移/缩放、\n"
+                        "缩略图导航、右键菜单、快捷键（Ctrl+Z 撤销/Delete 删除）、属性面板、分层/力导向自动布局、\n"
+                        "导出/导入画布 JSON。差距高亮（游离灰底/依赖违例红连线/缺失角色红虚线/循环黄框）。\n"
                         "数据层完全复用 arch_gap_analyzer + 知识图谱。输出 HTML 文件路径。\n"
                         "纯静态、确定性，不依赖 LLM。超大项目同步可能超时，默认后台执行。"
                     ),
@@ -473,6 +474,25 @@ BUILTIN_TOOLS: List[Dict] = [
                             "project_path": {"type": "string", "description": "目标项目路径"},
                             "target_arch": {"type": "object", "description": "目标架构 JSON（可选，缺省读已存储）"},
                             "output_dir": {"type": "string", "description": "画布输出目录（可选，默认 <project>/.coderef/）"},
+                            "background": {"type": "boolean", "description": "后台执行（超大项目同步可能超时，默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                        }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_flow_canvas",
+                    "description": (
+                        "生成交互式流程画布 HTML（5.4：从代码自动提取业务管线与跨模块数据流）。\n"
+                        "纯 HTML/CSS/JS + SVG 自包含、零外部依赖、离线可用。\n"
+                        "数据源（纯静态、确定性）：pipeline_insight（P0-A 入口管线，沿 CALLS 归纳阶段序）\n"
+                        "+ cross_module_flows（跨模块业务数据流）。\n"
+                        "自由布局交互：节点自由拖拽（对齐吸附）、端口拖出任意连线成流、画布平移/缩放、\n"
+                        "缩略图导航、右键菜单、快捷键、属性面板、分层/力导向自动布局、导出/导入画布 JSON。\n"
+                        "输出 HTML 文件路径。纯静态、确定性，不依赖 LLM。超大项目同步可能超时，默认后台执行。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "output_dir": {"type": "string", "description": "画布输出目录（可选，默认 <project>/.coderef/）"},
+                            "max_entries": {"type": "integer", "description": "最多归纳的入口管线数（默认 6）", "default": 6},
+                            "max_depth": {"type": "integer", "description": "调用链搜索深度（默认 6）", "default": 6},
                             "background": {"type": "boolean", "description": "后台执行（超大项目同步可能超时，默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
                         }, "required": ["project_path"]},
                 },
@@ -1709,6 +1729,24 @@ def _arch_canvas(a: dict) -> str:
     }, ensure_ascii=False)
 
 
+def _flow_canvas(a: dict) -> str:
+    """交互式流程画布（coderef_flow_canvas）"""
+    from core.flow_canvas import FlowCanvas
+    pp = a["project_path"]
+    output_dir = a.get("output_dir")
+    max_entries = a.get("max_entries", 6)
+    max_depth = a.get("max_depth", 6)
+    filepath = FlowCanvas().generate(project_path=pp, output_dir=output_dir,
+                                     max_entries=max_entries, max_depth=max_depth)
+    return json.dumps({
+        "status": "completed",
+        "tool": "coderef_flow_canvas",
+        "project_path": pp,
+        "result_path": filepath,
+        "message": "流程画布已生成，浏览器打开即可拖拽编辑、导出画布 JSON",
+    }, ensure_ascii=False)
+
+
 def _refactor_plan(a: dict) -> str:
     """重构任务卡生成（coderef_refactor_plan）"""
     from core.refactor_task_generator import RefactorTaskGenerator
@@ -2138,6 +2176,7 @@ class Server:
             "coderef_target_arch_get": self._target_arch_get,
             "coderef_arch_gap": self._arch_gap,
             "coderef_arch_canvas": self._arch_canvas,
+            "coderef_flow_canvas": self._flow_canvas,
             "coderef_refactor_plan": self._refactor_plan,
             "coderef_arch_verify": self._arch_verify,
             "coderef_gov_start": self._gov_start,
@@ -2189,7 +2228,7 @@ class Server:
         self.HEAVY_TOOLS = {
             "coderef_audit", "coderef_docs", "coderef_review", "coderef_frontend",
             "coderef_report", "coderef_audit_advisor", "coderef_architecture",
-            "coderef_arch_canvas",
+            "coderef_arch_canvas", "coderef_flow_canvas",
             "coderef_memory_sync", "coderef_memory_quality", "coderef_memory_status",
             "coderef_operation_memory_sync",
             "coderef_owasp",
@@ -2390,6 +2429,9 @@ class Server:
 
     def _arch_canvas(self, a: dict):
         return _arch_canvas(a)
+
+    def _flow_canvas(self, a: dict):
+        return _flow_canvas(a)
 
     def _refactor_plan(self, a: dict):
         return _refactor_plan(a)
