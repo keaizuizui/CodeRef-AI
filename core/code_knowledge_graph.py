@@ -176,9 +176,12 @@ def _resolve_import_target(imp: str, mod_ids: set) -> str:
             return f"mod:{key}"
     if parts:
         tail = parts[-1]
-        for mid in mod_ids:
-            if mid == f"mod:{tail}" or mid.endswith(f"/{tail}"):
-                return mid
+        matches = [
+            mid for mid in mod_ids
+            if mid == f"mod:{tail}" or mid.endswith(f"/{tail}")
+        ]
+        if len(matches) == 1:
+            return matches[0]
     return ""
 
 

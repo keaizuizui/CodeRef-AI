@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.3.3** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.3.4** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -453,6 +453,14 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.3.4 — CodeRabbit 复审 4 findings：测试目录识别/跨目录判定/import 歧义/同构空集
+
+- **`_is_test_file` 根级测试目录识别**（minor）：路径段拆分检查 `test/tests/测试` 目录段，修复根级 `tests/foo.py`（相对路径无前导斜杠）漏判为测试文件——`source_engine/engine.py` 因此被正确标为"活跃真身"（被引用 17，引用方含 `research_queue.py`）
+- **`duplicate_insight` 跨目录判定**（major）：改用相对路径目录（`_rel_dir`）判断跨目录，修复 `apps/worker` 与 `legacy/worker` 同名 basename 被 `_mod_of` 合并误判同目录而漏报；`_mod_of` 仅用于报告展示
+- **`_resolve_import_target` 歧义兜底**（major）：tail fallback 收集全部匹配模块 ID，仅恰好一个匹配时返回，歧义返回空——不再依赖 `mod_ids` 集合迭代顺序选目标
+- **`_dir_isomorph_insight` 空函数集跳过**（major）：任一侧函数签名集为空时跳过该目录对，避免空集 Jaccard=1.0 把纯文件目录误判为同构
+- **版本号**：5.3.3 → 5.3.4
 
 ### v5.3.3 —  业务级判定增强：真身/重复聚焦业务类，目录级同构识别
 
