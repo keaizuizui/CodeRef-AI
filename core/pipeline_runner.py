@@ -9,7 +9,7 @@ Pipeline Runner v2.0 — 三模式管线
 All modes share: single AST scan + checkpoint resume.
 """
 
-import os, sys, json, time, hashlib, traceback, importlib
+import os, sys, json, time, hashlib, traceback, importlib, threading
 from datetime import datetime
 from loguru import logger
 from dataclasses import dataclass, field
@@ -19,19 +19,40 @@ from core import tool_registry
 
 
 def _auto_sync_om_on_gov(project_path: str) -> None:
-    """方向 B：治理流程收尾强制自动增量同步操作记忆。
+    """方向 B：治理流程收尾自动增量同步操作记忆（后台线程，不阻塞主流程）。
 
     让"记忆始终新鲜"（解决存），供后续 recover/query 取到最新约定/工具定位。
     best-effort：尊重 OMEM_AUTO_SYNC_ON_GOV 开关，失败仅记日志，绝不破坏主流程。
+    用 daemon 线程延迟执行，Tool 返回不受同步耗时/跨进程锁重试影响；同一项目
+    _OM_GOV_SYNC_MIN_INTERVAL 秒内只排一次，避免高频 coderef_scan 反复触发重扫。
     """
     try:
         from config import settings
         if not getattr(settings, "OMEM_AUTO_SYNC_ON_GOV", True):
             return
-        from core.operation_memory import operation_memory
-        operation_memory.sync(project_path, mode="incr", with_llm=False)
-    except Exception as e:
-        logger.warning(f"[gov] 操作记忆自动收尾同步跳过: {e}")
+        now = time.time()
+        with _OM_GOV_SYNC_LOCK:
+            last = _OM_GOV_SYNC_LAST.get(project_path, 0.0)
+            if now - last < _OM_GOV_SYNC_MIN_INTERVAL:
+                return
+            _OM_GOV_SYNC_LAST[project_path] = now
+    except Exception:
+        return
+
+    def _run():
+        try:
+            from core.operation_memory import operation_memory
+            operation_memory.sync(project_path, mode="incr", with_llm=False)
+        except Exception as e:
+            logger.warning(f"[gov] 操作记忆自动收尾同步跳过: {e}")
+
+    threading.Thread(target=_run, daemon=True, name="om-gov-sync").start()
+
+
+# 治理收尾自动同步的最小间隔（秒）与去重状态；线程安全
+_OM_GOV_SYNC_MIN_INTERVAL = 30.0
+_OM_GOV_SYNC_LAST: Dict[str, float] = {}
+_OM_GOV_SYNC_LOCK = threading.Lock()
 
 
 class Tier(Enum):
