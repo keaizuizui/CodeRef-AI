@@ -47,3 +47,4 @@ Thumbs.db
 .DS_Store
 # 重构回退备份（不入库）
 core/mcp_server.py.bak
+*.bak_u11

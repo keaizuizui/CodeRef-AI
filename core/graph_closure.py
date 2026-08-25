@@ -27,7 +27,8 @@ def load_graph(db_path: str) -> Tuple[Dict[str, dict], Dict[str, List[str]]]:
     con = sqlite3.connect(db_path)
     try:
         con.row_factory = sqlite3.Row
-        for r in con.execute("SELECT id,type,name,file_path,start_line,props FROM nodes"):
+        for r in con.execute(
+                "SELECT id,type,name,file_path,start_line,end_line,props FROM nodes"):
             d = dict(r)
             try:
                 d["props"] = json.loads(d["props"] or "{}")
