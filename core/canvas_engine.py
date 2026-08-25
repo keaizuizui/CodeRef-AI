@@ -117,8 +117,7 @@ def auto_layout(canvas_data: Dict[str, Any], mode: str = "layered") -> Dict[str,
     data = normalize(canvas_data)
     nodes = data["nodes"]
     edges = data["edges"]
-    unpositioned = [n for n in nodes if n["x"] == 0 and n["y"] == 0]
-    if not unpositioned:
+    if not any(n["x"] == 0 and n["y"] == 0 for n in nodes):
         return data
     if mode == "force":
         _layout_force(nodes, edges)
@@ -127,10 +126,19 @@ def auto_layout(canvas_data: Dict[str, Any], mode: str = "layered") -> Dict[str,
     return data
 
 
+def _is_unpositioned(n: Dict) -> bool:
+    """是否未显式定位（x/y 均为 0 视为未布局）。"""
+    return n["x"] == 0 and n["y"] == 0
+
+
 def _layout_layered(nodes: List[Dict], edges: List[Dict],
                     layer_gap: float = 150, node_gap: float = 28,
                     margin: float = 80) -> None:
-    """分层布局：按 layer 分组，层间垂直排列，层内水平排列。"""
+    """分层布局：按 layer 分组，层间垂直排列，层内水平排列。
+
+    仅给未定位节点（x=0 且 y=0）赋坐标；已显式定位的节点保留原位，
+    其占位宽度仍计入层宽计算，避免与自动布局节点重叠。
+    """
     # 层分组（保持节点出现顺序）
     order: List[str] = []
     layers: Dict[str, List[Dict]] = {}
@@ -143,12 +151,22 @@ def _layout_layered(nodes: List[Dict], edges: List[Dict],
     y = margin
     for l in order:
         items = layers[l]
+        unpositioned = [n for n in items if n["x"] == 0 and n["y"] == 0]
+        if not unpositioned:
+            continue
+        # 已定位节点的最大底边作为该层起点，避免重叠
+        placed_bottom = margin
+        for n in items:
+            if n["x"] != 0 or n["y"] != 0:
+                placed_bottom = max(placed_bottom, n["y"] + n.get("h", _DEF_H))
+        y = max(y, placed_bottom + layer_gap)
         total_w = sum(n.get("w", _DEF_W) for n in items) + node_gap * (len(items) - 1)
         x = margin + max(0, (DEFAULT_WIDTH - 2 * margin - total_w) / 2)
         row_h = 0
         for n in items:
-            n["x"] = x
-            n["y"] = y
+            if n["x"] == 0 and n["y"] == 0:
+                n["x"] = x
+                n["y"] = y
             x += n.get("w", _DEF_W) + node_gap
             row_h = max(row_h, n.get("h", _DEF_H))
         y += row_h + layer_gap
@@ -157,35 +175,36 @@ def _layout_layered(nodes: List[Dict], edges: List[Dict],
 def _layout_force(nodes: List[Dict], edges: List[Dict],
                   iterations: int = 150, w: float = DEFAULT_WIDTH,
                   h: float = DEFAULT_HEIGHT) -> None:
-    """简单力导向布局：斥力（所有节点对）+ 弹簧力（边）。"""
+    """简单力导向布局：斥力（所有节点对）+ 弹簧力（边）。
+
+    已显式定位的节点作为固定锚点，不参与移动；仅布局未定位节点（x=0 且 y=0）。
+    """
     import random
     rng = random.Random(42)
-    for n in nodes:
+    movable = [n for n in nodes if _is_unpositioned(n)]
+    fixed = {id(n) for n in nodes if not _is_unpositioned(n)}
+    if not movable:
+        return
+    for n in movable:
         n["x"] = rng.uniform(100, w - 100)
         n["y"] = rng.uniform(100, h - 100)
 
-    # 邻接表
-    adj: Dict[str, List[str]] = {}
-    for e in edges:
-        adj.setdefault(e["from"], []).append(e["to"])
-        adj.setdefault(e["to"], []).append(e["from"])
-
     for _ in range(iterations):
-        # 斥力
-        for i in range(len(nodes)):
-            for j in range(i + 1, len(nodes)):
-                a, b = nodes[i], nodes[j]
+        # 斥力（固定锚点只推挤可动节点，自身不移位）
+        for i, a in enumerate(nodes):
+            if id(a) in fixed:
+                continue
+            for j, b in enumerate(nodes):
+                if i == j:
+                    continue
                 dx = b["x"] - a["x"]
                 dy = b["y"] - a["y"]
                 d2 = max(dx * dx + dy * dy, 1e-4)
                 d = d2 ** 0.5
                 f = 12000 / d2
-                fx, fy = f * dx / d, f * dy / d
-                a["x"] -= fx
-                a["y"] -= fy
-                b["x"] += fx
-                b["y"] += fy
-        # 弹簧力
+                a["x"] -= f * dx / d * 0.5
+                a["y"] -= f * dy / d * 0.5
+        # 弹簧力（只移动可动端点）
         for e in edges:
             a = next((n for n in nodes if n["id"] == e["from"]), None)
             b = next((n for n in nodes if n["id"] == e["to"]), None)
@@ -196,12 +215,14 @@ def _layout_force(nodes: List[Dict], edges: List[Dict],
             d = max((dx * dx + dy * dy) ** 0.5, 1e-4)
             f = 0.02 * (d - 200)
             fx, fy = f * dx / d, f * dy / d
-            a["x"] += fx
-            a["y"] += fy
-            b["x"] -= fx
-            b["y"] -= fy
+            if id(a) not in fixed:
+                a["x"] += fx * 0.5
+                a["y"] += fy * 0.5
+            if id(b) not in fixed:
+                b["x"] -= fx * 0.5
+                b["y"] -= fy * 0.5
         # 边界约束
-        for n in nodes:
+        for n in movable:
             n["x"] = max(20, min(w - 20, n["x"]))
             n["y"] = max(20, min(h - 20, n["y"]))
 
@@ -357,19 +378,30 @@ const mmCtx = mmCanvas.getContext('2d');
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 // ═══════════ 视口变换 ═══════════
-function toWorld(sx, sy){ return {x:(sx - view.x)/view.scale, y:(sy - view.y)/view.scale}; }
+function toLocal(cx, cy){
+  const r = wrap.getBoundingClientRect();
+  return {x: cx - r.left, y: cy - r.top};
+}
+function toWorld(cx, cy){
+  const p = toLocal(cx, cy);
+  return {x:(p.x - view.x)/view.scale, y:(p.y - view.y)/view.scale};
+}
 function applyView(){
   viewport.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
   renderMiniMap();
 }
 function zoomAt(cx, cy, factor){
+  const p = toLocal(cx, cy);
   const w = toWorld(cx, cy);
   view.scale = Math.max(0.2, Math.min(3, view.scale * factor));
-  view.x = cx - w.x * view.scale;
-  view.y = cy - w.y * view.scale;
+  view.x = p.x - w.x * view.scale;
+  view.y = p.y - w.y * view.scale;
   applyView();
 }
-function zoomBy(factor){ zoomAt(wrap.clientWidth/2, wrap.clientHeight/2, factor); }
+function zoomBy(factor){
+  const r = wrap.getBoundingClientRect();
+  zoomAt(r.left + wrap.clientWidth/2, r.top + wrap.clientHeight/2, factor);
+}
 function fitView(){
   if (!nodes.length) return;
   let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
@@ -538,6 +570,7 @@ wrap.addEventListener('mousedown', e => {
       selected.clear();
     }
     selected.add(id);
+    recordPre();
     renderNodes();
     drag = {mode:'node', id, startX:e.clientX, startY:e.clientY,
             orig: nodes.find(n => n.id===id) ? {x:nodes.find(n=>n.id===id).x, y:nodes.find(n=>n.id===id).y} : {x:0,y:0}};
@@ -577,15 +610,20 @@ window.addEventListener('mouseup', e => {
         const from = connectFrom.node;
         const ap = autoPort(from, toNode);
         const eid = 'e' + Date.now();
+        recordPre();
         edges.push({id:eid, from:connectFrom.nodeId, to:toNode.id,
                     fromPort: connectFrom.port || ap.fromPort, toPort: ap.toPort,
                     label:'', type:'edge', color:'#94A3B8', dashed:false});
-        pushHistory();
+        commitChange();
         toast(`已连线 ${from.label} → ${toNode.label}`);
       }
     }
     clearTempEdge();
     connectFrom = null;
+  } else if (drag.mode === 'node'){
+    const n = nodes.find(x => x.id === drag.id);
+    if (n && (n.x !== drag.orig.x || n.y !== drag.orig.y)) commitChange();
+    else pendingPre = null;
   }
   drag = null;
   wrap.classList.remove('panning');
@@ -694,6 +732,7 @@ function saveProps(){
   if (!propTarget) return;
   const label = document.getElementById('ppLabel').value;
   const color = document.getElementById('ppColor').value;
+  recordPre();
   if (propTarget.kind === 'node'){
     const n = nodes.find(x => x.id === propTarget.id);
     if (!n) return;
@@ -713,7 +752,7 @@ function saveProps(){
     const dashed = document.getElementById('ppDashed');
     if (dashed) e.dashed = dashed.value === '1';
   }
-  pushHistory();
+  commitChange();
   render();
   toast('已保存');
 }
@@ -721,6 +760,7 @@ function closeProps(){ document.getElementById('propPanel').classList.remove('op
 function deleteSelected(){
   if (!propTarget) return;
   const {kind, id} = propTarget;
+  recordPre();
   if (kind === 'node'){
     nodes = nodes.filter(n => n.id !== id);
     edges = edges.filter(e => e.from !== id && e.to !== id);
@@ -728,7 +768,7 @@ function deleteSelected(){
     edges = edges.filter(e => e.id !== id);
   }
   selected.clear();
-  pushHistory();
+  commitChange();
   closeProps();
   render();
   toast('已删除');
@@ -788,19 +828,21 @@ function menuDuplicate(){
   const src = nodes.find(n => n.id === ctxTarget.id);
   if (!src) return;
   const nid = 'n' + Date.now();
+  recordPre();
   nodes.push({id:nid, type:src.type, label:src.label + ' (副本)', x:src.x+30, y:src.y+30,
               w:src.w, h:src.h, color:src.color, icon:src.icon, layer:src.layer,
               props:Object.assign({}, src.props), ports:src.ports.slice()});
-  pushHistory();
+  commitChange();
   render();
   toast('已复制节点');
 }
 function menuAddNode(){
   if (!ctxTarget || ctxTarget.kind !== 'canvas') return;
   const nid = 'n' + Date.now();
+  recordPre();
   nodes.push({id:nid, type:'node', label:'新节点', x:ctxTarget.wx, y:ctxTarget.wy,
               w:180, h:60, color:'#3B82F6', icon:'📌', layer:'default', props:{}, ports:['top','right','bottom','left']});
-  pushHistory();
+  commitChange();
   render();
   openProps('node', nid);
 }
@@ -821,10 +863,11 @@ document.addEventListener('keydown', e => {
   } else if (e.key === 'Delete' || e.key === 'Backspace'){
     if (selected.size){
       const ids = new Set(selected);
+      recordPre();
       nodes = nodes.filter(n => !ids.has(n.id));
       edges = edges.filter(e => !ids.has(e.from) && !ids.has(e.to));
       selected.clear();
-      pushHistory();
+      commitChange();
       render();
       toast('已删除选中');
     }
@@ -833,7 +876,9 @@ document.addEventListener('keydown', e => {
     e.preventDefault();
     const dx = e.key === 'ArrowLeft' ? -10 : e.key === 'ArrowRight' ? 10 : 0;
     const dy = e.key === 'ArrowUp' ? -10 : e.key === 'ArrowDown' ? 10 : 0;
+    recordPre();
     nodes.forEach(n => { if (selected.has(n.id)){ n.x += dx; n.y += dy; } });
+    commitChange();
     render();
   } else if (e.ctrlKey && (e.key === '+' || e.key === '=')){
     e.preventDefault(); zoomBy(1.2);
@@ -844,8 +889,14 @@ document.addEventListener('keydown', e => {
 
 // ═══════════ 撤销 / 重做 ═══════════
 function snapshot(){ return JSON.stringify({nodes, edges}); }
-function pushHistory(){
-  history.push(snapshot());
+// recordPre(): 在 mutation 之前调用，记录"修改前"快照（只记一次）。
+// commitChange(): mutation 完成后调用，把记录的 pre 快照压入历史栈。
+let pendingPre = null;
+function recordPre(){ if (pendingPre === null) pendingPre = snapshot(); }
+function commitChange(){
+  if (pendingPre === null) return;
+  history.push(pendingPre);
+  pendingPre = null;
   if (history.length > 100) history.shift();
   redoStack = [];
 }
@@ -877,6 +928,7 @@ function layoutLayered(){
     if (!order.includes(l)) order.push(l);
     (layers[l] = layers[l] || []).push(n);
   });
+  recordPre();
   let y = 80;
   order.forEach(l => {
     const items = layers[l];
@@ -886,12 +938,13 @@ function layoutLayered(){
     items.forEach(n => { n.x = x; n.y = y; x += n.w + 28; rowH = Math.max(rowH, n.h); });
     y += rowH + 150;
   });
-  pushHistory();
+  commitChange();
   render();
   fitView();
   toast('已分层布局');
 }
 function layoutForce(){
+  recordPre();
   const rng = (() => { let s = 42; return () => (s = (s*9301+49297)%233280)/233280; })();
   nodes.forEach(n => { n.x = 100 + rng()*(CANVAS.width-200); n.y = 100 + rng()*(CANVAS.height-200); });
   const adj = {};
@@ -914,7 +967,7 @@ function layoutForce(){
     });
     nodes.forEach(n => { n.x=Math.max(20,Math.min(CANVAS.width-20,n.x)); n.y=Math.max(20,Math.min(CANVAS.height-20,n.y)); });
   }
-  pushHistory();
+  commitChange();
   render();
   fitView();
   toast('已力导向布局');
@@ -939,9 +992,10 @@ function importJSON(ev){
   reader.onload = () => {
     try {
       const d = JSON.parse(reader.result);
+      recordPre();
       if (d.nodes) nodes = d.nodes.map(n => Object.assign({}, n));
       if (d.edges) edges = d.edges.map(e => Object.assign({}, e));
-      pushHistory();
+      commitChange();
       render();
       fitView();
       toast('已导入画布 JSON');

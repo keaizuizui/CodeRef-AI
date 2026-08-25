@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.4.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.4.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -454,6 +454,16 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.4.1 — CodeRabbit 复审 4 findings：撤销语义/坐标偏移/自动布局不动已定位/角色高亮
+
+> 对 v5.4.0 自由布局画布进行 CodeRabbit 复审，采纳 4 findings（2 critical / 1 major / 1 minor）。
+
+- **`core/canvas_engine.py` undo/redo 语义修正**（critical）：撤销/重做栈原记录"修改后"状态，回退语义错误。重构为 `recordPre()`（mutation 前记录一次）`/`commitChange()`（mutation 后入栈）成对模式，并把全部 mutation 点接入——节点拖拽、方向键微调、任意连线、增删节点/连线、改属性、复制节点、导入 JSON——现在每个操作撤销时都回到操作前状态；无实际位移的单击不再污染历史栈
+- **`core/canvas_engine.py` 鼠标坐标 44px 偏移**（major）：`toLocal`/`toWorld` 视口变换将 client 坐标换算为 canvasWrap 局部坐标，修复工具栏导致的连线/吸附/右键落点系统性偏差
+- **`core/canvas_engine.py` 自动布局不再覆盖已定位节点**（minor）：`auto_layout` 与分层/力导向布局仅对未定位节点（x=0 且 y=0）赋坐标，已显式定位的节点作为固定锚点保留，避免覆盖调用方排好的位置；力导向布局中锚点只推挤可动节点、自身不移位
+- **`core/canvas_generator.py` 角色节点高亮**（critical）：缺角色判定由 `id.endswith(":")` 改为 `id.startswith("role:")`，缺失角色节点恢复红色高亮
+- **版本号**：5.4.0 → 5.4.1
 
 ### v5.4.0 — 自由布局画布引擎：架构图/流程图可自由拖拽（参考 smart-flow 交互理念）
 

@@ -228,7 +228,7 @@ class ArchCanvas:
                     n["color"] = "#F59E0B"
                 elif n["label"] in unassigned:
                     n["color"] = "#64748B"
-            elif n["type"] == "role" and n["id"].endswith(":"):
+            elif n["type"] == "role" and n["id"].startswith("role:"):
                 rid = n["id"].split(":", 1)[1]
                 if rid in missing_roles:
                     n["props"]["missing"] = True
