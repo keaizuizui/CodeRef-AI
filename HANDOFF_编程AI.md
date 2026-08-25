@@ -87,3 +87,14 @@
 - **方向 A（主，已落地）**：把操作红线/规程投放到项目根 `CODEREF.md`，再由 `AGENTS.md` 一行引入 → 记忆进入所有认 AGENTS.md 的 AI 的自然读取路径（"送上门"）。CODEREF.md 含第 6 节「记忆守则」，显式要求取/存/强制 gate，把 A+B 串成双向闭环。
 - **方向 B（辅，已落地）**：把 `operation_memory` 增量同步收紧为治理流程强制收尾——`core/pipeline_runner.py` 新增 `_auto_sync_om_on_gov()`，在 `coderef_audit`（`Pipe.audit`）与 `coderef_scan`（`run_single`）收尾自动增量同步 `mode="incr", with_llm=False`；**后台 daemon 线程执行，不阻塞工具返回，同一项目 30s 内去重**；开关 `settings.OMEM_AUTO_SYNC_ON_GOV`（默认 True），best-effort 失败仅记日志不破坏主流程。解决"存"，让记忆始终新鲜供 recover/query。`coderef_review/architecture/docs` 等 LLM/重型路径不走自动同步，可显式 sync。
 - **待观察**：方向 A 是否真被"陌生编程 AI"自然读到（用多 agent 实测），以及 CODEREF.md 多 AI 并发时的写入治理（当前由我统一维护，暂未开放多 AI 写）。
+
+## 课题双册对账（2026-08-25 起取代"共写课题统一清单"）
+
+> 背景：原「CodeRef-AI课题统一清单」被测试与开发方共写，存在双写冲突且长期堆积已闭环项。现改为**监控双册、各写各的**，消除共写。
+
+- **测试侧登记册**（测试唯一写）：`测试归档\课题台账\登记册.md` —— 发起课题（U-*）、写期望、回归验证、判定关闭；已闭环项由测试移入 `测试归档\课题台账\已关闭\`。
+- **开发侧响应册**（**你唯一写**）：`交接\响应册.md` —— 承接课题、修复版本、回报结果。
+- **你的动作（必循）**：
+  1. 处理新课题前先读登记册，登记册只留未闭环项。
+  2. 处理完在**响应册**回报（编号/版本/证据指针），同步升 `__init__.py`+README 末位 patch、`copy` 到 `Coderef-Test\coderef-src\`、重启 coderef MCP。
+  3. **只写响应册，不写测试侧任何文件**（`测试归档\`、`真实屎山治理\` 均归测试 owner，你只读）。
