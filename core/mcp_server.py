@@ -219,7 +219,11 @@ BUILTIN_TOOLS: List[Dict] = [
                             "enable_agent_pointer 控制在项目根维护 AGENTS.md 的 CodeRef Wiki 指针区块（R7）；"
                             "cross_verify 控制是否对模块描述做静态交叉验证（确证徽章）。\n"
                             "自动发现子项目并生成独立 Wiki。\n"
-                            "支持 background=True（推荐，生成耗时 3-20 分钟）。"
+                            "支持 background=True（推荐，生成耗时 3-20 分钟）。\n"
+                            "【超大项目边界（ 定性）】全量生成对超大项目（实测 573 文件/20 万+ 行）"
+                            "单次可能超后台兜底 860s 返回 partial——已按模块增量落盘可先用。"
+                            "超大项目请走分片/增量：resume=true 续跑、coderef_audit incr、"
+                            "或对子项目/维度逐个扫描，勿期望单次全量一次成功。"
                         ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
