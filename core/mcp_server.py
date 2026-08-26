@@ -48,7 +48,7 @@ logger = logging.getLogger("coderef")
 # 取略低于常见 host 轮询上限（900s），保证 partial 状态在轮询用尽前可被读到。
 MAX_BG_TASK_SECONDS = 860
 # 分片提示门槛：后台任务运行超过该秒数时，在 partial 结果中建议调用方改用分片/增量
-# 方式继续（如 resume=true 续跑、对子项目/维度逐个扫描），提示分片为更稳妥的路径。
+# 方式继续（如 coderef_audit incr、对子项目/维度逐个扫描），提示分片为更稳妥的路径。
 BG_PARTIAL_SUGGEST_SECONDS = 300
 
 # ：协作式取消专用异常（定义于 core.pipeline_runner，供 docs/audit/wiki 管线
@@ -222,8 +222,8 @@ BUILTIN_TOOLS: List[Dict] = [
                             "支持 background=True（推荐，生成耗时 3-20 分钟）。\n"
                             "【超大项目边界（ 定性）】全量生成对超大项目（实测 573 文件/20 万+ 行）"
                             "单次可能超后台兜底 860s 返回 partial——已按模块增量落盘可先用。"
-                            "超大项目请走分片/增量：resume=true 续跑、coderef_audit incr、"
-                            "或对子项目/维度逐个扫描，勿期望单次全量一次成功。"
+                            "超大项目请走分片/增量：coderef_audit incr、对子项目/维度逐个扫描，"
+                            "勿期望单次全量一次成功。"
                         ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
