@@ -179,12 +179,20 @@ BUILTIN_TOOLS: List[Dict] = [
         {
                         "name": "coderef_audit",
                         "description": (
-                            "全维度代码审计 = 治理审计 + Agent安全 + 依赖扫描(CVE) + 技术债务 + "
-                            "完整性检查 + 盲区检测 + 创新传播 + 垃圾文件 + 资源遗漏 + 代码精简 + 项目成熟度。\n"
-                            "11 个工具一次产出，交叉验证自动分级(HIGH/MEDIUM/LOW)。\n"
-                            "解决 AI 自查幻觉：多独立工具互验。\n"
-                            "支持 background=True 后台执行。"
-                        ),
+                                "全维度代码审计 = 治理审计 + Agent安全 + 依赖扫描(CVE) + 技术债务 + "
+                                "完整性检查 + 盲区检测 + 创新传播 + 垃圾文件 + 资源遗漏 + 代码精简 + 项目成熟度。\n"
+                                "11 个工具一次产出，交叉验证自动分级(HIGH/MEDIUM/LOW)。\n"
+                                "解决 AI 自查幻觉：多独立工具互验。\n"
+                                "支持 background=True 后台执行。\n\n"
+                                "【结构锈蚀场景（P0② 建议书）】本工具做「治理审计/结构诊断」时，重点看 "
+                                "cycle/god_module/large_module 等存量结构症状；对「结构性锈蚀」（重复/孪生/真身），"
+                                "请佐以 coderef_architecture 的 P0-B/P0-C（真身判定/重复簇）与 coderef_arch_gap 的 "
+                                "duplicate/directory_duplicate 差距，勿只依赖本工具 diff 焦点。\n\n"
+                                "【strategy 分场景（P1④/外部D）】\n"
+                                "  • 回归复核新增改动 → strategy=incr（只看本次变更文件，快）\n"
+                                "  • 治理健康度体检/存量结构 → strategy=full（全量 11 工具；若嫌游离噪声多再看 arch_gap 降噪游离）\n"
+                                "  勿把「治理存量结构」当「回归复核」用 strategy=incr——存量重复/孪生不在变更 diff 内，会漏。"
+                            ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
                             "output_dir": {"type": "string", "description": "报告输出目录（默认 coderef-report/）"},
@@ -622,7 +630,13 @@ BUILTIN_TOOLS: List[Dict] = [
                         "约束：仅可从 Confirmed 进入 Fixing；仅可在 Verified 后归档（Archived 前须复验达标）。\n"
                         "action=transition + to_state 做流转；action=reject + reason(必留) 做豁免；\n"
                         "action=meta 更新优先级/负责人/截止/备注。每次流转写活动日志形成审计轨迹。\n"
-                        "issue_id 为工作项 id。纯静态、确定性，不依赖 LLM。"
+                        "issue_id 为工作项 id。纯静态、确定性，不依赖 LLM。\n\n"
+                        "【参数动作速查（P2⑦）】\n"
+                        "  transition：必填 issue_id + action='transition' + to_state（如 Confirmed→Fixing 传 to_state='Fixing'）\n"
+                        "  reject    ：必填 issue_id + action='reject' + reason（豁免理由必留，缺省会报错）\n"
+                        "  meta      ：必填 issue_id + action='meta' + 至少一项（priority/assignee/due_date/note）\n"
+                        "  注意：action=meta 时勿传 to_state（否则报『需 provide to_state』）；\n"
+                        "  状态机强约束下，非法跳转（如 Detected→Fixing）会返回明确错误属正常，先 transition 到合法中间态。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
@@ -850,6 +864,23 @@ BUILTIN_TOOLS: List[Dict] = [
                         "project_path": {"type": "string", "description": "目标项目路径"},
                         "limit": {"type": "integer", "default": 8,
                                   "description": "每类隐性知识（决策/约定/踩坑）最多返回条数"},
+                    }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_operation_memory_export",
+                    "description": (
+                        "操作记忆导出为 Markdown + 冲突检测（外部建议 B）。\n"
+                        "把 decision/convention/pitfall 三段隐性知识渲染为 Markdown 导出（缺省 "
+                        "<项目> data/operation_memory/OPERATION_MEMORY.md），供 attach 到不支持 MCP 的 "
+                        "LLM 界面（Claude Project / CustomGPT 等）复用，打破『记忆只在 SQLite、换界面就得重同步』。\n"
+                        "内置冲突检测：同类别、摘要方向相反的两条记忆（如『禁止 X』与『推荐 X』）标记潜在冲突，"
+                        "呼应测试AI/开发AI 双册对账防覆盖。纯静态、不依赖 LLM。\n"
+                        "返回 output_path + markdown 内容 + conflicts 告警列表。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                        "project_path": {"type": "string", "description": "目标项目路径"},
+                        "output_path": {"type": "string",
+                                        "description": "导出文件路径（可选，缺省 <项目>/data/operation_memory/OPERATION_MEMORY.md）"},
                     }, "required": ["project_path"]},
                 },
         {
@@ -1367,6 +1398,17 @@ def _operation_memory_recover(a: dict) -> str:
     limit = int(a.get("limit", 8))
     r = operation_memory.recover(pp, limit=limit)
     r["tool"] = "coderef_operation_memory_recover"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
+def _operation_memory_export(a: dict) -> str:
+    """操作记忆导出为 Markdown + 冲突检测（coderef_operation_memory_export）"""
+    from core.operation_memory import operation_memory
+    pp = a["project_path"]
+    out = a.get("output_path", "")
+    r = operation_memory.export_markdown(pp, output_path=out)
+    r["tool"] = "coderef_operation_memory_export"
     r["project_path"] = pp
     return json.dumps(r, ensure_ascii=False)
 
@@ -2279,6 +2321,7 @@ class Server:
             "coderef_operation_memory_find": self._operation_memory_find,
             "coderef_operation_memory_status": self._operation_memory_status,
             "coderef_operation_memory_recover": self._operation_memory_recover,
+            "coderef_operation_memory_export": self._operation_memory_export,
             # 4.6 兼容层：coderef_prompt_mgmt / coderef_prompt_audit 已从 tools/list 移除
             #（收敛到 coderef_prompt_governance 唯一入口），此处保留 handler 供旧调用向后兼容转发。
             "coderef_prompt_mgmt": self._prompt_mgmt,
@@ -2456,6 +2499,9 @@ class Server:
 
     def _operation_memory_recover(self, a: dict):
         return _operation_memory_recover(a)
+
+    def _operation_memory_export(self, a: dict):
+        return _operation_memory_export(a)
 
     def _prompt_mgmt(self, a: dict):
         return _prompt_mgmt(a)

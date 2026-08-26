@@ -1296,6 +1296,102 @@ class OperationMemory:
                        ("name", "summary", "path", "note", "detail"))
         return kw in hay.lower()
 
+    def export_markdown(self, project_path: str,
+                        output_path: str = "") -> dict:
+        """外部 B（建议书）：把操作记忆导出为 Markdown 知识库 + 冲突检测。
+
+        - 导出：decision/convention/pitfall 三段渲染为 Markdown，供 attach 到
+          不支持 MCP 的 LLM 界面（Claude Project / CustomGPT 等），打破"记忆只
+          在 SQLite 里、换界面就得重同步"的限制。
+        - 冲突检测：同名/近名且同类别（decision 对 decision）的条目，若摘要方向
+          相反（如含"禁止/不要/失败/改用" 与 "使用/推荐/应该/成功"），标记为
+          潜在冲突并引用旧条目，呼应"测试AI/开发AI 双册对账、防覆盖"。
+        - 纯静态、不依赖 LLM。返回导出路径 + Markdown 内容 + 冲突告警列表。
+        """
+        import re as _re
+
+        project_path = os.path.abspath(project_path)
+        ledger = self._load_ledger(project_path)
+        if not ledger:
+            return {"status": "error",
+                    "message": "操作记忆尚未同步，请先调用 coderef_operation_memory_sync"}
+
+        knowledge = ledger.get("knowledge", {})
+        header = [
+            "# CodeRef-AI 操作记忆（导出）",
+            "",
+            f"- 项目：`{project_path}`",
+            f"- 最近同步：{ledger.get('last_sync', '-')}",
+            f"- LLM 提炼：{'可用' if ledger.get('llm_available') else '未启用/降级'}",
+            f"- 生成：本导出文件供 attach 到不支持 MCP 的 LLM 界面复用。",
+            "",
+            "> 用法：把本文件 attach 到 Claude Project / CustomGPT 等；或人工阅读核对约定。",
+            "",
+        ]
+        body = ["## 隐性知识", _render_knowledge(knowledge)]
+        markdown = "\n".join(header + body) + "\n"
+
+        # ---- 冲突检测 ----
+        # 思路：先剥掉摘要开头的正/否定语气词（建议/禁止/推荐/不要/勿/必须等），
+        # 取剩余"主题核心"做归一化键；同类别、键相同但方向相反的条目视为潜在冲突。
+        # 例如「禁止直接修改生产数据库」vs「推荐直接修改生产数据库」——
+        # 剥掉「禁止」「推荐」后主题核心都是「直接修改生产数据库」，判冲突；
+        # 而「禁止修改数据库」vs「统一用 source_engine」主题核心不同，不误报。
+        conflicts: List[dict] = []
+        _SIGN_WORDS = ("强烈建议", "不建议", "不再", "必须", "统一", "强烈推荐",
+                       "禁止", "推荐", "建议", "应该", "应当", "不要", "勿", "别", "请")
+        _neg_markers = ("禁止", "不要", "勿", "别", "不再", "避免", "不建议", "失败", "已废弃")
+        _pos_markers = ("推荐", "建议", "应该", "必须", "统一", "使用", "采用", "成功")
+        for cat in ("decision", "convention"):
+            items = knowledge.get(cat, [])
+            by_sign: Dict[str, int] = {}
+            by_sum: Dict[str, str] = {}
+            for it in items:
+                s = (it.get("summary") or "").strip()
+                if not s:
+                    continue
+                core = s
+                for w in _SIGN_WORDS:
+                    if core.startswith(w):
+                        core = core[len(w):].lstrip("「『<（(：:，, ")
+                        break
+                key = _re.sub(r"[\W_]+", "", core).lower()[:32]
+                if not key:
+                    continue
+                neg = any(m in s for m in _neg_markers)
+                pos = any(m in s for m in _pos_markers)
+                sign = 1 if pos and not neg else (-1 if neg and not pos else 0)
+                if key in by_sign and by_sign[key] != sign and sign != 0:
+                    conflicts.append({
+                        "category": cat,
+                        "old": by_sum[key],
+                        "new": s,
+                        "warning": "相同主题出现方向相反的两条记忆，请人工核对以哪个为准",
+                    })
+                elif key not in by_sign:
+                    by_sign[key] = sign
+                    by_sum[key] = s
+
+        out = output_path or os.path.join(_omem_dir(project_path),
+                                          "OPERATION_MEMORY.md")
+        try:
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            _write_atomic(out, markdown)
+            written = True
+        except Exception:
+            written = False
+        return {
+            "status": "ok",
+            "tool": "export",
+            "project_path": project_path,
+            "output_path": out,
+            "written": written,
+            "knowledge_counts": {k: len(v) for k, v in knowledge.items()},
+            "conflict_count": len(conflicts),
+            "conflicts": conflicts,
+            "markdown": markdown,
+        }
+
 
 def _count_resources(itemz) -> Dict[str, int]:
     """统计各分类资源数（兼容 dict.items() 或 dict）"""

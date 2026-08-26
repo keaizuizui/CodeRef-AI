@@ -17,6 +17,7 @@ GovernanceStore v1.0 —— CodeRef 5.1 架构治理运营库
 import os, json, time, uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
+from contextlib import contextmanager
 
 from loguru import logger
 
@@ -178,6 +179,23 @@ class GovernanceStore:
             self._conn.close()
             self._conn = None
 
+    # ---------- 事务原子性（外部 C：多 Agent 协作保险，写操作要么全成要么全回滚） ----------
+
+    @contextmanager
+    def _tx(self):
+        """显式事务：写操作包进 BEGIN/COMMIT，异常时 ROLLBACK 不留半截状态。"""
+        c = self._ensure()
+        try:
+            c.execute("BEGIN")
+            yield c
+            c.execute("COMMIT")
+        except Exception:
+            try:
+                c.execute("ROLLBACK")
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+
     # ---------- HealthCycle ----------
 
     def create_cycle(self, name: str, description: str = "",
@@ -191,11 +209,11 @@ class GovernanceStore:
                 timespec="seconds"),
         }
         c = self._ensure()
-        c.execute(
-            "INSERT INTO health_cycle(id,name,description,start_date,end_date,"
-            "status,note,created_at) VALUES(:id,:name,:description,"
-            ":start_date,:end_date,:status,:note,:created_at)", row)
-        c.commit()
+        with self._tx() as c:
+            c.execute(
+                "INSERT INTO health_cycle(id,name,description,start_date,end_date,"
+                "status,note,created_at) VALUES(:id,:name,:description,"
+                ":start_date,:end_date,:status,:note,:created_at)", row)
         logger.info(f"体检周期建档 {cid} {name}")
         return self.get_cycle(cid)
 
@@ -216,10 +234,10 @@ class GovernanceStore:
         if not self.get_cycle(cid):
             return None
         today = datetime.now().strftime("%Y-%m-%d")
-        c.execute("UPDATE health_cycle SET status='closed', end_date=?, note=? "
-                  "WHERE id=? AND status='open'",
-                  (today, note, cid))
-        c.commit()
+        with self._tx() as c:
+            c.execute("UPDATE health_cycle SET status='closed', end_date=?, note=? "
+                      "WHERE id=? AND status='open'",
+                      (today, note, cid))
         return self.get_cycle(cid)
 
     def list_cycles(self) -> List[Dict[str, Any]]:
@@ -254,52 +272,52 @@ class GovernanceStore:
                         (key,)).fetchone()
         if row is None:
             iid = "iss_" + uuid.uuid4().hex[:12]
-            c.execute(
-                "INSERT INTO gov_issue(id,cycle_id,gap_key,gap_type,severity,"
-                "title,module,role_id,flow_id,status,priority,assignee,due_date,"
-                "note,snapshot,recurred,first_detected,last_seen) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (iid, cycle_id, key, gtype, sev, title[:500], mod, rid, fid,
-                 STATUS_DETECTED, "medium", "", "", "", snap, 0, now, now))
-            c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
-                      "VALUES(?,?,?,?,?)",
-                      (iid, now, "created", "system",
-                       f"体检导入: {gtype} @ {key}"))
-            c.commit()
+            with self._tx() as c:
+                c.execute(
+                    "INSERT INTO gov_issue(id,cycle_id,gap_key,gap_type,severity,"
+                    "title,module,role_id,flow_id,status,priority,assignee,due_date,"
+                    "note,snapshot,recurred,first_detected,last_seen) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (iid, cycle_id, key, gtype, sev, title[:500], mod, rid, fid,
+                     STATUS_DETECTED, "medium", "", "", "", snap, 0, now, now))
+                c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
+                          "VALUES(?,?,?,?,?)",
+                          (iid, now, "created", "system",
+                           f"体检导入: {gtype} @ {key}"))
             return iid, "created"
 
         d = dict(row)
         if d["status"] == STATUS_ARCHIVED:
             # 复发：归档项再次出现 → 重开并打复发标记
-            c.execute("UPDATE gov_issue SET status=?, cycle_id=?, recurred=1, "
-                      "snapshot=?, last_seen=? WHERE gap_key=?",
-                      (STATUS_DETECTED, cycle_id, snap, now, key))
-            c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
-                      "VALUES(?,?,?,?,?)",
-                      (d["id"], now, "recurred", "system",
-                       "已归档差距再次出现，复发重开为 Detected"))
-            c.commit()
+            with self._tx() as c:
+                c.execute("UPDATE gov_issue SET status=?, cycle_id=?, recurred=1, "
+                          "snapshot=?, last_seen=? WHERE gap_key=?",
+                          (STATUS_DETECTED, cycle_id, snap, now, key))
+                c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
+                          "VALUES(?,?,?,?,?)",
+                          (d["id"], now, "recurred", "system",
+                           "已归档差距再次出现，复发重开为 Detected"))
             return d["id"], "recurred"
         if d["status"] == STATUS_REJECTED:
             # 豁免项：证据变化则重开提请复核，未变化则跳过
             if snap != (d.get("snapshot") or ""):
-                c.execute("UPDATE gov_issue SET status=?, cycle_id=?, snapshot=?, "
-                          "last_seen=? WHERE gap_key=?",
-                          (STATUS_DETECTED, cycle_id, snap, now, key))
-                c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
-                          "VALUES(?,?,?,?,?)",
-                          (d["id"], now, "reactivate", "system",
-                           "豁免差距证据变化，重新激活提请复核"))
-                c.commit()
+                with self._tx() as c:
+                    c.execute("UPDATE gov_issue SET status=?, cycle_id=?, snapshot=?, "
+                              "last_seen=? WHERE gap_key=?",
+                              (STATUS_DETECTED, cycle_id, snap, now, key))
+                    c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
+                              "VALUES(?,?,?,?,?)",
+                              (d["id"], now, "reactivate", "system",
+                               "豁免差距证据变化，重新激活提请复核"))
                 return d["id"], "reactivate"
             return d["id"], "skipped"
         # 其余 open 状态：刷新 last_seen，保持人工状态/优先级/负责人
-        c.execute("UPDATE gov_issue SET last_seen=?, snapshot=? WHERE gap_key=?",
-                  (now, snap, key))
-        c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
-                  "VALUES(?,?,?,?,?)", (d["id"], now, "seen", "system",
-                                        "本轮体检仍存在"))
-        c.commit()
+        with self._tx() as c:
+            c.execute("UPDATE gov_issue SET last_seen=?, snapshot=? WHERE gap_key=?",
+                      (now, snap, key))
+            c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
+                      "VALUES(?,?,?,?,?)", (d["id"], now, "seen", "system",
+                                            "本轮体检仍存在"))
         return d["id"], "kept"
 
     def get_issue(self, issue_id: str) -> Optional[Dict[str, Any]]:
@@ -326,13 +344,12 @@ class GovernanceStore:
         if to_state == STATUS_ARCHIVED and cur != STATUS_VERIFIED:
             return False, "仅可在 Verified 后归档（Archived 前须复验达标）"
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        c = self._ensure()
-        c.execute("UPDATE gov_issue SET status=? WHERE id=?",
-                  (to_state, issue_id))
-        c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
-                  "VALUES(?,?,?,?,?)",
-                  (issue_id, now, f"{cur}->{to_state}", actor, detail))
-        c.commit()
+        with self._tx() as c:
+            c.execute("UPDATE gov_issue SET status=? WHERE id=?",
+                      (to_state, issue_id))
+            c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
+                      "VALUES(?,?,?,?,?)",
+                      (issue_id, now, f"{cur}->{to_state}", actor, detail))
         logger.info(f"工作项 {issue_id} 状态 {cur} → {to_state}")
         return True, f"{cur} → {to_state}"
 
@@ -345,14 +362,13 @@ class GovernanceStore:
         if iss["status"] == STATUS_REJECTED:
             return False, "已是豁免状态"
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        c = self._ensure()
-        c.execute("UPDATE gov_issue SET status=?, note=? WHERE id=?",
-                  (STATUS_REJECTED, reason, issue_id))
-        c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
-                  "VALUES(?,?,?,?,?)",
-                  (issue_id, now, "reject", actor,
-                   f"豁免: {reason or '(超时)'} {detail}".strip()))
-        c.commit()
+        with self._tx() as c:
+            c.execute("UPDATE gov_issue SET status=?, note=? WHERE id=?",
+                      (STATUS_REJECTED, reason, issue_id))
+            c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
+                      "VALUES(?,?,?,?,?)",
+                      (issue_id, now, "reject", actor,
+                       f"豁免: {reason or '(超时)'} {detail}".strip()))
         return True, "已豁免 (Rejected)"
 
     def set_issue_meta(self, issue_id: str, priority: str = None,
@@ -371,13 +387,12 @@ class GovernanceStore:
             return True, "无字段更新"
         cols = ", ".join(f"{k}=?" for k in ups)
         vals = list(ups.values()) + [issue_id]
-        c = self._ensure()
-        c.execute(f"UPDATE gov_issue SET {cols} WHERE id=?", vals)
-        now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
-                  "VALUES(?,?,?,?,?)",
-                  (issue_id, now, "meta", actor, json.dumps(ups, ensure_ascii=False)))
-        c.commit()
+        with self._tx() as c:
+            c.execute(f"UPDATE gov_issue SET {cols} WHERE id=?", vals)
+            now = datetime.now().strftime("%Y-%m-%d %H:%M")
+            c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
+                      "VALUES(?,?,?,?,?)",
+                      (issue_id, now, "meta", actor, json.dumps(ups, ensure_ascii=False)))
         return True, "已更新: " + ", ".join(f"{k}={v}" for k, v in ups.items())
 
     # ---------- 查询 ----------
@@ -419,8 +434,17 @@ class GovernanceStore:
         if assignee:
             sql += " AND assignee=?"
             args.append(assignee)
-        if view != "recent":
+        if view == "recent":
             sql += " ORDER BY last_seen DESC"
+        else:
+            # P1⑥（建议书）：high/open/all 默认视图按真实 severity 排序、unassigned 置底。
+            # 避免封面被游离/噪声刷屏、治理重点（god/cycle/duplicate）被埋没。
+            # severity 序 high>medium>low；gap_type=unassigned 一律置底；其余按 last_seen 稳定。
+            sql += (
+                " ORDER BY "
+                "  CASE gap_type WHEN 'unassigned' THEN 3 ELSE 0 END,"
+                "  CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,"
+                "  last_seen DESC")
         sql += " LIMIT ?"
         args.append(min(int(limit or 500), 5000))
         rows = c.execute(sql, args).fetchall()
