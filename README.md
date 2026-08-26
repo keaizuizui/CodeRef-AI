@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.5.4** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.6.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -487,6 +487,17 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.6.0 — 治理主链改造批次一：arch_gap 新增重复类差距 + 游离真身区分（建议书承接 P0①/P0③）
+
+> 承接测试《建议书_治理主链与工具改造》的第一批工具层改造（P0① + P0③），让 coderef 有能力**识别并排队治理清单里最该治理的「结构性锈蚀」**（重复/孪生/真游离），而非只盯单次变更。真实项目 working 冒烟：识别出 20 个同构孪生（`duplicate`）与 7 组目录级重复（`directory_duplicate`，如 `shared/chart_engine` 与 `目标产品/chart_engine` 100% 同构）。
+
+- **coderef_arch_gap 新增 `duplicate` 差距类型**（P0①）：同构孪生——同名实现跨目录函数体相似度 ≥60%（复用 `arch_insight` P0-C 同一切词/相似度/通用名过滤逻辑，不重写），逐条给出符号、跨目录实现位置与相似度，作为可收敛的治理候选。
+- **coderef_arch_gap 新增 `directory_duplicate` 差距类型**（P0①）：目录级重复——整目录与其他目录同构（文件清单 + 函数签名双指标），识别"同构孪生目录"（如多版本并存、主线与备份目录）。
+- **游离模块区分「真游离 vs 未建模」**（P0③）：`unassigned` 每条附带 `monitored=free`（fan_in=0，代码孤儿、治理候选，排最前）/ `monitored=unmodeled`（被跨模块真实调用但 target_modules 未覆盖，本质是"目标架构覆盖不足"而非孤儿，文案引导去 define-target 补 target_modules），不再把所有游离一律当孤儿刷屏。
+- **游离链路自动豁免噪声**（P0③）：`vendor` / `node_modules` / `*.min.js` / `*.min.css` / `__init__` / `dist` / `build` 自动豁免，避免第三方依赖与压缩静态产物淹没真游离。
+- **summary 新增 `duplicate`/`directory_duplicate` 计数**，供 `arch_verify`/`gov_start`/督办链路统一感知重复类差距规模。
+- **版本号**：5.5.4 → 5.6.0（治理能力增强，走 minor）
 
 ### v5.5.4 — docs 超大项目并发提速（方案 B 能力增强：模块文档并行生成）
 
