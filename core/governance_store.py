@@ -305,23 +305,29 @@ class GovernanceStore:
 
         d = dict(row)
         if d["status"] == STATUS_ARCHIVED:
-            # 复发：归档项再次出现 → 重开并打复发标记
+            # 复发：归档项再次出现 → 重开并打复发标记（条件更新防并发覆盖新状态）
             with self._tx() as c:
-                c.execute("UPDATE gov_issue SET status=?, cycle_id=?, recurred=1, "
-                          "snapshot=?, last_seen=? WHERE gap_key=?",
-                          (STATUS_DETECTED, cycle_id, snap, now, key))
+                n = c.execute("UPDATE gov_issue SET status=?, cycle_id=?, recurred=1, "
+                              "snapshot=?, last_seen=? WHERE gap_key=? AND status=?",
+                              (STATUS_DETECTED, cycle_id, snap, now, key,
+                               STATUS_ARCHIVED)).rowcount
+                if n != 1:
+                    return d["id"], "skipped"
                 c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
                           "VALUES(?,?,?,?,?)",
                           (d["id"], now, "recurred", "system",
                            "已归档差距再次出现，复发重开为 Detected"))
             return d["id"], "recurred"
         if d["status"] == STATUS_REJECTED:
-            # 豁免项：证据变化则重开提请复核，未变化则跳过
+            # 豁免项：证据变化则重开提请复核，未变化则跳过（条件更新防并发覆盖）
             if snap != (d.get("snapshot") or ""):
                 with self._tx() as c:
-                    c.execute("UPDATE gov_issue SET status=?, cycle_id=?, snapshot=?, "
-                              "last_seen=? WHERE gap_key=?",
-                              (STATUS_DETECTED, cycle_id, snap, now, key))
+                    n = c.execute("UPDATE gov_issue SET status=?, cycle_id=?, snapshot=?, "
+                                  "last_seen=? WHERE gap_key=? AND status=?",
+                                  (STATUS_DETECTED, cycle_id, snap, now, key,
+                                   STATUS_REJECTED)).rowcount
+                    if n != 1:
+                        return d["id"], "skipped"
                     c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
                               "VALUES(?,?,?,?,?)",
                               (d["id"], now, "reactivate", "system",
@@ -383,9 +389,14 @@ class GovernanceStore:
         if iss["status"] == STATUS_REJECTED:
             return False, "已是豁免状态"
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        cur = iss["status"]
         with self._tx() as c:
-            c.execute("UPDATE gov_issue SET status=?, note=? WHERE id=?",
-                      (STATUS_REJECTED, reason, issue_id))
+            # 条件更新（WHERE status=cur）：并发下状态被另一 agent 改动则 rowcount=0，
+            # 放弃本次豁免并如实返回，避免覆盖新状态 / 重复 reject 事件（CodeRabbit 评审）
+            n = c.execute("UPDATE gov_issue SET status=?, note=? WHERE id=? AND status=?",
+                          (STATUS_REJECTED, reason, issue_id, cur)).rowcount
+            if n != 1:
+                return False, f"状态已变更（当前非 {cur}），请刷新后重试"
             c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
                       "VALUES(?,?,?,?,?)",
                       (issue_id, now, "reject", actor,
