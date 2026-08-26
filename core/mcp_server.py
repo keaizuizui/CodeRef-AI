@@ -51,10 +51,10 @@ MAX_BG_TASK_SECONDS = 860
 # 方式继续（如 resume=true 续跑、对子项目/维度逐个扫描），提示分片为更稳妥的路径。
 BG_PARTIAL_SUGGEST_SECONDS = 300
 
-# ：协作式取消专用异常。用户在阶段汇报点请求取消时，_bg 的 progress 回调抛此
-# 异常让后台线程尽早收尾，并单独标记为"用户取消"而非普通 error。
-class _TaskCancelled(Exception):
-    pass
+# ：协作式取消专用异常（定义于 core.pipeline_runner，供 docs/audit/wiki 管线
+# re-raise 穿透；_bg 内延迟 import 复用，避免顶部加载整条管线）。
+# 用户在阶段汇报点请求取消时，_bg 的 progress 回调抛此异常让后台线程尽早收尾，
+# 并单独标记为"用户取消"而非普通 error。
 
 
 # ─── 工具可靠性清单 ─────────────────────────────────────────────
@@ -2396,10 +2396,11 @@ class Server:
 
     def _bg(self, rc, n, a):
         import time
+        from core.pipeline_runner import TaskCancelled as _TaskCancelled
         try:
             # progress 回调：每个阶段完成后写入共享 rc，_tsk 据此回传进度；
             # 协作式取消（）：收到 coderef_task_cancel 后 rc.cancelled=True，
-            # 下一个阶段汇报点抛出 _TaskCancelled 让任务尽早收尾而非无限跑到底。
+            # 下一个阶段汇报点抛出 TaskCancelled 让任务尽早收尾而非无限跑到底。
             def prog(stage, done, total, detail=None):
                 if rc.get("cancelled"):
                     raise _TaskCancelled()

@@ -321,9 +321,9 @@ class WikiGenerator:
         """拆分说明：实现已移至模块级 get_core_rules，此处保留方法签名做委托"""
         return get_core_rules(project_path)
 
-    def generate(self, project_path: str, output_dir: str='', enable_git_hook: bool=False, wiki_style: str='comprehensive', include_subprojects: bool=False, cross_verify: bool=True, cross_entry_spec: str='class:pipeline_runner:Pipe', enable_agent_pointer: bool=False):
+    def generate(self, project_path: str, output_dir: str='', enable_git_hook: bool=False, wiki_style: str='comprehensive', include_subprojects: bool=False, cross_verify: bool=True, cross_entry_spec: str='class:pipeline_runner:Pipe', enable_agent_pointer: bool=False, progress_cb=None):
         """拆分说明：实现已移至模块级 generate，此处保留方法签名做委托"""
-        return generate(self, project_path, output_dir, enable_git_hook, wiki_style, include_subprojects, cross_verify, cross_entry_spec, enable_agent_pointer)
+        return generate(self, project_path, output_dir, enable_git_hook, wiki_style, include_subprojects, cross_verify, cross_entry_spec, enable_agent_pointer, progress_cb)
 
     def _git_bin(self):
         """拆分说明：实现已移至模块级 _git_bin，此处保留方法签名做委托"""
@@ -481,9 +481,9 @@ class WikiGenerator:
         """拆分说明：实现已移至模块级 _generate_usage，此处保留方法签名做委托"""
         return _generate_usage(self, project_name, summary, modules, style, descriptions, meta)
 
-    def _generate_module_docs(self, modules: List[WikiModule], descriptions: Dict[str, str], output_dir: str, style: str='comprehensive', meta: ProjectCodeMetadata=None, cross_badges: Dict[str, dict]=None, affected_modules: Optional[List[str]]=None):
+    def _generate_module_docs(self, modules: List[WikiModule], descriptions: Dict[str, str], output_dir: str, style: str='comprehensive', meta: ProjectCodeMetadata=None, cross_badges: Dict[str, dict]=None, affected_modules: Optional[List[str]]=None, progress_cb=None):
         """拆分说明：实现已移至模块级 _generate_module_docs，此处保留方法签名做委托"""
-        return _generate_module_docs(self, modules, descriptions, output_dir, style, meta, cross_badges, affected_modules)
+        return _generate_module_docs(self, modules, descriptions, output_dir, style, meta, cross_badges, affected_modules, progress_cb)
 
     def _build_module_index(self, modules: List[WikiModule], cross_badges: Dict[str, dict]=None):
         """拆分说明：实现已移至模块级 _build_module_index，此处保留方法签名做委托"""
@@ -651,7 +651,8 @@ def generate(self, project_path: str, output_dir: str = "",
              include_subprojects: bool = False,
              cross_verify: bool = True,
              cross_entry_spec: str = "class:pipeline_runner:Pipe",
-             enable_agent_pointer: bool = False) -> WikiResult:
+             enable_agent_pointer: bool = False,
+             progress_cb=None) -> WikiResult:
     """生成项目 Wiki（编排入口）
 
     拆分说明：原 220+ 行长函数按阶段拆为 _generate_prepare / _decide_incremental /
@@ -699,7 +700,8 @@ def generate(self, project_path: str, output_dir: str = "",
         # ─── 全量路径：三级管线 + 子项目 ───
         subprojects = _generate_full_pipeline(
             self, project_path, project_name, output_dir, wiki_style,
-            include_subprojects, cross_verify, cross_entry_spec, result)
+            include_subprojects, cross_verify, cross_entry_spec, result,
+            progress_cb=progress_cb)
         if subprojects is None:
             return result
         if subprojects:
@@ -801,7 +803,7 @@ def _decide_incremental(self, output_dir: str, project_path: str, result: WikiRe
 def _generate_full_pipeline(self, project_path: str, project_name: str, output_dir: str,
                             wiki_style: str, include_subprojects: bool,
                             cross_verify: bool, cross_entry_spec: str,
-                            result: WikiResult):
+                            result: WikiResult, progress_cb=None):
     """阶段 2：全量三级管线（元数据提取 → LLM 模块描述 → 文档生成）。
 
     返回 subprojects 列表（include_subprojects=False 时为空列表）；
@@ -1876,7 +1878,8 @@ def _generate_all_documents(self, project_name: str, modules: List[WikiModule],
     # =============================================================
     module_docs = self._generate_module_docs(modules, descriptions, output_dir,
                                              style, meta, cross_badges,
-                                             affected_modules=affected_modules)
+                                             affected_modules=affected_modules,
+                                             progress_cb=progress_cb)
     docs.extend(module_docs)
     result.module_count = len(module_docs)
 
@@ -2450,7 +2453,8 @@ def _generate_module_docs(self, modules: List[WikiModule],
                            output_dir: str, style: str = "comprehensive",
                            meta: ProjectCodeMetadata = None,
                            cross_badges: Dict[str, dict] = None,
-                           affected_modules: Optional[List[str]] = None) -> List[str]:
+                           affected_modules: Optional[List[str]] = None,
+                           progress_cb=None) -> List[str]:
     """生成 MODULES/ 目录下的模块文档
 
     Args:
@@ -2469,6 +2473,10 @@ def _generate_module_docs(self, modules: List[WikiModule],
 
     # 为每个核心模块生成详细文档
     for mod in modules:
+        # ：逐模块生成（主耗时段）每轮先过进度/取消检查点——progress_cb 抛
+        # TaskCancelled 时异常向上穿透（_wiki/docs 已 re-raise），后台任务尽早收尾。
+        if progress_cb:
+            progress_cb("wiki生成", 3, 3, f"逐模块生成文档: {mod.name}")
         if not mod.is_core:
             continue
         # R1 增量：只处理受影响模块

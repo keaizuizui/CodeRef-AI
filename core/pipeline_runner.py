@@ -18,6 +18,16 @@ from enum import Enum
 from core import tool_registry
 
 
+class TaskCancelled(Exception):
+    """ 协作式取消专用异常（定义于被依赖方，供 MCP 层与各管线共享）。
+
+    后台任务被 coderef_task_cancel 请求取消后，progress 回调抛此异常；各管线
+    （audit/docs/wiki）的 except Exception 必须 re-raise 本异常，避免取消信号被
+    吞掉后 daemon 线程继续跑到底（CodeRabbit major）。
+    """
+    pass
+
+
 def _auto_sync_om_on_gov(project_path: str) -> None:
     """方向 B：治理流程收尾自动增量同步操作记忆（后台线程，不阻塞主流程）。
 
@@ -1210,6 +1220,8 @@ def docs(project_path: str, output_dir: str = None,
             os.path.dirname(os.path.abspath(__file__))), "coderef-report"), "html")
         _render_html(project_path, r, kg_stats=None,
                           output_dir=html_out)
+    except TaskCancelled:
+        raise
     except Exception as e:
         r.errors.append(str(e))
 
@@ -1487,6 +1499,8 @@ def _wiki(p: str, r: PipeResult, done: set, output_dir: str = None,
             r.errors.append(f"wiki: {e}")
         r.wiki_result = gres
         done.add("wiki"); _save(p, list(done))
+    except TaskCancelled:
+        raise
     except Exception as e:
         r.errors.append(f"wiki: {e}")
 
@@ -1754,6 +1768,7 @@ class Pipe:
         def _prog(stage, done, total, detail=None):
             if progress_cb:
                 try: progress_cb(stage, done, total, detail)
+                except TaskCancelled: raise
                 except Exception: pass
 
         try:
