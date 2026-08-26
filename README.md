@@ -1,4 +1,4 @@
-<!-- AI Summary: CodeRef-AI exposes 54 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. Core results (audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, prompt compliance) are pure static analysis — no LLM, reproducible. LLM is only used for synthesis tasks (wiki, code review) and hard-blocks honestly without an API key. Builds a closed loop: verify LLM/CodeRabbit claims deterministically, replicate solidified design assets, and interpret everything in plain language for non-programmers. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams who want AI that augments rather than hallucinates. -->
+<!-- AI Summary: CodeRef-AI exposes 57 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. Core results (audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, prompt compliance) are pure static analysis — no LLM, reproducible. LLM is only used for synthesis tasks (wiki, code review) and hard-blocks honestly without an API key. Builds a closed loop: verify LLM/CodeRabbit claims deterministically, replicate solidified design assets, and interpret everything in plain language for non-programmers. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams who want AI that augments rather than hallucinates. -->
 [![MCP Badge](https://lobehub.com/badge/mcp/keaizuizui-coderef-ai?style=flat)](https://lobehub.com/mcp/keaizuizui-coderef-ai)
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
@@ -11,7 +11,7 @@
 
 ## 它是什么
 
-CodeRef-AI 通过 MCP 协议暴露 **55 个工具**，同时服务两类人：
+CodeRef-AI 通过 MCP 协议暴露 **57 个工具**，同时服务两类人：
 
 - **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险；持有一条 LLM/CodeRabbit 论断时，还能用静态图谱做确定性核验，再决定采不采信。
 - **非编程人员的技术助理**：把看不懂的代码变成通俗的健康仪表盘、Wiki 文档和流程确证，让你不用读代码，也能确认项目有没有按你的设想运转。
@@ -21,7 +21,7 @@ CodeRef-AI 通过 MCP 协议暴露 **55 个工具**，同时服务两类人：
 今天的能力地图上有五条主线，全部基于静态事实、确定且可复现：
 
 1. **静态审计与知识图谱**：11 个确定性检测器把工程体检成结构化 SQLite 图谱，编程 AI 用结构化查询替代 grep 与逐文件阅读（省 10-100 倍 token），非编程人员看降噪后的重点清单。
-2. **架构推回正轨（5.0）**：你定义目标架构（业务层 / 技术层 / 约束），CodeRef 对比现状图谱产出 7 类确定性差距、生成可视化自由布局画布、可执行重构任务卡，并四维打分验证是否真正回到正轨。
+2. **架构推回正轨（5.0）**：你定义目标架构（业务层 / 技术层 / 约束），CodeRef 对比现状图谱产出 9 类确定性差距、生成可视化自由布局画布、可执行重构任务卡，并四维打分验证是否真正回到正轨。
 3. **定期治理体检（5.1 / 5.2）**：把差距转成治理工作项，走「检出 → 确认 → 修复 → 验证 → 归档」状态闭环，配历史趋势报告、Web 看板、跨仓聚合治理与定时体检——让"正确状态"可维护、可追踪，而不是一次性的重构。
 4. **记忆层与操作记忆**：项目记忆（增量同步 + 语义检索 + 盲区地图 + 质量评估）与操作记忆（工具位置 / 约定 / 陷阱 + 崩溃恢复），让 AI 跨会话"记得住项目、找得回自己"。
 5. **人话解读（4.6+）**：把确定性格子结论翻译成健康仪表盘与 Wiki，让非编程人员第一次能"看懂"自己的项目。
@@ -64,7 +64,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | **变更守护引擎** | 拦截 AI 把代码改坏，输出人能看懂的变更报告 | `coderef_change_guard` `coderef_change_report` |
 | **人话解读平台** | 把确定性格子结论翻译成非编程人员听得懂的"人话" | `coderef_interpret` |
 
-## 56 个 MCP 工具
+## 57 个 MCP 工具
 
 ### 审计引擎
 
@@ -79,7 +79,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_arch_audit` | 架构腐化诊断：复用知识图谱 CALLS 边做模块级静态诊断（循环依赖/上帝模块/分层违例/异常模块规模），聚合 0–10 架构健康度。纯静态、不依赖 LLM | 否 |
 | `coderef_target_arch_set` | 设置/更新目标架构 JSON（5.0 架构推回正轨的参照系），校验后落盘 `<project>/.coderef/target_arch.json`。纯确定性校验，不依赖 LLM | 否 |
 | `coderef_target_arch_get` | 获取当前目标架构 JSON | 否 |
-| `coderef_arch_gap` | 架构差距分析（5.0 核心）：对比现状知识图谱与目标架构，输出 7 类确定性差距（职责缺失/依赖违例/循环依赖/业务断链/游离模块/上帝模块/异常规模）。纯静态、复用 arch_audit，不依赖 LLM | 否 |
+| `coderef_arch_gap` | 架构差距分析（5.0 核心）：对比现状知识图谱与目标架构，输出 9 类确定性差距（职责缺失/依赖违例/循环依赖/业务断链/游离模块/上帝模块/异常规模/同构重复/目录级重复），游离模块区分真游离（free）与未建模（unmodeled）并豁免 vendor/压缩产物噪声，summary 透出全量分档计数。纯静态、复用 arch_audit，不依赖 LLM | 否 |
 | `coderef_arch_canvas` | 可视化架构画布（5.0 Phase 1，5.4 自由布局版）：自包含 HTML 自由画布（业务/技术/代码三层节点），节点自由拖拽、任意连线、平移缩放、对齐吸附、缩略图、右键菜单、差距高亮、导出目标架构 JSON | 否 |
 | `coderef_flow_canvas` | 交互式流程画布（5.4）：从代码自动提取业务管线（P0-A 入口管线）+ 跨模块数据流，渲染为可自由拖拽的流程图（同一自由布局引擎） | 否 |
 | `coderef_refactor_plan` | 重构任务卡（5.0 Phase 2）：把差距清单转为编程 AI 可执行的任务卡（create_module/fix_dependency/break_cycle/implement_flow/move_module/split_module + 影响范围 + 验证标准） | 否 |
@@ -105,6 +105,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_audit_advisor` | 审计策略判定（增量/全量）+ 重点功能维度 + 可选 LLM 功能审查 | 可选 |
 | `coderef_whitelist` | 白名单管理 + 核心模块规则配置 | 否 |
 | `coderef_task_status` | 后台任务状态查询 | 否 |
+| `coderef_task_cancel` | 后台任务取消（协作式收尾：置 cancelled 状态，长任务在阶段汇报点尽早停止，可定位不再挂起） | 否 |
 
 ### 记忆引擎
 
@@ -348,7 +349,7 @@ coderef_interpret(project_path="/path/to/project", action="health")
 ```
 coderef-ai/
 ├── core/                             # 核心引擎
-│   ├── mcp_server.py                 # MCP Server 入口（55 个工具）
+│   ├── mcp_server.py                 # MCP Server 入口（57 个工具）
 │   ├── pipeline_runner.py            # 管线引擎（audit/architecture/docs + 知识图谱）
 │   ├── tool_registry.py              # 工具注册中心（收敛管线引擎的上帝模块职责）
 │   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
@@ -513,7 +514,7 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
   管理器 `_tx()`，建档/导入/流转/豁免/改元五个写入口统一包进 BEGIN/COMMIT，异常时 ROLLBACK 不留
   半截状态——为未来多 Agent 协作（写/审/修）共享 governance.db 提供原子性保险；非法状态流转本就
   不落库（幂等），现再多一层事务兜底。
-- **新增 coderef-governance 场景化 Skill**（外部 E，P0）：把 55 个 MCP 工具收敛为「治理主链
+- **新增 coderef-governance 场景化 Skill**（外部 E，P0）：把 57 个 MCP 工具收敛为「治理主链
   5 阶段 × 每阶段 2–4 个高频工具」编排（map-pipeline→define-target→refactor-along→
   verify-advance→health-cycle），每阶段内含目标、工具、编排步骤、产出与常见坑；内置「意图→工具」
   快速路由表（同义词/别名→主工具，即外部 A 轻量兜底）+ gov_transition 参数速查（P2⑦）+ 真身判定
