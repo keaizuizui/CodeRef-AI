@@ -39,6 +39,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 
 logger = logging.getLogger(__name__)
@@ -2476,11 +2477,21 @@ def _generate_module_docs(self, modules: List[WikiModule],
     self._emit(docs, modules_dir, "_index.md", index)
 
     # 为每个核心模块生成详细文档
+    # 并发提速（测试反馈）：LLM 调用是网络 IO 主耗时段，用固定并发线程池并行执行；
+    # 落盘/文档列表/进度回调仍回到主线程按原顺序执行，保证线程安全与输出顺序稳定。
+    # 注：self._last_llm_error 仅作诊断提示，并发下最后写入者胜，不影响产物正确性。
+    try:
+        wmax = int(os.environ.get("CODEREF_WIKI_CONCURRENCY") or "4")
+        wmax = max(1, min(wmax, 16))  # 防止误设超大并发耗尽连接
+    except Exception:
+        wmax = 4
+
+    # 1) 主线程预算每个模块的 prompt 与落盘物料（纯本地计算，不耗时）
+    plan = []
     for mod in modules:
-        # ：逐模块生成（主耗时段）每轮先过进度/取消检查点——progress_cb 抛
-        # TaskCancelled 时异常向上穿透（_wiki/docs 已 re-raise），后台任务尽早收尾。
+        #  保留取消/进度检查点；预算阶段同样每模块回报，后台可提前收尾
         if progress_cb:
-            progress_cb("wiki生成", 3, 3, f"逐模块生成文档: {mod.name}")
+            progress_cb("wiki生成", 3, 3, f"准备模块文档: {mod.name}")
         if not mod.is_core:
             continue
         # R1 增量：只处理受影响模块
@@ -2555,14 +2566,36 @@ def _generate_module_docs(self, modules: List[WikiModule],
             f"=== 事实数据（以此为唯一准确来源）===\n{mod_meta_text[:15000] if mod_meta_text else ''}\n\n"
             f"=== 模块描述（风格参考）===\n{desc[:10000]}"
         )
-        content = self._llm_ask(system_prompt, user_prompt)
+        plan.append(dict(name=mod.name, badge_md=badge_md, anchor_md=anchor_md,
+                         front_matter=front_matter, prompt=(system_prompt, user_prompt)))
+
+    # 2) 并发调用 LLM（网络 IO 并行）；每 worker 只调 self._llm_ask，不写共享列表
+    def _gen(item):
+        sp, up = item["prompt"]
+        return item["name"], self._llm_ask(sp, up)
+
+    results = {}
+    if plan:
+        with ThreadPoolExecutor(max_workers=wmax) as ex:
+            futs = [ex.submit(_gen, it) for it in plan]
+            for fut in as_completed(futs):
+                name, content = fut.result()
+                results[name] = content
+
+    # 3) 主线程按原顺序注入徽章/锚定并落盘（写文件/文档列表线程安全）
+    for item in plan:
+        name = item["name"]
+        #  保留逐模块进度/取消检查点：落盘前同样回报，后台可在此收尾
+        if progress_cb:
+            progress_cb("wiki生成", 3, 3, f"写入模块文档: {name}")
+        content = results.get(name, "")
         # 在 LLM 生成内容前注入徽章与证据锚定（均为铁证，不经过 LLM 幻觉）
-        if badge_md and content:
-            content = badge_md + "\n" + content
-        if anchor_md and content:
-            content = anchor_md + "\n" + content
-        self._emit(docs, modules_dir, f"{mod.name}.md", content,
-                   front_matter=front_matter)
+        if item["badge_md"] and content:
+            content = item["badge_md"] + "\n" + content
+        if item["anchor_md"] and content:
+            content = item["anchor_md"] + "\n" + content
+        self._emit(docs, modules_dir, f"{name}.md", content,
+                   front_matter=item["front_matter"])
 
     return docs
 
