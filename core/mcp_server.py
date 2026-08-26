@@ -2631,7 +2631,9 @@ class Server:
                             include_subprojects=True if a.get("include_subprojects", True) else False,
                             enable_agent_pointer=True if a.get("enable_agent_pointer", False) else False,
                             cross_verify=True if a.get("cross_verify", True) else False,
-                            cross_entry_spec=a.get("cross_entry_spec") or "class:pipeline_runner:Pipe")
+                            cross_entry_spec=a.get("cross_entry_spec") or "class:pipeline_runner:Pipe",
+                            # ：docs 也透传阶段进度回调，取消检查点覆盖扫描/图谱/wiki 生成阶段
+                            progress_cb=progress_cb)
             wr = getattr(r, "wiki_result", None)
             # 结构化返回：携带输出目录/文档清单/失败明细，让调用方能区分"全量成功"与"部分失败"，
             # 避免部分文档生成失败时仍被当作 fully completed。
@@ -2792,9 +2794,12 @@ class Server:
             t = tasks.get(tid)
             if not t:
                 return json.dumps({"error": f"不存在: {tid}"}, ensure_ascii=False)
-            # 线程已结束：非取消目标，如实返回其终态
+            # 线程已结束：非取消目标，如实返回其终态（若曾取消则保持 cancelled，勿退化为 completed）
             if not t["thread"].is_alive():
                 rc = t["result"]
+                if rc.get("cancelled"):
+                    return json.dumps({"status": "cancelled", "task_id": tid,
+                                       "message": "任务已取消"}, ensure_ascii=False)
                 status = "error" if "error" in rc else "completed"
                 return json.dumps({"status": status, "task_id": tid,
                                    "message": "任务已结束，无需取消"}, ensure_ascii=False)

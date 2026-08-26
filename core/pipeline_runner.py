@@ -1168,7 +1168,8 @@ def docs(project_path: str, output_dir: str = None,
          include_subprojects: bool = True,
          enable_agent_pointer: bool = False,
          cross_verify: bool = True,
-         cross_entry_spec: str = "class:pipeline_runner:Pipe") -> PipeResult:
+         cross_entry_spec: str = "class:pipeline_runner:Pipe",
+         progress_cb=None) -> PipeResult:
     """文档探查管线：Wiki
 
     wiki_style: Wiki 风格 (comprehensive / reference / tutorial / plain)
@@ -1184,16 +1185,21 @@ def docs(project_path: str, output_dir: str = None,
     try:
         tf, tl, analysis = _scan(project_path)
         r.total_files, r.total_lines = tf, tl
+        if progress_cb:
+            progress_cb("扫描", 1, 3, f"{tf} 文件 · {tl} 行")
 
         # 构建知识图谱
         _build_kg(project_path, analysis)
+        if progress_cb:
+            progress_cb("知识图谱", 2, 3, "构建调用图")
 
         _wiki(project_path, r, d, output_dir,
                    wiki_style=wiki_style,
                    include_subprojects=include_subprojects,
                    enable_agent_pointer=enable_agent_pointer,
                    cross_verify=cross_verify,
-                   cross_entry_spec=cross_entry_spec)
+                   cross_entry_spec=cross_entry_spec,
+                   progress_cb=progress_cb)
 
         r.report = _fmt(r, "文档探查报告")
         os.makedirs(output_dir or os.path.join(os.path.dirname(os.path.dirname(
@@ -1457,13 +1463,18 @@ def _wiki(p: str, r: PipeResult, done: set, output_dir: str = None,
           include_subprojects: bool = True,
           enable_agent_pointer: bool = False,
           cross_verify: bool = True,
-          cross_entry_spec: str = "class:pipeline_runner:Pipe"):
+          cross_entry_spec: str = "class:pipeline_runner:Pipe",
+          progress_cb=None):
     if "wiki" in done: return
     try:
         from core.wiki_generator import WikiGenerator
         # 尊重调用方指定的输出目录；未指定时回退到默认 txt/
         wo = output_dir or os.path.join(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))), "txt")
+        # ：进入逐模块生成（主耗时段）前先过一个进度/取消检查点，其余阶段由
+        # docs() 在扫描/图谱处上报；wg.generate 内部不暴露进度时此处即为协作式收尾点。
+        if progress_cb:
+            progress_cb("wiki生成", 3, 3, "逐模块生成文档")
         wg = WikiGenerator()
         gres = wg.generate(p, output_dir=wo, wiki_style=wiki_style,
                            include_subprojects=include_subprojects,
@@ -1884,8 +1895,8 @@ class Pipe:
 
     def docs(self, project_path, output_dir=None, resume=False, wiki_style="comprehensive",
              include_subprojects=True, enable_agent_pointer=False, cross_verify=True,
-             cross_entry_spec="class:pipeline_runner:Pipe"):
-        return docs(project_path, output_dir, resume, wiki_style, include_subprojects, enable_agent_pointer, cross_verify, cross_entry_spec)
+             cross_entry_spec="class:pipeline_runner:Pipe", progress_cb=None):
+        return docs(project_path, output_dir, resume, wiki_style, include_subprojects, enable_agent_pointer, cross_verify, cross_entry_spec, progress_cb)
 
     def docs_read(self, project_path, doc=None, output_dir=None, max_chars=20000):
         return docs_read(project_path, doc, output_dir, max_chars)

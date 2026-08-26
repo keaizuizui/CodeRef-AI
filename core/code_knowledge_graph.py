@@ -476,10 +476,18 @@ class CodeKnowledgeGraph:
                 if not caller_id:
                     caller_id = f"mod:{module_key}"
 
-                # 被调用者：先按全名精确匹配（可命中带类/模块前缀的方法节点，
-                # 如 Bot.run_bot / main.run_bot），失败再回退短名模糊匹配；否则
-                # 方法调用会漏建 CALLS 边，导致 callers 查询返空（）。
+                # 被调用者解析优先级（ / CodeRabbit major）：
+                #   1) 全名精确匹配（可命中带类/模块前缀的方法节点，如 Bot.run_bot）；
+                #   2) self/cls 调用 → 按调用者所在类解析（self.run_bot → Bot.run_bot），
+                #      避免与项目内顶层同名函数撞 CALLS 边；
+                #   3) 回退短名模糊匹配（漏建则 callers 查询返空）。
                 callee_id = self._find_node_by_name(call.func_name)
+                if not callee_id:
+                    first, _, rest = call.func_name.partition(".")
+                    if first in ("self", "cls") and rest:
+                        caller_class = self._caller_class_name(caller_id)
+                        if caller_class:
+                            callee_id = self._find_node_by_name(f"{caller_class}.{rest}")
                 if not callee_id:
                     callee_name = call.func_name.split(".")[-1]
                     callee_id = self._find_node_by_name(callee_name)
@@ -727,6 +735,18 @@ class CodeKnowledgeGraph:
         if len(candidates) == 1:
             return candidates[0]["id"]
         return None
+
+    def _caller_class_name(self, node_id: str) -> str:
+        """从调用者节点 id 提取其所在类名（method 节点 id 形如 method:<mod>:<类>.<方法>）。
+
+        self/cls 调用须先解析为调用者所在类的全名（self.run_bot → <类>.run_bot），再精确
+        匹配，避免与项目内顶层同名函数撞 CALLS 边（CodeRabbit major）。非方法节点返回空串。
+        """
+        if not node_id or not node_id.startswith("method:"):
+            return ""
+        tail = node_id.rsplit(":", 1)[-1]  # 末冒号后为 '<类>.<方法>'（module_key 可能含 ':' 亦不受影响）
+        cls = tail.split(".", 1)[0]
+        return cls if cls else ""
 
     def _find_containing_node(self, file_path: str, line: int) -> Optional[str]:
         """找到包含指定行号的函数/方法/类节点"""
