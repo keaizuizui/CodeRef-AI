@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.6.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.6.2** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -487,6 +487,50 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.6.2 — 治理主链改造批次四收尾：gov 事务原子性 + 场景化 Skill 封装（外部 C/E）
+
+> 承接《建议书_治理主链与工具改造》批次四最后两块：外部 C（gov 状态机原子性/幂等性）与
+> 外部 E（场景化 Skill 封装层，P0 最高优先，即「少而精工具链」物化）。至此建议书 8 条改造点 +
+> 5 条外部建议全部收尾。
+
+- **gov 工作项写操作全部事务化**（外部 C，P2 中远期保底）：`GovernanceStore` 新增显式事务上下文
+  管理器 `_tx()`，建档/导入/流转/豁免/改元五个写入口统一包进 BEGIN/COMMIT，异常时 ROLLBACK 不留
+  半截状态——为未来多 Agent 协作（写/审/修）共享 governance.db 提供原子性保险；非法状态流转本就
+  不落库（幂等），现再多一层事务兜底。
+- **新增 coderef-governance 场景化 Skill**（外部 E，P0）：把 55 个 MCP 工具收敛为「治理主链
+  5 阶段 × 每阶段 2–4 个高频工具」编排（map-pipeline→define-target→refactor-along→
+  verify-advance→health-cycle），每阶段内含目标、工具、编排步骤、产出与常见坑；内置「意图→工具」
+  快速路由表（同义词/别名→主工具，即外部 A 轻量兜底）+ gov_transition 参数速查（P2⑦）+ 真身判定
+  看 fan_in 不看可达性 + 治理动作护栏（不动 git 库/备份）。
+- **coderef-mcp Skill 补「场景化路由」小节**：意图→工具路由表 + 结构性锈蚀场景指引（P0②），
+  与 coderef-governance 联动，编程 AI 不确定工具归属时先查表。
+- **版本号**：5.6.1 → 5.6.2（治理能力增强，走 minor）
+
+### v5.6.1 — 治理主链改造批次二三：arch_audit 真身透出 + gov_issues 去噪 + 记忆导出（建议书承接 P1⑤/⑥、P2⑦、外部 B/A/D）
+
+> 承接《建议书_治理主链与工具改造》批次二三四，让工具链沿治理主链更顺：真身判定信息直达
+> `arch_audit`、治理库封面不再被游离噪声淹没、超严格状态机有参数速查、记忆可导出为 Markdown
+> 供不支持的 LLM 界面复用。纯静态、确定性，全部不依赖 LLM。
+
+- **coderef_arch_audit 直接透出真身/孤本摘要**（P1⑤）：新增 `identity` 列表 + `identity_count`，
+  复用 `arch_insight` P0-B `identity_insight`，逐类列出「同名多目录实现」的副本数、活跃真身数、
+  无调用者孤本数、各副本 verdict 与优先来源文件——Skill 只看 arch_audit 健康度也不会漏真身判定。
+- **coderef_gov_issues 按真实 severity 排序 + unassigned 置底**（P1⑥）：`high`/`open`/`all` 默认
+  视图改为 severity 序（high>medium>low）优先、`gap_type=unassigned` 一律置底，再按 last_seen 稳定；
+  治理库封面不再被 `*.min.js`/`__init__`/游离噪声刷屏，治理重点（god/cycle/duplicate）能被看到。
+- **coderef_audit 补「结构锈蚀 + strategy 分场景」引导**（P0②/P1④/外部D）：description 明示
+  结构锈蚀要佐以 architecture P0-B/C 与 arch_gap 的 duplicate 差距；strategy 分场景——回归复核新
+  增改动用 `incr`，治理健康度体检/存量结构用 `full`，勿把治理存量当回归用 incr（存量重复不在 diff 内）。
+- **coderef_gov_transition 补「参数动作速查」**（P2⑦）：description 内置 transition/reject/meta
+  三种 action 所需参数速查，明示 action=meta 时勿传 to_state、非法跳转返回错误属正常。
+- **新增 coderef_operation_memory_export**（外部 B）：把操作记忆的 decision/convention/pitfall
+  渲染导出为 Markdown（缺省 `<项目>/data/operation_memory/OPERATION_MEMORY.md`），供 attach 到
+  不支持 MCP 的 LLM 界面（Claude Project / CustomGPT）；内置冲突检测——剥掉正/否定语气词后
+  主题核心相同的同类别条目若方向相反（如「禁止 X」vs「推荐 X」）标记潜在冲突，呼应双册对账防覆盖。
+- **外部 A（意图路由）轻量兜底**：通过各工具 description 的「适用/不适用」硬约束分场景定界，
+  后续由外部 E 场景化 Skill 封装整体路由；暂不做在线向量反射层（符合纯静态确定性原则）。
+- **版本号**：5.6.0 → 5.6.1（治理能力增强，走 minor）
 
 ### v5.6.0 — 治理主链改造批次一：arch_gap 新增重复类差距 + 游离真身区分（建议书承接 P0①/P0③）
 

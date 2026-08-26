@@ -89,6 +89,27 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 | `coderef_interpret` | 人话解读：健康总览/仪表盘/Wiki/assets | 给非编程人员看 |
 | `coderef_whitelist` | 误报白名单 + 核心模块规则管理 | 审查确认为误报后写入 |
 
+## 场景化路由（外部建议 A/E 落地：不直面 55 工具）
+
+> 治理主链场景化编排见 `coderef-governance` Skill（5 阶段 × 每阶段 2–4 工具）。这里给出意图 → 工具快速路由（同义词/别名 → 主工具），编程 AI 不确定用哪个工具时先查这张表。
+
+| 用户意图（可能说法） | 主工具 | 备选/组合 |
+|---|---|---|
+| 项目健康吗 / 完整体检 / 有没有坏味道 | `coderef_audit` | + `coderef_arch_audit` + `coderef_owasp` |
+| 代码结构乱 / 重复多 / 模块不统一 | `coderef_architecture` | + `coderef_arch_gap`（duplicate 差距） |
+| 这个入口按不按我期望的流程走 | `coderef_flow_verify` | + `coderef_query`(callers) |
+| 架构腐化 / 循环依赖 / 上帝模块 | `coderef_arch_audit` | + `coderef_architecture` P0-B |
+| 哪个是真身 / 哪个是孤本 / 同名多实现 | `coderef_architecture`（读 P0-B/P0-C） | + `coderef_arch_audit` identity 摘要 |
+| 治理差距清单 / 该治理什么 | `coderef_arch_gap` | + `coderef_gov_issues`（排队） |
+| 治理工作项怎么流转 / 豁免 | `coderef_gov_transition` | 参数速查见 coderef-governance |
+| 定期体检 / 建档 / 闭环 | `coderef_gov_start` / `coderef_gov_close` | + `coderef_gov_board` / `coderef_gov_report` |
+| AI 改完代码提交前确认没改坏 | `coderef_change_guard` | + `coderef_change_report` |
+| 查调用关系 / 影响面 | `coderef_query` | 替代 grep，省 token |
+| 安全合规（OWASP） | `coderef_owasp` | + `coderef_prompt_governance` |
+| 上下文丢了，东西在哪儿 | `coderef_operation_memory_recover` | 强制 gate（见工作流 E） |
+
+**结构性锈蚀场景（P0②）**：治理「存量结构」（重复/孪生/真身）时，重点看 `coderef_architecture` 的 P0-B/P0-C（真身判定/重复簇）与 `coderef_arch_gap` 的 duplicate/directory_duplicate 差距，勿只依赖 `coderef_audit` 的 diff 焦点。`strategy=incr` 仅用于回归复核新增改动，治理存量用 `strategy=full`。
+
 ## 标准工作流
 
 ### 工作流 A：对一个新项目做「完整体检」

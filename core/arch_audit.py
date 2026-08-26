@@ -508,6 +508,43 @@ def _scan_function_recursion(project_path: str) -> list:
     return findings
 
 
+def _identity_briefing(project_path: str, db_path: str) -> list:
+    """真身/孤本摘要（P1⑤）：复用 arch_insight P0-B identity_insight，
+    让 arch_audit 直接透出"同名多目录实现里谁是活跃真身/谁是孤本"。
+
+    返回紧凑摘要列表：[{class_name, copies: 总数, active: 活跃真身副本数,
+    roots: 无调用者副本数, verdicts: 各副本 verdict, 优先展示来源文件}]。
+    纯静态、不依赖 LLM；缺图谱时返回空列表（不阻断健康度）。
+    """
+    try:
+        from core.arch_insight import identity_insight
+        ins = identity_insight(project_path, db_path=db_path, max_items=30)
+    except Exception:
+        return []
+    if not ins.get("ok"):
+        return []
+
+    briefing = []
+    for item in ins.get("items") or []:
+        copies = item.get("copies") or []
+        if not copies:
+            continue
+        active = [c for c in copies if c.get("verdict") == "活跃真身"]
+        roots = [c for c in copies if c.get("callers", 0) == 0]
+        # 展示优先：活跃真身最前 -> 生产入口候选 -> 孤本，附来源文件简化形式
+        prio = (active or roots or copies)[:1]
+        src = prio[0].get("file", "") if prio else ""
+        briefing.append({
+            "class_name": item.get("name", ""),
+            "copies": len(copies),
+            "active": len(active),
+            "roots": len(roots),
+            "verdicts": [c.get("verdict", "?") for c in copies][:6],
+            "lead_src": src,
+        })
+    return briefing
+
+
 def audit(project_path: str, db_path: str = None,
           fan_out_threshold: int = None,
           large_symbol_threshold: int = None,
@@ -562,9 +599,15 @@ def audit(project_path: str, db_path: str = None,
     # 5) 函数级递归（ARC-08）：AST 扫描源码，检测函数级递归调用（直接/间接）
     result["function_recursions"] = _scan_function_recursion(project_path)
 
+    # 5.5) 真身/孤本摘要（P1⑤，建议书承接）：复用 arch_insight P0-B identity_insight，
+    #      让 arch_audit 直接透出"同名多目录实现里谁是活跃真身/谁是孤本"，
+    #      不再埋在 architecture 报告内（Skill 只看 arch_audit 健康度也不会漏真身判定）。
+    result["identity"] = _identity_briefing(project_path, db)
+
     # 6) 架构健康度（0-10）
     result["summary"] = _health_summary(
         result["cycles"], result["god_modules"], layer_viol, result["large_modules"])
     result["summary"]["function_recursions"] = len(result["function_recursions"])
+    result["identity_count"] = len(result["identity"])
     result["ok"] = True
     return result
