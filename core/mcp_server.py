@@ -634,8 +634,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         "【参数动作速查（P2⑦）】\n"
                         "  transition：必填 issue_id + action='transition' + to_state（如 Confirmed→Fixing 传 to_state='Fixing'）\n"
                         "  reject    ：必填 issue_id + action='reject' + reason（豁免理由必留，缺省会报错）\n"
-                        "  meta      ：必填 issue_id + action='meta' + 至少一项（priority/assignee/due_date/note）\n"
-                        "  注意：action=meta 时勿传 to_state（否则报『需 provide to_state』）；\n"
+                        "  meta      ：必填 issue_id + action='meta' + 至少一项（priority/assignee/due_date/note）；to_state 会被忽略，无需传\n"
                         "  状态机强约束下，非法跳转（如 Detected→Fixing）会返回明确错误属正常，先 transition 到合法中间态。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
