@@ -133,6 +133,13 @@ class HealthCycle:
     # ---------- 收尾与报告 ----------
 
     def close_cycle(self, cid: str, note: str = "") -> Dict[str, Any]:
+        # cid 缺省时定位当前 open 周期（），与 report/issues 的缺省逻辑一致；
+        # 直接拿空串去 store.close_cycle 会误报"周期不存在或已关闭"。
+        if not cid:
+            open_cyc = self.store.open_cycle()
+            if not open_cyc:
+                return {"ok": False, "message": "没有 open 周期可关闭，请先用 coderef_gov_start 建档"}
+            cid = open_cyc["id"]
         cyc = self.store.close_cycle(cid, note=note)
         if cyc is None:
             return {"ok": False, "message": "周期不存在或已关闭"}

@@ -853,7 +853,9 @@ class KnowledgeExtractor:
             if not content:
                 continue
             chunk = content[:LLM_MAX_CHARS_SOURCE]
-            prompt = _EXTRACT_PROMPT.format(source=chunk)
+            # 用 replace 占位符而非 str.format：模板内的 JSON 花括号({"kind": ...})
+            # 会被 format 误作字段名解析，导致 KeyError('"kind"')（）。
+            prompt = _EXTRACT_PROMPT.replace("{source}", chunk)
             try:
                 raw = self._llm.chat_completion(
                     [{"role": "user", "content": prompt}],
@@ -976,11 +978,19 @@ class OperationMemory:
         # 4. 隐性知识提炼（可选）
         knowledge: Dict[str, List[dict]] = {"decision": [], "convention": [], "pitfall": []}
         llm_available = False
+        extract_error = ""
         if with_llm:
-            extractor = KnowledgeExtractor(with_llm=True)
-            llm_available = extractor.llm_available()
-            sources = self._collect_knowledge_sources(project_path, resources)
-            knowledge = extractor.extract(sources)
+            try:
+                extractor = KnowledgeExtractor(with_llm=True)
+                llm_available = extractor.llm_available()
+                sources = self._collect_knowledge_sources(project_path, resources)
+                knowledge = extractor.extract(sources)
+            except Exception as e:
+                # 提炼路径任何意外异常不得让整个 sync 裸报错（）：降级
+                # 为结构化错误记录并继续完成静态盘点到，保证有可用记忆产物。
+                logger.exception(f"[OperationMemory] LLM 提炼整体失败: {e}")
+                extract_error = f"隐性知识提炼失败: {e}"
+                knowledge = {"decision": [], "convention": [], "pitfall": []}
 
         # 5. 组装 ledger
         ledger = {
@@ -1023,6 +1033,7 @@ class OperationMemory:
             "side_dirs": side_dirs,
             "knowledge": {k: len(v) for k, v in knowledge.items()},
             "llm_available": llm_available,
+            "extract_error": extract_error or None,
             "ledger_path": ledger_path,
             "brain_path": brain_path,
         }
