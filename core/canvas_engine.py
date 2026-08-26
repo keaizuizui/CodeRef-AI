@@ -692,11 +692,13 @@ function tierTitle(t){
 function renderLanes(){
   laneLayer.innerHTML = '';
   if (!nodes.some(n => n.tier)) return;
+  const vis = nodes.filter(navVisible);
+  if (!vis.length) return;
   const svgns = 'http://www.w3.org/2000/svg';
   const ns = document.createElementNS(svgns,'svg');
   ns.setAttribute('width','20000'); ns.setAttribute('height','20000');
   ns.style.position = 'absolute'; ns.style.left = '0'; ns.style.top = '0'; ns.style.overflow = 'visible';
-  const xs = nodes.map(n => n.x), xe = nodes.map(n => n.x + n.w);
+  const xs = vis.map(n => n.x), xe = vis.map(n => n.x + n.w);
   const minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xe);
   const laneFill = {'business':'rgba(59,130,246,.08)','service':'rgba(245,158,11,.07)','code':'rgba(16,185,129,.07)'};
   const laneStroke = {'business':'#1D4ED8','service':'#B45309','code':'#047857'};
@@ -733,8 +735,17 @@ function hasTierLayers(){
   return nodes.some(n => NAV_LAYERS.includes(n.layer));
 }
 function initNav(){
-  if (!hasTierLayers()) return;   // flow_canvas 等无业务/技术/代码分层 → 不启用导航
-  ['navSep','navGroup','gapSep','gapToggle'].forEach(id => document.getElementById(id).style.display = '');
+  // 可重置：导入/撤销重做替换画布数据后重新配置导航（ 复审）
+  navLevel = 'all'; navLayer = 'all'; navFocus = null;
+  const on = hasTierLayers();
+  ['navSep','navGroup','gapSep','gapToggle'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = on ? '' : 'none';
+  });
+  ['navL0','navL1','navL2','navL3','navAll'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('active', id === 'navAll');
+  });
   renderBreadcrumb();
 }
 function navVisible(n){
@@ -748,13 +759,14 @@ function navVisible(n){
     }
     return n.type === 'module';   // 未聚焦：先看全部模块
   }
-  if (navLevel === 'L3') return n.type === 'module';   // 代码管线：模块 + 依赖
+  if (navLevel === 'L3') return n.layer === '代码层' || n.tier === 'code';   // 代码管线：只看代码层模块与依赖
   return true;
 }
 function setNav(lv){
   navLevel = lv;
   navLayer = 'all';
   navFocus = null;
+  selected.clear();   // 导航过滤变化：清除隐藏节点的选中，避免 Delete 误删
   ['navL0','navL1','navL2','navL3','navAll'].forEach(id => {
     document.getElementById(id).classList.toggle('active', id === 'nav' + lv.toUpperCase() || (lv === 'all' && id === 'navAll'));
   });
@@ -767,6 +779,7 @@ function drillFocus(id){
   const n = nodes.find(x => x.id === id);
   if (!n) return;
   navFocus = id;
+  selected.clear();   // 下钻切换聚焦模块：清除旧选中
   renderBreadcrumb();
   render();
   fitView();
@@ -774,11 +787,13 @@ function drillFocus(id){
 function setLayer(layer){
   if (navLevel !== 'L1') return;
   navLayer = NAV_LAYERS.includes(layer) ? layer : 'all';
+  selected.clear();   // 分层过滤变化：清除隐藏节点的选中
   renderBreadcrumb();
   render();
   fitView();
 }
 function navBack(){
+  selected.clear();   // 回退改变可见范围：清除隐藏节点的选中
   if (navFocus){ navFocus = null; renderBreadcrumb(); render(); fitView(); return; }
   if (navLayer !== 'all'){ navLayer = 'all'; renderBreadcrumb(); render(); fitView(); return; }
   setNav('all');
@@ -1202,6 +1217,7 @@ function undo(){
   const s = JSON.parse(history.pop());
   nodes = s.nodes; edges = s.edges;
   selected.clear();
+  initNav();   // 历史恢复后重新配置导航（ 复审）
   render();
   toast('已撤销');
 }
@@ -1211,6 +1227,7 @@ function redo(){
   const s = JSON.parse(redoStack.pop());
   nodes = s.nodes; edges = s.edges;
   selected.clear();
+  initNav();   // 历史恢复后重新配置导航（ 复审）
   render();
   toast('已重做');
 }
@@ -1362,6 +1379,8 @@ function importJSON(ev){
       if (d.nodes) nodes = d.nodes.map(n => Object.assign({}, n));
       if (d.edges) edges = d.edges.map(e => Object.assign({}, e));
       commitChange();
+      selected.clear();
+      initNav();   // 画布数据替换后重新配置导航（ 复审）
       render();
       fitView();
       toast('已导入画布 JSON');
