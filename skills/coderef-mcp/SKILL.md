@@ -67,6 +67,7 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 | `coderef_operation_memory_query` | 按类别检索操作记忆（decision/convention/pitfall/resource/tool/doc） | 上下文丢失后快速恢复 |
 | `coderef_operation_memory_find` | 定位资源：「test 工具在哪儿」「.env 在哪儿」 | 别再满项目找 |
 | `coderef_operation_memory_status` | 操作记忆健康度 + 待人工确认项 | |
+| `coderef_operation_memory_export` | 操作记忆导出 Markdown + 冲突检测 | attach 到不支持 MCP 的 LLM 界面 |
 
 ### 创新引擎 — 挖出值得复用的设计
 
