@@ -1192,16 +1192,25 @@ def docs(project_path: str, output_dir: str = None,
     r = PipeResult(project_path=project_path)
     d = _load(project_path) if resume else set()
 
+    # 进度包装：非取消的 progress_cb 异常仅记录不阻断 docs（与 audit._prog 一致，
+    # CodeRabbit major）；TaskCancelled 必须透传给上层以协作式收尾。
+    def _cb(stage, done, total, detail=None):
+        if progress_cb:
+            try:
+                progress_cb(stage, done, total, detail)
+            except TaskCancelled:
+                raise
+            except Exception:
+                pass
+
     try:
         tf, tl, analysis = _scan(project_path)
         r.total_files, r.total_lines = tf, tl
-        if progress_cb:
-            progress_cb("扫描", 1, 3, f"{tf} 文件 · {tl} 行")
+        _cb("扫描", 1, 3, f"{tf} 文件 · {tl} 行")
 
         # 构建知识图谱
         _build_kg(project_path, analysis)
-        if progress_cb:
-            progress_cb("知识图谱", 2, 3, "构建调用图")
+        _cb("知识图谱", 2, 3, "构建调用图")
 
         _wiki(project_path, r, d, output_dir,
                    wiki_style=wiki_style,
@@ -1492,7 +1501,10 @@ def _wiki(p: str, r: PipeResult, done: set, output_dir: str = None,
                            include_subprojects=include_subprojects,
                            enable_agent_pointer=enable_agent_pointer,
                            cross_verify=cross_verify,
-                           cross_entry_spec=cross_entry_spec)
+                           cross_entry_spec=cross_entry_spec,
+                           # /CodeRabbit major：透传 progress_cb，使 wiki 逐模块
+                           # 生成循环内置的取消检查点可触达，取消后不再跑到底。
+                           progress_cb=progress_cb)
         # 把 Wiki 生成失败明细带入管线结果，让 _fmt / MCP 层能感知"部分文档生成失败"，
         # 避免部分阶段失败却仍对外标记为 fully completed。
         for e in getattr(gres, "errors", []) or []:
@@ -1832,6 +1844,10 @@ class Pipe:
 
             if os.path.exists(self._ckpt(project_path)):
                 os.remove(self._ckpt(project_path))
+        except TaskCancelled:
+            # CodeRabbit major：TaskCancelled 继承 Exception，须在宽 handler 前显式
+            # 透传到任务 owner，使取消状态可被 _bg/_tsk 识别，而非退化为普通 error。
+            raise
         except Exception as e:
             r.errors.append(str(e))
 

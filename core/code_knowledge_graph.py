@@ -773,10 +773,13 @@ class CodeKnowledgeGraph:
         return row["id"] if row else None
 
     def _find_or_create_ref(self, name: str) -> str:
-        """查找或创建引用节点（用于 GitNexus 关系）"""
-        existing = self._find_node_by_name(name)
-        if existing:
-            return existing
+        """查找或创建引用节点（用于 GitNexus 关系）；引用名称精确匹配，
+        不做子串模糊回退——避免 ref 端点为既有节点后缀（如 foo_service 命中 foo）
+        而被误归属存假边（CodeRabbit major）。"""
+        row = self._conn.execute(
+            "SELECT id FROM nodes WHERE name=? LIMIT 1", (name,)).fetchone()
+        if row:
+            return row["id"]
         nid = f"ref:{name}"
         self._upsert_node(KGNode(id=nid, type="ref", name=name))
         return nid
