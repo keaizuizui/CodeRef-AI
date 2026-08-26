@@ -555,14 +555,17 @@ function zoomBy(factor){
 }
 function fitView(){
   if (!nodes.length) return;
+  // ：导航激活时按当前可见节点计算边界，避免隐藏节点把聚焦视图缩得过小
+  const vis = navLevel === 'all' ? nodes : nodes.filter(navVisible);
+  if (!vis.length) return;
   let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
-  nodes.forEach(n => { minX=Math.min(minX,n.x); minY=Math.min(minY,n.y); maxX=Math.max(maxX,n.x+n.w); maxY=Math.max(maxY,n.y+n.h); });
+  vis.forEach(n => { minX=Math.min(minX,n.x); minY=Math.min(minY,n.y); maxX=Math.max(maxX,n.x+n.w); maxY=Math.max(maxY,n.y+n.h); });
   const pad = 80;
   minX-=pad; minY-=pad; maxX+=pad; maxY+=pad;
   const w = maxX-minX, h = maxY-minY;
   view.scale = Math.min(wrap.clientWidth/w, wrap.clientHeight/h, 1.5);
   // ：适应后节点最小可辨尺寸下限，防止超大图把节点缩成不可辨
-  const maxNW = Math.max(...nodes.map(n=>n.w));
+  const maxNW = Math.max(...vis.map(n=>n.w));
   const minScale = MIN_READABLE_PX / Math.max(maxNW, 1);
   view.scale = Math.max(view.scale, minScale);
   view.x = (wrap.clientWidth - w*view.scale)/2 - minX*view.scale;
@@ -610,7 +613,11 @@ function renderNodes(){
     el.style.width = n.w+'px'; el.style.height = n.h+'px';
     el.style.borderColor = nodeColor(n);
     el.dataset.id = n.id;
-    el.addEventListener('dblclick', ev => { ev.stopPropagation(); drillFocus(n.id); });
+    el.addEventListener('dblclick', ev => {
+      ev.stopPropagation();
+      if (navLevel === 'L2') drillFocus(n.id);
+      else if (navLevel === 'L1') setLayer(n.layer);
+    });
     const sub = n.props && (n.props.file || n.props.desc || '');
     el.innerHTML = `<div class="node-icon">${esc(n.icon||'')}</div>
       <div class="node-label" title="${esc(n.label)}">${esc(n.label)}</div>
@@ -764,6 +771,13 @@ function drillFocus(id){
   render();
   fitView();
 }
+function setLayer(layer){
+  if (navLevel !== 'L1') return;
+  navLayer = NAV_LAYERS.includes(layer) ? layer : 'all';
+  renderBreadcrumb();
+  render();
+  fitView();
+}
 function navBack(){
   if (navFocus){ navFocus = null; renderBreadcrumb(); render(); fitView(); return; }
   if (navLayer !== 'all'){ navLayer = 'all'; renderBreadcrumb(); render(); fitView(); return; }
@@ -776,7 +790,10 @@ function renderBreadcrumb(){
   let s = '📍 ';
   if (navLevel === 'L0') s += 'L0 总览';
   else if (navLevel === 'L1') s += 'L1 分层' + (navLayer !== 'all' ? ' › ' + navLayer : '');
-  else if (navLevel === 'L2') s += 'L2 模块' + (navFocus ? ' › ' + (nodes.find(x => x.id === navFocus) || {}).label : '');
+  else if (navLevel === 'L2') {
+    const focused = nodes.find(x => x.id === navFocus);
+    s += 'L2 模块' + (navFocus ? ' › ' + esc(focused ? focused.label : '') : '');
+  }
   else s += 'L3 代码';
   if (navLevel !== 'all') s += ' <a href="javascript:navBack()" style="color:#60A5FA">[回退]</a>';
   bc.innerHTML = s;
