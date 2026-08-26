@@ -463,6 +463,17 @@ body { font-family:"Segoe UI","Noto Sans CJK SC",sans-serif; background:#0F172A;
   <span class="sep"></span>
   <button onclick="layoutLayered()" title="分层自动布局">📊 分层布局</button>
   <button onclick="layoutForce()" title="力导向自动布局">🕸 力导向</button>
+  <span class="sep" id="navSep" style="display:none"></span>
+  <span id="navGroup" style="display:none">
+    <button onclick="setNav('L0')" id="navL0" title="L0 架构总览：先看这是什么业务/有哪些角色（先整体后局部）">🏠 L0 总览</button>
+    <button onclick="setNav('L1')" id="navL1" title="L1 模块盘点：按层聚焦（业务/技术/代码）">🗂 L1 分层</button>
+    <button onclick="setNav('L2')" id="navL2" title="L2 模块内逻辑：双击模块节点下钻其关联子图">🔍 L2 模块</button>
+    <button onclick="setNav('L3')" id="navL3" title="L3 代码管线：只看代码层模块与依赖">🧩 L3 代码</button>
+    <button onclick="setNav('all')" id="navAll" title="全量平铺（默认视图）">🌐 全量</button>
+  </span>
+  <span id="breadcrumb" style="display:none; font-size:11px; color:#94A3B8;"></span>
+  <span class="sep" id="gapSep" style="display:none"></span>
+  <button id="gapToggle" style="display:none" onclick="toggleGaps()" title="差距高亮开关：默认折叠，捋清 L0-L3 后再叠加">⚠ 差距:开</button>
   <span class="sep"></span>
   <button onclick="undo()" title="撤销 (Ctrl+Z)">↩ 撤销</button>
   <button onclick="redo()" title="重做 (Ctrl+Shift+Z)">↪ 重做</button>
@@ -496,6 +507,14 @@ let drag = null;   // {mode:'node'|'pan'|'connect'|'marquee', ...}
 let connectFrom = null;  // {nodeId, port}
 let ctxTarget = null;    // 右键菜单目标
 let propTarget = null;   // 属性面板目标 {kind:'node'|'edge', id}
+// ：L0→L3 逐层下钻导航状态
+let navLevel = 'all';    // 'all'|'L0'|'L1'|'L2'|'L3'
+let navLayer = 'all';    // L1 分层过滤：'all'|'业务层'|'技术层'|'代码层'
+let navFocus = null;     // L2 聚焦模块 id
+let showGaps = true;     // 差距高亮开关（先捋清后治理）
+const NAV_LAYERS = ['业务层', '技术层', '代码层'];
+const GAP_NODE_COLORS = ['#64748B', '#F59E0B', '#EF4444'];  // 游离/循环/缺失角色
+const GAP_EDGE_COLORS = ['#EF4444'];                        // 依赖违例
 
 const wrap = document.getElementById('canvasWrap');
 const viewport = document.getElementById('viewport');
@@ -584,12 +603,14 @@ function bezierPath(p1, p2){
 function renderNodes(){
   nodeLayer.innerHTML = '';
   nodes.forEach(n => {
+    if (!navVisible(n)) return;
     const el = document.createElement('div');
     el.className = 'node' + (selected.has(n.id) ? ' selected' : '') + (n.tier ? ' tier-'+n.tier : '');
     el.style.left = n.x+'px'; el.style.top = n.y+'px';
     el.style.width = n.w+'px'; el.style.height = n.h+'px';
-    el.style.borderColor = n.color || '#334155';
+    el.style.borderColor = nodeColor(n);
     el.dataset.id = n.id;
+    el.addEventListener('dblclick', ev => { ev.stopPropagation(); drillFocus(n.id); });
     const sub = n.props && (n.props.file || n.props.desc || '');
     el.innerHTML = `<div class="node-icon">${esc(n.icon||'')}</div>
       <div class="node-label" title="${esc(n.label)}">${esc(n.label)}</div>
@@ -621,13 +642,13 @@ function renderEdges(){
   nodes.forEach(n => byId[n.id] = n);
   edges.forEach(e => {
     const from = byId[e.from], to = byId[e.to];
-    if (!from || !to) return;
+    if (!from || !to || !navVisible(from) || !navVisible(to)) return;
     const p1 = portPos(from, e.fromPort || autoPort(from,to).fromPort);
     const p2 = portPos(to, e.toPort || autoPort(from,to).toPort);
     const path = document.createElementNS('http://www.w3.org/2000/svg','path');
     path.setAttribute('d', bezierPath(p1,p2));
     // ：边 rel 配色/线型——flow 同层流程 / align 业务→技术 / land 技术→代码 / depends 代码内部
-    let stroke = e.color || '#94A3B8';
+    let stroke = edgeColor(e);
     let dash = e.dashed;
     if (e.rel==='align'){ stroke = '#F59E0B'; dash = true; }
     else if (e.rel==='land'){ stroke = '#10B981'; dash = true; }
@@ -673,7 +694,7 @@ function renderLanes(){
   const laneFill = {'business':'rgba(59,130,246,.08)','service':'rgba(245,158,11,.07)','code':'rgba(16,185,129,.07)'};
   const laneStroke = {'business':'#1D4ED8','service':'#B45309','code':'#047857'};
   tierOrder().forEach(t => {
-    const items = nodes.filter(n => n.tier === t);
+    const items = nodes.filter(n => n.tier === t && navVisible(n));
     if (!items.length) return;
     const top = Math.min.apply(null, items.map(n => n.y)) - 26;
     const bottom = Math.max.apply(null, items.map(n => n.y + n.h)) + 16;
@@ -699,6 +720,80 @@ function renderStats(){
   if (s.total != null) html += ` | 差距 ${s.total} (高${s.high||0}/中${s.medium||0}/低${s.low||0})`;
   document.getElementById('stats').innerHTML = html;
 }
+
+// ═══════════ ：L0→L3 逐层下钻导航 ═══════════
+function hasTierLayers(){
+  return nodes.some(n => NAV_LAYERS.includes(n.layer));
+}
+function initNav(){
+  if (!hasTierLayers()) return;   // flow_canvas 等无业务/技术/代码分层 → 不启用导航
+  ['navSep','navGroup','gapSep','gapToggle'].forEach(id => document.getElementById(id).style.display = '');
+  renderBreadcrumb();
+}
+function navVisible(n){
+  if (navLevel === 'all') return true;
+  if (navLevel === 'L0') return n.type === 'step' || n.type === 'role';   // 业务定位 + 角色总览
+  if (navLevel === 'L1') return navLayer === 'all' || n.layer === navLayer;
+  if (navLevel === 'L2'){
+    if (navFocus){
+      if (n.id === navFocus) return true;
+      return edges.some(e => (e.from === navFocus && e.to === n.id) || (e.to === navFocus && e.from === n.id));
+    }
+    return n.type === 'module';   // 未聚焦：先看全部模块
+  }
+  if (navLevel === 'L3') return n.type === 'module';   // 代码管线：模块 + 依赖
+  return true;
+}
+function setNav(lv){
+  navLevel = lv;
+  navLayer = 'all';
+  navFocus = null;
+  ['navL0','navL1','navL2','navL3','navAll'].forEach(id => {
+    document.getElementById(id).classList.toggle('active', id === 'nav' + lv.toUpperCase() || (lv === 'all' && id === 'navAll'));
+  });
+  renderBreadcrumb();
+  render();
+  if (lv !== 'all') fitView();
+}
+function drillFocus(id){
+  if (navLevel !== 'L2') return;
+  const n = nodes.find(x => x.id === id);
+  if (!n) return;
+  navFocus = id;
+  renderBreadcrumb();
+  render();
+  fitView();
+}
+function navBack(){
+  if (navFocus){ navFocus = null; renderBreadcrumb(); render(); fitView(); return; }
+  if (navLayer !== 'all'){ navLayer = 'all'; renderBreadcrumb(); render(); fitView(); return; }
+  setNav('all');
+}
+function renderBreadcrumb(){
+  const bc = document.getElementById('breadcrumb');
+  if (navLevel === 'all'){ bc.style.display = 'none'; bc.innerHTML = ''; return; }
+  bc.style.display = '';
+  let s = '📍 ';
+  if (navLevel === 'L0') s += 'L0 总览';
+  else if (navLevel === 'L1') s += 'L1 分层' + (navLayer !== 'all' ? ' › ' + navLayer : '');
+  else if (navLevel === 'L2') s += 'L2 模块' + (navFocus ? ' › ' + (nodes.find(x => x.id === navFocus) || {}).label : '');
+  else s += 'L3 代码';
+  if (navLevel !== 'all') s += ' <a href="javascript:navBack()" style="color:#60A5FA">[回退]</a>';
+  bc.innerHTML = s;
+}
+function toggleGaps(){
+  showGaps = !showGaps;
+  document.getElementById('gapToggle').textContent = showGaps ? '⚠ 差距:开' : '⚠ 差距:关';
+  render();
+}
+function nodeColor(n){
+  if (!showGaps && GAP_NODE_COLORS.includes(n.color)) return '#3B82F6';   // 差距折叠：还原默认蓝
+  return n.color || '#334155';
+}
+function edgeColor(e){
+  if (!showGaps && GAP_EDGE_COLORS.includes(e.color)) return '#94A3B8';   // 差距折叠：还原默认灰
+  return e.color || '#94A3B8';
+}
 function render(){
   renderNodes(); renderEdges(); renderLanes(); renderStats(); renderMiniMap();
 }
@@ -715,7 +810,7 @@ function renderMiniMap(){
   const ox = (cw - (maxX-minX)*sc)/2 - minX*sc;
   const oy = (ch - (maxY-minY)*sc)/2 - minY*sc;
   nodes.forEach(n => {
-    mmCtx.fillStyle = n.color || '#3B82F6';
+    mmCtx.fillStyle = nodeColor(n);
     mmCtx.fillRect(n.x*sc+ox, n.y*sc+oy, Math.max(2,n.w*sc), Math.max(2,n.h*sc));
   });
   // 视口矩形
@@ -1269,6 +1364,7 @@ function toast(msg){
 }
 
 // ═══════════ 初始化 ═══════════
+initNav();
 render();
 fitView();
 </script>
