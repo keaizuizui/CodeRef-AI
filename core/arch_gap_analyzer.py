@@ -169,7 +169,7 @@ def _detect_unassigned(nodes: Dict[str, dict], adj: Dict[str, List[str]],
 
     豁免噪声（vendor/*.min.js/__init__/dist/build 等）自动排除，避免刷屏淹没真游离。
 
-    返回 (报出的差距列表, 游离模块总数)。
+    返回 (报出的差距列表, 游离模块总数, free 计数, unmodeled 计数)。
     """
     # 模块 → 跨模块被调次数（fan_in 近似）：用 CALLS 边被调侧统计
     called_mods: Dict[str, int] = {}
@@ -205,6 +205,8 @@ def _detect_unassigned(nodes: Dict[str, dict], adj: Dict[str, List[str]],
         })
     unassigned.sort(key=lambda x: (x["monitored"] != "free", x["module"]))
     total = len(unassigned)
+    free_cnt = sum(1 for u in unassigned if u["monitored"] == "free")
+    unmodeled_cnt = total - free_cnt
     shown = unassigned[:max_n]
     gaps = []
     for u in shown:
@@ -221,7 +223,7 @@ def _detect_unassigned(nodes: Dict[str, dict], adj: Dict[str, List[str]],
             "fan_in": u["fan_in"],
             "detail": detail,
         })
-    return gaps, total
+    return gaps, total, free_cnt, unmodeled_cnt
 
 
 def _detect_dependency_violations(nodes: Dict[str, dict],
@@ -405,7 +407,7 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
     gaps.extend(_detect_missing(roles, project_path, nodes))
 
     # 2) 游离模块（真游离 free 优先，未建模 unmodeled 次之；豁免 vendor/产物噪声）
-    unassigned_gaps, unassigned_total = _detect_unassigned(
+    unassigned_gaps, unassigned_total, unassigned_free, unassigned_unmodeled = _detect_unassigned(
         nodes, adj, project_path, assigned_ids, max_unassigned)
     gaps.extend(unassigned_gaps)
 
@@ -471,6 +473,8 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
         "directory_duplicate": dir_dup_cnt,
         "unassigned_total": unassigned_total,
         "unassigned_shown": len(unassigned_gaps),
+        "unassigned_free": unassigned_free,
+        "unassigned_unmodeled": unassigned_unmodeled,
     }
 
     # 对齐度（Phase 0 简化：角色覆盖度 + 模块归属度）

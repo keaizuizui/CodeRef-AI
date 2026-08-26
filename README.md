@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.6.2** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.6.3** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -488,6 +488,20 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.6.3 — arch_gap 游离分档全量计数透出（ 回归存疑项定因）
+
+> 承接测试 ：arch_gap 游离分级 unmodeled 实盘 0 与冒烟 free=189/unmodeled=11 不一致。
+> 定因：**展示截断，非检测分支遗漏**——游离按 free 置顶排序，默认 `max_unassigned=50` 只展示
+> 前 50 条（全 free），unmodeled 全量被截断；冒烟 189+11=200 恰是 `max_unassigned=200` 的截断口径。
+> 实盘全量（working 图谱 + target_arch v2）：free=189 / unmodeled=265 / total=454。
+
+- **summary 新增游离全量分档计数**：`unassigned_free` / `unassigned_unmodeled` 直接透出全量
+  free/unmodeled 计数，调用方不再受 `max_unassigned` 展示截断影响（此前 `_detect_unassigned` 已算
+  出两档计数但 `analyze_gap` 未解包、summary 未透出，属上一轮半成品，本轮补齐）。
+- **展开参数口径说明**：控制游离列表展开的参数是 `max_unassigned`（默认 50），非 `limit`；
+  传 `limit` 不影响展开属调用方口径，已在本条目与响应册说明。
+- **版本号**：5.6.2 → 5.6.3（patch， 修复）
 
 ### v5.6.2 — 治理主链改造批次四收尾：gov 事务原子性 + 场景化 Skill 封装（外部 C/E）
 
