@@ -349,9 +349,9 @@ class WikiGenerator:
         """拆分说明：实现已移至模块级 _save_last_update，此处保留方法签名做委托"""
         return _save_last_update(self, output_dir, git_head, doc_count)
 
-    def _incremental_update(self, project_path: str, output_dir: str, changed_files: List[str], wiki_style: str, cross_verify: bool, cross_entry_spec: str, result: WikiResult):
+    def _incremental_update(self, project_path: str, output_dir: str, changed_files: List[str], wiki_style: str, cross_verify: bool, cross_entry_spec: str, result: WikiResult, progress_cb=None):
         """拆分说明：实现已移至模块级 _incremental_update，此处保留方法签名做委托"""
-        return _incremental_update(self, project_path, output_dir, changed_files, wiki_style, cross_verify, cross_entry_spec, result)
+        return _incremental_update(self, project_path, output_dir, changed_files, wiki_style, cross_verify, cross_entry_spec, result, progress_cb)
 
     def _prune_stale_module_docs(self, output_dir: str, modules: List[WikiModule]):
         """拆分说明：实现已移至模块级 _prune_stale_module_docs，此处保留方法签名做委托"""
@@ -421,9 +421,9 @@ class WikiGenerator:
         """拆分说明：实现已移至模块级 _strip_deterministic_prefix，此处保留方法签名做委托"""
         return _strip_deterministic_prefix(self, doc_text)
 
-    def _generate_all_documents(self, project_name: str, modules: List[WikiModule], meta: ProjectCodeMetadata, descriptions: Dict[str, str], output_dir: str, result: WikiResult, cross_badges: Dict[str, dict]=None, affected_modules: Optional[List[str]]=None, skip_global: bool=False):
+    def _generate_all_documents(self, project_name: str, modules: List[WikiModule], meta: ProjectCodeMetadata, descriptions: Dict[str, str], output_dir: str, result: WikiResult, cross_badges: Dict[str, dict]=None, affected_modules: Optional[List[str]]=None, skip_global: bool=False, progress_cb=None):
         """拆分说明：实现已移至模块级 _generate_all_documents，此处保留方法签名做委托"""
-        return _generate_all_documents(self, project_name, modules, meta, descriptions, output_dir, result, cross_badges, affected_modules, skip_global)
+        return _generate_all_documents(self, project_name, modules, meta, descriptions, output_dir, result, cross_badges, affected_modules, skip_global, progress_cb)
 
     def _generate_global_docs(self, project_name: str, modules: List[WikiModule], meta: ProjectCodeMetadata, descriptions: Dict[str, str], output_dir: str, result: WikiResult, cite_warnings: List[str]=None):
         """拆分说明：实现已移至模块级 _generate_global_docs，此处保留方法签名做委托"""
@@ -693,7 +693,7 @@ def generate(self, project_path: str, output_dir: str = "",
                 "增量同步模式暂不处理子项目，如需更新子项目请使用全量生成。")
         docs = self._incremental_update(
             project_path, output_dir, changed_files, wiki_style,
-            cross_verify, cross_entry_spec, result,
+            cross_verify, cross_entry_spec, result, progress_cb=progress_cb,
         )
         result.documents = docs
     else:
@@ -850,7 +850,7 @@ def _generate_full_pipeline(self, project_path: str, project_name: str, output_d
     # Stage 3: LLM 生成各文档（用 Stage 2 的输出，而非原始代码摘要）
     docs = self._generate_all_documents(
         project_name, modules, code_metadata, module_descriptions,
-        output_dir, result, cross_badges,
+        output_dir, result, cross_badges, progress_cb=progress_cb,
     )
     result.documents = docs
     return subprojects
@@ -889,7 +889,7 @@ def _generate_subproject_wikis(self, subprojects: List[str], output_dir: str,
             # Stage 3
             sub_docs = self._generate_all_documents(
                 sub_name, sub_modules, sub_meta, sub_descriptions,
-                sub_output, sub_result,
+                sub_output, sub_result, progress_cb=progress_cb,
             )
             sub_result.documents = sub_docs
             sub_result.module_count = sum(1 for d in sub_docs if "MODULES" in d)
@@ -1083,7 +1083,7 @@ def _save_last_update(self, output_dir: str, git_head: Optional[str],
 def _incremental_update(self, project_path: str, output_dir: str,
                         changed_files: List[str], wiki_style: str,
                         cross_verify: bool, cross_entry_spec: str,
-                        result: WikiResult) -> List[str]:
+                        result: WikiResult, progress_cb=None) -> List[str]:
     """R1 增量同步：只重新生成受影响模块的 MODULES 文档，全局文档按需重建。
 
     调用方已判定变更文件数在阈值内；本方法对比变更文件所属模块，
@@ -1150,6 +1150,7 @@ def _incremental_update(self, project_path: str, output_dir: str,
         output_dir, result, cross_badges,
         affected_modules=sorted(affected),
         skip_global=True,
+        progress_cb=progress_cb,
     )
 
     # 全局文档：存在代码变更时重建（README/ARCHITECTURE 等描述可能过时）
@@ -1857,7 +1858,8 @@ def _generate_all_documents(self, project_name: str, modules: List[WikiModule],
                              result: WikiResult,
                              cross_badges: Dict[str, dict] = None,
                              affected_modules: Optional[List[str]] = None,
-                             skip_global: bool = False) -> List[str]:
+                             skip_global: bool = False,
+                             progress_cb=None) -> List[str]:
     """生成所有 Wiki 文档
 
     顺序优化：先逐模块 → 再合并产出跨模块文档
