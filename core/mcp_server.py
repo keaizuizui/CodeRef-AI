@@ -51,6 +51,11 @@ MAX_BG_TASK_SECONDS = 860
 # 方式继续（如 resume=true 续跑、对子项目/维度逐个扫描），提示分片为更稳妥的路径。
 BG_PARTIAL_SUGGEST_SECONDS = 300
 
+# ：协作式取消专用异常。用户在阶段汇报点请求取消时，_bg 的 progress 回调抛此
+# 异常让后台线程尽早收尾，并单独标记为"用户取消"而非普通 error。
+class _TaskCancelled(Exception):
+    pass
+
 
 # ─── 工具可靠性清单 ─────────────────────────────────────────────
 # 汇总工具的可信度与使用边界，注入到 MCP 元数据（initialize.serverInfo.reliability +
@@ -249,6 +254,20 @@ BUILTIN_TOOLS: List[Dict] = [
                         "inputSchema": {"type": "object", "properties": {
                             "task_id": {"type": "string"},
                         }},
+                    },
+        {
+                        "name": "coderef_task_cancel",
+                        "description": (
+                            "取消/停止一个运行中的后台任务（）。\n"
+                            "对仍 running 的任务：立即置为 cancelled 状态——随后 coderef_task_status "
+                            "返回可定位的 cancelled（不再误报\"running、无部分结果\"），且任务在下一个阶段"
+                            "汇报点协作式尽早收尾（audit/docs 等逐阶段工具可真正停止）。\n"
+                            "对已完成/已结束/不存在的任务：返回其实际状态，无副作用。\n"
+                            "说明：折叠式取消无法强制杀死 daemon 线程；若任务已被取消前产出的部分产物（文档/报告）仍按模块落盘，可先使用。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "task_id": {"type": "string", "description": "要取消的后台任务 task_id（来自启动时的返回值）"},
+                        }, "required": ["task_id"]},
                     },
         {
                         "name": "coderef_query",
@@ -1049,7 +1068,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         "工作项表格（按视图/状态/角色筛选、点击行展开详情、状态流转按钮）。\n"
                         "interactive=true（默认）启用前端流转回写治理库（/api/transition，仅 127.0.0.1）；\n"
                         "false 退化为只读。open=true 可起本地 http.server 服务（进程常驻，返回 URL）。\n"
-                        "纯静态、确定性，不依赖 LLM。"
+                        "纯静态、确定性，不依赖 LLM。产物落盘：生成本体 HTML 写盘到 <project>/.coderef/gov_board.html（），返回含确切 board_html 路径供浏览器直接打开；output_dir 可自定义。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
@@ -1950,7 +1969,12 @@ def _gov_board(a: dict) -> str:
     from core.gov_webdash import render_board, serve
     pp = a["project_path"]
     interactive = a.get("interactive", True)
-    r = render_board(pp, output_dir=a.get("output_dir", ""),
+    # 缺省落盘到 <project>/.coderef/gov_board.html（）：保证有可人工/浏览器
+    # 直接查看的 HTML 产物，而非只在返回里塞一整段 html 字符串。
+    output_dir = a.get("output_dir", "")
+    if not output_dir:
+        output_dir = os.path.join(pp, ".coderef")
+    r = render_board(pp, output_dir=output_dir,
                      cid=a.get("cid", ""), interactive=interactive)
     r["tool"] = "coderef_gov_board"
     r["project_path"] = pp
@@ -2347,9 +2371,11 @@ class Server:
     def _call(self, rid, params):
         n, a = params.get("name",""), params.get("arguments",{})
         try:
-            # 状态查询永远同步返回，不后台化
+            # 状态查询/取消永远同步返回，不后台化
             if n == "coderef_task_status":
                 return self._ok(rid, self._tsk(a))
+            if n == "coderef_task_cancel":
+                return self._ok(rid, self._task_cancel(a))
             # 未知工具提前拦截，避免落入 _run 才报"未知"
             if n not in self._handlers and n not in ("coderef_audit", "coderef_docs"):
                 return {"jsonrpc":"2.0","id":rid,"error":{"code":-32602,"message":f"未知工具: {n}"}}
@@ -2371,10 +2397,16 @@ class Server:
     def _bg(self, rc, n, a):
         import time
         try:
-            # progress 回调：每个阶段完成后写入共享 rc，_tsk 据此回传进度
+            # progress 回调：每个阶段完成后写入共享 rc，_tsk 据此回传进度；
+            # 协作式取消（）：收到 coderef_task_cancel 后 rc.cancelled=True，
+            # 下一个阶段汇报点抛出 _TaskCancelled 让任务尽早收尾而非无限跑到底。
             def prog(stage, done, total, detail=None):
+                if rc.get("cancelled"):
+                    raise _TaskCancelled()
                 rc["progress"] = {"stage": stage, "done": done, "total": total, "detail": detail}
             rc["result"] = self._run(n, a, progress_cb=prog)
+        except _TaskCancelled:
+            rc["cancelled_at"] = time.time()   # 用户取消，非错误
         except Exception as e: rc["error"] = str(e); rc["tb"] = traceback.format_exc()
         finally:
             # 任务终态标记完成时间（无论成败），供 _tsk / 调用方判断终态
@@ -2662,6 +2694,12 @@ class Server:
             t = tasks.get(tid)
             if not t: return json.dumps({"error":f"不存在: {tid}"})
             if t["thread"].is_alive():
+                # ：收到 coderef_task_cancel 后，即便线程仍在收尾也返回可定位的
+                # cancelled 状态，避免外层 AI 继续以 running 无限轮询/误判悬置。
+                if t.get("cancelled"):
+                    return json.dumps({"status": "cancelled", "task_id": tid,
+                                       "message": "任务已请求取消，正在收尾，可稍后重查最终状态"},
+                                      ensure_ascii=False)
                 # 超时兜底：超大项目单次后台任务可能远超 host 层轮询上限而一直 running，
                 # 导致外层 AI 轮询（poll_timeout）用尽后整步失败、结果被丢弃。运行超过
                 # 阈值时改返回"部分完成 + 未完成提示"的诚实结构化结果，让调用方在放弃
@@ -2735,10 +2773,40 @@ class Server:
             # 标记完成时间戳，不再首次读取即删除；由 _evict_finished_tasks 按年龄/大小清除
             if "finished_at" not in t:
                 t["finished_at"] = time.time()
+            # ：取消后终态（协作式收尾，非 error）
+            if rc.get("cancelled"):
+                return json.dumps({"status":"cancelled","task_id":tid,
+                                   "message":"任务已取消","content":rc.get("result","")}, ensure_ascii=False)
             if "error" in rc:
                 return json.dumps({"status":"error","task_id":tid,"error":rc["error"]})
             r = rc.get("result","")
         return json.dumps({"status":"completed","task_id":tid,"content":r}, ensure_ascii=False)
+
+    def _task_cancel(self, a) -> str:
+        """：取消一个运行中的后台任务（状态可定位，不再把悬置任务误报 running）。"""
+        tid = a.get("task_id", "")
+        if not tid:
+            return json.dumps({"error": "缺少 task_id"}, ensure_ascii=False)
+        with self._locked_tasks() as tasks:
+            self._evict_finished_tasks(tasks)
+            t = tasks.get(tid)
+            if not t:
+                return json.dumps({"error": f"不存在: {tid}"}, ensure_ascii=False)
+            # 线程已结束：非取消目标，如实返回其终态
+            if not t["thread"].is_alive():
+                rc = t["result"]
+                status = "error" if "error" in rc else "completed"
+                return json.dumps({"status": status, "task_id": tid,
+                                   "message": "任务已结束，无需取消"}, ensure_ascii=False)
+            if t.get("cancelled"):
+                return json.dumps({"status": "cancelled", "task_id": tid,
+                                   "message": "该任务已请求取消，可稍后重查最终状态"}, ensure_ascii=False)
+            # 标记取消：写入共享 rc，供 _bg 的 progress 回调在下一阶段点协作式收尾
+            t["cancelled"] = True
+            t["result"]["cancelled"] = True
+        return json.dumps({"status": "cancelled", "task_id": tid,
+                           "message": ("已请求取消；任务在下一个阶段汇报点协作式收尾，"
+                                       "可稍后用 coderef_task_status 查询最终结果")}, ensure_ascii=False)
 
     def _query(self, a):
         return _query(a)

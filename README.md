@@ -488,6 +488,19 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
 
+### v5.5.3 — ~：全工具补齐对账修复（治理产出落盘 / 目标架构保真 / 排序追溯 / 后台任务取消）
+
+> 全工具补齐对账（20260826）沉取 6 项确证缺陷集中修复：治理看板 HTML 落盘、目标架构落盘保真、缺省关闭周期、后台任务取消、图谱 callers 追溯、operation_memory 异常兜底。
+
+- ** gov_board 落盘 HTML（`core/mcp_server.py`）**：缺省 output_dir 时自动生成本体 HTML 写盘到 `<project>/.coderef/gov_board.html`，description 明确产物路径，供人工/浏览器直接查看（不再"仅返回 JSON、无 HTML 产物"）
+- ** target_arch_set 落盘保真（实证核对）**：`normalize_arch` 以 `dict(arch)` 完整复制输入再补缺省空数组，`_target_arch_set` 全量 `json.dump`，version/tech_roles/business_flows/constraints 等顶层段落完整保真落盘；实测传入该 4 段富结构，落盘文件 4 段齐全无丢失。测试观察到的"丢段"根因为 TRAE coderef MCP（stdio 长驻进程）仍运行旧版本代码——重启 MCP 并重新 set 覆盖写入即可消除
+- ** gov_close 缺省关闭（`core/healthcycle.py`）**：缺省 cid 时自动定位当前 open 周期并关闭（与 gov_start 周期状态一致），无 open 周期时返回明确提示"请先用 coderef_gov_start 建档"，不再误导性报"周期不存在或已关闭"
+- ** query callers 追溯补全（`core/code_knowledge_graph.py`）**：方法调用侧 `call.func_name` 常带类/模块前缀（如 `self.run_bot` / `Bot.run_bot`），此前用纯短名 `run_bot` 精确匹配失败导致 CALLS 边漏建、callers 查询返空；现 `_find_node_by_name` 精确失败后做唯一候选模糊回退，建边时优先全名匹配再回退短名，`run_bot` 可追溯到真实调用者
+- ** operation_memory_sync 异常兜底（`core/operation_memory.py`）**：LLM 提炼路径整体捕获异常，返回结构化 `extract_error`，不再裸 `'"kind"'` JSON 解析报错崩溃后台任务；同时修复提炼提示模板花括号与 `str.format()` 冲突（`replace` 替代 `format`）
+- ** 后台任务取消接口 + 可定位状态（`core/mcp_server.py`）**：新增 `coderef_task_cancel` 工具同步置任务为 cancelled——随后 `coderef_task_status` 返回可定位的 `cancelled`（不再无限报"running、无部分结果"），且 `_bg` 的 progress 回调实现协作式取消（下一阶段点抛 `_TaskCancelled` 尽早收尾，非普通 error）。审计/docs 等逐阶段汇报工具可真正停止；取消前已产出的增量产物（文档/报告）按模块落盘可先用
+- **验证**： `.coderef/` 生成 gov_board.html； 富结构 4 段落盘归齐； 缺省关闭命中 open 周期； 模拟方法调用 `run_bot` 精确命中 `Bot.run_bot` 且 callers 返回真实调用者； sync 不再裸报错； cancel 后状态转 cancelled、协作收尾；全部改动 `py_compile` 通过
+- **版本号**：5.5.2 → 5.5.3
+
 ### v5.5.2 — ~：专项工具可信度修复（owasp/change_guard 降噪 + 入口/描述指引）
 
 > 专项工具对账（20260826）暴露的工具可信度问题集中修复：owasp 静态检测 8/8 误报、change_guard 4/4 误报降噪，flow_verify 入口指引与相近符号提示，target_arch_set 描述补 role_keywords 说明。

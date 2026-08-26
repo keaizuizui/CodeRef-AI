@@ -476,9 +476,13 @@ class CodeKnowledgeGraph:
                 if not caller_id:
                     caller_id = f"mod:{module_key}"
 
-                # 被调用者
-                callee_name = call.func_name.split(".")[-1]
-                callee_id = self._find_node_by_name(callee_name)
+                # 被调用者：先按全名精确匹配（可命中带类/模块前缀的方法节点，
+                # 如 Bot.run_bot / main.run_bot），失败再回退短名模糊匹配；否则
+                # 方法调用会漏建 CALLS 边，导致 callers 查询返空（）。
+                callee_id = self._find_node_by_name(call.func_name)
+                if not callee_id:
+                    callee_name = call.func_name.split(".")[-1]
+                    callee_id = self._find_node_by_name(callee_name)
                 if callee_id:
                     self._upsert_edge(KGEdge(
                         source=caller_id, target=callee_id, type="CALLS",
@@ -713,7 +717,16 @@ class CodeKnowledgeGraph:
     def _find_node_by_name(self, name: str) -> Optional[str]:
         row = self._conn.execute(
             "SELECT id FROM nodes WHERE name=? LIMIT 1", (name,)).fetchone()
-        return row["id"] if row else None
+        if row:
+            return row["id"]
+        # 模糊回退 ：方法调用侧 name 常带类/模块前缀（如 Bot.run_bot），
+        # 精确匹配 name='run_bot' 会失败而漏建 CALLS 边。仅当 LIKE 候选唯一时
+        # 选中，避免多类同名方法跨类误归属；多候选则放弃。
+        candidates = self._conn.execute(
+            "SELECT id FROM nodes WHERE name LIKE ?", (f"%{name}%",)).fetchall()
+        if len(candidates) == 1:
+            return candidates[0]["id"]
+        return None
 
     def _find_containing_node(self, file_path: str, line: int) -> Optional[str]:
         """找到包含指定行号的函数/方法/类节点"""
