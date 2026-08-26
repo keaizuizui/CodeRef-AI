@@ -500,6 +500,7 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 - ** 后台任务取消接口 + 可定位状态（`core/mcp_server.py`）**：新增 `coderef_task_cancel` 工具同步置任务为 cancelled——随后 `coderef_task_status` 返回可定位的 `cancelled`（不再无限报"running、无部分结果"），且 `_bg` 的 progress 回调实现协作式取消（下一阶段点抛 `_TaskCancelled` 尽早收尾，非普通 error）。审计/docs 等逐阶段汇报工具可真正停止；取消前已产出的增量产物（文档/报告）按模块落盘可先用
 - **验证**： `.coderef/` 生成 gov_board.html； 富结构 4 段落盘归齐； 缺省关闭命中 open 周期； 模拟方法调用 `run_bot` 精确命中 `Bot.run_bot` 且 callers 返回真实调用者； sync 不再裸报错； cancel 后状态转 cancelled、协作收尾；全部改动 `py_compile` 通过
 - **CodeRabbit 评审修订**：① `self/cls` 方法调用先按调用者所在类解析（`self.run_bot`→`Bot.run_bot`），避免与顶层同名函数撞 CALLS 边，并加碰撞测试；② `coderef_docs` 透传 `progress_cb` 至扫描/图谱/wiki 生成阶段，docs 后台任务具备阶段内协作取消点；③ `coderef_task_cancel` 对曾取消已收尾的任务保持 `cancelled` 终态，不退化误报 `completed`
+- **CodeRabbit 二轮评审修订**：① 取消信号穿透——`TaskCancelled` 下沉定义于 `core/pipeline_runner`（被依赖方），audit/docs/wiki 各 `except Exception` 显式 re-raise，`_bg` 复用同一异常，取消不再被吞、daemon 线程不再跑到底；② WikiGenerator 逐模块生成循环加 `progress_cb` 检查点（`_generate_module_docs` 每模块先过取消点），docs 取消可在 wiki 生成内部生效；③ `self/cls` 调用改按调用者所在**模块+类**构造完整方法 id（`self.run_bot`→`method:<调用者mod>:<调用者类>.run_bot`）精确主键匹配，跨模块同名类方法不再误连（碰撞测试：modA/modB 各自 `Bot.run_bot` 均正确归属本模块）
 - **版本号**：5.5.2 → 5.5.3
 
 ### v5.5.2 — ~：专项工具可信度修复（owasp/change_guard 降噪 + 入口/描述指引）
