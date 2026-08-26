@@ -1361,25 +1361,48 @@ class OperationMemory:
                 neg = any(m in s for m in _neg_markers)
                 pos = any(m in s for m in _pos_markers)
                 sign = 1 if pos and not neg else (-1 if neg and not pos else 0)
-                if key in by_sign and by_sign[key] != sign and sign != 0:
-                    conflicts.append({
-                        "category": cat,
-                        "old": by_sum[key],
-                        "new": s,
-                        "warning": "相同主题出现方向相反的两条记忆，请人工核对以哪个为准",
-                    })
-                elif key not in by_sign:
+                if key in by_sign:
+                    prev = by_sign[key]
+                    # 仅当两条都有方向且方向相反才报冲突；中性条目不参与冲突判定
+                    # （CodeRabbit 评审：中性先出现时不再误报后续正/负条目为冲突）
+                    if prev != 0 and sign != 0 and prev == -sign:
+                        conflicts.append({
+                            "category": cat,
+                            "old": by_sum[key],
+                            "new": s,
+                            "warning": "相同主题出现方向相反的两条记忆，请人工核对以哪个为准",
+                        })
+                    elif prev == 0 and sign != 0:
+                        # 存储为中性时，用当前有方向的条目补位，使后续相反方向可被检出
+                        by_sign[key] = sign
+                        by_sum[key] = s
+                else:
                     by_sign[key] = sign
                     by_sum[key] = s
 
         out = output_path or os.path.join(_omem_dir(project_path),
                                           "OPERATION_MEMORY.md")
+        parent = os.path.dirname(out)
         try:
-            os.makedirs(os.path.dirname(out), exist_ok=True)
-            _write_atomic(out, markdown)
-            written = True
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            written = _write_atomic(out, markdown)
         except Exception:
             written = False
+        if not written:
+            # 写入失败如实返回 error，不谎报成功（CodeRabbit 评审）
+            return {
+                "status": "error",
+                "tool": "export",
+                "project_path": project_path,
+                "output_path": out,
+                "written": False,
+                "message": f"导出文件写入失败: {out}",
+                "knowledge_counts": {k: len(v) for k, v in knowledge.items()},
+                "conflict_count": len(conflicts),
+                "conflicts": conflicts,
+                "markdown": markdown,
+            }
         return {
             "status": "ok",
             "tool": "export",

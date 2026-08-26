@@ -119,6 +119,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_operation_memory_status` | 操作记忆状态概览 | 否 |
 | `coderef_operation_memory_find` | 定位工具 / 约定 / 陷阱（跨进程并发安全） | 否 |
 | `coderef_operation_memory_recover` | 恢复关键工具位置 / 约定摘要 / 待人工确认项 | 否 |
+| `coderef_operation_memory_export` | 操作记忆导出 Markdown 知识库 + 冲突检测（attach 到不支持 MCP 的 LLM 界面） | 否 |
 
 ### 创新识别引擎
 

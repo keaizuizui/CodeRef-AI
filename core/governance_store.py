@@ -14,7 +14,7 @@ GovernanceStore v1.0 —— CodeRef 5.1 架构治理运营库
 与知识图谱（cache/kg/，扫描产物）职责分离，治理库持续累积、图谱每次重建。
 """
 
-import os, json, time, uuid
+import os, json, time, uuid, sqlite3
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 from contextlib import contextmanager
@@ -272,18 +272,35 @@ class GovernanceStore:
                         (key,)).fetchone()
         if row is None:
             iid = "iss_" + uuid.uuid4().hex[:12]
-            with self._tx() as c:
-                c.execute(
-                    "INSERT INTO gov_issue(id,cycle_id,gap_key,gap_type,severity,"
-                    "title,module,role_id,flow_id,status,priority,assignee,due_date,"
-                    "note,snapshot,recurred,first_detected,last_seen) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (iid, cycle_id, key, gtype, sev, title[:500], mod, rid, fid,
-                     STATUS_DETECTED, "medium", "", "", "", snap, 0, now, now))
-                c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
-                          "VALUES(?,?,?,?,?)",
-                          (iid, now, "created", "system",
-                           f"体检导入: {gtype} @ {key}"))
+            try:
+                with self._tx() as c:
+                    c.execute(
+                        "INSERT INTO gov_issue(id,cycle_id,gap_key,gap_type,severity,"
+                        "title,module,role_id,flow_id,status,priority,assignee,due_date,"
+                        "note,snapshot,recurred,first_detected,last_seen) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (iid, cycle_id, key, gtype, sev, title[:500], mod, rid, fid,
+                         STATUS_DETECTED, "medium", "", "", "", snap, 0, now, now))
+                    c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
+                              "VALUES(?,?,?,?,?)",
+                              (iid, now, "created", "system",
+                               f"体检导入: {gtype} @ {key}"))
+            except sqlite3.IntegrityError:
+                # 并发下同 gap_key 已被另一 agent 插入：重读走 kept，不抛裸 UNIQUE 错误
+                row2 = c.execute("SELECT * FROM gov_issue WHERE gap_key=?",
+                                 (key,)).fetchone()
+                if row2 is not None:
+                    d2 = dict(row2)
+                    with self._tx() as c:
+                        c.execute("UPDATE gov_issue SET last_seen=?, snapshot=? "
+                                  "WHERE gap_key=?",
+                                  (now, snap, key))
+                        c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
+                                  "VALUES(?,?,?,?,?)",
+                                  (d2["id"], now, "seen", "system",
+                                   "并发导入同 key 冲突，重读为 kept"))
+                    return d2["id"], "kept"
+                return iid, "created"
             return iid, "created"
 
         d = dict(row)
@@ -345,8 +362,12 @@ class GovernanceStore:
             return False, "仅可在 Verified 后归档（Archived 前须复验达标）"
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         with self._tx() as c:
-            c.execute("UPDATE gov_issue SET status=? WHERE id=?",
-                      (to_state, issue_id))
+            # 条件更新（WHERE status=cur）：并发下状态被另一 agent 改动则 rowcount=0，
+            # 放弃本次流转并如实返回，事件只记录真实发生的流转（CodeRabbit 评审）
+            n = c.execute("UPDATE gov_issue SET status=? WHERE id=? AND status=?",
+                          (to_state, issue_id, cur)).rowcount
+            if n != 1:
+                return False, f"状态已变更（当前非 {cur}），请刷新后重试"
             c.execute("INSERT INTO issue_event(issue_id,at,action,actor,detail) "
                       "VALUES(?,?,?,?,?)",
                       (issue_id, now, f"{cur}->{to_state}", actor, detail))
@@ -425,8 +446,12 @@ class GovernanceStore:
             args += [STATUS_ARCHIVED, STATUS_REJECTED]
         elif view == "assigned":
             sql += " AND assignee!=''"
+        elif view == "high":
+            # 高优先级队列：仅真实 high 严重度、排除终态（CodeRabbit 评审补分支）
+            sql += " AND severity='high' AND status NOT IN (?,?)"
+            args += [STATUS_ARCHIVED, STATUS_REJECTED]
         elif view == "recent":
-            sql += " ORDER BY last_seen DESC"
+            pass
         else:
             # 默认 open：所有非终结态
             sql += " AND status NOT IN (?,?)"
