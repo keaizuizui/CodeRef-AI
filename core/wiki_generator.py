@@ -705,7 +705,8 @@ def generate(self, project_path: str, output_dir: str = "",
         if subprojects is None:
             return result
         if subprojects:
-            _generate_subproject_wikis(self, subprojects, output_dir, wiki_style, result)
+            _generate_subproject_wikis(self, subprojects, output_dir, wiki_style,
+                                       result, progress_cb=progress_cb)
 
     # 阶段 4：Git hook / Agent 指针 / 失败汇总 / 增量状态与 Last-good 门控
     _finalize_generation(self, project_path, output_dir, enable_git_hook,
@@ -857,7 +858,8 @@ def _generate_full_pipeline(self, project_path: str, project_name: str, output_d
 
 
 def _generate_subproject_wikis(self, subprojects: List[str], output_dir: str,
-                               wiki_style: str, result: WikiResult):
+                               wiki_style: str, result: WikiResult,
+                               progress_cb=None):
     """阶段 3：子项目 Wiki（每个子项目独立跑三级管线）。"""
     for sub_path in subprojects:
         sub_name = os.path.basename(sub_path)
