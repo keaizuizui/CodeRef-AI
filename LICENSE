@@ -1,123 +1,42 @@
-# PolyForm Noncommercial License 1.0.0
+# CodeRef-AI 双轨授权协议（Custom Dual-Reserved License）
 
-<https://polyformproject.org/licenses/noncommercial/1.0.0>
+本文档由软件作者（"licensor"，即 keaizuizui，GitHub: https://github.com/keaizuizui/coderef-ai）
+发布，用以明确本软件的**免费使用边界**与**商业红线**。使用、复制、修改或分发本软件的，
+视为已阅读并同意本协议全部条款。
 
-Required Notice: Copyright (c) 2026 keaizuizui
+## 一、授权范围（免费）
 
-## Acceptance
+以下场景**免费**授权，无需付费、无需另行申请，但须遵守第三部分的限制：
 
-In order to get any license under these terms, you must agree to them as
-both strict obligations and conditions to all your licenses.
+1. **企业内部自用**：任何企业或团队将本软件用于**自己的编程与软件开发业务**
+   （无论该业务是否以盈利为目的），包括但不限于辅助重构、架构诊断、文档生成、
+   代码审计、流程验证。本授权**不**视企业内部使用为“商业再分发”。
+2. **非商业场景**：个人学习、研究、实验、教学、教育机构、非营利组织、
+   开源项目、政府机构等非以转售本软件为直接目的之用途。
+3. **修改与衍生**：允许对本软件进行修改、复制、内部集成形成衍生作品，
+   用于上述第 1、2 项之目的。
 
-## Copyright License
+## 二、商业红线（禁止）
 
-The licensor grants you a copyright license for the software to do
-everything you might do with the software that would otherwise infringe
-the licensor’s copyright in it for any permitted purpose. However, you
-may only distribute the software according to [Distribution
-License](https://polyformproject.org/licenses/noncommercial/1.0.0/#distribution-license)
-and make changes or new works based on the software according to
-[Changes and New Works
-License](https://polyformproject.org/licenses/noncommercial/1.0.0/#changes-and-new-works-license).
+**不得**将本软件或其任何衍生版本，用于以下“以转卖软件本身获利”的场景：
 
-## Distribution License
+1. **直接出售**：不得将本软件（或经你修改/封装的版本）作为商品直接售卖。
+2. **对外提供收费服务**：不得将本软件作为**对外提供的服务（SaaS / 工具服务 /
+   咨询交付中的核心软件资产）**收取费用或向第三方收费授权。
+3. **嵌入竞品**：不得将本软件**嵌入任何与本软件功能同类竞争的商业软件 / IDE /
+   商业编程工具 / 商业 SaaS 产品**之中，作为其组成部分对外分发或出售。
 
-The licensor grants you an additional copyright license to distribute
-copies of the software. Your license to distribute covers distributing
-the software with changes and new works permitted by [Changes and New
-Works License](https://polyformproject.org/licenses/noncommercial/1.0.0/#changes-and-new-works-license).
+> 需要上述第 2、3 项（对外提供 / 嵌入竞品）商业授权的，请与作者联系（GitHub Issues），
+> 另行签订商业授权协议。**联系作者即可，并不自动获得许可。**
 
-## Notices
+## 三、通用条款
 
-You must ensure that anyone who gets a copy of any part of the software
-from you also gets a copy of these terms or the URL for them above, as
-well as copies of any plain-text lines beginning with `Required Notice:`
-that the licensor provided with the software. For example:
+1. **保留版权与许可声明**：分发时须保留本软件中的版权与许可文本，并附上
+   本协议的副本或 URL。
+2. **免责声明**：本软件按 **“现状”** 提供，不作任何明示或默示的担保，
+   包括但不限于适销性、特定用途适用性及不侵权保证。在任何情况下，
+   作者均不对因使用本软件而产生的任何损害承担责任。
+3. **许可终止**：违反本协议任何条款的，本授权自动终止。
 
-## Required Notice: Copyright keaizuizui (https://github.com/keaizuizui/coderef-ai)
-
-## Changes and New Works License
-
-The licensor grants you an additional copyright license to make changes
-and new works based on the software for any permitted purpose.
-
-## Patent License
-
-The licensor grants you a patent license for the software that covers
-patent claims the licensor can license, or becomes able to license, that
-you would infringe by using the software.
-
-## Noncommercial Purposes
-
-Any noncommercial purpose is a permitted purpose.
-
-## Personal Uses
-
-Personal use for research, experiment, and testing for the benefit of
-public knowledge, personal study, private entertainment, hobby projects,
-amateur pursuits, or religious observance, without any anticipated
-commercial application, is use for a permitted purpose.
-
-## Noncommercial Organizations
-
-Use by any charitable organization, educational institution, public
-research organization, public safety or health organization,
-environmental protection organization, or government institution is use
-for a permitted purpose regardless of the source of funding or
-obligations resulting from the funding.
-
-## Fair Use
-
-You may have “fair use” rights for the software under the law. These
-terms do not limit them.
-
-## No Other Rights
-
-These terms do not allow you to sublicense or transfer any of your
-licenses to anyone else, or prevent the licensor from granting licenses
-to anyone else. These terms do not imply any other licenses.
-
-## Patent Defense
-
-If you make any written claim that the software infringes or contributes
-to infringement of any patent, your patent license for the software
-granted under these terms ends immediately. If your company makes such a
-claim, your patent license ends immediately for work on behalf of your
-company.
-
-## Violations
-
-The first time you are notified in writing that you have violated any of
-these terms, or done anything with the software not covered by your
-licenses, your licenses can nonetheless continue if you come into full
-compliance with these terms, and take practical steps to correct past
-violations, within 32 days of receiving notice. Otherwise, all your
-licenses end immediately.
-
-## No Liability
-
-***As far as the law allows, the software comes as is, without any
-warranty or condition, and the licensor will not be liable to you for
-any damages arising out of these terms or the use or nature of the
-software, under any kind of legal claim.***
-
-## Definitions
-
-The *licensor* is the individual or entity offering these terms, and the
-*software* is the software the licensor makes available under these
-terms.
-
-*You* refers to the individual or entity agreeing to these terms.
-
-*Your company* is any legal entity, sole proprietorship, or other kind
-of organization that you work for, plus all organizations that have
-control over, are under the control of, or are under common control with
-that organization. *Control* means ownership of substantially all the
-assets of an entity, or the power to direct its management and policies
-by vote, contract, or otherwise. Control can be direct or indirect.
-
-*Your licenses* are all the licenses granted to you for the software
-under these terms.
-
-*Use* means anything you do with the software requiring one of your
-licenses.
+---
+© 2026 keaizuizui. All rights reserved.

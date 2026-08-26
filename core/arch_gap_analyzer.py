@@ -50,29 +50,29 @@ SEVERITY = {
 # 游离模块默认报出上限（避免刷屏淹没 high 级差距）
 DEFAULT_MAX_UNASSIGNED = 50
 
-# 游离/治理链路豁免的噪声路径特征：第三方依赖、压缩静态产物、打包输出、包聚合桩。
-# 这些反复出现在 unassigned 与治理库高频区但非真实治理目标，自动豁免避免刷屏。
-_EXEMPT_FRAGMENTS = (
-    "vendor", "node_modules",  # 第三方依赖目录
-    ".min.js", ".min.css",  # 前端压缩产物（建议书 P0③ 豁免项）
-    "__init__",  # 包聚合桩
-    "dist", "build",  # 打包输出目录
-)
-
 
 def _is_exempt_module(module_name: str) -> bool:
     """判断模块是否属于治理豁免噪声：vendor / 压缩产物 / __init__ / dist / build。
 
-    豁免仅作用于游离报出与治理库排队（避免 vendor/静态产物刷屏淹没真游离），
-    不改变知识图谱构建与统计口径。
+    CodeRabbit 评审修订：按**完整路径段精确匹配**（而非子串包含）——避免真实现模块
+    如 src/vendor_management.py、src/rebuild_tasks.py 因名称含 vendor/build 被误豁免漏掉。
+
+    规则：
+      - 目录段精确命中 {vendor, node_modules, dist, build} 之一 → 豁免
+      - 文件名（basename）为 __init__ / __init__.py → 豁免
+      - 文件名以 .min.js / .min.css 结尾 → 豁免
+    豁免仅作用于游离报出与治理库排队，不改变知识图谱构建与统计口径。
     """
-    m = (module_name or "").replace("\\", "/")
-    base = m.split("/")[-1].lower()
-    for frag in _EXEMPT_FRAGMENTS:
-        low = frag.lower()
-        if low in m or low == base:
-            return True
-    return False
+    parts = [p.lower() for p in (module_name or "").replace("\\", "/").split("/") if p]
+    if not parts:
+        return False
+    base = parts[-1]
+    if base.endswith((".min.js", ".min.css")):
+        return True
+    return (
+        bool({"vendor", "node_modules", "dist", "build"} & set(parts))
+        or base in {"__init__", "__init__.py"}
+    )
 
 
 def _is_test_module(module_name: str) -> bool:
