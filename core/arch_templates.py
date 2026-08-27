@@ -109,7 +109,7 @@ TEMPLATES = {
              "kw": ["web", "gui", "main", "app", "entry"]},
             {"id": "business_modules", "name": "业务模块", "all_biz_dirs": True},
             {"id": "shared_base", "name": "共享底座",
-             "kw": ["shared", "common", "base", "config", "配置"]},
+                     "kw": ["shared", "common", "core", "base", "config", "配置"]},
         ],
         "suggest_dirs": [
             ("shared", "共享底座：跨模块复用的通用能力（日志/配置/公共模型）"),
