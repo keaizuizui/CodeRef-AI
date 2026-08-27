@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.6.4** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.6.5** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -489,6 +489,21 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.6.5 — 画布层级导航「统计随视图联动」（ 真实浏览器回归）
+
+> 承接测试  回归： 导航入口/过滤/下钻/回退在真实浏览器实测中，
+> 顶部「节点/连线/差距」统计恒为全量（537/2315/357）不随层级切换更新，被误判为"有入口、无行为"。
+
+- **定因**：`renderStats` 用 `nodes.length` / `edges.length` 全量 + 静态 `DATA.meta.summary`，
+  未随 `navVisible` 过滤联动——层级过滤/下钻/回退本身在真实浏览器已生效，
+  唯一失效的是统计面板反馈信号。
+- **修复（`core/canvas_engine.py` `renderStats`）**：统计改按当前 `navVisible` 过滤后的可见节点/连线
+  计数；全量视图保留整体差距摘要（含高中低分档），层级视图显示该层可见差距节点数，随视图切换更新。
+- **真实浏览器实测（working 537 节点/2315 边）全 PASS**：all 节点537→L0 节点7→L1 业务4/技术3/代码530→
+  L3 节点530→L2 下钻 run_cycle 23→回退还原 530，stats 数值与画布可见节点完全一致；差距开关在 L3 下
+  独立切换高亮（开=差距色、关=还原默认蓝）；/ 泳道不劣化。
+- **版本号**：5.6.4 → 5.6.5（patch， 修复）
 
 ### v5.6.4 — 画布 L0→L3 逐层下钻导航（ 治理主链①捋管线堵点）
 
