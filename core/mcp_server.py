@@ -1750,9 +1750,9 @@ def _target_arch_set(a: dict) -> str:
     warnings = []
     flows = ta.get("business_flows") or []
     if not flows:
-        warnings.append("业务流为空，建议基于真实调用枚举主干业务流（web 编排中枢 / 洞察→方案→创意 等）")
+        warnings.append("业务流为空，建议基于真实调用枚举主干业务流（可先跑 arch_gap 查看 flow_suggestions 列出的真实跨域主干）")
     elif len(flows) < 2:
-        warnings.append(f"业务流仅 {len(flows)} 条，建议纳入真实主干业务流（web 编排中枢 / 洞察→方案 / 洞察→调研 等）")
+        warnings.append(f"业务流仅 {len(flows)} 条，建议纳入 arch_gap 的 flow_suggestions 建议的真实主干业务流（来自知识图谱跨域调用），而非唯一定义单条链路")
     empty_roles = [r.get("id") for r in ta.get("tech_roles", []) if not r.get("target_modules")]
     if empty_roles:
         warnings.append(f"以下角色 target_modules 为空：{empty_roles}，target 覆盖会偏低（module_assigned 低）")
