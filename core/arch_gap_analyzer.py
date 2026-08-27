@@ -23,6 +23,7 @@ arch_gap_analyzer — 架构差距分析器（5.0 Phase 0 核心）
 """
 
 import os
+from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional, Set
 
 from core.arch_audit import (
@@ -45,6 +46,7 @@ SEVERITY = {
     "large_module": "low",
     "duplicate": "medium",
     "directory_duplicate": "medium",
+    "twin_identity": "medium",
 }
 
 # 游离模块默认报出上限（避免刷屏淹没 high 级差距）
@@ -294,7 +296,8 @@ def _detect_business_gaps(flows: List[dict],
 
 
 def _detect_duplicates(project_path: str, db_path: str,
-                       parts: Dict[str, bool]) -> List[dict]:
+                       parts: Dict[str, bool],
+                       ds: Optional[dict] = None) -> List[dict]:
     """同构重复 / 目录级重复差距（建议书 P0①，复用 arch_insight P0-C）。
 
     复用 duplicate_insight() 的同一切词/相似度/通用名过滤逻辑，避免重复实现：
@@ -304,8 +307,11 @@ def _detect_duplicates(project_path: str, db_path: str,
 
     parts 控制是否纳入：{"duplicate": True, "directory_duplicate": True}，
     供调用方按需裁剪（不影响图谱与确定性）。
+
+    ds 可选：已调用的 duplicate_insight 结果（供孪生判定复用，避免重复计算）。
     """
-    ds = duplicate_insight(project_path, db_path=db_path)
+    if ds is None:
+        ds = duplicate_insight(project_path, db_path=db_path)
     if not ds.get("ok"):
         return []
 
@@ -343,6 +349,138 @@ def _detect_duplicates(project_path: str, db_path: str,
                            f"函数签名相似度 {iso.get('func_sim',0.0):.0%}（建议收敛合并）"),
             })
     return gaps
+
+
+def _detect_twin_identity(nodes: Dict[str, dict], adj: Dict[str, List[str]],
+                          project_path: str,
+                          ds: Optional[dict] = None) -> List[dict]:
+    """孪生模块真身/孤本标注（③）：目录级同构对中同名模块按 fan_in 判真身/孤本。
+
+    复用 duplicate_insight 的 dir_isomorph（目录级同构）识别孪生目录对
+    （如 source_engine <-> 调研工具），对每对目录中 basename 相同的模块
+    按跨模块 fan_in 标注：
+      - 真身：fan_in 最高且 >0（活跃实现，治理保留）
+      - 孤本：fan_in=0（无调用者，治理收敛候选）
+      - 活跃副本：fan_in>0 但非最高（被部分调用，待收编）
+    仅报"有真身且有孤本"的组（有收敛价值），避免把无关同名模块误报。
+
+    ds 可选：已调用的 duplicate_insight 结果（复用 dir_isomorph）。
+    """
+    if ds is None:
+        ds = duplicate_insight(project_path)
+    isos = ds.get("dir_isomorph") or []
+    if not isos:
+        return []
+
+    # 模块级跨模块 fan_in（与 _detect_unassigned 同口径）
+    called_mods: Dict[str, int] = {}
+    for src, targets in adj.items():
+        src_n = nodes.get(src, {})
+        src_mod = module_of(src_n, project_path) if src_n.get("type") != "module" else (src_n.get("name") or "")
+        for t in targets:
+            t_n = nodes.get(t, {})
+            t_mod = module_of(t_n, project_path) if t_n.get("type") != "module" else (t_n.get("name") or "")
+            if not src_mod or not t_mod or src_mod == t_mod:
+                continue
+            called_mods[t_mod] = called_mods.get(t_mod, 0) + 1
+
+    mods: Set[str] = set()
+    for nid, n in nodes.items():
+        if n.get("type") != "module":
+            continue
+        m = module_of(n, project_path) or n.get("name", "?")
+        if not _is_test_module(m):
+            mods.add(m)
+
+    results: List[dict] = []
+    for iso in isos:
+        da, db_ = iso.get("dir_a", ""), iso.get("dir_b", "")
+        if not da or not db_:
+            continue
+        a_mods = sorted(m for m in mods if m == da or m.startswith(da + "/"))
+        b_mods = sorted(m for m in mods if m == db_ or m.startswith(db_ + "/"))
+        a_by_base = {m.split("/")[-1]: m for m in a_mods}
+        b_by_base = {m.split("/")[-1]: m for m in b_mods}
+        common = sorted(set(a_by_base) & set(b_by_base))
+        if not common:
+            continue
+        copies: List[dict] = []
+        for base in common:
+            ma, mb = a_by_base[base], b_by_base[base]
+            fa, fb = called_mods.get(ma, 0), called_mods.get(mb, 0)
+            if fa == 0 and fb == 0:
+                continue  # 双方都无调用者，无真身可判
+            if fa > fb:
+                va, vb = "真身", ("孤本" if fb == 0 else "活跃副本")
+            elif fb > fa:
+                va, vb = ("孤本" if fa == 0 else "活跃副本"), "真身"
+            else:
+                va, vb = "活跃副本", "活跃副本"
+            copies.append({"module": ma, "fan_in": fa, "verdict": va})
+            copies.append({"module": mb, "fan_in": fb, "verdict": vb})
+        has_true = any(c["verdict"] == "真身" for c in copies)
+        has_orphan = any(c["verdict"] == "孤本" for c in copies)
+        if has_true and has_orphan:
+            results.append({
+                "dir_a": da, "dir_b": db_,
+                "file_sim": iso.get("file_sim", 0.0),
+                "func_sim": iso.get("func_sim", 0.0),
+                "copies": copies,
+            })
+    return results
+
+
+def _suggest_business_flows(nodes: Dict[str, dict], adj: Dict[str, List[str]],
+                            project_path: str,
+                            target_flows: List[dict]) -> List[dict]:
+    """基于真实调用提出主干业务流建议（②）。
+
+    通用启发式（不硬编码项目特定关系）：按模块路径第一段分业务域，
+    统计跨域调用（域 A → 域 B），排除底座/服务域（shared/gptr_service/tests/
+    本地测试gui 等被所有域复用、非业务流终点）作为目标域，对调用数 ≥ 3 的
+    跨域对生成建议业务流，并给出具体调用证据（模块 → 模块）。
+
+    返回 [{from_domain, to_domain, call_count, evidence:[...]}]，
+    供 define-target 阶段校验 target 是否枚举了真实主干业务流。
+    """
+    BASE_DOMAINS = {"shared", "gptr_service", "tests", "本地测试gui"}
+
+    mod_adj: Dict[str, Set[str]] = defaultdict(set)
+    for src, targets in adj.items():
+        src_n = nodes.get(src, {})
+        sm = module_of(src_n, project_path) if src_n.get("type") != "module" else (src_n.get("name") or "")
+        if not sm:
+            continue
+        for t in targets:
+            t_n = nodes.get(t, {})
+            tm = module_of(t_n, project_path) if t_n.get("type") != "module" else (t_n.get("name") or "")
+            if not tm or tm == sm:
+                continue
+            mod_adj[sm].add(tm)
+
+    cross: Counter = Counter()
+    evidence: Dict[tuple, List[str]] = defaultdict(list)
+    for sm, tgts in mod_adj.items():
+        d1 = sm.split("/")[0]
+        for tm in tgts:
+            d2 = tm.split("/")[0]
+            if d1 == d2 or d2 in BASE_DOMAINS:
+                continue
+            cross[(d1, d2)] += 1
+            if len(evidence[(d1, d2)]) < 5:
+                evidence[(d1, d2)].append(f"{sm} → {tm}")
+
+    suggestions: List[dict] = []
+    for (d1, d2), cnt in cross.most_common():
+        if cnt < 3:
+            continue
+        suggestions.append({
+            "from_domain": d1,
+            "to_domain": d2,
+            "call_count": cnt,
+            "evidence": evidence[(d1, d2)],
+        })
+    return suggestions
 
 
 def analyze_gap(project_path: str, target_arch: Dict[str, Any],
@@ -416,8 +554,29 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
         nodes, adj, project_path, role_of, constraints))
 
     # 3.5) 同构重复 / 目录级重复（建议书 P0①，复用 arch_insight P0-C）
+    #       ds 一次调用，供重复差距与孪生判定复用，避免重复计算
+    ds = duplicate_insight(project_path, db_path=db)
     gaps.extend(_detect_duplicates(project_path, db, {"duplicate": True,
-                                                      "directory_duplicate": True}))
+                                                      "directory_duplicate": True},
+                                   ds=ds))
+
+    # 3.6) 孪生模块真身/孤本标注（③）：目录级同构对中同名模块按 fan_in 判真身/孤本
+    for twin in _detect_twin_identity(nodes, adj, project_path, ds=ds):
+        true_mods = [c["module"] for c in twin["copies"] if c["verdict"] == "真身"]
+        orphan_mods = [c["module"] for c in twin["copies"] if c["verdict"] == "孤本"]
+        gaps.append({
+            "type": "twin_identity",
+            "severity": SEVERITY["twin_identity"],
+            "dir_a": twin["dir_a"],
+            "dir_b": twin["dir_b"],
+            "file_sim": twin.get("file_sim", 0.0),
+            "func_sim": twin.get("func_sim", 0.0),
+            "copies": twin["copies"],
+            "detail": (f"孪生目录 {twin['dir_a']} 与 {twin['dir_b']} 同构"
+                       f"（文件相似度 {twin['file_sim']:.0%}），同名模块按 fan_in 判真身/孤本："
+                       f"{'、'.join(true_mods)} 为真身，{'、'.join(orphan_mods)} 为孤本，"
+                       f"建议收敛（G1 优先）"),
+        })
 
     # 4) 循环依赖（复用 arch_audit，过滤纯测试模块组成的环）
     for cyc in arch.get("cycles", []):
@@ -464,6 +623,7 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
     result["gaps"] = gaps
     dup_cnt = sum(1 for g in gaps if g.get("type") == "duplicate")
     dir_dup_cnt = sum(1 for g in gaps if g.get("type") == "directory_duplicate")
+    twin_cnt = sum(1 for g in gaps if g.get("type") == "twin_identity")
     result["summary"] = {
         "total": len(gaps),
         "high": by_sev["high"],
@@ -471,6 +631,7 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
         "low": by_sev["low"],
         "duplicate": dup_cnt,
         "directory_duplicate": dir_dup_cnt,
+        "twin_identity": twin_cnt,
         "unassigned_total": unassigned_total,
         "unassigned_shown": len(unassigned_gaps),
         "unassigned_free": unassigned_free,
@@ -485,11 +646,29 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
         1 for n in nodes.values()
         if n.get("type") == "module"
         and not _is_test_module(module_of(n, project_path) or n.get("name", "")))
+    module_assigned = round(len(assigned_ids) / total_mods, 2) if total_mods else 1.0
     result["alignment"] = {
         "role_coverage": round(impl_roles / total_roles, 2) if total_roles else 1.0,
-        "module_assigned": round(len(assigned_ids) / total_mods, 2) if total_mods else 1.0,
+        "module_assigned": module_assigned,
         "note": "Phase 0 简化对齐度：role_coverage=已实现角色/总角色；module_assigned=已归属模块/总模块",
     }
+
+    # 业务流建议（②）：基于真实跨域调用提出主干业务流，供 define-target 校验
+    flow_suggestions = _suggest_business_flows(nodes, adj, project_path, flows)
+    result["flow_suggestions"] = flow_suggestions
+
+    # 覆盖引导（①）：target 覆盖面低或业务流不足时显式提示，防治理建在残缺图上
+    guidance: List[str] = []
+    if module_assigned < 0.3:
+        guidance.append(
+            f"target_modules 覆盖不完整（module_assigned={module_assigned}，"
+            f"{unassigned_total} 个游离模块），建议在 define-target 阶段补全真实主干模块"
+            f"（web 编排中枢 / 洞察→方案→创意 等），否则治理建在残缺图上")
+    if len(flows) < 2:
+        guidance.append(
+            f"业务流仅 {len(flows)} 条，建议基于真实调用纳入主干业务流"
+            f"（web 编排中枢 / 洞察→方案 / 洞察→调研 等），而非只有调研 4 步")
+    result["coverage_guidance"] = guidance
 
     result["ok"] = True
     return result

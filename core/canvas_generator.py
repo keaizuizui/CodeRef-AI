@@ -211,6 +211,7 @@ class ArchCanvas:
         cycle = set()
         missing_roles = set()
         violation_pairs = set()
+        twin_verdict: Dict[str, str] = {}  # 模块名 → 真身/孤本/活跃副本（③）
         for g in gaps:
             t = g.get("type", "")
             if t == "unassigned":
@@ -221,6 +222,9 @@ class ArchCanvas:
                 missing_roles.add(g.get("role_id", ""))
             elif t == "dependency_violation":
                 violation_pairs.add((g.get("from_module", ""), g.get("to_module", "")))
+            elif t == "twin_identity":
+                for c in g.get("copies", []):
+                    twin_verdict[c.get("module", "")] = c.get("verdict", "")
 
         for n in canvas_nodes:
             if n["type"] == "module":
@@ -228,6 +232,17 @@ class ArchCanvas:
                     n["color"] = "#F59E0B"
                 elif n["label"] in unassigned:
                     n["color"] = "#64748B"
+                # 孪生真身/孤本标注（③）：真身绿、孤本灰、活跃副本橙，独立于差距色不受折叠影响
+                v = twin_verdict.get(n["label"])
+                if v == "真身":
+                    n["color"] = "#22C55E"
+                    n["props"]["twin_verdict"] = "真身"
+                elif v == "孤本":
+                    n["color"] = "#A1A1AA"
+                    n["props"]["twin_verdict"] = "孤本"
+                elif v == "活跃副本":
+                    n["color"] = "#F97316"
+                    n["props"]["twin_verdict"] = "活跃副本"
             elif n["type"] == "role" and n["id"].startswith("role:"):
                 rid = n["id"].split(":", 1)[1]
                 if rid in missing_roles:
@@ -250,6 +265,9 @@ class ArchCanvas:
             {"color": "#64748B", "label": "游离模块"},
             {"color": "#F59E0B", "label": "循环依赖"},
             {"color": "#EF4444", "label": "缺失/违例"},
+            {"color": "#22C55E", "label": "孪生真身"},
+            {"color": "#A1A1AA", "label": "孪生孤本"},
+            {"color": "#F97316", "label": "孪生活跃副本"},
         ]
         return {
             "canvas": {
