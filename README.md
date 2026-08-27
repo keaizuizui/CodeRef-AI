@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.6.7** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.7.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -489,6 +489,27 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.7.0 — 软件形态模板体系：无 target 也能生成目标架构初稿与整理建议（ 解决方案落地）
+
+> 承接  尾部（多案例回归发现"部分样本不能产出对的架构图"）：无 `target_arch` 时画布
+> 缺业务/技术层退化为单层模块图。本版新增软件形态模板体系作为降级适配——识别项目属于
+> 哪种常见软件形态，按模板自动生成 `target_arch` 初稿 + 文件夹整理建议（引导非强求），
+> 先让"非编程人员 + 编程 AI"有架子可调，再谈三层泳道图。
+
+- **模板体系（新增 `core/arch_templates.py`）**：内置两种样板——`hexagonal` 六边形单体
+  （业务核心 domain/use-cases 与外部技术 adapters/infrastructure 解耦，依赖向内）与
+  `modular_monolith` 模块化单体（按业务域平铺模块 + 共享底座，模块间依赖受控）。每类模板含
+  识别特征（目录/依赖关键词）、角色骨架、期望目录与整理建议。纯静态、确定性，不依赖 LLM。
+- **define-target 模板初始化（`coderef_target_arch_set` 新增 `template`/`detect` 参数）**：
+  不传 `target_arch` 时，`template=hexagonal|modular_monolith` 按模板结合项目实际顶层目录生成
+  `target_arch` 初稿（tech_roles 自动匹配真实模块）；`detect=true` 自动识别项目类型并套用对应
+  模板（detect 优先级低于 template）。初稿仅供参考，可在此基础上完善；识别到的模板在返回值
+  `template` 字段说明。
+- **arch_gap 模板整理建议（新增 `templating` 输出）**：每次 `coderef_arch_gap` 自动 detect
+  项目形态，对比模板期望骨架输出整理建议（缺失目录 add_dir / 未落入角色目录 review_dir），
+  "按期望骨架整理文件夹有助于生成目标架构；可自主决定是否照做"。
+- **版本号**：5.6.7 → 5.7.0（minor，新增模板体系功能模块）
 
 ### v5.6.7 — arch_audit cycle 口径分流 + 去样例化残留清理（ 复核）
 
