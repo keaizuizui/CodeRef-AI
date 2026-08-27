@@ -353,6 +353,7 @@ def _detect_duplicates(project_path: str, db_path: str,
 
 def _detect_twin_identity(nodes: Dict[str, dict], adj: Dict[str, List[str]],
                           project_path: str,
+                          db_path: Optional[str] = None,
                           ds: Optional[dict] = None) -> List[dict]:
     """孪生模块真身/孤本标注（③）：目录级同构对中同名模块按 fan_in 判真身/孤本。
 
@@ -367,7 +368,7 @@ def _detect_twin_identity(nodes: Dict[str, dict], adj: Dict[str, List[str]],
     ds 可选：已调用的 duplicate_insight 结果（复用 dir_isomorph）。
     """
     if ds is None:
-        ds = duplicate_insight(project_path)
+        ds = duplicate_insight(project_path, db_path=db_path)
     isos = ds.get("dir_isomorph") or []
     if not isos:
         return []
@@ -443,44 +444,44 @@ def _domain_flow_model(nodes: Dict[str, dict], adj: Dict[str, List[str]],
       - hubs           结构层：逐域标 in_src_count / biz_out_count / role（共享层/双向枢纽/
                        被共同依赖/业务编排源/纯上游入口/叶子/待定），全程无项目名
       - shared_layers  动态判定的共享层（被 ≥50% 源域引用的域，如各项目的公共依赖层）
-      - suggestions    业务骨架层：去掉共享层源/目标 + 叶子 + scope 排除后，按调用量排序的主干
-                       跨域对（调用数 ≥ 3），供 define-target 校验是否枚举真实主干业务流
+      - suggestions    业务骨架层：去掉共享层源/目标 + 叶子 + scope 排除后，按真实调用边数排序的主干
+                       跨域对（真实调用边数 ≥ 3），供 define-target 校验是否枚举真实主干业务流
 
     scope（可选，默认空）：{"exclude_domains": ["gptr_service"], "exclude_suffixes": [".coderef"]}
       exclude_domains   精确排除的域（项目语义：项目自认为是技术底座/噪声的域）
       exclude_suffixes  按域名字后缀排除（如 ".coderef" 内部目录、"_service" 服务层）
     """
 
-    mod_adj: Dict[str, Set[str]] = defaultdict(set)
-    for src, targets in adj.items():
-        src_n = nodes.get(src, {})
-        sm = module_of(src_n, project_path) if src_n.get("type") != "module" else (src_n.get("name") or "")
-        if not sm or _is_test_module(sm):
-            continue
-        for t in targets:
-            t_n = nodes.get(t, {})
-            tm = module_of(t_n, project_path) if t_n.get("type") != "module" else (t_n.get("name") or "")
-            if not tm or tm == sm or _is_test_module(tm):
-                continue
-            mod_adj[sm].add(tm)
-
     cross: Counter = Counter()
     evidence: Dict[tuple, List[str]] = defaultdict(list)
     in_src: Dict[str, Set[str]] = defaultdict(set)
     out_tgt: Dict[str, Set[str]] = defaultdict(set)
     source_domains: Set[str] = set()
-    for sm, tgts in mod_adj.items():
+    seen_evidence: Dict[tuple, Set[str]] = defaultdict(set)  # 同一模块对示例只入 evidence 一次
+    for src, targets in adj.items():
+        src_n = nodes.get(src, {})
+        sm = module_of(src_n, project_path) if src_n.get("type") != "module" else (src_n.get("name") or "")
+        if not sm or _is_test_module(sm):
+            continue
         d1 = sm.split("/")[0]
         source_domains.add(d1)
-        for tm in tgts:
+        for t in targets:
+            t_n = nodes.get(t, {})
+            tm = module_of(t_n, project_path) if t_n.get("type") != "module" else (t_n.get("name") or "")
+            if not tm or tm == sm or _is_test_module(tm):
+                continue
             d2 = tm.split("/")[0]
             if d1 == d2:
                 continue
-            cross[(d1, d2)] += 1
+            cross[(d1, d2)] += 1          # 真实调用边数：同名模块间的多条 CALLS 边都累计
             in_src[d2].add(d1)
             out_tgt[d1].add(d2)
-            if len(evidence[(d1, d2)]) < 5:
-                evidence[(d1, d2)].append(f"{sm} → {tm}")
+            key = (d1, d2)
+            pair = f"{sm} → {tm}"
+            if pair not in seen_evidence[key]:
+                seen_evidence[key].add(pair)
+                if len(evidence[key]) < 5:
+                    evidence[key].append(pair)
 
     total_src = len(source_domains)
 
@@ -632,7 +633,7 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
                                    ds=ds))
 
     # 3.6) 孪生模块真身/孤本标注（③）：目录级同构对中同名模块按 fan_in 判真身/孤本
-    for twin in _detect_twin_identity(nodes, adj, project_path, ds=ds):
+    for twin in _detect_twin_identity(nodes, adj, project_path, db_path=db, ds=ds):
         true_mods = [c["module"] for c in twin["copies"] if c["verdict"] == "真身"]
         orphan_mods = [c["module"] for c in twin["copies"] if c["verdict"] == "孤本"]
         gaps.append({
