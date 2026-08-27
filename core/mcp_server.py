@@ -466,7 +466,7 @@ BUILTIN_TOOLS: List[Dict] = [
                     ),
                     "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
-                            "target_arch": {"type": "object", "description": "目标架构 JSON 对象（与 template/detect 二选一）"},
+                            "target_arch": {"type": ["object", "string"], "description": "目标架构 JSON 对象或 JSON 字符串（与 template/detect 二选一）"},
                             "template": {"type": "string", "description": "软件类型模板名：hexagonal / modular_monolith（不传 target_arch 时生效）"},
                             "detect": {"type": "boolean", "description": "自动识别项目类型并套用对应模板（不传 target_arch/template 时生效）", "default": False},
                         }, "required": ["project_path"]},
