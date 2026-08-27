@@ -646,7 +646,11 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
         1 for n in nodes.values()
         if n.get("type") == "module"
         and not _is_test_module(module_of(n, project_path) or n.get("name", "")))
-    module_assigned = round(len(assigned_ids) / total_mods, 2) if total_mods else 1.0
+    assigned_production = sum(
+        1 for nid in assigned_ids
+        if not _is_test_module(
+            module_of(nodes[nid], project_path) or nodes[nid].get("name", "")))
+    module_assigned = round(assigned_production / total_mods, 2) if total_mods else 1.0
     result["alignment"] = {
         "role_coverage": round(impl_roles / total_roles, 2) if total_roles else 1.0,
         "module_assigned": module_assigned,
@@ -659,6 +663,15 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
 
     # 覆盖引导（①）：target 覆盖面低或业务流不足时显式提示，防治理建在残缺图上
     guidance: List[str] = []
+    empty_target_roles = [
+        role.get("name", role.get("id", ""))
+        for role in roles
+        if not role.get("target_modules")
+    ]
+    if empty_target_roles:
+        guidance.append(
+            "以下角色未声明 target_modules：" + "、".join(empty_target_roles)
+            + "。请在 define-target 阶段补全真实实现模块")
     if module_assigned < 0.3:
         guidance.append(
             f"target_modules 覆盖不完整（module_assigned={module_assigned}，"
