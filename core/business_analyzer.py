@@ -2339,12 +2339,12 @@ def _render_ba_architecture(lines: List[str], entities: List[BusinessEntity]) ->
     lines.append('        S1[LLM客户端]')
     lines.append('        S2[搜索服务]')
     lines.append('        S3[文档处理]')
-    lines.append('        S4[配置管理]')
+    lines.append('        S4[配置服务]')
     lines.append('        S5[安全审计]')
     lines.append('    end')
     lines.append('')
     lines.append('    subgraph 基础设施层')
-    lines.append('        I1[配置管理]')
+    lines.append('        I1[配置存储]')
     lines.append('        I2[日志监控]')
     lines.append('        I3[数据存储]')
     lines.append('    end')
@@ -2370,8 +2370,8 @@ def _render_ba_architecture(lines: List[str], entities: List[BusinessEntity]) ->
     layers = [
         ('用户交互层', 'Web端 / GUI端 / API', '提供用户界面，接收用户输入，展示分析结果'),
         ('业务层', top_entity_names, '承载核心业务逻辑，执行具体任务'),
-        ('共享服务层', 'LLM客户端 / 搜索服务 / 文档处理 / 配置管理', '提供通用能力，被多个业务模块复用'),
-        ('基础设施层', '配置管理 / 日志监控 / 数据存储', '提供底层支撑，保障系统稳定运行'),
+        ('共享服务层', 'LLM客户端 / 搜索服务 / 文档处理 / 配置服务', '提供通用能力，被多个业务模块复用'),
+        ('基础设施层', '配置存储 / 日志监控 / 数据存储', '提供底层支撑，保障系统稳定运行'),
     ]
     for layer, mods, duty in layers:
         lines.append(f'| **{layer}** | {mods} | {duty} |')

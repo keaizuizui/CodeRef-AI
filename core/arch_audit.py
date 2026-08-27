@@ -184,8 +184,12 @@ def _find_cycles(mod_adj: Dict[str, List[str]], self_edges: set, sc_min: int):
     """
     module_cycles: List[List[str]] = []
     self_loops: List[str] = []
-    for comp in find_sccs(mod_adj):
-        if len(comp) >= sc_min:
+    # 自环模块即使无跨模块边也不在 mod_adj，需并入 SCC 节点集才能被识别
+    scc_adj = dict(mod_adj)
+    for module in self_edges:
+        scc_adj.setdefault(module, [])
+    for comp in find_sccs(scc_adj):
+        if len(comp) >= 2 and len(comp) >= sc_min:
             module_cycles.append(comp)
         elif len(comp) == 1 and comp[0] in self_edges:
             self_loops.append(comp[0])
