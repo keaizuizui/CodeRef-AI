@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.6.6** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.6.7** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -489,6 +489,25 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.6.7 — arch_audit cycle 口径分流 + 去样例化残留清理（ 复核）
+
+> 承接测试  待复核点 + 过拟合审计（`20260827-过拟合审计`）：多案例回归中 self
+> 实测 `arch_audit=0.0`，暴露 cycle 口径把"模块内互调自环"计入循环依赖并压健康分，
+> 对大型单体过度悲观。同步清理工具代码中全部 working 特有业务名残留。
+
+- **arch_audit 区分「模块间循环 vs 模块自环」（`core/arch_audit.py`）**：原 `self_edges`
+  只要模块内存在任意符号级 CALLS 边（无需成环）就记录，单模块分量命中即判循环依赖并扣健康分
+  ——模块内正常函数互调（如 `core/role_boundary` 无自引用 import 却成单元素 SCC）被误当架构腐化。
+  修复：`cycles` 只保留模块间 SCC≥2 的真循环（架构腐化，照常扣分）；模块自环单独透出
+  `self_loops` 字段与 `summary.self_loops` 计数（不扣健康分）。实证：self（2272 节点高耦合单体）
+  health 0.0→3.0（46 中 45 自环分流，core/* 24 模块真环保留）；requests 保持 2.0 不变
+  （tests/src 真循环仍在，证明不误伤模块间真环）。
+- **去样例化残留清理（① + 过拟合审计 D 节）**：全量替换 LLM prompt、MCP schema description、
+  SKILL、注释、docstring 中的 working 特有业务名（调研工具/洞察工具/方案工具/配置中心/创意引擎等）
+  与 `目标产品`、`working` 路径示例为中性占位（如 营销助手/业务工具.main/infra_layer）；
+  `_domain_flow_model` docstring 的 gptr_service 示例同步中性化。工具本体不再含任何单项目命名残留。
+- **版本号**：5.6.6 → 5.6.7（patch， 复核 + 去样例化）
 
 ### v5.6.6 — target 与架构图真实化（ 覆盖引导/业务流建议/孪生真身孤本标注）
 

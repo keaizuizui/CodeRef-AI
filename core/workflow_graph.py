@@ -14,7 +14,7 @@
     from core.workflow_graph import WorkflowGraph
 
     graph = WorkflowGraph()
-    html_path = graph.generate(project_path="d:/c/coding/marketing/working")
+    html_path = graph.generate(project_path="/path/to/your_project")
     # 返回 HTML 文件路径，浏览器打开即可
 
 作者: PersuadeAI Team

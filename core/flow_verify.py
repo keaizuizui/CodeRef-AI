@@ -360,7 +360,7 @@ class FlowVerifier:
             summary = f"入口未找到: {entry_spec}"
             if suggestions:
                 summary += (f"；相近符号: {'、'.join(suggestions)}"
-                            "（请用 相对目录名.符号名 精确指定，如 调研工具.run_bot）")
+                            "（请用 相对目录名.符号名 精确指定，如 业务工具.main）")
             return {"entry": {"spec": entry_spec, "found": False,
                               "suggestions": suggestions},
                     "steps": [], "ok": False,

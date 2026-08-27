@@ -169,7 +169,7 @@ BUILTIN_TOOLS: List[Dict] = [
                                 "type": "object",
                                 "properties": {
                                     "entry_files": {"type": "array", "items": {"type": "string"}, "description": "入口文件名列表，如 [\"main.py\",\"app.py\",\"server.py\"]"},
-                                    "core_names": {"type": "array", "items": {"type": "string"}, "description": "强制核心模块名列表，如 [\"洞察工具\",\"shared\"]"},
+                                    "core_names": {"type": "array", "items": {"type": "string"}, "description": "强制核心模块名列表，如 [\"业务工具\",\"shared\"]"},
                                     "min_files": {"type": "integer", "description": "文件数阈值（>=此值自动视为核心模块）"},
                                 },
                                 "description": "核心模块规则 (action=core_rules_set 时必填)"
@@ -414,7 +414,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         "流程合规验证 —— 非编程人员最核心的需求：项目是不是按我期待的流程执行。\n"
                         "验证「入口 A 的调用管线是否覆盖期望步骤 B→C→D」，确认数据真的按这条管线走。\n"
                         "纯静态、确定性：数据只来自知识图谱 CALLS 边，不依赖 LLM。\n"
-                        "entry 建议传 相对目录名.符号名（如 调研工具.run_bot），前缀命中文件路径即定位；"
+                        "entry 建议传 相对目录名.符号名（如 业务工具.main），前缀命中文件路径即定位；"
                         "也支持 模块.函数（如 pipeline_runner.audit）消除同名歧义；"
                         "steps 传期望步骤的符号关键词（中英文均可，编程 AI 需先把中文期望步骤映射为代码符号）。\n"
                         "状态语义：ordered=调用链确证(含顺序)；in_pipeline=在管线但顺序未确证(可能并行)；"
@@ -423,7 +423,7 @@ BUILTIN_TOOLS: List[Dict] = [
                     ),
                     "inputSchema": {"type": "object", "properties": {
                         "project_path": {"type": "string", "description": "目标项目路径"},
-                        "entry": {"type": "string", "description": "入口符号，建议传 相对目录名.符号名（如 调研工具.run_bot），前缀命中文件路径即定位；也支持 模块.函数（如 pipeline_runner.audit）"},
+                        "entry": {"type": "string", "description": "入口符号，建议传 相对目录名.符号名（如 业务工具.main），前缀命中文件路径即定位；也支持 模块.函数（如 pipeline_runner.audit）"},
                         "steps": {"type": ["array", "string"], "items": {"type": "string"},
                                   "description": "期望步骤的符号关键词列表或逗号分隔字符串，如 ['analyze_project','build_knowledge_graph','render']。省略（可选）时仅执行跨语言契约检测与入口/图谱定位，不验证流程步骤；提供空/非法元素则报错"},
                         "depth": {"type": "integer", "description": "调用链搜索深度，默认 8"},

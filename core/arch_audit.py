@@ -10,7 +10,8 @@ arch_audit — 架构腐化诊断（coderef_arch_audit）
 它是"非编程人员验证工程结构是否健康"的入口，也是编程 AI 的客观参考。
 
 诊断维度（模块 = 文件，file_path 的 basename 去 .py）：
-  cycles        模块 CALLS 图强连通分量（SCC）尺寸 ≥2 或自环 → 循环依赖
+  cycles        模块 CALLS 图强连通分量（SCC）尺寸 ≥2 → 模块间循环依赖（架构腐化）
+  self_loops    单模块 SCC 且模块内存在符号互调/自环 → 模块内自环（透出参考，不扣健康分）
   god_modules   模块扇出超过阈值（依赖过多下游）→ 上帝模块
   layer_viol    低层模块依赖高层模块（如 config 依赖 core）→ 分层违例
   large_modules 单模块符号数超阈值 → 异常模块规模
@@ -171,16 +172,24 @@ def find_sccs(adj: Dict[str, List[str]]) -> List[List[str]]:
     return _collect_components(_reverse_graph(adj), order)
 
 
-def _find_cycles(mod_adj: Dict[str, List[str]], self_edges: set, sc_min: int) -> List[List[str]]:
-    """模块级 SCC 中筛出真循环：单模块分量需自环，多模块分量需达最小尺寸。"""
-    cycles = []
+def _find_cycles(mod_adj: Dict[str, List[str]], self_edges: set, sc_min: int):
+    """模块级 SCC 中区分「模块间真循环」与「模块内自环」。
+
+    返回 (module_cycles, self_loops)：
+      module_cycles  多模块 SCC（尺寸 ≥ sc_min）→ 模块间循环依赖，属架构腐化，参与健康分扣分
+      self_loops     单模块分量且模块内存在符号互调/自环 → 模块内自环，
+                     是大型单体正常协作形态（如 core/role_boundary 内部函数互调），
+                     不当作循环依赖、不扣健康分（ 复核：原口径把模块内互调
+                     全计入 cycles，致大型单体 health 被压到 0.0 过度悲观）
+    """
+    module_cycles: List[List[str]] = []
+    self_loops: List[str] = []
     for comp in find_sccs(mod_adj):
-        is_cycle = len(comp) >= sc_min
-        if len(comp) == 1:
-            is_cycle = comp[0] in self_edges
-        if is_cycle:
-            cycles.append(comp)
-    return cycles
+        if len(comp) >= sc_min:
+            module_cycles.append(comp)
+        elif len(comp) == 1 and comp[0] in self_edges:
+            self_loops.append(comp[0])
+    return module_cycles, self_loops
 
 
 def _module_symbol_counts(nodes: dict, project_path: str) -> Dict[str, int]:
@@ -582,8 +591,10 @@ def audit(project_path: str, db_path: str = None,
     mod_adj, self_edges = build_module_graph(nodes, adj, project_path)
     result["graph_stats"]["modules"] = len(mod_adj)
 
-    # 1) 循环依赖（模块级 SCC）
-    result["cycles"] = _find_cycles(mod_adj, self_edges, sc_min)
+    # 1) 循环依赖（模块级 SCC：模块间真循环 + 模块内自环分流，自环不扣健康分）
+    module_cycles, self_loops = _find_cycles(mod_adj, self_edges, sc_min)
+    result["cycles"] = module_cycles
+    result["self_loops"] = self_loops
 
     # 2) 扇出 / 扇入 + 上帝模块（结合模块规模综合判定）
     mod_symbols = _module_symbol_counts(nodes, project_path)
@@ -608,6 +619,7 @@ def audit(project_path: str, db_path: str = None,
     result["summary"] = _health_summary(
         result["cycles"], result["god_modules"], layer_viol, result["large_modules"])
     result["summary"]["function_recursions"] = len(result["function_recursions"])
+    result["summary"]["self_loops"] = len(self_loops)
     result["identity_count"] = len(result["identity"])
     result["ok"] = True
     return result

@@ -435,8 +435,8 @@ def _domain_flow_model(nodes: Dict[str, dict], adj: Dict[str, List[str]],
                        project_path: str, scope: Optional[dict] = None) -> Dict[str, Any]:
     """域间业务流量透视（②深化）：向 define-target 提供真实业务主干，且零项目名硬编码。
 
-    '谁是可清理的技术底座'是项目语义（working 中 gptr_service 与真实业务终点
-    创业咨询在纯调用拓扑上同构），工具不擅自下结论，仅做**可解释的结构透视**，
+    '谁是可清理的技术底座'是项目语义（技术底座域与真实业务终点在纯调用拓扑上
+    可能同构，工具不擅自下结论），仅做**可解释的结构透视**，
     把需要项目语义的排除经 `business_flow.scope` 配置注入。
 
     三层输出：
@@ -447,7 +447,7 @@ def _domain_flow_model(nodes: Dict[str, dict], adj: Dict[str, List[str]],
       - suggestions    业务骨架层：去掉共享层源/目标 + 叶子 + scope 排除后，按真实调用边数排序的主干
                        跨域对（真实调用边数 ≥ 3），供 define-target 校验是否枚举真实主干业务流
 
-    scope（可选，默认空）：{"exclude_domains": ["gptr_service"], "exclude_suffixes": [".coderef"]}
+    scope（可选，默认空）：{"exclude_domains": ["infra_layer"], "exclude_suffixes": [".coderef"]}
       exclude_domains   精确排除的域（项目语义：项目自认为是技术底座/噪声的域）
       exclude_suffixes  按域名字后缀排除（如 ".coderef" 内部目录、"_service" 服务层）
     """

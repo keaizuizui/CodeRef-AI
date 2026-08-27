@@ -44,7 +44,7 @@ from core.prompt_analyzer import PromptAnalyzer, PromptAnalysisResult
 @dataclass
 class BusinessEntity:
     """业务实体 —— 代码中映射到业务概念的类/模块"""
-    name: str                         # 业务名称 (如 "调研工具", "方案工具")
+    name: str                         # 业务名称 (如 "营销助手", "报表工具")
     technical_name: str               # 代码中的技术名称
     purpose: str                      # 业务目的 (一句话)
     files: List[str] = field(default_factory=list)     # 涉及的文件 (相对路径)
@@ -247,7 +247,7 @@ def _ba_dir_to_business_name(llm, dir_name: str, code_context: str = "") -> str:
 代码内容摘要:
 {code_context[:2000]}
 
-请仅返回业务名称，不要其他内容。例如："调研工具"、"配置中心"、"创意引擎"。"""
+请仅返回业务名称，不要其他内容。例如："营销助手"、"报表中心"、"推荐引擎"。"""
             result = llm.chat_completion([
                 {"role": "system", "content": "你是一个业务命名专家。请仅返回简洁的业务名称。"},
                 {"role": "user", "content": prompt}
@@ -1220,7 +1220,7 @@ def _hier_entry_modules(all_modules, out_degree, in_degree) -> set:
     for m in all_modules:
         m_lower = m.lower()
         is_entry_path = any(kw in m_lower for kw in entry_keywords)
-        # V7.1: 收紧阈值 1.5→2.0，避免业务模块（如洞察工具 8/5）被误判为入口
+        # V7.1: 收紧阈值 1.5→2.0，避免业务模块（如分析中心 8/5）被误判为入口
         is_entry_degree = out_degree.get(m, 0) > in_degree.get(m, 0) * 2.0
         if is_entry_path or is_entry_degree:
             entry_modules.add(m)
@@ -1436,8 +1436,8 @@ def _ba_build_hierarchy_from_callgraph(
 
     三层架构：
     - 入口层（出度 >> 入度）：web、gui —— 用户直接交互的界面
-    - 业务层（调用 shared 的模块）：调研工具、洞察工具、方案工具等
-    - 基础设施层（入度 >> 出度）：shared、配置中心 —— 被所有业务模块调用
+    - 业务层（调用 shared 的模块）：营销助手、分析中心、方案引擎等
+    - 基础设施层（入度 >> 出度）：shared、配置管理 —— 被所有业务模块调用
     """
     # ── Step 1: 构建 func_name → module_name 映射 ──
     func_to_module, _func_to_file = _hier_func_maps(enrichment)
@@ -1613,9 +1613,9 @@ def _ba_llm_hierarchical_workflows(
 
 ## 层级判断规则
 - 主轴：直接接收用户输入、对外暴露接口的流程（如 Web 端、主入口）
-- 一级子流程：被主轴调度，有独立完整的业务逻辑（如洞察工具、调研工具）
-- 二级子流程：被一级子流程调度，是更细粒度的子流程（如创意引擎被方案工具调度）
-- 如果某个流程有明确的下游角色（如"小调调度调研工具"），说明它调度了另一个流程
+- 一级子流程：被主轴调度，有独立完整的业务逻辑（如分析中心、营销助手）
+- 二级子流程：被一级子流程调度，是更细粒度的子流程（如推荐引擎被方案引擎调度）
+- 如果某个流程有明确的下游角色（如"调度引擎调度营销助手"），说明它调度了另一个流程
 
 ## 返回 JSON 格式
 ```json
@@ -2020,7 +2020,7 @@ def _eval_role_quality(result) -> Tuple[float, Optional[str]]:
 def _eval_workflow_quality(result) -> Tuple[float, Optional[str]]:
     """工作流维度：已有的流程是否步骤清晰（无流程不扣分）"""
     if not result.workflows:
-        # 不扣分——很多项目没有"流程"概念（如工具库、配置中心）
+        # 不扣分——很多项目没有"流程"概念（如工具库、服务层）
         return 0.8, None
     good_flows = [w for w in result.workflows if len(w.steps) >= 2]
     if len(good_flows) == len(result.workflows):
@@ -2339,7 +2339,7 @@ def _render_ba_architecture(lines: List[str], entities: List[BusinessEntity]) ->
     lines.append('        S1[LLM客户端]')
     lines.append('        S2[搜索服务]')
     lines.append('        S3[文档处理]')
-    lines.append('        S4[配置中心]')
+    lines.append('        S4[配置管理]')
     lines.append('        S5[安全审计]')
     lines.append('    end')
     lines.append('')
@@ -2370,7 +2370,7 @@ def _render_ba_architecture(lines: List[str], entities: List[BusinessEntity]) ->
     layers = [
         ('用户交互层', 'Web端 / GUI端 / API', '提供用户界面，接收用户输入，展示分析结果'),
         ('业务层', top_entity_names, '承载核心业务逻辑，执行具体任务'),
-        ('共享服务层', 'LLM客户端 / 搜索服务 / 文档处理 / 配置中心', '提供通用能力，被多个业务模块复用'),
+        ('共享服务层', 'LLM客户端 / 搜索服务 / 文档处理 / 配置管理', '提供通用能力，被多个业务模块复用'),
         ('基础设施层', '配置管理 / 日志监控 / 数据存储', '提供底层支撑，保障系统稳定运行'),
     ]
     for layer, mods, duty in layers:
