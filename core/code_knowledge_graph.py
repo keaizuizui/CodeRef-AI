@@ -75,7 +75,7 @@ def _module_key(project_path: str, rel: str) -> str:
     """模块 id 前缀：相对 project_path 的路径去扩展名（正斜杠）。
 
     用相对路径而非 basename 作 id 前缀，避免跨目录同名文件（如
-    source_engine/engine.py 与 调研工具/engine.py）生成相同 id 被
+    业务工具/engine.py 与 分析中心/engine.py）生成相同 id 被
     INSERT OR REPLACE 互相覆盖，导致图谱漏扫（真实屎山治理发现）。
     """
     if not rel:
@@ -164,9 +164,9 @@ def _kg_method_node(rel: str, module_key: str, cls, m) -> KGNode:
 def _resolve_import_target(imp: str, mod_ids: set) -> str:
     """解析 import 语句的项目内目标模块 id；未命中返回空串。
 
-    先按点分路径转斜杠逐段精确匹配（如 `source_engine.engine` →
-    `mod:source_engine/engine`），再按最后一段模糊匹配跨目录同名模块
-    （如 `import engine` 命中 `mod:source_engine/engine`）。避免标准库/
+    先按点分路径转斜杠逐段精确匹配（如 `data_loader.engine` →
+    `mod:data_loader/engine`），再按最后一段模糊匹配跨目录同名模块
+    （如 `import engine` 命中 `mod:data_loader/engine`）。避免标准库/
     第三方导入产生孤儿边。
     """
     parts = [p for p in imp.split(".") if p]

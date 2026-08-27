@@ -487,8 +487,8 @@ def _dir_isomorph_insight(project_path: str, fv, max_pairs: int = 10,
                           func_threshold: float = 0.5) -> List[Dict]:
     """目录级同构比对（）：文件清单相似度 + 函数签名相似度。
 
-    对目录两两比较，双指标均 ≥ 阈值视为"同构重复候选"（如 调研工具/engine vs
-    source_engine/engine 全目录同构、round2/round2_v2/round2_fast 多版本并存）。
+    对目录两两比较，双指标均 ≥ 阈值视为"同构重复候选"（如 业务工具/engine vs
+    主服务/engine 全目录同构、batch2/batch2_v2/batch2_fast 多版本并存）。
     返回 [{dir_a, dir_b, file_sim, func_sim, n_files_a, n_files_b}]，按综合相似度降序。
     """
     dirs = _dir_inventory(project_path, fv)
