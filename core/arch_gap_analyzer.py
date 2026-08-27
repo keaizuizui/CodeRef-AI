@@ -357,8 +357,8 @@ def _detect_twin_identity(nodes: Dict[str, dict], adj: Dict[str, List[str]],
     """孪生模块真身/孤本标注（③）：目录级同构对中同名模块按 fan_in 判真身/孤本。
 
     复用 duplicate_insight 的 dir_isomorph（目录级同构）识别孪生目录对
-    （如 source_engine <-> 调研工具），对每对目录中 basename 相同的模块
-    按跨模块 fan_in 标注：
+    （目录 A 有同名子模块清单、目录 B 也有一份，即目录级同构），对每对目录中
+    basename 相同的模块按跨模块 fan_in 标注：
       - 真身：fan_in 最高且 >0（活跃实现，治理保留）
       - 孤本：fan_in=0（无调用者，治理收敛候选）
       - 活跃副本：fan_in>0 但非最高（被部分调用，待收编）
@@ -430,48 +430,114 @@ def _detect_twin_identity(nodes: Dict[str, dict], adj: Dict[str, List[str]],
     return results
 
 
-def _suggest_business_flows(nodes: Dict[str, dict], adj: Dict[str, List[str]],
-                            project_path: str,
-                            target_flows: List[dict]) -> List[dict]:
-    """基于真实调用提出主干业务流建议（②）。
+def _domain_flow_model(nodes: Dict[str, dict], adj: Dict[str, List[str]],
+                       project_path: str, scope: Optional[dict] = None) -> Dict[str, Any]:
+    """域间业务流量透视（②深化）：向 define-target 提供真实业务主干，且零项目名硬编码。
 
-    通用启发式（不硬编码项目特定关系）：按模块路径第一段分业务域，
-    统计跨域调用（域 A → 域 B），排除底座/服务域（shared/gptr_service/tests/
-    本地测试gui 等被所有域复用、非业务流终点）作为目标域，对调用数 ≥ 3 的
-    跨域对生成建议业务流，并给出具体调用证据（模块 → 模块）。
+    '谁是可清理的技术底座'是项目语义（working 中 gptr_service 与真实业务终点
+    创业咨询在纯调用拓扑上同构），工具不擅自下结论，仅做**可解释的结构透视**，
+    把需要项目语义的排除经 `business_flow.scope` 配置注入。
 
-    返回 [{from_domain, to_domain, call_count, evidence:[...]}]，
-    供 define-target 阶段校验 target 是否枚举了真实主干业务流。
+    三层输出：
+      - edges          如实层：全部跨域调用（仅剔自环/测试/纯叶子接收域），保留权重与证据
+      - hubs           结构层：逐域标 in_src_count / biz_out_count / role（共享层/双向枢纽/
+                       被共同依赖/业务编排源/纯上游入口/叶子/待定），全程无项目名
+      - shared_layers  动态判定的共享层（被 ≥50% 源域引用的域，如各项目的公共依赖层）
+      - suggestions    业务骨架层：去掉共享层源/目标 + 叶子 + scope 排除后，按调用量排序的主干
+                       跨域对（调用数 ≥ 3），供 define-target 校验是否枚举真实主干业务流
+
+    scope（可选，默认空）：{"exclude_domains": ["gptr_service"], "exclude_suffixes": [".coderef"]}
+      exclude_domains   精确排除的域（项目语义：项目自认为是技术底座/噪声的域）
+      exclude_suffixes  按域名字后缀排除（如 ".coderef" 内部目录、"_service" 服务层）
     """
-    BASE_DOMAINS = {"shared", "gptr_service", "tests", "本地测试gui"}
 
     mod_adj: Dict[str, Set[str]] = defaultdict(set)
     for src, targets in adj.items():
         src_n = nodes.get(src, {})
         sm = module_of(src_n, project_path) if src_n.get("type") != "module" else (src_n.get("name") or "")
-        if not sm:
+        if not sm or _is_test_module(sm):
             continue
         for t in targets:
             t_n = nodes.get(t, {})
             tm = module_of(t_n, project_path) if t_n.get("type") != "module" else (t_n.get("name") or "")
-            if not tm or tm == sm:
+            if not tm or tm == sm or _is_test_module(tm):
                 continue
             mod_adj[sm].add(tm)
 
     cross: Counter = Counter()
     evidence: Dict[tuple, List[str]] = defaultdict(list)
+    in_src: Dict[str, Set[str]] = defaultdict(set)
+    out_tgt: Dict[str, Set[str]] = defaultdict(set)
+    source_domains: Set[str] = set()
     for sm, tgts in mod_adj.items():
         d1 = sm.split("/")[0]
+        source_domains.add(d1)
         for tm in tgts:
             d2 = tm.split("/")[0]
-            if d1 == d2 or d2 in BASE_DOMAINS:
+            if d1 == d2:
                 continue
             cross[(d1, d2)] += 1
+            in_src[d2].add(d1)
+            out_tgt[d1].add(d2)
             if len(evidence[(d1, d2)]) < 5:
                 evidence[(d1, d2)].append(f"{sm} → {tm}")
 
-    suggestions: List[dict] = []
+    total_src = len(source_domains)
+
+    # 共享层：被 ≥ 50% 不同源域引用的域（被几乎所有业务共用，通常是公共依赖层）
+    shared_layers = sorted(
+        d for d, srcs in in_src.items() if total_src and len(srcs) / total_src >= 0.5)
+
+    def biz_out(d: str) -> Set[str]:
+        if d in shared_layers:
+            return set()
+        return {t for t in out_tgt.get(d, set()) if t != d}
+
+    # 角色分派（in/out 二维，可解释，无项目名）
+    def role_of(d: str) -> str:
+        ni = len(in_src.get(d, set()))
+        no = len(biz_out(d))
+        if d in shared_layers:
+            return "共享层"
+        if no == 0:
+            return "被共同依赖" if ni > 0 else "叶子"
+        if ni == 0:
+            return "纯上游入口"
+        if ni >= 6 and no >= 3:
+            return "双向枢纽"
+        if no >= 3:
+            return "业务编排源"
+        return "待定"
+
+    # ── edges（如实层）：仅剔"目标域无跨域出边"的纯叶子（不删 shared 作目标的真实依赖）──
+    edges = []
     for (d1, d2), cnt in cross.most_common():
+        if out_tgt.get(d2):
+            edges.append({"from_domain": d1, "to_domain": d2, "call_count": cnt,
+                          "evidence": evidence[(d1, d2)]})
+
+    # ── hubs（结构层）──
+    hubs = []
+    for d in sorted(set(in_src) | set(out_tgt)):
+        hubs.append({"domain": d,
+                     "in_src_count": len(in_src.get(d, set())),
+                     "biz_out_count": len(biz_out(d)),
+                     "role": role_of(d)})
+
+    # ── suggestions（业务骨架层）：去共享层源/目标 + 叶子 + scope 排除 ──
+    exclude_domains = {d for d in (scope or {}).get("exclude_domains", []) if d}
+    exclude_suffixes = [s for s in (scope or {}).get("exclude_suffixes", []) if s]
+
+    def is_excluded(d: str) -> bool:
+        return d in shared_layers or d in exclude_domains or any(
+            d.endswith(s) for s in exclude_suffixes)
+
+    suggestions = []
+    for (d1, d2), cnt in cross.most_common():
+        if is_excluded(d1) or is_excluded(d2):
+            continue
+        if not biz_out(d2):
+            continue  # 目标是纯叶子接收域，无业务语义
         if cnt < 3:
             continue
         suggestions.append({
@@ -480,7 +546,12 @@ def _suggest_business_flows(nodes: Dict[str, dict], adj: Dict[str, List[str]],
             "call_count": cnt,
             "evidence": evidence[(d1, d2)],
         })
-    return suggestions
+    return {
+        "edges": edges,
+        "hubs": hubs,
+        "shared_layers": shared_layers,
+        "suggestions": suggestions,
+    }
 
 
 def analyze_gap(project_path: str, target_arch: Dict[str, Any],
@@ -657,9 +728,11 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
         "note": "Phase 0 简化对齐度：role_coverage=已实现角色/总角色；module_assigned=已归属模块/总模块",
     }
 
-    # 业务流建议（②）：基于真实跨域调用提出主干业务流，供 define-target 校验
-    flow_suggestions = _suggest_business_flows(nodes, adj, project_path, flows)
-    result["flow_suggestions"] = flow_suggestions
+    # 域间业务流量透视（②）：domain_flow 三层 + flow_suggestions 兼容简表
+    flow_scope = (target_arch.get("business_flow") or {}).get("scope") or {}
+    domain_flow = _domain_flow_model(nodes, adj, project_path, flow_scope)
+    result["domain_flow"] = domain_flow
+    result["flow_suggestions"] = domain_flow["suggestions"]
 
     # 覆盖引导（①）：target 覆盖面低或业务流不足时显式提示，防治理建在残缺图上
     guidance: List[str] = []
@@ -675,12 +748,12 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
     if module_assigned < 0.3:
         guidance.append(
             f"target_modules 覆盖不完整（module_assigned={module_assigned}，"
-            f"{unassigned_total} 个游离模块），建议在 define-target 阶段补全真实主干模块"
-            f"（web 编排中枢 / 洞察→方案→创意 等），否则治理建在残缺图上")
+            f"{unassigned_total} 个游离模块），建议在 define-target 阶段基于真实调用"
+            f"补全主干模块，否则治理建在残缺图上")
     if len(flows) < 2:
         guidance.append(
-            f"业务流仅 {len(flows)} 条，建议基于真实调用纳入主干业务流"
-            f"（web 编排中枢 / 洞察→方案 / 洞察→调研 等），而非只有调研 4 步")
+            f"业务流仅 {len(flows)} 条，建议纳入多条主干业务流（可参考本轮 domain_flow "
+            f"suggestions 列出的真实跨域主干），而非唯一定义单条链路")
     result["coverage_guidance"] = guidance
 
     result["ok"] = True

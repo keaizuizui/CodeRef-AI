@@ -499,9 +499,13 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 - **define-target 覆盖引导（`coderef_target_arch_set` / `arch_gap`）**：业务流为空或不足 2 条、
   角色 `target_modules` 为空时显式提示（不阻断设置）；`arch_gap` 在 `module_assigned<0.3` 或业务流不足时
   输出 `coverage_guidance`，防治理建在残缺图上。
-- **业务流校验/建议（`arch_gap` 新增 `flow_suggestions`）**：基于知识图谱真实跨域调用（排除 shared/
-  gptr_service/tests 等底座域），对调用数 ≥3 的跨域对提出主干业务流建议并附具体调用证据
-  （web→方案工具、洞察→创业咨询、方案→目标产品 等真实主干）。
+- **业务流校验/建议（`arch_gap` 新增 `domain_flow`）**：域间业务流量透视三层——`edges`（如实
+  跨域调用含证据）、`hubs`（逐域结构角色：共享层/双向枢纽/被共同依赖/业务编排源…，全程无项目名）、
+  `suggestions`（去掉共享层与叶子后的主干业务流，调用数 ≥3，并附具体调用证据）。共享层在"被
+  ≥50% 源域引用"时自动识别（零项目名硬编码）；"谁是技术底座"属项目语义（working 中 gptr_service
+  与真实业务终点创业咨询拓扑同构，工具不擅自下结论），经 `business_flow.scope.exclude_domains` /
+  `exclude_suffixes` 配置注入。保留 `flow_suggestions` 作为建议简表。真实主干（web→方案工具、
+  洞察→创业咨询 25、方案→目标产品 17、调研→source_engine 43）自动排前。
 - **双真身孤本标注进图（`arch_gap` 新增 `twin_identity` 差距 + 画布渲染）**：复用 `duplicate_insight`
   目录级同构对，按跨模块 fan_in 判真身（最高且>0）/孤本（=0）/活跃副本（>0 非最高）；
   画布真身绿 #22C55E、孤本灰 #A1A1AA、活跃副本橙 #F97316，节点子标签直显身份，图例同步。
