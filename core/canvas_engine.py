@@ -618,7 +618,8 @@ function renderNodes(){
       if (navLevel === 'L2') drillFocus(n.id);
       else if (navLevel === 'L1') setLayer(n.layer);
     });
-    const sub = n.props && (n.props.file || n.props.desc || '');
+    const p = n.props || {};
+    const sub = p.twin_verdict || p.file || p.desc || '';
     el.innerHTML = `<div class="node-icon">${esc(n.icon||'')}</div>
       <div class="node-label" title="${esc(n.label)}">${esc(n.label)}</div>
       ${sub ? `<div class="node-sub" title="${esc(sub)}">${esc(sub)}</div>` : ''}`;

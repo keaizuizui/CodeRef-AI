@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.6.5** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.6.6** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -489,6 +489,26 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.6.6 — target 与架构图真实化（ 覆盖引导/业务流建议/孪生真身孤本标注）
+
+> 承接测试 ：coderef 自动生成的分层/目标架构与 working 实际架构差异大
+> （覆盖率仅 0.06、业务流只有 1 条调研 4 步、source_engine/调研工具双真身被画成平级真身未标孤本），
+> 照这张图治理会漏掉真实主线（web 编排、洞察→方案→创意）。
+
+- **define-target 覆盖引导（`coderef_target_arch_set` / `arch_gap`）**：业务流为空或不足 2 条、
+  角色 `target_modules` 为空时显式提示（不阻断设置）；`arch_gap` 在 `module_assigned<0.3` 或业务流不足时
+  输出 `coverage_guidance`，防治理建在残缺图上。
+- **业务流校验/建议（`arch_gap` 新增 `flow_suggestions`）**：基于知识图谱真实跨域调用（排除 shared/
+  gptr_service/tests 等底座域），对调用数 ≥3 的跨域对提出主干业务流建议并附具体调用证据
+  （web→方案工具、洞察→创业咨询、方案→目标产品 等真实主干）。
+- **双真身孤本标注进图（`arch_gap` 新增 `twin_identity` 差距 + 画布渲染）**：复用 `duplicate_insight`
+  目录级同构对，按跨模块 fan_in 判真身（最高且>0）/孤本（=0）/活跃副本（>0 非最高）；
+  画布真身绿 #22C55E、孤本灰 #A1A1AA、活跃副本橙 #F97316，节点子标签直显身份，图例同步。
+  working 实测 6 组孪生目录 97 模块全标注：source_engine/engine=真身(fan_in 68)、调研工具/engine=孤本(0)。
+- **回归不劣化**： 分层布局（47 层无坍缩）/  三层泳道 /  L0-L3 导航 /  统计联动
+  真实浏览器全 PASS。
+- **版本号**：5.6.5 → 5.6.6（patch， 修复）
 
 ### v5.6.5 — 画布层级导航「统计随视图联动」（ 真实浏览器回归）
 

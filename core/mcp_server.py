@@ -1746,6 +1746,16 @@ def _target_arch_set(a: dict) -> str:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(ta, f, ensure_ascii=False, indent=2)
+    # 覆盖引导（①）：业务流不足或 target_modules 为空时提示（不阻断设置）
+    warnings = []
+    flows = ta.get("business_flows") or []
+    if not flows:
+        warnings.append("业务流为空，建议基于真实调用枚举主干业务流（web 编排中枢 / 洞察→方案→创意 等）")
+    elif len(flows) < 2:
+        warnings.append(f"业务流仅 {len(flows)} 条，建议纳入真实主干业务流（web 编排中枢 / 洞察→方案 / 洞察→调研 等）")
+    empty_roles = [r.get("id") for r in ta.get("tech_roles", []) if not r.get("target_modules")]
+    if empty_roles:
+        warnings.append(f"以下角色 target_modules 为空：{empty_roles}，target 覆盖会偏低（module_assigned 低）")
     return json.dumps({
         "status": "completed",
         "tool": "coderef_target_arch_set",
@@ -1753,9 +1763,10 @@ def _target_arch_set(a: dict) -> str:
         "path": path,
         "summary": {
             "roles": len(ta.get("tech_roles", [])),
-            "flows": len(ta.get("business_flows", [])),
+            "flows": len(flows),
             "constraints": len(ta.get("constraints", [])),
         },
+        "warnings": warnings,
     }, ensure_ascii=False)
 
 
