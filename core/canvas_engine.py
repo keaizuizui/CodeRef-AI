@@ -724,9 +724,20 @@ function renderLanes(){
   laneLayer.appendChild(ns);
 }
 function renderStats(){
+  // ：统计随层级导航联动——按当前 navVisible 过滤后的可见节点/连线计数
+  const vis = navLevel === 'all' ? nodes : nodes.filter(navVisible);
+  const visIds = new Set(vis.map(n => n.id));
+  const visEdges = edges.filter(e => visIds.has(e.from) && visIds.has(e.to));
   const s = (DATA.meta && DATA.meta.summary) || {};
-  let html = `节点 ${nodes.length} | 连线 ${edges.length}`;
-  if (s.total != null) html += ` | 差距 ${s.total} (高${s.high||0}/中${s.medium||0}/低${s.low||0})`;
+  let html = `节点 ${vis.length} | 连线 ${visEdges.length}`;
+  if (navLevel === 'all'){
+    // 全量视图保留整体差距摘要（含高中低分档）
+    if (s.total != null) html += ` | 差距 ${s.total} (高${s.high||0}/中${s.medium||0}/低${s.low||0})`;
+  } else {
+    // 层级视图按当前可视范围内的差距节点计数，随视图切换更新
+    const gapN = vis.filter(n => GAP_NODE_COLORS.includes(n.color)).length;
+    html += ` | 差距 ${gapN}`;
+  }
   document.getElementById('stats').innerHTML = html;
 }
 
