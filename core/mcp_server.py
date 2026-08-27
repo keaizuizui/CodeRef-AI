@@ -456,14 +456,20 @@ BUILTIN_TOOLS: List[Dict] = [
                         "    可选 depends_on/depended_by/role_keywords（字符串数组，角色职责关键词表，\n"
                         "    供 coderef_role_boundary 做符号级职责判定；缺省时 role_boundary 会提示未配置）。\n"
                         "  constraints（可选，数组）：每项必填 from/to/rule，rule=no_dependency。\n"
+                        "模板初始化（不传 target_arch 时）：template=模板名（hexagonal 六边形单体 /\n"
+                        "  modular_monolith 模块化单体）按模板结合项目顶层目录生成 target_arch 初稿；\n"
+                        "  detect=true 自动识别项目类型并套用对应模板（detect 优先级低于 template）。\n"
+                        "  初稿仅供参考，可在此基础上完善；识别到的模板会在返回值 template 中说明。\n"
                         "校验失败返回 status=error + errors 明细（含具体字段），不会静默成功。\n"
                         "校验通过后写入 <project>/.coderef/target_arch.json（进 git 版本控制）。\n"
                         "纯确定性校验，不依赖 LLM。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
-                            "target_arch": {"type": "object", "description": "目标架构 JSON 对象"},
-                        }, "required": ["project_path", "target_arch"]},
+                            "target_arch": {"type": "object", "description": "目标架构 JSON 对象（与 template/detect 二选一）"},
+                            "template": {"type": "string", "description": "软件类型模板名：hexagonal / modular_monolith（不传 target_arch 时生效）"},
+                            "detect": {"type": "boolean", "description": "自动识别项目类型并套用对应模板（不传 target_arch/template 时生效）", "default": False},
+                        }, "required": ["project_path"]},
                 },
         {
                     "name": "coderef_target_arch_get",
@@ -1713,25 +1719,60 @@ def _coerce_target_arch(tool: str, ta) -> dict:
 
 def _target_arch_set(a: dict) -> str:
     """设置/更新目标架构 JSON（coderef_target_arch_set）"""
+    from core.arch_templates import TEMPLATES, build_target_arch, detect_template
     from core.target_arch_schema import normalize_arch, validate_target_arch
     pp = a["project_path"]
     ta = a.get("target_arch")
+    template_id = None
     if ta is None:
-        return json.dumps({
-            "status": "error",
-            "tool": "coderef_target_arch_set",
-            "project_path": pp,
-            "error": "缺少 target_arch 参数，请传入目标架构 JSON",
-        }, ensure_ascii=False)
-    try:
-        ta = _coerce_target_arch("coderef_target_arch_set", ta)
-    except ValueError as e:
-        return json.dumps({
-            "status": "error",
-            "tool": "coderef_target_arch_set",
-            "project_path": pp,
-            "error": str(e),
-        }, ensure_ascii=False)
+        # 模板初始化：template 显式指定，detect 自动识别，二者都不给则报错
+        template_id = a.get("template")
+        detect = a.get("detect")
+        if template_id:
+            template_id = str(template_id).strip().lower()
+            if template_id not in TEMPLATES:
+                return json.dumps({
+                    "status": "error",
+                    "tool": "coderef_target_arch_set",
+                    "project_path": pp,
+                    "error": f"未知模板：{template_id}，可选：{', '.join(sorted(TEMPLATES))}",
+                }, ensure_ascii=False)
+        elif detect:
+            found = detect_template(pp)
+            if not found:
+                return json.dumps({
+                    "status": "error",
+                    "tool": "coderef_target_arch_set",
+                    "project_path": pp,
+                    "error": "detect 未能识别项目类型，请显式指定 template 或传入 target_arch",
+                }, ensure_ascii=False)
+            template_id = found[0]
+        else:
+            return json.dumps({
+                "status": "error",
+                "tool": "coderef_target_arch_set",
+                "project_path": pp,
+                "error": "缺少 target_arch 参数，请传入目标架构 JSON，或使用 template/detect 按模板生成初稿",
+            }, ensure_ascii=False)
+        try:
+            ta = build_target_arch(pp, template_id)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "tool": "coderef_target_arch_set",
+                "project_path": pp,
+                "error": f"按模板生成 target_arch 初稿失败: {e}",
+            }, ensure_ascii=False)
+    else:
+        try:
+            ta = _coerce_target_arch("coderef_target_arch_set", ta)
+        except ValueError as e:
+            return json.dumps({
+                "status": "error",
+                "tool": "coderef_target_arch_set",
+                "project_path": pp,
+                "error": str(e),
+            }, ensure_ascii=False)
     ok, errors = validate_target_arch(ta)
     if not ok:
         return json.dumps({
@@ -1756,7 +1797,7 @@ def _target_arch_set(a: dict) -> str:
     empty_roles = [r.get("id") for r in ta.get("tech_roles", []) if not r.get("target_modules")]
     if empty_roles:
         warnings.append(f"以下角色 target_modules 为空：{empty_roles}，target 覆盖会偏低（module_assigned 低）")
-    return json.dumps({
+    result = {
         "status": "completed",
         "tool": "coderef_target_arch_set",
         "project_path": pp,
@@ -1767,7 +1808,10 @@ def _target_arch_set(a: dict) -> str:
             "constraints": len(ta.get("constraints", [])),
         },
         "warnings": warnings,
-    }, ensure_ascii=False)
+    }
+    if template_id:
+        result["template"] = template_id
+    return json.dumps(result, ensure_ascii=False)
 
 
 def _target_arch_get(a: dict) -> str:

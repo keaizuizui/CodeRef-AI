@@ -757,5 +757,27 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
             f"suggestions 列出的真实跨域主干），而非唯一定义单条链路")
     result["coverage_guidance"] = guidance
 
+    # 模板整理建议（引导非强求）：识别项目形态，对比模板期望骨架给整理建议
+    from core.arch_templates import TEMPLATES, detect_template, templating_suggestions
+    found = detect_template(project_path)
+    if found:
+        tid, score = found
+        result["templating"] = {
+            "template_id": tid,
+            "template_name": TEMPLATES[tid]["name"],
+            "matched": True,
+            "score": score,
+            "suggestions": templating_suggestions(project_path, tid),
+            "note": "模板是整理建议而非强制标准：按期望骨架整理文件夹有助于生成目标架构；可自主决定是否照做",
+        }
+    else:
+        result["templating"] = {
+            "template_id": None,
+            "template_name": None,
+            "matched": False,
+            "suggestions": [],
+            "note": "未识别到常见软件形态模板；可用 coderef_target_arch_set 的 template/detect 参数按模板生成目标架构初稿",
+        }
+
     result["ok"] = True
     return result
