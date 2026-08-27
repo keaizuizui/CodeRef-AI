@@ -131,7 +131,7 @@ class PromptExtractor:
         # 只扫 .py 会 100% 漏检这些主流载体。扩展扫描 *.md，并对 md 走文本提取。
         py_files = list(Path(project_path).rglob("*.py"))
         md_files = list(Path(project_path).rglob("*.md"))
-        # 治理缺陷：知识包/提示词库等纯文本指令内容文件（如 目标产品 的
+        # 治理缺陷：知识包/提示词库等纯文本指令内容文件（如项目的
         # knowledge_pack/*.txt）也是 prompt 资产，只扫 .py/.md 会漏检其内容污染。
         txt_files = list(Path(project_path).rglob("*.txt"))
         _SKIP = ('__pycache__', '.venv', 'venv', 'node_modules', '.git')
@@ -246,7 +246,7 @@ class PromptExtractor:
     def _extract_from_textfile(self, file_path: str, project_path: str) -> List[ExtractedPrompt]:
         """从纯文本指令内容文件（知识包 / 提示词库 .txt）提取 prompt。
 
-        知识包/提示词库（如 目标产品 的 brand/cognition/knowledge_pack/*.txt）是
+        知识包/提示词库（如项目的 brand/cognition/knowledge_pack/*.txt）是
         供 LLM 引用的内容资产，其内容污染（伪科学/违禁宣称）会示范污染下游生成。
         仅当文件位于指令内容目录时提取，整文件作为一条 prompt 资产保留全文，
         供 prompt_governance 做治理检测。

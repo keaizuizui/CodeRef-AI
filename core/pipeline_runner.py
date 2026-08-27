@@ -642,7 +642,7 @@ def core_rules_set(project_path: str, rules: dict) -> dict:
 
     rules 可含:
       - entry_files: ["main.py", "app.py", ...]  入口文件名列表
-      - core_names: ["洞察工具", "shared", ...]  强制核心模块名
+      - core_names: ["业务工具", "shared", ...]  强制核心模块名
       - min_files: 10                             文件数阈值
     未指定的字段保持默认值。
     """
