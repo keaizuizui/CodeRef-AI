@@ -103,10 +103,19 @@ def _is_test_path(rel_path: str) -> bool:
     return top in ("test", "tests")
 
 
-def _top_package(mod: str) -> str:
-    """模块相对路径的顶层父包（route/gin → route）；无层级（纯顶层模块）时返回自身。"""
-    part = mod.replace("\\", "/").split("/", 1)[0]
-    return part or mod
+def _parent_package(mod: str) -> str:
+    """模块相对路径的直接父包（business/manage/http_tools → business/manage、
+    route/gin → route）；无层级（纯顶层模块）时返回自身。
+
+    package_cycles（包内环分类）用「直接父包」而非「顶层第一段」作分拣键：
+    Go 等标准布局下全部代码在 internal 之下，顶层第一段恒为 internal，会把
+    business/manage/http_tools ↔ common/http_tools 这类跨业务/公共层的环
+    误判为"包内环"（目标项目 实测观察点）。
+    """
+    parts = mod.replace("\\", "/").split("/")
+    if len(parts) <= 1:
+        return mod
+    return "/".join(parts[:-1])
 
 
 def _has_non_test_module(nodes: Dict[str, dict], project_path: str) -> bool:
@@ -702,12 +711,12 @@ def audit(project_path: str, db_path: str = None,
 
     # 1) 循环依赖（模块级 SCC：模块间真循环 + 模块内自环分流，自环不扣健康分）
     module_cycles, self_loops = _find_cycles(mod_adj, self_edges, sc_min)
-    # O-C3 + Major(CodeRabbit 复审)：同顶层父包的子包互引（如 route/gin↔route/client_side）
+    # O-C3 + Major(CodeRabbit 复审)：同直接父包的子包互引（如 route/gin↔route/client_side）
     #  在业务上是同一模块/层内部的组件纠缠，单独透出为 package_cycles 作补充观察；
     #  但它们仍是文件级的真实循环依赖，不能因同包就完全不扣健康分。因此把全部
     #  module_cycles（含包内环）计入 cycles 参与扣分，package_cycles 仅作分类透出。
     package_cycles = [comp for comp in module_cycles
-                      if len({_top_package(m) for m in comp}) == 1]
+                      if len({_parent_package(m) for m in comp}) == 1]
     result["cycles"] = module_cycles
     result["package_cycles"] = package_cycles
     result["self_loops"] = self_loops
