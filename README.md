@@ -547,6 +547,14 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 >   working 实测：boundary_issues 200→3（仅剩 service 层
 >   重复实现 code 层 checkpoint/chart 能力的真信号），call_hints 187→133（纯 error 撞词
 >   清零）；目标产品 验收场景（waiter.cook→chef 越界）保持 PASS、本角色符号不误报。
+>   **⑤ 测试观察点修订**——`package_cycles` 分拣由「顶层第一段」改为「直接父包」：
+>   Go 标准布局下所有模块首段恒为 `internal`，原口径把 `business/manage/http_tools ↔
+>   common/http_tools` 这类跨业务/公共层环误归「包内环」，修复后按完整父路径分拣
+>   （目标项目 实测 package_cycles 2→1：route 包内环保留、http_tools 环正确归跨包
+>   cycles）；detect 初稿递归展开跳过依赖/产物目录（`_COMMON_DIRS` 白名单补
+>   vendor/volumes/public + libs 内 npm 包子目录启发），目标项目 初稿 target_modules
+>   1000+→542（php/vendor、public/libs、logs、volumes 全清除，目标项目 libs 业务
+>   子仓不受影响）。
 > - **版本号**：5.7.1 → 5.8.0（minor，业务层表达力扩展 + O-C3 口径 + ② 去 overfit）。
 
 ### v5.7.1 — 架构判据口径校准：tests 排除 + 基础设施层归属 + detect 粒度/role_boundary 泛词/入口游离（新代码验收观察点）
