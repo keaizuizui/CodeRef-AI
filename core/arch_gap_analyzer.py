@@ -380,9 +380,13 @@ def _detect_business_gaps(flows: List[dict],
                 })
             # ：阶段内成员矩阵断链（sub_module_refs 全部无实现）
             if member_resolved:
-                refs = step.get("sub_module_refs") or []
-                specs = [r.get("module") for r in refs
-                         if isinstance(r, dict) and r.get("module")]
+                specs = []
+                for r in step.get("sub_module_refs") or []:
+                    if not isinstance(r, dict):
+                        continue
+                    items = (r.get("items") or []) if "group" in r else [r]
+                    specs.extend(it.get("module") for it in items
+                                 if isinstance(it, dict) and it.get("module"))
                 if specs and not any(member_resolved.get(s) for s in specs):
                     gaps.append({
                         "type": "business_gap",
@@ -806,8 +810,8 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
                 for it in items:
                     spec = it.get("module", "") if isinstance(it, dict) else ""
                     if spec and spec not in member_resolved:
-                        mm = _match_module_ids(nodes, project_path, [spec], idx=mod_index)
-                        member_resolved[spec] = bool(mm)
+                        member_resolved[spec] = _module_exists(
+                            project_path, spec, nodes, idx=mod_index)
     gaps.extend(_detect_business_gaps(flows, role_has_impl, member_resolved))
 
     # 汇总

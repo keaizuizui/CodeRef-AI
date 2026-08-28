@@ -103,6 +103,12 @@ def _is_test_path(rel_path: str) -> bool:
     return top in ("test", "tests")
 
 
+def _top_package(mod: str) -> str:
+    """模块相对路径的顶层父包（route/gin → route）；无层级（纯顶层模块）时返回自身。"""
+    part = mod.replace("\\", "/").split("/", 1)[0]
+    return part or mod
+
+
 def build_module_graph(nodes: Dict[str, dict],
                        adj: Dict[str, List[str]],
                        project_path: str = "") -> Dict[str, List[str]]:
@@ -651,7 +657,17 @@ def audit(project_path: str, db_path: str = None,
 
     # 1) 循环依赖（模块级 SCC：模块间真循环 + 模块内自环分流，自环不扣健康分）
     module_cycles, self_loops = _find_cycles(mod_adj, self_edges, sc_min)
-    result["cycles"] = module_cycles
+    # O-C3：同顶层父包的子包互引（如 route/gin↔route/client_side↔route/chat_claw）在业务上
+    #   属同一模块/层内部的组件纠缠，而非"跨模块"真环。把这类"包内子组件环"从跨模块真环
+    #   分拣出来单独透出（package_cycles），不计入 health 扣分的跨模块环集合；跨顶层包真环
+    #   仍保留在 cycles 照常扣分，保留真实耦合信息。
+    package_cycles = []
+    cross_cycles = []
+    for comp in module_cycles:
+        pkgs = {_top_package(m) for m in comp}
+        (package_cycles if len(pkgs) == 1 else cross_cycles).append(comp)
+    result["cycles"] = cross_cycles
+    result["package_cycles"] = package_cycles
     result["self_loops"] = self_loops
 
     # 2) 扇出 / 扇入 + 上帝模块（结合模块规模综合判定）

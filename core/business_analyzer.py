@@ -1212,30 +1212,44 @@ def _hier_filter_modules(all_modules) -> set:
     return filtered_modules
 
 
-def _hier_entry_modules(all_modules, out_degree, in_degree) -> set:
-    """识别入口模块：出度 > 入度（V7.1 收紧阈值 1.5→2.0）或路径含 web/gui 等"""
+# ── ②：入口/基础设施模块判据阈值（可配置，通用依据，不为单一项目特例收死）──
+#   判据本质是"调用失衡度"：入口模块出度显著高于入度（对外调度/被调用少），基础设施模块
+#   入度显著高于出度（被广泛复用）。用「失衡比值」表达，默认 2.0（出/入度相差 2 倍以上
+#   即倾向该层），属通用"显著失衡"判据；调用方遇具体项目形态可传参覆盖，避免项目语义
+#   硬化进工具（此前为避开某业务模块 8/5 特例把入口比 1.5→2.0 收死，现改为显式可配）。
+ENTRY_DEGREE_RATIO = 2.0
+INFRA_DEGREE_RATIO = 2.0
+INFRA_MIN_DEGREE = 2
+
+
+def _hier_entry_modules(all_modules, out_degree, in_degree,
+                        ratio: float = ENTRY_DEGREE_RATIO) -> set:
+    """识别入口模块：出度 > 入度 × ratio（对外调度失衡）或路径含 web/gui 等入口特征。"""
     # 入口模块特征：出度 > 入度（调用别人多，被调用少）+ 路径包含 web/gui
     entry_keywords = {'web', 'gui', 'app', 'frontend', 'ui', 'client'}
     entry_modules = set()
     for m in all_modules:
         m_lower = m.lower()
         is_entry_path = any(kw in m_lower for kw in entry_keywords)
-        # V7.1: 收紧阈值 1.5→2.0，避免业务模块（如分析中心 8/5）被误判为入口
-        is_entry_degree = out_degree.get(m, 0) > in_degree.get(m, 0) * 2.0
+        # 调用失衡度判据：出度 > 入度 × ratio（默认 2.0，显著失衡）
+        is_entry_degree = out_degree.get(m, 0) > in_degree.get(m, 0) * ratio
         if is_entry_path or is_entry_degree:
             entry_modules.add(m)
     return entry_modules
 
 
-def _hier_infra_modules(all_modules, out_degree, in_degree) -> set:
-    """识别基础设施模块：入度 >> 出度（被调用多）或路径含 shared/common 等"""
+def _hier_infra_modules(all_modules, out_degree, in_degree,
+                        ratio: float = INFRA_DEGREE_RATIO,
+                        min_degree: int = INFRA_MIN_DEGREE) -> set:
+    """识别基础设施模块：入度 > 出度 × ratio 且入度 ≥ min_degree（被广泛复用）。"""
     # 基础设施模块特征：入度 >> 出度（被调用多，调用别人少）+ 路径包含 shared/common/core/config
     infra_keywords = {'shared', 'common', 'core', 'config', 'util', 'base', 'lib'}
     infra_modules = set()
     for m in all_modules:
         m_lower = m.lower()
         is_infra_path = any(kw in m_lower for kw in infra_keywords)
-        is_infra_degree = in_degree.get(m, 0) > out_degree.get(m, 0) * 2 and in_degree.get(m, 0) >= 2
+        is_infra_degree = in_degree.get(m, 0) > out_degree.get(m, 0) * ratio \
+            and in_degree.get(m, 0) >= min_degree
         if is_infra_path or is_infra_degree:
             infra_modules.add(m)
     return infra_modules

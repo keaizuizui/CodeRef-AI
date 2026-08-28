@@ -213,6 +213,8 @@ def validate_target_arch(arch: Any) -> Tuple[bool, List[str]]:
 
         # ：branches[].to 必须能在本 flow 的 steps 中找到（在全部 step 收集后统一校验）
         for step in steps:
+            if not isinstance(step, dict):
+                continue
             for k, br in enumerate(step.get("branches") or []):
                 if not isinstance(br, dict) or not isinstance(br.get("to"), str):
                     continue
