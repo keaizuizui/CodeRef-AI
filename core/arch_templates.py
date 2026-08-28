@@ -11,10 +11,14 @@ import re
 # 顶层通用/非业务目录（识别业务模块、判定项目形态时排除）
 # 说明：除框架/基础设施目录外，也含“输出/报告/制品”类目录——这类目录是工具
 # 或构建的产物而非业务源码，detect/[业务模块] 不应把它们当业务模块。
+# 本集合同时用于 _expand_module_specs 的**递归级跳过**（detect 初稿展开时，
+# 任意深度下的 vendor/node_modules/venv/logs/data/volumes/public 等依赖/产物
+# 目录一律不当作业务模块递归展开，防初稿 target_modules 膨胀成 1000+ 条垃圾 spec）。
 _COMMON_DIRS = {
     "tests", "test", "docs", "doc", "config", "conf", "data", "output", "out",
     "scripts", "script", "archive", "backup", "_备份", "uploads", "templates",
-    "static", "media", "assets", "venv", "node_modules", "__pycache__",
+    "static", "media", "assets", "venv", "vendor", "node_modules", "public",
+    "volumes", "__pycache__",
     "third_party", "migrations", "wiki", "knowledge", "logs", "cache", "tmp",
     "temp", "reports", "dist", "build", "knowledge_base", "知识库", "projects",
     "checkpoints", ".checkpoints",
@@ -185,8 +189,11 @@ def _expand_module_specs(project_path: str, top_dir: str, max_depth: int = 5) ->
     消费方匹配是精确匹配 + basename 兜底，目录前缀无法直接命中子路径模块，故把
     目录下的子包（含 __init__.py 的目录）与 .py 模块递归收集为模块级相对路径。
     top_dir 本身也保留（作为覆盖锚点，且它通常物理存在，不产生 missing）。
-    跳过 __init__.py/__main__.py/conftest.py/setup.py、隐藏目录与 test/tests 目录，
-    避免污染。
+    跳过 __init__.py/__main__.py/conftest.py/setup.py、隐藏目录、test/tests 目录，
+    以及任意深度下的依赖/产物目录（_COMMON_DIRS：vendor/node_modules/venv/logs/
+    data/volumes/public 等）——后者是 目标项目 detect 初稿膨胀成 1000+ 条
+    target_modules 的根因（php/vendor、front-end/*/public/libs、*/*/logs、volumes
+    被当业务模块递归展开），避免污染。
     """
     specs = [top_dir]
     try:
@@ -207,7 +214,13 @@ def _expand_module_specs(project_path: str, top_dir: str, max_depth: int = 5) ->
             full_e = os.path.join(full, e)
             rel_e = f"{rel}/{e}"
             if os.path.isdir(full_e):
-                if e in ("test", "tests"):
+                if e in ("test", "tests") or _is_common_dir(e):
+                    continue
+                # libs 依赖启发：libs 目录内的 npm 包子目录（直接含 package.json）→ 跳过。
+                # 不全局禁 libs（目标项目 的 libs 是业务子仓），只跳过 libs 内第三方 npm 包
+                # （如 front-end/*/src/libs/fetch-event-source，防其 lib/cjs/esm 子树展开）。
+                if (rel.split("/")[-1].lower() == "libs"
+                        and os.path.exists(os.path.join(full_e, "package.json"))):
                     continue
                 specs.append(rel_e)
                 if depth < max_depth:
