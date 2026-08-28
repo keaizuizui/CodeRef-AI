@@ -534,6 +534,15 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 >   self_loop"，避免把同文件线性调用 a()→b()→c() 误报为模块自环；② **Minor**——no_code 判定
 >   由 `len(nodes)==0` 改为"是否存在非 test 模块"，图谱只剩 test/tests 节点时不再误给满分 10.0
 >   而判"无代码可评"。合成验证 9 项全 PASS、`py_compile` 过；`self_loops` 口径更精确（去掉线性误报）。
+> - **role_boundary 输出面细化（`core/role_boundary.py`）**：① definition 越界仅报**顶层类/
+>   函数**（方法名是行为描述如 `_llm_edit`，非职责单元声明，方法级撞词全部归入 `call_hints`
+>   弱信号，消除"类名撞词→类+全部方法刷屏"，如 `CheckpointManager` 曾 9 连报）；② 修复
+>   `role_matchable` 计算后未接入 `def_hits` 的缺陷——role_keywords 全为中文（无法 token 化
+>   提供英文锚点）的角色不判 definition，消除 business 模块因 `engine`/`research` 等跨语言
+>   撞词的整模块误报；③ `call_hints` 通道降权 `error`/`logging` 支撑词（异常/日志属通用机制，
+>   纯支撑词命中不构成跨角色提示）。working 实测：boundary_issues 200→3（仅剩 service 层
+>   重复实现 code 层 checkpoint/chart 能力的真信号），call_hints 187→133（纯 error 撞词
+>   清零）；目标产品 验收场景（waiter.cook→chef 越界）保持 PASS、本角色符号不误报。
 > - **版本号**：5.7.1 → 5.8.0（minor，业务层表达力扩展 + O-C3 口径 + ② 去 overfit）。
 
 ### v5.7.1 — 架构判据口径校准：tests 排除 + 基础设施层归属 + detect 粒度/role_boundary 泛词/入口游离（新代码验收观察点）
