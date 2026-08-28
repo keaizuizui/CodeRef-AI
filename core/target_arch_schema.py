@@ -145,6 +145,81 @@ def validate_target_arch(arch: Any) -> Tuple[bool, List[str]]:
                     if rid not in role_ids:
                         errors.append(
                             f"business_flows[{i}].steps[{j}] 引用了未定义的角色: {rid}")
+            # ──  业务层表达力扩展（方案 A + 演进槽位；全部可选，向后兼容）──
+            # kind：阶段/普通步骤标记（缺省=普通 step，旧语义不变）
+            kind = step.get("kind")
+            if kind is not None and kind not in ("phase", "step", ""):
+                errors.append(
+                    f"business_flows[{i}].steps[{j}].kind 必须为 'phase'|'step'|空（当前 {kind!r}）")
+            # sub_module_refs：阶段内子模块/适配器矩阵挂载（成员），
+            #   每项 = {module, role?, alias?, kind?, note?}（模块项）
+            #        或 {group, items:[...]}（演进槽位：子分组，本轮仅校验结构，不参与渲染）
+            refs = step.get("sub_module_refs")
+            if refs is not None:
+                if not isinstance(refs, list):
+                    errors.append(
+                        f"business_flows[{i}].steps[{j}].sub_module_refs 必须是数组")
+                else:
+                    for k, ref in enumerate(refs):
+                        if not isinstance(ref, dict):
+                            errors.append(
+                                f"business_flows[{i}].steps[{j}].sub_module_refs[{k}] 必须是对象")
+                            continue
+                        if "group" in ref:
+                            # 演进槽位：子分组，要求 items 为对象数组
+                            items = ref.get("items")
+                            if not isinstance(items, list) or not all(
+                                    isinstance(it, dict) and isinstance(it.get("module", ""), str)
+                                    and it.get("module") for it in items):
+                                errors.append(
+                                    f"business_flows[{i}].steps[{j}].sub_module_refs[{k}].group"
+                                    f" 必须有非空对象数组 items（每项含非空 module）")
+                        else:
+                            mod = ref.get("module")
+                            if not isinstance(mod, str) or not mod.strip():
+                                errors.append(
+                                    f"business_flows[{i}].steps[{j}].sub_module_refs[{k}].module"
+                                    f" 必须是非空字符串")
+                            if "role" in ref and (not isinstance(ref["role"], str) or not ref["role"].strip()):
+                                errors.append(
+                                    f"business_flows[{i}].steps[{j}].sub_module_refs[{k}].role"
+                                    f" 必须是非空字符串")
+                            if "kind" in ref and ref["kind"] not in ("adapter", "module"):
+                                errors.append(
+                                    f"business_flows[{i}].steps[{j}].sub_module_refs[{k}].kind"
+                                    f" 必须为 'adapter'|'module'")
+            # branches：分支/回环条件边（step→step）；to 指向同 flow 另一 step id
+            branches = step.get("branches")
+            if branches is not None:
+                if not isinstance(branches, list):
+                    errors.append(
+                        f"business_flows[{i}].steps[{j}].branches 必须是数组")
+                else:
+                    for k, br in enumerate(branches):
+                        if not isinstance(br, dict):
+                            errors.append(
+                                f"business_flows[{i}].steps[{j}].branches[{k}] 必须是对象")
+                            continue
+                        if not isinstance(br.get("to"), str) or not br["to"]:
+                            errors.append(
+                                f"business_flows[{i}].steps[{j}].branches[{k}].to 必须是非空字符串")
+                        if "type" in br and br["type"] not in ("loop", "if", "fallback"):
+                            errors.append(
+                                f"business_flows[{i}].steps[{j}].branches[{k}].type"
+                                f" 必须为 'loop'|'if'|'fallback'")
+                        if not isinstance(br.get("condition", ""), str):
+                            errors.append(
+                                f"business_flows[{i}].steps[{j}].branches[{k}].condition 必须是字符串")
+
+        # ：branches[].to 必须能在本 flow 的 steps 中找到（在全部 step 收集后统一校验）
+        for step in steps:
+            for k, br in enumerate(step.get("branches") or []):
+                if not isinstance(br, dict) or not isinstance(br.get("to"), str):
+                    continue
+                if br["to"] not in step_ids:
+                    errors.append(
+                        f"business_flows[{i}].steps[{step.get('id','')}].branches[{k}].to"
+                        f" 引用了本 flow 中不存在的步骤 id: {br['to']}")
 
     # constraints
     constraints = arch.get("constraints")

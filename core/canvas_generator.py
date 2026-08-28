@@ -118,18 +118,32 @@ class ArchCanvas:
         mod_node_id: Dict[str, str] = {}  # 模块名 → 画布节点 id
 
         # ── 1. 业务步骤节点（业务层）──
+        # ：kind=="phase" 渲染为阶段分组（🎯 附阶段序号徽章），与普通 step(📈) 视觉区分
+        session_step_counter: Dict[str, int] = {}
         for f in flows:
+            fid = f.get("id", "")
+            seq = 0
             for st in f.get("steps", []):
-                nid = f"step:{f.get('id', '')}:{st.get('id', '')}"
+                sid = st.get("id", "")
+                kind = st.get("kind", "")
+                if kind == "phase":
+                    seq += 1
+                nid = f"step:{fid}:{sid}"
                 canvas_nodes.append({
                     "id": nid, "type": "step",
-                    "label": st.get("name", st.get("id", "")),
-                    "icon": "📈", "color": "#10B981", "layer": "业务层",
+                    "label": st.get("name", sid),
+                    "icon": "🎯" if kind == "phase" else "📈",
+                    "color": "#10B981" if kind == "phase" else "#B7E6CD",
+                    "layer": "业务层",
                     "props": {
-                        "flow": f.get("name", f.get("id", "")),
+                        "flow": f.get("name", fid),
                         "tech_roles": st.get("tech_roles", []),
+                        "kind": kind,
+                        "phase_no": seq if kind == "phase" else 0,
+                        "branches": st.get("branches", []),
                     },
                 })
+                session_step_counter[nid] = 1
 
         # ── 2. 角色节点（技术层）+ 角色→模块归属 ──
         role_modules: Dict[str, List[str]] = {}
@@ -161,6 +175,38 @@ class ArchCanvas:
                 "label": m, "icon": "🧩", "color": "#3B82F6", "layer": "代码层",
                 "props": {"file": n.get("file_path", "")},
             })
+
+        # ── 3.1 ：阶段成员矩阵强制纳入可视图 + member/branch 边 ──
+        # sub_module_refs 引用的成员（子模块/适配器）沿其所属阶段被拉进可视图，
+        # 即使图谱无独立模块节点，也补一个"成员占位"节点，消解"适配器命中 0"。
+        for f in flows:
+            fid = f.get("id", "")
+            for st in f.get("steps", []):
+                sid = st.get("id", "")
+                step_nid = f"step:{fid}:{sid}"
+                # 阶段→成员 membership 边（成员命中图谱模块或占位）
+                for ref in st.get("sub_module_refs") or []:
+                    if "group" in ref:  # 演进槽位：子分组本轮只透传，不展开渲染
+                        for it in ref.get("items") or []:
+                            self._emit_member_member(project_path, nodes, mod_node_id,
+                                                     canvas_nodes, canvas_edges,
+                                                     step_nid, fid, sid, it)
+                    else:
+                        self._emit_member_member(project_path, nodes, mod_node_id,
+                                                 canvas_nodes, canvas_edges,
+                                                 step_nid, fid, sid, ref)
+                # 分支/回环条件边（step→step，虚线）
+                for br in st.get("branches") or []:
+                    to_sid = br.get("to", "")
+                    to_nid = f"step:{fid}:{to_sid}"
+                    if not to_sid or to_sid == sid:
+                        continue
+                    canvas_edges.append({
+                        "id": f"e:branch:{fid}:{sid}:{br.get('type','loop')}:{to_sid}",
+                        "from": step_nid, "to": to_nid,
+                        "label": br.get("condition", ""),
+                        "type": "branch", "color": "#F472B6", "dashed": True,
+                    })
 
         # ── 4. 边 ──
         # 业务步骤 → 角色（mapping）
@@ -259,7 +305,9 @@ class ArchCanvas:
 
         # ── 6. meta ──
         legend = [
-            {"color": "#10B981", "label": "业务步骤"},
+            {"color": "#10B981", "label": "业务步骤（🎯=阶段分组）"},
+            {"color": "#14B8A6", "label": "阶段成员挂载"},
+            {"color": "#F472B6", "label": "分支/回环（条件边）"},
             {"color": "#8B5CF6", "label": "技术角色"},
             {"color": "#3B82F6", "label": "代码模块"},
             {"color": "#64748B", "label": "游离模块"},
@@ -286,3 +334,50 @@ class ArchCanvas:
                 "target_arch": target_arch,
             },
         }
+
+    def _emit_member_member(
+        self,
+        project_path: str,
+        nodes: Dict[str, dict],
+        mod_node_id: Dict[str, str],
+        canvas_nodes: List[dict],
+        canvas_edges: List[dict],
+        step_nid: str,
+        fid: str,
+        sid: str,
+        ref: dict,
+    ) -> None:
+        """阶段成员（子模块/适配器）→ 代码层节点 membership 边（）。
+
+        ref = {"module": 相对路径, "role": optional, "alias": optional,
+               "kind": "adapter"|"module", "note": optional}
+        成员命中图谱模块则以 cite 连接；若 mod_node_id 无该模块（如适配器类
+        无独立 module 节点），补一个"成员占位"节点强制纳入可视图，消解命中 0。
+        """
+        spec = (ref.get("module") or "").strip()
+        if not spec:
+            return
+        # module spec（相对路径/basename）优先精确命中已建 mod 节点
+        target_id = None
+        for m, mid in mod_node_id.items():
+            if m == spec or m.endswith("/" + spec) or spec.endswith("/" + m):
+                target_id = mid
+                break
+        if target_id is None:
+            # 图谱无该模块节点（适配器类常如此）→ 补占位节点，强制入视图
+            placeholder = f"mod:{spec}"
+            if placeholder not in mod_node_id.values():
+                canvas_nodes.append({
+                    "id": placeholder, "type": "module",
+                    "label": ref.get("alias") or spec,
+                    "icon": "🧩", "color": "#94A3B8", "layer": "代码层",
+                    "props": {"placeholder": True, "desc": ref.get("note", "阶段成员（占位）")},
+                })
+                mod_node_id.setdefault(spec, placeholder)
+            target_id = placeholder
+        canvas_edges.append({
+            "id": f"e:member:{fid}:{sid}:{spec}",
+            "from": step_nid, "to": target_id,
+            "label": ref.get("note") or ref.get("alias") or "",
+            "type": "member", "color": "#14B8A6", "dashed": True,
+        })
