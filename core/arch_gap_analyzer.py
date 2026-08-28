@@ -350,8 +350,15 @@ def _detect_dependency_violations(nodes: Dict[str, dict],
 
 
 def _detect_business_gaps(flows: List[dict],
-                          role_has_impl: Dict[str, bool]) -> List[dict]:
-    """业务断链：业务步骤关联的所有角色都无有效代码实现。"""
+                          role_has_impl: Dict[str, bool],
+                          member_resolved: Optional[Dict[str, bool]] = None,
+                          ) -> List[dict]:
+    """业务断链：业务步骤关联的所有角色都无有效代码实现。
+
+    member_resolved 可选（）：sub_module_refs 成员 spec → 是否在项目中实现。
+    当提供且某 step 声明了成员但全部成员均无实现时，追加"阶段内成员缺失"提示，
+    使画布能暴露"阶段→实现"链上的断链，而不只是角色级断链。
+    """
     gaps = []
     for flow in flows:
         fid = flow.get("id", "")
@@ -371,6 +378,23 @@ def _detect_business_gaps(flows: List[dict],
                     "detail": (f"业务步骤 '{step.get('name', '')}' 关联的角色 "
                                f"{roles} 均无有效代码实现"),
                 })
+            # ：阶段内成员矩阵断链（sub_module_refs 全部无实现）
+            if member_resolved:
+                refs = step.get("sub_module_refs") or []
+                specs = [r.get("module") for r in refs
+                         if isinstance(r, dict) and r.get("module")]
+                if specs and not any(member_resolved.get(s) for s in specs):
+                    gaps.append({
+                        "type": "business_gap",
+                        "severity": SEVERITY["business_gap"],
+                        "flow_id": fid,
+                        "step_id": step.get("id", ""),
+                        "step_name": step.get("name", ""),
+                        "roles": roles,
+                        "member_missing": True,
+                        "detail": (f"阶段 '{step.get('name', '')}' 声明的阶段内成员 "
+                                   f"{specs} 均无有效代码实现（阶段→实现断链）"),
+                    })
     return gaps
 
 
@@ -771,7 +795,20 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
         })
 
     # 7) 业务断链
-    gaps.extend(_detect_business_gaps(flows, role_has_impl))
+    # ：解析 sub_module_refs 成员是否实现，供阶段内成员断链判定
+    member_resolved: Dict[str, bool] = {}
+    for flow in flows:
+        for step in flow.get("steps", []):
+            for ref in step.get("sub_module_refs") or []:
+                if not isinstance(ref, dict):
+                    continue
+                items = ref.get("items") or [] if "group" in ref else [ref]
+                for it in items:
+                    spec = it.get("module", "") if isinstance(it, dict) else ""
+                    if spec and spec not in member_resolved:
+                        mm = _match_module_ids(nodes, project_path, [spec], idx=mod_index)
+                        member_resolved[spec] = bool(mm)
+    gaps.extend(_detect_business_gaps(flows, role_has_impl, member_resolved))
 
     # 汇总
     by_sev = {"high": 0, "medium": 0, "low": 0}

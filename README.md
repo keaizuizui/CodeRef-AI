@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.7.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.8.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -491,6 +491,30 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.8.0 — 业务层表达力扩展：阶段分组 × 子模块/适配器矩阵 × 分支回环（ 落地）
+
+> 承接 （画布/目标架构对"多阶段流程 × 模块/适配器矩阵"复杂架构呈现清晰度不足）：
+> working 调研工具真实流程是 8 阶段、阶段内含子模块矩阵、含众多分支回环决策点，而原
+> `business_flows.steps` 仅 `{id,name}`，无法承载"阶段×子项矩阵 + 回环"这类高密度业务架构。
+> 本版把业务层表达力从"线性 step"扩展为"阶段分组 + 成员矩阵 + 条件回环"，让画布能呈现
+> 真实架构主干而非 4 步粗主干。
+> - **schema 扩展（`core/target_arch_schema.py`）**：`steps[].kind`（`phase` 阶段/普通 step）、
+>   `sub_module_refs`（阶段→子模块/适配器成员挂载，成员含 `module`/`role`/`alias`/`kind`/
+>   `note`）、`branches`（step→step 条件/回环边，含 `to`/`type:loop|if|fallback`/`condition`）。
+>   `sub_module_refs` 预留 `group` 嵌套槽位（子分组演进接口）；全部可选，`REQUIRED_STEP_KEYS`
+>   保持 `{id,name}` 不动 → 旧 target_arch 零新增错误、向后兼容。
+> - **画布渲染（`core/canvas_generator.py`）**：`kind=="phase"` 渲染为阶段分组（🎯 + 阶段序号
+>   徽章），与普通 step（📈）视觉区分；`sub_module_refs` 成员沿所属阶段拉进可视图——命中图谱
+>   模块直连、图谱无独立节点的适配器类补"成员占位"节点强制纳入（消解"5 个搜索 Adapter 命中 0"）；
+>   `branches` 绘制粉色虚线回环/条件边（label=condition）。图例新增"阶段成员挂载/分支回环"。
+> - **business_gap 成员断链（`core/arch_gap_analyzer.py`）**：`_detect_business_gaps` 新增可选
+>   `member_resolved` 参数，主流程解析 `sub_module_refs` 成员是否实现，阶段声明成员全无实现时
+>   追加"阶段→实现断链"提示（`member_missing`），不只是角色级断链。
+> - **自证与回归**：合成验证 8 项全 PASS（schema 合法/非法校验、阶段分组节点、成员占位、
+>   分支回环边、成员挂载边、成员断链）；旧 target_arch 渲染路径不变，/14/30/31/32/33
+>   不劣化。
+> - **版本号**：5.7.1 → 5.8.0（minor，业务层表达力扩展新功能）。
 
 ### v5.7.1 — 架构判据口径校准：tests 排除 + 基础设施层归属 + detect 粒度/role_boundary 泛词/入口游离（新代码验收观察点）
 
