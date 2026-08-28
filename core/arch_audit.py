@@ -306,8 +306,23 @@ def _large_modules(nodes: dict, project_path: str, ls_t: int) -> list:
         key=lambda x: -x["symbols"])
 
 
-def _health_summary(cycles: list, god: list, layer_viol: list, large: list) -> dict:
-    """架构健康度（0-10）：循环/上帝模块/分层违例/异常规模扣分。"""
+def _health_summary(cycles: list, god: list, layer_viol: list, large: list,
+                    no_code: bool = False) -> dict:
+    """架构健康度（0-10）：循环/上帝模块/分层违例/异常规模扣分。
+
+    O-D2：当项目无任何代码模块（知识图谱 nodes=0，纯文档+少量脚本项目
+    常见）时健康度"不适用"。此时 health 置 None、health_label 置"无代码"，
+    并附加 status 提示"无代码可评"，避免"空项目得分满分 10.0"掩盖
+    "项目为空 / 尚未完成代码建图"的真实信息。该分支不影响 nodes>0 的
+    正常评分逻辑（no_code=False 时行为与原实现完全一致）。
+    """
+    if no_code:
+        return {
+            "health": None, "health_label": "无代码",
+            "cycles": len(cycles), "god_modules": len(god),
+            "layer_violations": len(layer_viol), "large_modules": len(large),
+            "status": "无代码可评（知识图谱 nodes=0，无代码模块；健康度不适用）",
+        }
     score = 10.0
     score -= min(6.0, len(cycles) * ARCH_HEALTH_WEIGHT_CYCLE)
     score -= min(2.0, len(god) * ARCH_HEALTH_WEIGHT_GOD)
@@ -659,8 +674,11 @@ def audit(project_path: str, db_path: str = None,
     result["identity"] = _identity_briefing(project_path, db)
 
     # 6) 架构健康度（0-10）
+    # O-D2：图谱无任何代码节点（nodes=0）时健康度"不适用"，summary 标注"无代码可评"，
+    #       health=null 而非满分 10.0，避免空项目得高分掩盖"项目为空/未建图"的真实信息。
     result["summary"] = _health_summary(
-        result["cycles"], result["god_modules"], layer_viol, result["large_modules"])
+        result["cycles"], result["god_modules"], layer_viol, result["large_modules"],
+        no_code=(len(nodes) == 0))
     result["summary"]["function_recursions"] = len(result["function_recursions"])
     result["summary"]["self_loops"] = len(self_loops)
     result["identity_count"] = len(result["identity"])

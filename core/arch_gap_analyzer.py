@@ -80,13 +80,18 @@ def _is_exempt_module(module_name: str) -> bool:
 def _is_test_module(module_name: str) -> bool:
     """判断模块是否属于测试代码（架构对齐的目标是生产代码，测试默认排除）。
 
-    判定规则：相对路径含 /tests/ 或 tests/ 开头；模块名以 test_ 开头或 _test 结尾。
+    判定规则：相对路径含 /tests/ 或 tests/ 开头；模块名以 test_ 开头或 _test 结尾；
+    前端（JS/TS）测试命名补充：basename 含 .test.（如 lineMapping.test.js、foo.test.js）
+    或以 .test 结尾（如 foo.test）同样判定为测试模块，与 Python tests/ 口径对齐，
+    避免前端单测文件被误报为游离模块。
     """
     m = (module_name or "").replace("\\", "/")
     if "/tests/" in m or m.startswith("tests/"):
         return True
     base = m.split("/")[-1]
-    return base.startswith("test_") or base.endswith("_test")
+    if base.startswith("test_") or base.endswith("_test"):
+        return True
+    return ".test." in base or base.endswith(".test")
 
 
 def _is_entry_script(module_name: str) -> bool:

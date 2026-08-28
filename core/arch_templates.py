@@ -185,7 +185,8 @@ def _expand_module_specs(project_path: str, top_dir: str, max_depth: int = 5) ->
     消费方匹配是精确匹配 + basename 兜底，目录前缀无法直接命中子路径模块，故把
     目录下的子包（含 __init__.py 的目录）与 .py 模块递归收集为模块级相对路径。
     top_dir 本身也保留（作为覆盖锚点，且它通常物理存在，不产生 missing）。
-    跳过 __init__.py/__main__.py/conftest.py/setup.py 与隐藏目录，避免污染。
+    跳过 __init__.py/__main__.py/conftest.py/setup.py、隐藏目录与 test/tests 目录，
+    避免污染。
     """
     specs = [top_dir]
     try:
@@ -206,6 +207,8 @@ def _expand_module_specs(project_path: str, top_dir: str, max_depth: int = 5) ->
             full_e = os.path.join(full, e)
             rel_e = f"{rel}/{e}"
             if os.path.isdir(full_e):
+                if e in ("test", "tests"):
+                    continue
                 specs.append(rel_e)
                 if depth < max_depth:
                     walk(rel_e, depth + 1)
