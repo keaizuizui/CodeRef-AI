@@ -370,7 +370,9 @@ def _health_summary(cycles: list, god: list, layer_viol: list, large: list,
             "health": None, "health_label": "无代码",
             "cycles": len(cycles), "god_modules": len(god),
             "layer_violations": len(layer_viol), "large_modules": len(large),
-            "status": "无代码可评（知识图谱 nodes=0，无代码模块；健康度不适用）",
+            # Minor(CodeRabbit 复审)：no_code 也可能源于图谱只剩 test/tests 模块（nodes>0），
+            # 不能声称 nodes=0。统一表述为"无非测试代码模块（测试模块除外）"。
+            "status": "无代码可评（无非测试代码模块；健康度不适用）",
         }
     score = 10.0
     score -= min(6.0, len(cycles) * ARCH_HEALTH_WEIGHT_CYCLE)
@@ -700,16 +702,13 @@ def audit(project_path: str, db_path: str = None,
 
     # 1) 循环依赖（模块级 SCC：模块间真循环 + 模块内自环分流，自环不扣健康分）
     module_cycles, self_loops = _find_cycles(mod_adj, self_edges, sc_min)
-    # O-C3：同顶层父包的子包互引（如 route/gin↔route/client_side↔route/chat_claw）在业务上
-    #   属同一模块/层内部的组件纠缠，而非"跨模块"真环。把这类"包内子组件环"从跨模块真环
-    #   分拣出来单独透出（package_cycles），不计入 health 扣分的跨模块环集合；跨顶层包真环
-    #   仍保留在 cycles 照常扣分，保留真实耦合信息。
-    package_cycles = []
-    cross_cycles = []
-    for comp in module_cycles:
-        pkgs = {_top_package(m) for m in comp}
-        (package_cycles if len(pkgs) == 1 else cross_cycles).append(comp)
-    result["cycles"] = cross_cycles
+    # O-C3 + Major(CodeRabbit 复审)：同顶层父包的子包互引（如 route/gin↔route/client_side）
+    #  在业务上是同一模块/层内部的组件纠缠，单独透出为 package_cycles 作补充观察；
+    #  但它们仍是文件级的真实循环依赖，不能因同包就完全不扣健康分。因此把全部
+    #  module_cycles（含包内环）计入 cycles 参与扣分，package_cycles 仅作分类透出。
+    package_cycles = [comp for comp in module_cycles
+                      if len({_top_package(m) for m in comp}) == 1]
+    result["cycles"] = module_cycles
     result["package_cycles"] = package_cycles
     result["self_loops"] = self_loops
 
