@@ -8,9 +8,12 @@ role_boundary —— 符号级职责越界检测（5.2 升格实现，解决 5.0
 
 检测原理（确定性，零 LLM）：
   1. 模块 → 角色归属：按目标架构 tech_roles.target_modules 精确/basename 匹配。
-  2. 命名语义（definition 越界）：在归属角色 R 的模块 m 里，符号名（含类内方法）
-     命中"其他角色 X（X≠R）"的 role_keywords → 该符号疑似本属角色 X，却在 R 的
-     模块里实现。
+  2. 命名语义（definition 越界）：在归属角色 R 的模块 m 里，顶层类/函数名（职责
+     单元声明）命中"其他角色 X（X≠R）"的 role_keywords → 该符号疑似本属角色 X，
+     却在 R 的模块里实现。方法名是行为描述（_llm_edit / _generate_candidates）
+     而非职责单元声明，方法级撞词不判 definition（相关信息由 call_hints 承载）；
+     本角色 role_keywords 全为中文等无法 token 化的职责词时（无法为英文符号提供
+     锚点），判定全是跨语言撞词即噪音，同样不判 definition。
   3. 调用边界（call 越界提示）：模块 m(角色 R) 内符号调用了名字命中角色 X≠R
      关键词的函数 → 跨角色调用提示（比 definition 越界弱，标记为提示）。
 
@@ -41,7 +44,9 @@ def _tokens(name: str) -> List[str]:
     """把标识符拆成语义 token（snake_case / camelCase / PascalCase → 小写 token）。"""
     s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name or "")
     s = re.sub(r"(_+)", "_", s)
-    return [t.lower() for t in re.split(r"[^a-z0-9]+", s) if t]
+    # 分隔符必须含大写：若用 [^a-z0-9]+，PascalCase 首字母会被当成分隔符吃掉
+    # （TaskQueue → ['ask','ueue']），导致类名/大写词 token 损坏、角色关键词锚点失配。
+    return [t.lower() for t in re.split(r"[^a-zA-Z0-9]+", s) if t]
 
 
 def _keyword_tokens(kw: str) -> List[str]:
@@ -54,6 +59,10 @@ def _hits_keyword(sym_tokens: List[str], kw_tokens: List[str]) -> bool:
 
     命中规则（保守，防泛词误报）：
       - 关键词首 token 必须与符号的某个组成单元（token）整词相等。
+      - 多 token 关键词（task_scheduler / structured_output / deep_scraper）
+        要求"非首 token"也至少匹配一个，防只凭首 token 撞词
+        （get_task 命中 task_scheduler 的 task、chat_structured 命中
+        structured_output 的 structured 等误报）。
       - 不做子串 / 前缀匹配：token 切分（_ . 大写边界）已由 _tokens 完成，
         此处仅整词判等，避免泛词 app 命中 application、entry 命中 entrance
         等"同位但语义不同"的 token 造成误判。
@@ -61,7 +70,11 @@ def _hits_keyword(sym_tokens: List[str], kw_tokens: List[str]) -> bool:
     if not sym_tokens or not kw_tokens:
         return False
     head = kw_tokens[0]
-    return head in sym_tokens
+    if head not in sym_tokens:
+        return False
+    if len(kw_tokens) > 1 and not any(t in sym_tokens for t in kw_tokens[1:]):
+        return False
+    return True
 
 
 # 内置泛词/token 黑名单：命名过于泛化，难以作为强越界信号。
@@ -81,6 +94,17 @@ def _is_generic_token(tok: str) -> bool:
 def _all_matched_generic(kw_list: Optional[List[str]]) -> bool:
     """命中的关键词是否全部为泛词（用于低置信度降级）。"""
     return bool(kw_list) and all(_is_generic_token(k) for k in kw_list)
+
+
+# call 弱信号降权词：异常/日志等通用支撑词，任何层模块调用都属正常机制，
+# 不构成"跨角色职责纠缠"提示（仅影响 call_hints，不影响 definition 判定）。
+_CALL_DEWEIGHT_KEYWORDS = frozenset({"error", "logging"})
+
+
+def _all_matched_deweight(kw_matched: Optional[List[str]]) -> bool:
+    """命中的关键词是否全部为 call 降权支撑词（用于 call_hints 过滤）。"""
+    return bool(kw_matched) and all(k in _CALL_DEWEIGHT_KEYWORDS
+                                    for k in kw_matched)
 
 
 def _norm_spec(spec: str) -> str:
@@ -189,9 +213,10 @@ def _module_role(rel: str, spec_map: Dict[str, Dict[str, Any]]) -> Tuple[str, st
     role = spec_map.get(rel)
     if role:
         return role["id"], role["name"]
-    # basename 宽松匹配兜底
+    # basename 宽松兜底仅限"纯 basename spec（不含 /）"；带 / 的 spec 只精确匹配，
+    # 防 gptr_service/main 因 basename=main 误配到 web/web端/main（与 arch_gap 同源修复）。
     for spec, role in spec_map.items():
-        if spec.split("/")[-1] == base:
+        if "/" not in spec and spec == base:
             return role["id"], role["name"]
     return "", ""
 
@@ -211,6 +236,23 @@ def _match_suspected(sym_tokens: List[str], roles: List[Dict[str, Any]],
         if kw_matched:
             hits.append((rid, role, kw_matched[:3]))
     return hits
+
+
+def _hits_role_keywords(sym_tokens: List[str], role_id: str,
+                        roles: List[Dict[str, Any]]) -> bool:
+    """符号 token 是否命中指定角色（role_id）的任一 role_keywords。
+
+    用于"本角色锚点优先"：符号名命中自己所属角色的职责关键词时，说明符号语义
+    归属本角色；此时即便顺带命中其他角色同源词（task/config/llm 等高频通用词）
+    也只是撞词，不再判 definition 越界（保守防误报）。类名锚定则传导到类内方法。
+    """
+    for role in roles:
+        if role["id"] != role_id:
+            continue
+        for kw_tokens in role["kw_tokens"]:
+            if _hits_keyword(sym_tokens, kw_tokens):
+                return True
+    return False
 
 
 def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
@@ -240,8 +282,9 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
         "graph_stats": {},
         "arch": {"role_count": 0, "keyword_roles": []},
         "summary": {"modules_scanned": 0, "symbols_scanned": 0,
-                    "boundary_issues": 0, "by_role": {}},
+                    "boundary_issues": 0, "call_hints": 0, "by_role": {}},
         "boundary_issues": [],
+        "call_hints": [],          # cross_role_call 弱信号（独立通道，不占越界主输出）
         "semantic_note": None,
     }
     # 图谱仅用于 graph_stats 元数据；符号级检测基于 AST，图谱缺失不阻断扫描
@@ -296,6 +339,7 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
 
     # —— AST 扫描 ——
     issues: List[Dict[str, Any]] = []
+    hints: List[Dict[str, Any]] = []   # cross_role_call 弱信号（独立通道，不占越界）
     modules_scanned = symbols_scanned = 0
     for path in _iter_py_files(project_path):
         rel = os.path.relpath(path, project_path).replace("\\", "/")
@@ -316,18 +360,49 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
         # 在此把符号当"职责越界"只会制造噪音，直接跳过未归属模块
         if not module_role_id:
             continue
+        # 本角色 role_keywords 是否含可匹配英文符号的 token。若全为中文等无法
+        # token 化的职责词（kw_tokens 全空），关键词体系无法为英文符号提供
+        # "本角色锚点"，definition 越界判定全是跨语言撞词（如 business 模块类名
+        # 含 engine/search 命中 service 关键词），报出即噪音 → 该模块不判 definition。
+        module_role_obj = next((r for r in roles if r["id"] == module_role_id),
+                               None)
+        role_matchable = bool(module_role_obj
+                              and any(kt for kt in module_role_obj["kw_tokens"]))
         syms = _scan_symbols(tree)
         if not syms:
             continue
         modules_scanned += 1
+        # 类锚点：类名命中本角色职责关键词（BrandMasterEngine 命中 business「品牌」）
+        # → 该类的方法视为本角色职责，锚点传导到方法（_init_llm 等不再误报越界）
+        anchored_classes = {s.name for s in syms if s.kind == "class"
+                            and _hits_role_keywords(s.keywords_defined,
+                                                    module_role_id, roles)}
         for sym in syms:
             symbols_scanned += 1
-            # definition 越界：符号定义名命中其他角色关键词
-            def_hits = _match_suspected(sym.keywords_defined, roles,
-                                        module_role_id)
+            # 本角色锚点优先：符号名命中本角色职责关键词（或为锚定类的方法）
+            # → 语义归属本角色；顺带命中其他角色同源词（task/config/llm）仅撞词
+            anchored = _hits_role_keywords(sym.keywords_defined,
+                                           module_role_id, roles)
+            if sym.kind == "method" and sym.name.split(".")[0] in anchored_classes:
+                anchored = True
+            # definition 越界（真越界）：仅顶层类/函数——符号定义名命中其他角色
+            # 关键词，且符号未命中本角色职责词锚点、本角色关键词可匹配英文符号。
+            # 方法名是行为描述（_llm_edit / _generate_candidates）而非职责单元声明，
+            # 方法级撞词几乎全是噪音，不判 definition（相关信息由 call_hints 承载）；
+            # role_matchable=False（中文关键词角色）无法为英文符号提供本角色锚点，
+            # 判定全是跨语言撞词即噪音，同样不判 definition。
+            if sym.kind == "method":
+                def_hits = []
+            else:
+                def_hits = ([] if anchored or not role_matchable
+                            else _match_suspected(sym.keywords_defined, roles,
+                                                  module_role_id))
             # call 越界提示：符号体内调用名命中其他角色关键词
-            call_hits = _match_suspected(list(sym.keywords_called), roles,
-                                         module_role_id)
+            # （跨角色调用是分层协作常态，降级为独立 call_hints 弱信号，不进主越界；
+            #   仅命中 error/logging 等支撑词的调用属通用机制，不构成提示，直接过滤）
+            call_hits = [h for h in _match_suspected(list(sym.keywords_called),
+                                                     roles, module_role_id)
+                         if not _all_matched_deweight(h[2])]
             matched = []
             signals = []
             suspected_id = suspected_name = ""
@@ -360,14 +435,17 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
             confidence = "low" if generic_hint else "high"
             generic_tail = ("；命中的均为泛词关键词，仅作低置信度提示，"
                             "非硬判职责越界" if generic_hint else "")
-            issue = {
+            is_definition = "keyword_definition" in signals
+            kind_label = "定义名" if is_definition else "调用名"
+            verdict = ("疑似职责越界" if is_definition
+                       else "跨角色调用提示（弱信号，非硬判）")
+            item = {
                 "symbol": sym.name,
                 "kind": sym.kind,
                 "module": mod_path,
                 "module_role_id": module_role_id,
                 "module_role_name": module_role_name,
-                "type": ("definition" if "keyword_definition" in signals
-                         else "call"),
+                "type": "definition" if is_definition else "call",
                 "suspected_role_id": suspected_id,
                 "suspected_role_name": suspected_name,
                 "matched_keywords": matched,
@@ -377,13 +455,15 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
                 "file_path": rel,
                 "line": sym.line,
                 "detail": (f"符号 {sym.name} 定义于 {rel}:{sym.line}（角色 "
-                           f"{module_role_name or '未归属'}），其职责关键词命中角色 "
-                           f"{suspected_name}（{matched}），疑似职责越界"
-                           f"{generic_tail}"),
+                           f"{module_role_name or '未归属'}），其{kind_label}命中角色 "
+                           f"{suspected_name}（{matched}），{verdict}{generic_tail}"),
             }
-            if len(issues) >= max_issues:
-                break
-            issues.append(issue)
+            if is_definition:
+                if len(issues) >= max_issues:
+                    break
+                issues.append(item)
+            elif len(hints) < max_issues:
+                hints.append(item)
         if len(issues) >= max_issues:
             break
 
@@ -398,14 +478,18 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
         by_role[rid] = by_role.get(rid, 0) + 1
 
     result["boundary_issues"] = issues
+    result["call_hints"] = hints
     result["summary"] = {
         "modules_scanned": modules_scanned,
         "symbols_scanned": symbols_scanned,
         "boundary_issues": len(issues),
+        "call_hints": len(hints),
         "by_role": by_role,
-        "message": ("符号级职责越界：符号定义/调用名命中非本模块角色的 "
-                    "role_keywords 即报出；semantic=False 时仅静态信号（"
-                    "uncertainty=high），不硬阻断。"),
+        "message": ("符号级职责越界：boundary_issues 仅报 definition 型真越界（顶层"
+                    "类/函数定义名命中非本角色 role_keywords，且未命中本角色职责词"
+                    "锚点、本角色关键词可匹配英文符号）；方法级撞词与跨角色调用是"
+                    "分层协作常态，降级为独立 call_hints 弱信号（不占越界主输出）。"
+                    "semantic=False 时仅静态信号（uncertainty=high），不硬阻断。"),
     }
     result["semantic_note"] = semantic_note
     result["ok"] = True
