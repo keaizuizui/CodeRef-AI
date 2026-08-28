@@ -529,6 +529,11 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 >   `ENTRY_DEGREE_RATIO/INFRA_DEGREE_RATIO/INFRA_MIN_DEGREE`（默认 2.0/2.0/2，即"出/入度
 >   相差 2 倍以上即倾向该层"的通用显著失衡判据），`_hier_entry_modules/_hier_infra_modules`
 >   可传参覆盖；注释不再引用单一项目业务名,消除工具对 working 的过拟合。
+> - **CodeRabbit 二轮修订（`arch_audit.py`，1 major + 1 minor）**：① **Major**——模块内自环
+>   判定由"模块内任意符号调用"改为"按符号建模块内子图，仅当符号自递归或形成环(SCC≥2)才标
+>   self_loop"，避免把同文件线性调用 a()→b()→c() 误报为模块自环；② **Minor**——no_code 判定
+>   由 `len(nodes)==0` 改为"是否存在非 test 模块"，图谱只剩 test/tests 节点时不再误给满分 10.0
+>   而判"无代码可评"。合成验证 9 项全 PASS、`py_compile` 过；`self_loops` 口径更精确（去掉线性误报）。
 > - **版本号**：5.7.1 → 5.8.0（minor，业务层表达力扩展 + O-C3 口径 + ② 去 overfit）。
 
 ### v5.7.1 — 架构判据口径校准：tests 排除 + 基础设施层归属 + detect 粒度/role_boundary 泛词/入口游离（新代码验收观察点）

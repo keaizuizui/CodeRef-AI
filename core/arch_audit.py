@@ -109,6 +109,20 @@ def _top_package(mod: str) -> str:
     return part or mod
 
 
+def _has_non_test_module(nodes: Dict[str, dict], project_path: str) -> bool:
+    """是否至少存在一个非测试模块（顶层 test/tests 目录之外）。
+
+    Minor(CodeRabbit)：no_code 若只看原始节点数，图谱里只剩 test/tests 节点时仍是
+    空转（架构指标已全排除测试），会误给满分 10.0 而非"无代码可评"。这里按"是否存在
+    非 test 模块"判定，与 build_module_graph 的测试排除口径对齐。
+    """
+    for n in nodes.values():
+        m = module_of(n, project_path)
+        if m and not _is_test_path(m):
+            return True
+    return False
+
+
 def build_module_graph(nodes: Dict[str, dict],
                        adj: Dict[str, List[str]],
                        project_path: str = "") -> Dict[str, List[str]]:
@@ -124,6 +138,11 @@ def build_module_graph(nodes: Dict[str, dict],
     """
     mod_adj: Dict[str, set] = defaultdict(set)
     self_edges: set = set()
+    # Major(CodeRabbit)：模块内"符号级"调用也可能是线性（a()→b()→c()）而非环，
+    # 不能把模块内任意调用都当自环。单独按符号建模块内子图，仅在模块内存在符号
+    # 直接自调用、或符号图形成环（SCC≥2）时，才标记为"模块内自环"。
+    intra_self: set = set()            # 模块名集合：存在符号直接自调用
+    intra_adj: Dict[str, Dict[str, set]] = defaultdict(lambda: defaultdict(set))
     for src, targets in adj.items():
         ms = module_of(nodes.get(src, {}), project_path)
         if not ms or _is_test_path(ms):
@@ -134,9 +153,33 @@ def build_module_graph(nodes: Dict[str, dict],
                 continue
             if mt != ms:
                 mod_adj[ms].add(mt)
+            elif tgt == src:
+                intra_self.add(ms)              # 符号直接调用自身 → 自环
             else:
-                self_edges.add(ms)
+                intra_adj[ms][src].add(tgt)     # 模块内符号级调用（剔除自调用边）
+    for m, s_adj in intra_adj.items():
+        if _has_symbol_cycle(s_adj):
+            self_edges.add(m)
+    self_edges |= intra_self
     return {m: sorted(t) for m, t in mod_adj.items()}, self_edges
+
+
+def _has_symbol_cycle(s_adj: Dict[str, set]) -> bool:
+    """模块内符号级有向图是否存在环（已剔自调用边）。Kahn 拓扑排序，剩余节点>0 即有环。"""
+    indeg = {v: 0 for v in s_adj}
+    for targets in s_adj.values():
+        for t in targets:
+            indeg[t] = indeg.get(t, 0) + 1
+    queue = [v for v, d in indeg.items() if d == 0]
+    removed = 0
+    while queue:
+        v = queue.pop()
+        removed += 1
+        for t in s_adj.get(v, ()):
+            indeg[t] -= 1
+            if indeg[t] == 0:
+                queue.append(t)
+    return removed < len(indeg)
 
 
 def _dfs_finish_order(adj: Dict[str, List[str]], all_nodes: set) -> List[str]:
@@ -694,7 +737,7 @@ def audit(project_path: str, db_path: str = None,
     #       health=null 而非满分 10.0，避免空项目得高分掩盖"项目为空/未建图"的真实信息。
     result["summary"] = _health_summary(
         result["cycles"], result["god_modules"], layer_viol, result["large_modules"],
-        no_code=(len(nodes) == 0))
+        no_code=not _has_non_test_module(nodes, project_path))
     result["summary"]["function_recursions"] = len(result["function_recursions"])
     result["summary"]["self_loops"] = len(self_loops)
     result["identity_count"] = len(result["identity"])
