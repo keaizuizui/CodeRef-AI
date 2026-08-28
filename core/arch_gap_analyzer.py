@@ -132,11 +132,17 @@ def _match_module_ids(nodes: Dict[str, dict], project_path: str,
         ns = _norm_spec(spec)
         if not ns:
             continue
+        # 含路径分隔符的 spec（模板展开出的模块级路径，如 domain/models）必须精确
+        # 匹配整条相对路径；仅纯 basename spec（legacy）保留 basename 宽松兜底。
+        # 否则 domain/models 的 basename 会误配到无关的 other/models（CodeRabbit）。
+        has_slash = "/" in ns
         base = ns.split("/")[-1]
         for nid, n in nodes.items():
             if n.get("type") != "module":
                 continue
-            if module_of(n, project_path) == ns or n.get("name") == base:
+            if module_of(n, project_path) == ns:
+                matched.add(nid)
+            elif (not has_slash) and n.get("name") == base:
                 matched.add(nid)
     return matched
 
@@ -211,6 +217,11 @@ def _detect_unassigned(nodes: Dict[str, dict], adj: Dict[str, List[str]],
             t_n = nodes.get(t, {})
             t_mod = module_of(t_n, project_path) if t_n.get("type") != "module" else (t_n.get("name") or "")
             if not src_mod or not t_mod or src_mod == t_mod:
+                continue
+            # 排除测试代码的调用边：测试调用不应影响生产模块的 fan_in / 入口 / 游离判定，
+            # 否则 test 调用的入口脚本会丢入口标记、被测试引用的孤儿会被误判为 unmodeled
+            #（与 core/arch_audit.py 的 tests 排除口径对齐，CodeRabbit）。
+            if _is_test_module(src_mod) or _is_test_module(t_mod):
                 continue
             called_mods[t_mod] = called_mods.get(t_mod, 0) + 1
 
