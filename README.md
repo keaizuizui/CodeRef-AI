@@ -540,7 +540,11 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 >   `role_matchable` 计算后未接入 `def_hits` 的缺陷——role_keywords 全为中文（无法 token 化
 >   提供英文锚点）的角色不判 definition，消除 business 模块因 `engine`/`research` 等跨语言
 >   撞词的整模块误报；③ `call_hints` 通道降权 `error`/`logging` 支撑词（异常/日志属通用机制，
->   纯支撑词命中不构成跨角色提示）。working 实测：boundary_issues 200→3（仅剩 service 层
+>   纯支撑词命中不构成跨角色提示）；④ **CodeRabbit 复审 3 发现修订**——本角色泛词关键词
+>   （service/manager 等）不再作为越界锚点（防 `PaymentService` 被泛词锚定压掉真实越界）、
+>   命中关键词保留完整文本（`service_client`/`error_handler` 不再被误判为纯泛词/纯 error
+>   支撑词而降权删除）、definition 与 call_hints 各自达到上限才停止扫描（上限互不压制）。
+>   working 实测：boundary_issues 200→3（仅剩 service 层
 >   重复实现 code 层 checkpoint/chart 能力的真信号），call_hints 187→133（纯 error 撞词
 >   清零）；目标产品 验收场景（waiter.cook→chef 越界）保持 PASS、本角色符号不误报。
 > - **版本号**：5.7.1 → 5.8.0（minor，业务层表达力扩展 + O-C3 口径 + ② 去 overfit）。

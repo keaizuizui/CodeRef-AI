@@ -92,8 +92,19 @@ def _is_generic_token(tok: str) -> bool:
 
 
 def _all_matched_generic(kw_list: Optional[List[str]]) -> bool:
-    """命中的关键词是否全部为泛词（用于低置信度降级）。"""
-    return bool(kw_list) and all(_is_generic_token(k) for k in kw_list)
+    """命中的关键词是否全部为泛词（用于低置信度降级）。
+
+    按完整关键词的所有 token 判断（service_client → [service, client] 含非泛词
+    client → 不降级；仅单 token 的 service 等纯泛词才降级），避免只取首 token
+    把 service_client 误判为纯泛词（CodeRabbit minor）。
+    """
+    if not kw_list:
+        return False
+    for kw in kw_list:
+        toks = _tokens(kw)
+        if not toks or not all(_is_generic_token(t) for t in toks):
+            return False
+    return True
 
 
 # call 弱信号降权词：异常/日志等通用支撑词，任何层模块调用都属正常机制，
@@ -102,9 +113,19 @@ _CALL_DEWEIGHT_KEYWORDS = frozenset({"error", "logging"})
 
 
 def _all_matched_deweight(kw_matched: Optional[List[str]]) -> bool:
-    """命中的关键词是否全部为 call 降权支撑词（用于 call_hints 过滤）。"""
-    return bool(kw_matched) and all(k in _CALL_DEWEIGHT_KEYWORDS
-                                    for k in kw_matched)
+    """命中的关键词是否全部为 call 降权支撑词（用于 call_hints 过滤）。
+
+    按完整关键词的所有 token 判断（error_handler → [error, handler] 含非降权词
+    handler → 不删除；仅 error / logging 纯支撑词才过滤），避免只取首 token
+    把 error_handler 误从 call_hints 删除（CodeRabbit minor）。
+    """
+    if not kw_matched:
+        return False
+    for kw in kw_matched:
+        toks = _tokens(kw)
+        if not toks or not all(t in _CALL_DEWEIGHT_KEYWORDS for t in toks):
+            return False
+    return True
 
 
 def _norm_spec(spec: str) -> str:
@@ -196,6 +217,7 @@ def _load_roles_with_keywords(target_arch: Dict[str, Any]) -> List[Dict[str, Any
             "id": r.get("id", ""),
             "name": r.get("name", r.get("id", "")),
             "keywords": kws,
+            "kw_texts": [str(k) for k in kws],   # 原始关键词文本（与 kw_tokens 索引对应）
             "kw_tokens": [_keyword_tokens(k) for k in kws],
             "target_modules": [x for x in (r.get("target_modules") or [])
                                if str(x).strip()],
@@ -223,33 +245,47 @@ def _module_role(rel: str, spec_map: Dict[str, Dict[str, Any]]) -> Tuple[str, st
 
 def _match_suspected(sym_tokens: List[str], roles: List[Dict[str, Any]],
                      module_role_id: str) -> List[Tuple[str, Dict[str, Any], List[str]]]:
-    """返回 (疑似角色id, 角色, 命中的关键词列表)。module_role 已剔除。"""
+    """返回 (疑似角色id, 角色, 命中的完整关键词列表)。module_role 已剔除。
+
+    命中关键词保留原始文本（service_client / error_handler 而非仅首 token），
+    供调用方做泛词/降权判定时按完整关键词的 token 判断（CodeRabbit minor：
+    只存首 token 会把 service_client 误判为纯泛词、把 error_handler 误判为
+    纯 error 支撑词而误删 call_hints）。
+    """
     hits = []
     for role in roles:
         rid = role["id"]
         if rid == module_role_id:        # 本角色自己的关键词不算越界
             continue
         kw_matched = []
-        for kw_tokens in role["kw_tokens"]:
+        for kw_text, kw_tokens in zip(role["kw_texts"], role["kw_tokens"]):
             if _hits_keyword(sym_tokens, kw_tokens):
-                kw_matched.append(kw_tokens[0])
+                kw_matched.append(kw_text)
         if kw_matched:
             hits.append((rid, role, kw_matched[:3]))
     return hits
 
 
 def _hits_role_keywords(sym_tokens: List[str], role_id: str,
-                        roles: List[Dict[str, Any]]) -> bool:
+                        roles: List[Dict[str, Any]],
+                        exclude_generic: bool = True) -> bool:
     """符号 token 是否命中指定角色（role_id）的任一 role_keywords。
 
     用于"本角色锚点优先"：符号名命中自己所属角色的职责关键词时，说明符号语义
     归属本角色；此时即便顺带命中其他角色同源词（task/config/llm 等高频通用词）
     也只是撞词，不再判 definition 越界（保守防误报）。类名锚定则传导到类内方法。
+    exclude_generic=True（默认）：整个关键词全为泛词（service/manager/...）时不产生
+    锚点——泛词命中是职责语义的最弱信号，若用它锚定（如本角色含 service 关键词，
+    PaymentService 即被 anchored），会在泛词降级前就压掉真实越界判定（CodeRabbit major）。
     """
     for role in roles:
         if role["id"] != role_id:
             continue
         for kw_tokens in role["kw_tokens"]:
+            if not kw_tokens:
+                continue
+            if exclude_generic and all(_is_generic_token(t) for t in kw_tokens):
+                continue
             if _hits_keyword(sym_tokens, kw_tokens):
                 return True
     return False
@@ -459,12 +495,13 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
                            f"{suspected_name}（{matched}），{verdict}{generic_tail}"),
             }
             if is_definition:
-                if len(issues) >= max_issues:
-                    break
-                issues.append(item)
+                if len(issues) < max_issues:
+                    issues.append(item)
             elif len(hints) < max_issues:
                 hints.append(item)
-        if len(issues) >= max_issues:
+        # 仅当两个输出通道都达到各自上限才停：definition 满而 call_hints 未满时
+        # 继续扫描以收齐调用提示，避免 definition 上限压掉后续 call 信号（CodeRabbit minor）
+        if len(issues) >= max_issues and len(hints) >= max_issues:
             break
 
     # —— 语义判定（可选，缺 LLM 只给静态信号）——
