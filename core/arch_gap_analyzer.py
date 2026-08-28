@@ -121,12 +121,35 @@ def _norm_spec(spec: str) -> str:
     return s
 
 
+def _build_module_index(nodes: Dict[str, dict], project_path: str):
+    """预构建模块匹配索引，避免每个 spec 都全量扫描 nodes 并重复 module_of/relpath。
+
+    返回 (by_rel, by_base)：相对路径 → [(nid, type)]、basename → [(nid, type)]。
+    CodeRabbit 三轮 major：模板生成数以千计的模块级 spec，逐 spec 全扫节点会退化为
+    O(specs×nodes) 的 relpath 调用；一次建索引后按 key O(1) 查找。
+    """
+    by_rel: Dict[str, List[tuple]] = defaultdict(list)
+    by_base: Dict[str, List[tuple]] = defaultdict(list)
+    for nid, n in nodes.items():
+        if n.get("type") not in ("module", "go_func"):
+            continue
+        rel = module_of(n, project_path)
+        if rel:
+            by_rel[rel].append((nid, n.get("type")))
+        name = n.get("name")
+        if name:
+            by_base[name].append((nid, n.get("type")))
+    return by_rel, by_base
+
+
 def _match_module_ids(nodes: Dict[str, dict], project_path: str,
-                      specs: List[str]) -> Set[str]:
+                      specs: List[str], idx=None) -> Set[str]:
     """把 target_modules specs 匹配到知识图谱 mod 节点 id 集合。
 
-    匹配规则：相对路径精确匹配优先（module_of 结果），basename 宽松匹配兜底。
+    匹配规则：相对路径精确匹配优先（module_of 结果），纯 basename spec 保留
+    basename 宽松兜底。idx 可传 _build_module_index 结果避免调用方重复全扫。
     """
+    by_rel, by_base = idx or _build_module_index(nodes, project_path)
     matched: Set[str] = set()
     for spec in specs:
         ns = _norm_spec(spec)
@@ -135,22 +158,23 @@ def _match_module_ids(nodes: Dict[str, dict], project_path: str,
         # 含路径分隔符的 spec（模板展开出的模块级路径，如 domain/models）必须精确
         # 匹配整条相对路径；仅纯 basename spec（legacy）保留 basename 宽松兜底。
         # 否则 domain/models 的 basename 会误配到无关的 other/models（CodeRabbit）。
-        has_slash = "/" in ns
-        base = ns.split("/")[-1]
-        for nid, n in nodes.items():
-            if n.get("type") != "module":
-                continue
-            if module_of(n, project_path) == ns:
+        for nid, t in by_rel.get(ns, ()):
+            if t == "module":
                 matched.add(nid)
-            elif (not has_slash) and n.get("name") == base:
-                matched.add(nid)
+        if "/" not in ns:
+            for nid, t in by_base.get(ns, ()):
+                if t == "module":
+                    matched.add(nid)
     return matched
 
 
-def _module_exists(project_path: str, spec: str, nodes: Dict[str, dict]) -> bool:
+def _module_exists(project_path: str, spec: str, nodes: Dict[str, dict],
+                   idx=None) -> bool:
     """判断目标模块 spec 在项目中是否有实现。
 
     判定依据：文件系统存在（project_path/spec.py 或目录）或知识图谱已有匹配模块。
+    idx 可传 _build_module_index 结果——_detect_missing/role_has_impl 逐 spec
+    高频调用，复用索引避免每次全扫 nodes（CodeRabbit 三轮 major）。
     """
     ns = _norm_spec(spec)
     if not ns:
@@ -159,23 +183,25 @@ def _module_exists(project_path: str, spec: str, nodes: Dict[str, dict]) -> bool
         p = os.path.join(project_path, cand.replace("/", os.sep))
         if os.path.isfile(p) or os.path.isdir(p):
             return True
-    for nid, n in nodes.items():
-        if n.get("type") != "module" and n.get("type") != "go_func":
-            continue
-        if module_of(n, project_path) == ns or n.get("name") == ns.split("/")[-1]:
-            return True
-    return False
+    by_rel, by_base = idx or _build_module_index(nodes, project_path)
+    if by_rel.get(ns):
+        return True
+    # 与 _match_module_ids 对齐：含路径分隔符的 spec 不做 basename 兜底，
+    # 避免 domain/models 被误判为已存在的其它 …/models 而掩盖职责缺失
+    if "/" in ns:
+        return False
+    return bool(by_base.get(ns))
 
 
 def _detect_missing(roles: List[dict], project_path: str,
-                    nodes: Dict[str, dict]) -> List[dict]:
+                    nodes: Dict[str, dict], idx=None) -> List[dict]:
     """职责缺失：角色声明的 target_modules 在项目中不存在。"""
     gaps = []
     for role in roles:
         rid = role.get("id", "")
         rname = role.get("name", rid)
         for spec in role.get("target_modules", []):
-            if not _module_exists(project_path, spec, nodes):
+            if not _module_exists(project_path, spec, nodes, idx=idx):
                 gaps.append({
                     "type": "missing",
                     "severity": SEVERITY["missing"],
@@ -431,6 +457,11 @@ def _detect_twin_identity(nodes: Dict[str, dict], adj: Dict[str, List[str]],
             t_mod = module_of(t_n, project_path) if t_n.get("type") != "module" else (t_n.get("name") or "")
             if not src_mod or not t_mod or src_mod == t_mod:
                 continue
+            # 与 _detect_unassigned 一致：测试调用不计入生产模块 fan_in，
+            # 否则"仅被测试引用"的副本会被误标活跃副本而非孤本，
+            # 致 has_orphan 判定失效、整组孪生收敛候选被丢弃（CodeRabbit 三轮 minor）。
+            if _is_test_module(src_mod) or _is_test_module(t_mod):
+                continue
             called_mods[t_mod] = called_mods.get(t_mod, 0) + 1
 
     mods: Set[str] = set()
@@ -645,24 +676,25 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
     flows = target_arch.get("business_flows") or []
     constraints = target_arch.get("constraints") or []
 
-    # 目标归属映射
+    # 目标归属映射（一次建模块索引，供匹配/缺失/实现复用，避免逐 spec 全扫 nodes）
+    mod_index = _build_module_index(nodes, project_path)
     role_of: Dict[str, str] = {}          # mod 节点 id → 角色 id
     role_has_impl: Dict[str, bool] = {}   # 角色 id → 是否有有效实现
     assigned_ids: Set[str] = set()
     for role in roles:
         rid = role.get("id", "")
         specs = role.get("target_modules", [])
-        matched = _match_module_ids(nodes, project_path, specs)
+        matched = _match_module_ids(nodes, project_path, specs, idx=mod_index)
         for nid in matched:
             role_of[nid] = rid
         assigned_ids |= matched
         role_has_impl[rid] = any(
-            _module_exists(project_path, s, nodes) for s in specs)
+            _module_exists(project_path, s, nodes, idx=mod_index) for s in specs)
 
     gaps: List[dict] = []
 
     # 1) 职责缺失
-    gaps.extend(_detect_missing(roles, project_path, nodes))
+    gaps.extend(_detect_missing(roles, project_path, nodes, idx=mod_index))
 
     # 2) 游离模块（真游离 free 优先，未建模 unmodeled 次之；豁免 vendor/产物噪声）
     unassigned_gaps, unassigned_total, unassigned_free, unassigned_unmodeled = _detect_unassigned(
