@@ -50,17 +50,37 @@ def _keyword_tokens(kw: str) -> List[str]:
 
 
 def _hits_keyword(sym_tokens: List[str], kw_tokens: List[str]) -> bool:
-    """判断符号 token 是否命中角色关键词 token。
+    """判断符号 token 是否命中角色关键词 token（全 token 边界匹配）。
 
-    命中规则（防误报，要求足够明确的词根）：
-      - 关键词首 token 与符号某 token 相等；或
-      - 关键词首 token 长于等于 3 个字符且为符号某 token 的前缀（cook→cooking）。
+    命中规则（保守，防泛词误报）：
+      - 关键词首 token 必须与符号的某个组成单元（token）整词相等。
+      - 不做子串 / 前缀匹配：token 切分（_ . 大写边界）已由 _tokens 完成，
+        此处仅整词判等，避免泛词 app 命中 application、entry 命中 entrance
+        等"同位但语义不同"的 token 造成误判。
     """
     if not sym_tokens or not kw_tokens:
         return False
     head = kw_tokens[0]
-    return any((t == head) or (len(head) >= 3 and t.startswith(head))
-               for t in sym_tokens)
+    return head in sym_tokens
+
+
+# 内置泛词/token 黑名单：命名过于泛化，难以作为强越界信号。
+# 命中这些 token 只作低置信度提示，不可硬判职责越界（保守，防误报）。
+_GENERIC_KEYWORD_TOKENS = frozenset({
+    "app", "apps", "main", "entry", "service", "services",
+    "util", "utils", "helper", "helpers", "base", "core", "common",
+    "manager", "handler", "handlers",
+})
+
+
+def _is_generic_token(tok: str) -> bool:
+    """某 token 是否属于内置泛词黑名单。"""
+    return tok in _GENERIC_KEYWORD_TOKENS
+
+
+def _all_matched_generic(kw_list: Optional[List[str]]) -> bool:
+    """命中的关键词是否全部为泛词（用于低置信度降级）。"""
+    return bool(kw_list) and all(_is_generic_token(k) for k in kw_list)
 
 
 def _norm_spec(spec: str) -> str:
@@ -327,6 +347,17 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
                 signals.append("cross_role_call")
             if not signals:
                 continue
+            # 泛词关键词降级：命中的关键词若全部是泛词（app/main/...），
+            # 只作低置信度提示，不硬判职责越界（保守，防误报）。
+            generic_hint = bool(matched) and _all_matched_generic(matched)
+            signals_out = list(signals)
+            if generic_hint and "generic_keyword_hint" not in signals_out:
+                signals_out.append("generic_keyword_hint")
+            uncertainty = ("high" if not semantic else "medium")
+            if generic_hint:
+                uncertainty = "low"
+            generic_tail = ("；命中的均为泛词关键词，仅作低置信度提示，"
+                            "非硬判职责越界" if generic_hint else "")
             issue = {
                 "symbol": sym.name,
                 "kind": sym.kind,
@@ -338,13 +369,14 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
                 "suspected_role_id": suspected_id,
                 "suspected_role_name": suspected_name,
                 "matched_keywords": matched,
-                "signals": signals,
-                "uncertainty": "high" if not semantic else "medium",
+                "signals": signals_out,
+                "uncertainty": uncertainty,
                 "file_path": rel,
                 "line": sym.line,
                 "detail": (f"符号 {sym.name} 定义于 {rel}:{sym.line}（角色 "
                            f"{module_role_name or '未归属'}），其职责关键词命中角色 "
-                           f"{suspected_name}（{matched}），疑似职责越界"),
+                           f"{suspected_name}（{matched}），疑似职责越界"
+                           f"{generic_tail}"),
             }
             if len(issues) >= max_issues:
                 break

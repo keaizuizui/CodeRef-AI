@@ -36,15 +36,20 @@ from config.settings import (
     ARCH_HEALTH_WEIGHT_GOD,
     ARCH_HEALTH_WEIGHT_LAYER,
     ARCH_HEALTH_WEIGHT_LARGE,
+    ARCH_INFRA_DIRS,
 )
 from core.graph_closure import load_graph
 
 
-# 目录 → 分层（3=应用层 2=引擎层 1=基础层）；未知目录保守视为引擎层
+# 目录 → 分层（3=应用层 2=引擎层 1=基础层 0=基础设施层）；未知目录保守视为引擎层
+# O-C2：新增最低的"基础设施层"(0)，把跨切面基础设施目录归入该层。公共层(1)
+# 依赖基础设施层(0)时，因 0 是最低层、1<0 不成立，不再被误判为"下层依赖上层"。
 _LAYER_ORDER = {"demo-app": 3, "app": 3, "frontend": 3,
                 "core": 2, "engine": 2,
                 "config": 1, "utils": 1, "common": 1, "lib": 1}
-_LAYER_NAME = {3: "应用层", 2: "引擎层", 1: "基础层"}
+for _infra_dir in ARCH_INFRA_DIRS:
+    _LAYER_ORDER.setdefault(_infra_dir, 0)
+_LAYER_NAME = {3: "应用层", 2: "引擎层", 1: "基础层", 0: "基础设施层"}
 _DEFAULT_LAYER = 2
 
 
@@ -84,6 +89,20 @@ def layer_of(node: dict) -> int:
     return _LAYER_ORDER.get(parent, _DEFAULT_LAYER)
 
 
+def _is_test_path(rel_path: str) -> bool:
+    """判断模块相对路径是否位于顶层测试目录（test/ 或 tests/）。
+
+    O-C1：测试代码属于"验证面"而非"运行时业务/架构腐化面"，不应参与循环依赖、
+    上帝模块、分层违例、异常规模等腐化判定。这里只比较**顶层目录片段**，
+    且只匹配 test/tests，绝不依赖文件名含 "test" 字符，避免误杀
+    src/utils 这类带子串的目录或正常模块。相对路径为空返回 False 保守放行。
+    """
+    if not rel_path:
+        return False
+    top = rel_path.replace("\\", "/").split("/", 1)[0]
+    return top in ("test", "tests")
+
+
 def build_module_graph(nodes: Dict[str, dict],
                        adj: Dict[str, List[str]],
                        project_path: str = "") -> Dict[str, List[str]]:
@@ -93,18 +112,23 @@ def build_module_graph(nodes: Dict[str, dict],
       mod_adj    {模块名: [下游模块, ...]（去重、排序）}
       self_edges 存在模块内递归（自环）调用的模块名集合。
     模块名用相对路径，区分不同目录下的同名文件，避免边被错误合并。
+
+    O-C1：位于顶层 test/tests 目录下的测试模块（源或目标）直接不放入
+    mod_adj/self_edges，使 downstream 的 cycles/god/layer/large 天然干净。
     """
     mod_adj: Dict[str, set] = defaultdict(set)
     self_edges: set = set()
     for src, targets in adj.items():
         ms = module_of(nodes.get(src, {}), project_path)
-        if not ms:
+        if not ms or _is_test_path(ms):
             continue
         for tgt in targets:
             mt = module_of(nodes.get(tgt, {}), project_path)
-            if mt and mt != ms:
+            if not mt or _is_test_path(mt):
+                continue
+            if mt != ms:
                 mod_adj[ms].add(mt)
-            elif mt and mt == ms:
+            else:
                 self_edges.add(ms)
     return {m: sorted(t) for m, t in mod_adj.items()}, self_edges
 
@@ -201,7 +225,11 @@ def _module_symbol_counts(nodes: dict, project_path: str) -> Dict[str, int]:
     mod_symbols: Dict[str, int] = defaultdict(int)
     for nid, n in nodes.items():
         if n.get("type") in ("function", "method", "class"):
-            mod_symbols[module_of(n, project_path)] += 1
+            ms = module_of(n, project_path)
+            # O-C1：测试模块不计入规模，避免测试文件占据 large_modules 头部
+            if ms and _is_test_path(ms):
+                continue
+            mod_symbols[ms] += 1
     return dict(mod_symbols)
 
 
@@ -244,12 +272,18 @@ def _layer_violations(nodes: dict, mod_adj: Dict[str, List[str]], project_path: 
     mod_layer: Dict[str, int] = {}
     for nid, n in nodes.items():
         m = module_of(n, project_path)
-        if m:
-            mod_layer[m] = max(mod_layer.get(m, 0), layer_of(n))
+        if not m or _is_test_path(m):
+            # O-C1：测试模块不参与分层判定
+            continue
+        mod_layer[m] = max(mod_layer.get(m, 0), layer_of(n))
     viol = []
     for m, tars in mod_adj.items():
+        if _is_test_path(m):
+            continue
         lm = mod_layer.get(m, _DEFAULT_LAYER)
         for t in tars:
+            if _is_test_path(t):
+                continue
             lt = mod_layer.get(t, _DEFAULT_LAYER)
             if lm < lt:
                 viol.append({

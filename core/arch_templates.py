@@ -9,6 +9,8 @@ import os
 import re
 
 # 顶层通用/非业务目录（识别业务模块、判定项目形态时排除）
+# 说明：除框架/基础设施目录外，也含“输出/报告/制品”类目录——这类目录是工具
+# 或构建的产物而非业务源码，detect/[业务模块] 不应把它们当业务模块。
 _COMMON_DIRS = {
     "tests", "test", "docs", "doc", "config", "conf", "data", "output", "out",
     "scripts", "script", "archive", "backup", "_备份", "uploads", "templates",
@@ -16,6 +18,9 @@ _COMMON_DIRS = {
     "third_party", "migrations", "wiki", "knowledge", "logs", "cache", "tmp",
     "temp", "reports", "dist", "build", "knowledge_base", "知识库", "projects",
     "checkpoints", ".checkpoints",
+    # 输出/报告/制品类（产物而非业务源码）
+    "coderef-report", "report", "result", "results", "artifacts", "generated",
+    "产出", "报告", "制品",
 }
 
 # 六边形识别加分目录
@@ -28,6 +33,10 @@ _BACKEND_DEPS = ["fastapi", "flask", "django", "spring", "nestjs", "express",
 
 # 模块化单体识别：共享底座目录 + 业务模块数下限
 _MODULAR_SHARED_DIRS = {"shared", "common", "core", "配置中心", "shared_lib"}
+
+# 中性缺省职责语义词（角色未配置 role_keywords 时兜底）。
+# 刻意不含目录匹配泛词 app/main/entry，避免 role_boundary 符号级职责判定误判。
+_DEFAULT_ROLE_KEYWORDS = ["核心职责"]
 
 
 def _top_dirs(project_path: str) -> list:
@@ -85,14 +94,23 @@ TEMPLATES = {
                         "ports", "use_cases", "usecases"],
         "role_skeleton": [
             {"id": "api_entry", "name": "接口入口",
-             "kw": ["controller", "route", "api", "web", "handler", "interface"]},
+             "kw": ["controller", "route", "api", "web", "handler", "interface"],
+             "role_keywords": ["controller", "handler", "endpoint", "view", "route",
+                               "接口", "路由", "api", "http"]},
             {"id": "use_case", "name": "应用用例",
-             "kw": ["use_case", "usecase", "service", "application"]},
+             "kw": ["use_case", "usecase", "service", "application"],
+             "role_keywords": ["service", "usecase", "interactor", "用例",
+                               "应用服务", "业务编排"]},
             {"id": "domain_core", "name": "领域核心",
-             "kw": ["domain", "model", "entity", "core"]},
+             "kw": ["domain", "model", "entity", "core"],
+             "role_keywords": ["domain", "model", "entity", "event", "value_object",
+                               "领域", "领域服务", "实体"]},
             {"id": "outbound_adapter", "name": "出站适配",
              "kw": ["repository", "repo", "adapter", "infrastructure", "db",
-                    "storage", "persistence"]},
+                    "storage", "persistence"],
+             "role_keywords": ["repository", "repo", "adapter", "persistence",
+                               "storage", "infra", "基础设施", "仓储", "持久化",
+                               "数据访问", "外部服务客户端", "适配器"]},
         ],
         "suggest_dirs": [
             ("domain", "领域模型与业务规则，零框架依赖"),
@@ -106,10 +124,16 @@ TEMPLATES = {
         "detect_shared_dirs": ["shared", "common", "core", "配置中心", "shared_lib"],
         "role_skeleton": [
             {"id": "entry_point", "name": "入口层",
-             "kw": ["web", "gui", "main", "app", "entry"]},
-            {"id": "business_modules", "name": "业务模块", "all_biz_dirs": True},
+             "kw": ["web", "gui", "main", "app", "entry"],
+             "role_keywords": ["入口", "服务入口", "接口层", "启动器",
+                               "命令行", "launcher", "cli", "server"]},
+            {"id": "business_modules", "name": "业务模块", "all_biz_dirs": True,
+             "role_keywords": []},
             {"id": "shared_base", "name": "共享底座",
-                     "kw": ["shared", "common", "core", "base", "config", "配置"]},
+             "kw": ["shared", "common", "core", "base", "config", "配置"],
+             "role_keywords": ["基础设施", "配置", "公共组件", "工具", "utils",
+                               "helper", "common", "shared", "base", "core",
+                               "config", "缓存", "日志", "异常", "middleware"]},
         ],
         "suggest_dirs": [
             ("shared", "共享底座：跨模块复用的通用能力（日志/配置/公共模型）"),
@@ -155,8 +179,55 @@ def detect_template(project_path: str):
     return None
 
 
+def _expand_module_specs(project_path: str, top_dir: str, max_depth: int = 5) -> list:
+    """把顶层目录名展开为模块级相对路径 spec，用于覆盖其下整棵子树的命中。
+
+    消费方匹配是精确匹配 + basename 兜底，目录前缀无法直接命中子路径模块，故把
+    目录下的子包（含 __init__.py 的目录）与 .py 模块递归收集为模块级相对路径。
+    top_dir 本身也保留（作为覆盖锚点，且它通常物理存在，不产生 missing）。
+    跳过 __init__.py/__main__.py/conftest.py/setup.py 与隐藏目录，避免污染。
+    """
+    specs = [top_dir]
+    try:
+        if not os.path.isdir(os.path.join(project_path, top_dir)):
+            return specs
+    except OSError:
+        return specs
+
+    def walk(rel: str, depth: int) -> None:
+        full = os.path.join(project_path, rel)
+        try:
+            entries = sorted(os.listdir(full))
+        except OSError:
+            return
+        for e in entries:
+            if e.startswith(".") or e == "__pycache__":
+                continue
+            full_e = os.path.join(full, e)
+            rel_e = f"{rel}/{e}"
+            if os.path.isdir(full_e):
+                specs.append(rel_e)
+                if depth < max_depth:
+                    walk(rel_e, depth + 1)
+            elif e.endswith(".py") and e not in ("__init__.py", "__main__.py",
+                                                 "conftest.py", "setup.py"):
+                specs.append(rel_e[:-3])
+
+    walk(top_dir, 0)
+    return specs
+
+
 def build_target_arch(project_path: str, template_id: str) -> dict:
-    """按模板生成 target_arch 初稿（结合项目实际顶层目录匹配 target_modules）。"""
+    """按模板生成 target_arch 初稿（结合项目实际顶层目录匹配 target_modules）。
+
+    target_modules 采用“目录前缀覆盖”语义：对每个被目录关键词匹配到的顶层目录，
+    递归展开其下的子包与 .py 模块，产出模块级相对路径 spec。这是因为下游
+    （arch_gap_analyzer._match_module_ids）按【相对路径精确匹配 + basename 兜底】
+    评审 module_assigned 覆盖率——若只写顶层目录名（如 agents），粒度错位会导致
+    游离模块（agents/best_image_selector）几乎全部命中不了，
+    初稿覆盖率骤降。展开既能覆盖整棵子树，也不破坏 target_arch_schema
+    （target_modules 仍是字符串数组）。
+    """
     tpl = TEMPLATES[template_id]
     dirs = _biz_dirs(project_path)
     all_dirs = _top_dirs(project_path)
@@ -168,18 +239,25 @@ def build_target_arch(project_path: str, template_id: str) -> dict:
         if r.get("all_biz_dirs"):
             # 业务模块全量角色：排除模板共享底座目录，留给 shared_base 等角色
             excluded = {d.lower() for d in tpl.get("detect_shared_dirs", [])}
-            matched = [d for d in dirs if d.lower() not in excluded and d not in used]
+            matched_dirs = [d for d in dirs if d.lower() not in excluded and d not in used]
         else:
-            matched = []
+            matched_dirs = []
             for d in all_dirs:
                 if d in used:
                     continue
                 dl = d.lower()
                 if any(k in dl for k in kw):
-                    matched.append(d)
-        used.update(matched)
-        role = {"id": r["id"], "name": r["name"], "target_modules": matched,
-                "role_keywords": kw}
+                    matched_dirs.append(d)
+        used.update(matched_dirs)
+        # 目录前缀覆盖：把每个匹配目录递归展开为模块级 spec
+        target_modules = []
+        for d in matched_dirs:
+            target_modules.extend(_expand_module_specs(project_path, d))
+        # role_keywords 取“职责语义词表”（供 role_boundary 符号级职责判定），
+        # 与“目录匹配词表 kw”分离；未配置职责词的角色给中性缺省（不含泛词 app/main/entry）。
+        role_keywords = r.get("role_keywords") or _DEFAULT_ROLE_KEYWORDS
+        role = {"id": r["id"], "name": r["name"], "target_modules": target_modules,
+                "role_keywords": role_keywords}
         roles.append(role)
 
     flows = _build_flows(template_id, roles)

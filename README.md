@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.7.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.7.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -489,6 +489,25 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.7.1 — 架构判据口径校准：tests 排除 + 基础设施层归属 + detect 粒度/role_boundary 泛词/入口游离（新代码验收观察点）
+
+> 承接 2026-08-28 新代码验收（O-C1/O-C2 + 观察点 a/b/c/d）：用独立 LLM 子代理与
+> coderef 全量探测正面对比发现，coderef 健康分系统性低于人判（-4~-6），偏离集中在少数
+> 静态口径。本版校准：
+> - **O-C1** 循环/规模/分层判定排除顶层 `tests/`、`test/` 目录（`_is_test_path` 顶层片段
+>   判定，不误杀 `src/utils` 等）。request 样例不再被 tests 边凑成 11 模块大环。
+> - **O-C2** 新增"基础设施层"（最低层 0，`ARCH_INFRA_DIRS` 配置 i18n/log/plugin/rpc 等），
+>   "公共库依赖日志/国际化"这类合理依赖不再被判下层依赖上层，目标项目 的分层违例不再
+>   被批量放大。
+> - **a** detect 生成初稿把 `target_modules` 展开到模块级与"目录前缀覆盖"匹配语义对齐，
+>   消除"目录名 vs 子路径"粒度错位导致的初稿覆盖率极低。
+> - **b** `_COMMON_DIRS` 补充 `coderef-report`/`report`/`result`/`artifacts` 等输出制品目录，
+>   不再把输出目录当业务模块。
+> - **c** `role_boundary` 关键词匹配由子串/前缀收敛为整词边界匹配 + 泛词（app/main/entry）
+>   低置信降级，合理符号不再被泛词 `app` 误判越界；模板 `role_keywords` 与目录匹配词分离。
+> - **d** `main_*`/`bin/cmd/cli`/`manage`/`__main__` 入口脚本由"真游离 free"改为 `unmodeled`
+>   （带 `entry` 标记），不再误导为需删除的危险游离物。
 
 ### v5.7.0 — 软件形态模板体系：无 target 也能生成目标架构初稿与整理建议（ 解决方案落地）
 
