@@ -285,6 +285,11 @@ def _layer_violations(nodes: dict, mod_adj: Dict[str, List[str]], project_path: 
             if _is_test_path(t):
                 continue
             lt = mod_layer.get(t, _DEFAULT_LAYER)
+            # O-C2：基础设施层(0)是跨切面层，进出两侧都不作分层违例（公共库
+            # 依赖日志/国际化等基础设施是平级装配，反之基础设施引用业务也属
+            # 切面横切，均非"下层依赖上层"的腐化信号）。
+            if lm == 0 or lt == 0:
+                continue
             if lm < lt:
                 viol.append({
                     "from": m, "to": t,
