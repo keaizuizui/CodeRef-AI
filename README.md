@@ -514,7 +514,22 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 > - **自证与回归**：合成验证 8 项全 PASS（schema 合法/非法校验、阶段分组节点、成员占位、
 >   分支回环边、成员挂载边、成员断链）；旧 target_arch 渲染路径不变，/14/30/31/32/33
 >   不劣化。
-> - **版本号**：5.7.1 → 5.8.0（minor，业务层表达力扩展新功能）。
+> - **CodeRabbit 评审修订（1 项 critical + 2 项 major + 1 项 minor）**：
+>   `arch_gap_analyzer.py` 主流程与 `_detect_business_gaps` 统一解析 `group.items[].module`
+>   并改用 `_module_exists`（文件系统+图谱双口径）判定成员实现；`target_arch_schema.py` 分支
+>   后置校验防护非 dict step（防 AttributeError 崩溃）；`canvas_generator.py` 预收集步骤节点 id，
+>   过滤指向不存在步骤的分支边。修复后合成验证 8 项全 PASS、`py_compile` 全过。
+> - **O-C3 模块边界口径（`core/arch_audit.py`）**：同顶层父包的子包互引（如
+>   `route/gin↔route/client_side↔route/chat_claw`）在业务上属同一模块/层内部的组件纠缠，而非
+>   "跨模块"真环。`audit()` 现按各 SCC 成员顶层父包集合分拣：纯同父包环 → 转 `package_cycles`
+>   （包内子组件环，单独透出、不计入 health 扣分）；跨顶层包真环仍保留在 `cycles` 照常扣分，
+>   保留真实耦合信息、对齐 LLM"包内循环"认知。
+> - **② 阈值去 overfit（`core/business_analyzer.py`）**：入口/基础设施模块判据由硬编码
+>   比值（此前为避单一项目特例 1.5→2.0 收死）改为可配置常量
+>   `ENTRY_DEGREE_RATIO/INFRA_DEGREE_RATIO/INFRA_MIN_DEGREE`（默认 2.0/2.0/2，即"出/入度
+>   相差 2 倍以上即倾向该层"的通用显著失衡判据），`_hier_entry_modules/_hier_infra_modules`
+>   可传参覆盖；注释不再引用单一项目业务名,消除工具对 working 的过拟合。
+> - **版本号**：5.7.1 → 5.8.0（minor，业务层表达力扩展 + O-C3 口径 + ② 去 overfit）。
 
 ### v5.7.1 — 架构判据口径校准：tests 排除 + 基础设施层归属 + detect 粒度/role_boundary 泛词/入口游离（新代码验收观察点）
 

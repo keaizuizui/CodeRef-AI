@@ -120,6 +120,7 @@ class ArchCanvas:
         # ── 1. 业务步骤节点（业务层）──
         # ：kind=="phase" 渲染为阶段分组（🎯 附阶段序号徽章），与普通 step(📈) 视觉区分
         session_step_counter: Dict[str, int] = {}
+        step_node_ids: set = set()  # ：已建步骤节点 id，供分支边过滤无效目标
         for f in flows:
             fid = f.get("id", "")
             seq = 0
@@ -144,6 +145,7 @@ class ArchCanvas:
                     },
                 })
                 session_step_counter[nid] = 1
+                step_node_ids.add(nid)
 
         # ── 2. 角色节点（技术层）+ 角色→模块归属 ──
         role_modules: Dict[str, List[str]] = {}
@@ -199,7 +201,7 @@ class ArchCanvas:
                 for br in st.get("branches") or []:
                     to_sid = br.get("to", "")
                     to_nid = f"step:{fid}:{to_sid}"
-                    if not to_sid or to_sid == sid:
+                    if not to_sid or to_sid == sid or to_nid not in step_node_ids:
                         continue
                     canvas_edges.append({
                         "id": f"e:branch:{fid}:{sid}:{br.get('type','loop')}:{to_sid}",
