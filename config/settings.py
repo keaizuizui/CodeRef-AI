@@ -36,6 +36,11 @@ ARCH_HEALTH_WEIGHT_CYCLE = 3.0             # 每个循环依赖扣分权重（�
 ARCH_HEALTH_WEIGHT_GOD = 1.0               # 每个上帝模块扣分权重（封顶 2.0）
 ARCH_HEALTH_WEIGHT_LAYER = 1.0             # 每个分层违例扣分权重（封顶 2.0）
 ARCH_HEALTH_WEIGHT_LARGE = 0.5             # 每个大模块扣分权重（封顶 2.0）
+# 基础设施层目录集合（O-C2）：跨切面基础设施归入最低层(0)，公共层依赖它们
+# 不再被误判为"下层依赖上层"。保守集合，仅命中明显属于跨切面基础设施的目录名。
+ARCH_INFRA_DIRS = ("i18n", "locale", "log", "logger", "logging", "plugin", "rpc",
+                   "event", "queue", "cache", "security", "guard", "interceptor",
+                   "middleware", "monitor", "metrics", "trace", "sdk")
 
 # 架构探测器（arch_detector.py）
 ARCH_DETECT_MAX_ENTRY_SIGNALS = 80         # 入口信号总数上限，防止过大拖慢后续

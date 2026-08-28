@@ -89,6 +89,30 @@ def _is_test_module(module_name: str) -> bool:
     return base.startswith("test_") or base.endswith("_test")
 
 
+def _is_entry_script(module_name: str) -> bool:
+    """判断模块是否为入口脚本（CLI/命令入口，程序启动点）。
+
+    入口脚本是程序的启动点，天然无人 import（fan_in=0），但这不表示它"游离危险需删除"，
+    不应被判为 free（真游离/治理候选）。识别结构特征（保守，避免误伤业务孤儿模块）：
+      - 路径含本地入口目录段 {main, bin, cmd, cli}
+      - 文件名形如 main_*（main_idea2video 等）/ __main__（__main__.py）/ manage（manage.py）
+      - 文件名以 _cli 结尾（xxx_cli.py 命令脚本）
+    注意：不扫描文件内容中的 `if __name__ == "__main__"` —— 业务孤儿模块常含用于本地
+    调试/自测的 main 块，纳入会使真游离孤儿被误豁免；上述结构特征已覆盖典型入口命名。
+    """
+    parts = [p.lower() for p in (module_name or "").replace("\\", "/").split("/") if p]
+    if not parts:
+        return False
+    if {"main", "bin", "cmd", "cli"} & set(parts[:-1]):  # 命中入口目录段
+        return True
+    base = parts[-1]
+    if base.startswith("main_") or base in {"__main__", "manage"}:
+        return True
+    if base.endswith("_cli"):
+        return True
+    return False
+
+
 def _norm_spec(spec: str) -> str:
     """规范化目标模块路径：正斜杠、去 .py 扩展名。"""
     s = (spec or "").strip().replace("\\", "/")
@@ -162,16 +186,21 @@ def _detect_unassigned(nodes: Dict[str, dict], adj: Dict[str, List[str]],
                        max_n: int) -> tuple:
     """游离模块：不在任何角色 target_modules 中的代码模块（建议书 P0③ 增强）。
 
-    区分两类：
+    区分两类（入口脚本豁免见下）：
       - monitored=free（真游离）：模块无任何调用者（fan_in=0），代码孤儿，治理候选，
         排在最前。
       - monitored=unmodeled（未建模）：模块被真实调用（跨模块 fan_in>0）但 target_modules
         未覆盖——本质是「目标架构覆盖不足」而非真游离，排在 free 之后；说明文案引导
         去 define-target 补 target_modules，而非当成孤儿删除。
 
+    入口脚本豁免：CLI/命令入口（main_* / manage / __main__ / *_cli，或位于 main/bin/cmd/cli
+    目录）是程序启动点，天然无人 import（fan_in=0），不属于"危险的游离物"。其对 free 判定
+    被豁免，归入 unmodeled（"未建模的已知入口"），并在条目上以 entry=True 标记区分。
+
     豁免噪声（vendor/*.min.js/__init__/dist/build 等）自动排除，避免刷屏淹没真游离。
 
     返回 (报出的差距列表, 游离模块总数, free 计数, unmodeled 计数)。
+    注：free=真游离孤儿计数；unmodeled=未建模（含被调未覆盖 与 已知入口脚本）。
     """
     # 模块 → 跨模块被调次数（fan_in 近似）：用 CALLS 边被调侧统计
     called_mods: Dict[str, int] = {}
@@ -199,11 +228,15 @@ def _detect_unassigned(nodes: Dict[str, dict], adj: Dict[str, List[str]],
         if _is_exempt_module(m):
             continue
         fan_in = called_mods.get(m, 0)
+        # 入口脚本（CLI/命令入口）天然无人 import（fan_in=0），是程序启动点而非
+        # "游离危险项"——豁免 free 判定，归入 unmodeled（"未建模的已知入口"）。
+        is_entry = fan_in == 0 and _is_entry_script(m)
         unassigned.append({
             "module": m,
             "file_path": n.get("file_path", ""),
             "fan_in": fan_in,
-            "monitored": "free" if fan_in == 0 else "unmodeled",
+            "monitored": "unmodeled" if is_entry else ("free" if fan_in == 0 else "unmodeled"),
+            "entry": is_entry,
         })
     unassigned.sort(key=lambda x: (x["monitored"] != "free", x["module"]))
     total = len(unassigned)
@@ -214,6 +247,9 @@ def _detect_unassigned(nodes: Dict[str, dict], adj: Dict[str, List[str]],
     for u in shown:
         if u["monitored"] == "free":
             detail = f"代码模块 {u['module']} 无任何调用者（fan_in=0），真游离，治理候选"
+        elif u.get("entry"):
+            detail = (f"代码模块 {u['module']} 是已知入口脚本（CLI/命令入口，fan_in=0 "
+                      f"系程序启动点），非真游离；如纳入建模，请在 define-target 补 target_modules")
         else:
             detail = (f"代码模块 {u['module']} 被调用（fan_in={u['fan_in']}）但 target_modules "
                       f"未覆盖——属「未建模」而非真游离，请在 define-target 补 target_modules")
@@ -223,6 +259,7 @@ def _detect_unassigned(nodes: Dict[str, dict], adj: Dict[str, List[str]],
             "module": u["module"],
             "monitored": u["monitored"],
             "fan_in": u["fan_in"],
+            "entry": u.get("entry", False),
             "detail": detail,
         })
     return gaps, total, free_cnt, unmodeled_cnt
