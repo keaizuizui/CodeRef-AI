@@ -371,6 +371,8 @@ coderef-ai/
 │   ├── arch_audit.py                 # 架构腐化诊断（循环依赖/上帝模块/分层违例）
 │   ├── target_arch_schema.py         # 目标架构 JSON Schema（5.0：人定义的正轨）
 │   ├── arch_gap_analyzer.py          # 架构差距分析器（5.0：现状 vs 目标架构）
+│   ├── role_boundary.py             # 符号级职责越界检测（5.2：归属对但符号逾越角色边界）
+│   ├── arch_templates.py            # 软件形态模板体系（5.7：hexagonal/modular_monolith 初稿+整理建议）
 │   ├── canvas_generator.py           # 可视化架构画布（5.0 Phase 1：三层拖拽画布）
 │   ├── refactor_task_generator.py    # 重构任务卡生成器（5.0 Phase 2）
 │   ├── arch_alignment_verifier.py    # 架构对齐验证器（5.0 Phase 2：四维评分）
@@ -508,6 +510,15 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 >   低置信降级，合理符号不再被泛词 `app` 误判越界；模板 `role_keywords` 与目录匹配词分离。
 > - **d** `main_*`/`bin/cmd/cli`/`manage`/`__main__` 入口脚本由"真游离 free"改为 `unmodeled`
 >   （带 `entry` 标记），不再误导为需删除的危险游离物。
+> **CodeRabbit 评审修订（2 轮 5 发现全修）**：一轮 3 发现——① `_match_module_ids` 含 `/` 的
+>   模块级 spec（模板展开的 domain/models 等）改精确路径匹配，防 basename 误配无关 `other/models`；
+>   ② `_detect_unassigned` 与孪生判定的 fan_in 均排除测试调用边（防生产入口标记丢失、仅被测试
+>   引用的孤本被误判活跃副本、整组收敛候选被丢弃）；③ role_boundary 泛词命中的 `uncertainty`
+>   保持 high（与"静态-only 即不可靠"语义一致，防消费方把泛词命中当更高可信）+ 新增独立
+>   `confidence=low` 表达低置信。二轮 2 发现——基础设施层（最低层 0）进出双向豁免分层违例
+>   （跨切面横切非腐化信号，反向依赖业务属正常装配）；模块匹配/缺失判定改为一次预建索引
+>   O(nodes)，模板生成千级 spec 不再退化为 O(specs×nodes) 的逐 spec 全扫 relpath。
+> - **版本号**：5.7.0 → 5.7.1（patch，架构判据口径校准 + CodeRabbit 两轮评审修订）
 
 ### v5.7.0 — 软件形态模板体系：无 target 也能生成目标架构初稿与整理建议（ 解决方案落地）
 
