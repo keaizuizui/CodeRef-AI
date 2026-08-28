@@ -353,9 +353,11 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
             signals_out = list(signals)
             if generic_hint and "generic_keyword_hint" not in signals_out:
                 signals_out.append("generic_keyword_hint")
-            uncertainty = ("high" if not semantic else "medium")
-            if generic_hint:
-                uncertainty = "low"
+            # 泛词命中一律高 uncertainty（本工具静态-only 口径下 high=不可靠），
+            # 另用独立 confidence="low" 表达低置信提示，避免与现有 uncertainty
+            # 语义相反、导致消费方把泛词命中当更高可信（CodeRabbit 二轮 minor）。
+            uncertainty = "high" if (not semantic or generic_hint) else "medium"
+            confidence = "low" if generic_hint else "high"
             generic_tail = ("；命中的均为泛词关键词，仅作低置信度提示，"
                             "非硬判职责越界" if generic_hint else "")
             issue = {
@@ -371,6 +373,7 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
                 "matched_keywords": matched,
                 "signals": signals_out,
                 "uncertainty": uncertainty,
+                "confidence": confidence,
                 "file_path": rel,
                 "line": sym.line,
                 "detail": (f"符号 {sym.name} 定义于 {rel}:{sym.line}（角色 "
