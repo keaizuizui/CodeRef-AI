@@ -522,6 +522,13 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 >   预置种子保护、资产同步清理、唯一别名归一化删除、删除不存在报错、歧义别名拒绝、8 线程
 >   并发 add 全落盘无丢失）；`py_compile` 通过；`setup.bat` 三入口在真实环境实测（reg
 >   list/add/delete、看板 HTTP 200、画布生成 44KB HTML）。
+> - **CodeRabbit 终审修订（2 major）**：⑤ `core/cli.py` 项目身份校验——`argv` 传入的
+>   `project_path` 被当作 delete 的所有权证明不可靠（从项目 A 传项目 B 路径即可绕过来源
+>   防护）；修复为从**可信执行上下文（cwd）**派生项目身份 `_require_owned_project`，
+>   add/alias/delete 变更操作仅允许作用于当前所在项目，路径不一致即拒绝；⑥
+>   `core/design_registry.py` 锁文件父目录——`_file_lock` 打开 `.lock` 前未确保父目录存在，
+>   新路径注册表初始化会抛 FileNotFoundError；修复为打开锁前
+>   `os.makedirs(dirname, exist_ok=True)`。
 > - **版本号**：5.8.0 → 5.8.1（patch， 可回收补全）。
 
 ### v5.8.0 — 业务层表达力扩展：阶段分组 × 子模块/适配器矩阵 × 分支回环（ 落地）
