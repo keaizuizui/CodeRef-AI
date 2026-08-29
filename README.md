@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.8.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.8.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -491,6 +491,22 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.8.1 — 设计注册表可回收：coderef_registry 新增 delete（ 落地）
+
+> 承接 （多 AI × 多项目调 coderef 资料隔离）观察点：设计注册表此前仅 add/alias/list，
+> 多 agent 在任意项目 `registry add` 会永久写入全局共享池且不可自动回收。本版新增 `delete`
+> 动作，让来源项目可回收自己注册的设计，同时保留"全局共享 + source_project 溯源"的
+> 跨项目设计复用设计意图（测试实测"清单隔离成立，唯一共享面=设计注册表"）。
+> - **`coderef_registry` 新增 `delete` 动作（`core/design_registry.py` + `core/mcp_server.py`）**：
+>   `name` 支持 canonical 或别名（自动归一化）；删除设计时**同步清理资产区同名资产**，
+>   避免设计删除后资产残留。来源防护两级：① `source_project` 为空（预置种子/未标注来源）的
+>   基础设计**不可删除**，保护通用设计库；② `source_project` 与当前 `project_path` 不一致的
+>   条目**不可删除**，提示"请在来源项目下删除"，防止 A 项目误删 B 项目注册的哨兵。
+> - **自证**：临时注册表全流程 7 项 PASS（add→delete 同项目闭环、他项目条目防护拒绝、
+>   预置种子保护、资产同步清理、别名归一化删除、删除不存在报错、全流程后 count 恢复
+>   4 条预置）；`py_compile` 通过。
+> - **版本号**：5.8.0 → 5.8.1（patch， 可回收补全）。
 
 ### v5.8.0 — 业务层表达力扩展：阶段分组 × 子模块/适配器矩阵 × 分支回环（ 落地）
 

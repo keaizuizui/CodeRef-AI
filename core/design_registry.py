@@ -241,8 +241,8 @@ class DesignRegistry:
 
         Args:
             project_path: 触发操作的项目路径（用于记录来源元数据）。
-            action: list / add / alias。
-            name: add 时的 canonical 名称；alias 时忽略。
+            action: list / add / alias / delete。
+            name: add 时的 canonical 名称、delete 时的目标名称；alias 时忽略。
             canonical: alias 时目标 canonical。
             alias: alias 时新增的别名。
             description: add 时的设计描述。
@@ -314,7 +314,36 @@ class DesignRegistry:
                 "resolved": self.resolve(alias),
                 "message": f"别名「{alias}」已归一化到 canonical「{resolved}」。",
             }
-        raise ValueError(f"不支持的 action「{action}」，仅支持 list / add / alias。")
+        if action == "delete":
+            if not name or not name.strip():
+                raise ValueError("delete 操作必须提供目标名称（name）")
+            resolved = self.resolve(name)
+            if resolved not in self._data["designs"]:
+                raise ValueError(f"设计「{name}」不存在，无需删除。")
+            entry = self._data["designs"].get(resolved, {})
+            src = entry.get("source_project", "") or ""
+            if not src:
+                raise ValueError(
+                    f"设计「{resolved}」为预置/未标注来源的基础设计，不可删除。"
+                )
+            if src != project_path:
+                raise ValueError(
+                    f"设计「{resolved}」由项目「{src}」注册，请在来源项目下删除。"
+                )
+            removed = self._data["designs"].pop(resolved)
+            removed_asset = self._data["assets"].pop(resolved, None)
+            self._save()
+            return {
+                "ok": True,
+                "action": "delete",
+                "registry_path": self.registry_path,
+                "canonical": resolved,
+                "removed": removed,
+                "asset_removed": removed_asset is not None,
+                "total": len(self._data["designs"]),
+                "message": f"已删除设计「{resolved}」（含关联别名与资产）。",
+            }
+        raise ValueError(f"不支持的 action「{action}」，仅支持 list / add / alias / delete。")
 
     # ─── 资产（asset）区 ────────────────────────────────────────
 

@@ -989,12 +989,13 @@ BUILTIN_TOOLS: List[Dict] = [
                     "name": "coderef_registry",
                     "description": (
                         "管理已知设计库（DesignRegistry）。\n"
-                        "action=list 列出已知设计；add 新增 canonical 设计；alias 把别名归一到 canonical（解决 LLM 命名漂移）。"
+                        "action=list 列出已知设计；add 新增 canonical 设计；alias 把别名归一到 canonical（解决 LLM 命名漂移）；"
+                        "delete 删除当前项目注册的设计（预置/未标注来源与他项目注册的条目受保护，不可删除）。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                         "project_path": {"type": "string", "description": "目标项目路径"},
-                        "action": {"type": "string", "enum": ["list","add","alias"], "default": "list"},
-                        "name": {"type": "string", "description": "设计名/别名"},
+                        "action": {"type": "string", "enum": ["list","add","alias","delete"], "default": "list"},
+                        "name": {"type": "string", "description": "设计名/别名（add/delete 用）"},
                         "canonical": {"type": "string", "description": "规范设计名（add/alias 用）"},
                         "alias": {"type": "string", "description": "要归一化的别名（alias 用）"},
                         "description": {"type": "string", "description": "设计说明（add 用）"},
