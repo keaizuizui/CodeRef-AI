@@ -503,11 +503,18 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 >   避免设计删除后资产残留。来源防护两级：① `source_project` 为空（预置种子/未标注来源）的
 >   基础设计**不可删除**，保护通用设计库；② `source_project` 与当前 `project_path` 不一致的
 >   条目**不可删除**，提示"请在来源项目下删除"，防止 A 项目误删 B 项目注册的哨兵。
-> - **CodeRabbit 评审修订（2 major）**：① delete 改为「恰好一个 canonical/别名匹配才可删」
->   （`resolve()` 只取首个匹配在共享别名时会删错），歧义别名拒绝删除；② 注册表变更操作
->   （add/alias/delete/add_asset）加**跨实例写事务锁** `_synchronized`（持锁 + 变更前重载
->   最新磁盘状态）——原子写只能防半写损坏，防不了多实例并发「陈旧快照覆盖」把已删除的
->   设计恢复回来/丢弃他实例更新。
+> - **CodeRabbit 评审修订（2 major + 复审 1 critical/1 major）**：
+>   ① delete 改为「恰好一个 canonical/别名匹配才可删」（`resolve()` 只取首个匹配在共享
+>   别名时会删错），歧义别名拒绝删除；② 注册表变更操作（add/alias/delete/add_asset）
+>   加**跨实例写事务锁** `_synchronized`（持锁 + 变更前重载最新磁盘状态），防多实例
+>   「陈旧快照覆盖」把已删除的设计恢复回来/丢弃他实例更新；③ **复审 Critical——`setup.bat`
+>   命令注入**：原 `set /p` 输入被直接内插进 `python -c` 源码，恶意输入
+>   （如 `x');import os;os.system('calc');#`）可执行任意代码；已新建 **`core/cli.py`**
+>   （参数经 `sys.argv` 传入、只当数据不当代码编译），`setup.bat` 全部改调
+>   `python -m core.cli ...`，注入 payload 实测仅作为普通设计名存储、不执行；④ **复审
+>   Major——跨进程写锁**：`setup.bat` 每个动作是独立 `python -c` 进程，进程内 RLock 盖不住
+>   多进程并发；升级为「进程内 RLock + 跨进程文件锁（`msvcrt.locking`/`fcntl.flock`）」
+>   并让构造/种子初始化共用同一事务边界，实测双进程并发 add 全落盘无丢失。
 > - **`setup.bat` 菜单扩展**：新增「5 设计注册表管理（list/add/alias/delete）」「6 激活治理
 >   看板前端（本地服务，回环 127.0.0.1，复用 `gov_webdash.serve`）」「7 生成并打开架构画布」，
 >   注册表 delete 带来源校验与二次确认；原退出项顺延为 8。
