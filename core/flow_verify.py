@@ -117,10 +117,11 @@ class FlowVerifier:
             return spec
         if "." in spec:
             # 支持 模块.函数 / 模块.类.方法 / 任意层级限定。
-            # 取最后一段为符号名，其余为限定前缀（模块/包路径段）。
-            # 限定前缀按 file_path 路径段连续子序列精确匹配（而非子串包含），
-            # 避免 目标项目 这类"项目根目录名命中所有 Python main"的跨语言歧义；
-            # 符号名支持方法/限定名末段等值（Go 方法节点可能为 program.Run）。
+            # 取最后一段为符号名，其余为限定前缀（模块/包路径段 + 类限定名段）。
+            # 限定段先与候选节点限定名（如 Pipe.run 的 Pipe）的后缀对齐扣除，
+            # 剩余前导段才要求是 file_path 路径段连续子序列（而非子串包含）——
+            # 否则 模块.类.方法 的类名（Pipe）会被误当路径段而无法解析，
+            # 也避免 目标项目 这类"项目根目录名命中所有 Python main"的跨语言歧义。
             *prefixes, name = spec.split(".")
             prefixes = [p for p in prefixes if p]
             best = None
@@ -128,9 +129,16 @@ class FlowVerifier:
                 nm = n["name"]
                 if not prefixes or not (nm == name or nm.split(".")[-1] == name):
                     continue
+                name_segs = nm.split(".")
+                cand_q = name_segs[:-1] if len(name_segs) > 1 else []
+                i, j = len(prefixes) - 1, len(cand_q) - 1
+                while i >= 0 and j >= 0 and prefixes[i].lower() == cand_q[j].lower():
+                    i -= 1
+                    j -= 1
+                remaining = prefixes[:i + 1]
                 fp = (n.get("file_path") or "").replace("\\", "/")
                 segs = [os.path.splitext(s)[0] for s in fp.lower().split("/") if s]
-                if _path_seqs(segs, [p.lower() for p in prefixes]):
+                if not remaining or _path_seqs(segs, [p.lower() for p in remaining]):
                     if best is None or n["type"] in ("function", "method", "go_func"):
                         best = nid
             if best:

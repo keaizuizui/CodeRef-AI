@@ -499,7 +499,7 @@ BUILTIN_TOOLS: List[Dict] = [
                             "target_arch": {"type": ["object", "string"], "description": "目标架构 JSON（可选，缺省读已存储）"},
                             "role_id": {"type": "string", "description": "纳入目标角色 id（可选，缺省取第一个 tech_role）"},
                             "modules": {"type": "array", "items": {"type": "string"}, "description": "指定纳入的游离模块（module 相对路径，可选；缺省按 monitored 取全部）"},
-                            "monitored": {"type": "string", "description": "纳入口径：free=仅真游离孤儿（缺省）；all=free+unmodeled 一并纳入", "default": "free"},
+                            "monitored": {"type": "string", "description": "纳入口径：free=仅真游离孤儿（缺省）；all=free+unmodeled 一并纳入", "default": "free", "enum": ["free", "all"]},
                             "dry_run": {"type": "boolean", "description": "只预览不落盘", "default": False},
                         }, "required": ["project_path"]},
                 },
@@ -1893,10 +1893,26 @@ def _target_adopt(a: dict) -> str:
             "error": f"目标架构无效（{len(errors)} 条），请先用 coderef_target_arch_set 设置合法目标架构",
             "errors": errors,
         }, ensure_ascii=False)
+    dry_run = a.get("dry_run", False)
+    if not isinstance(dry_run, bool):
+        return json.dumps({
+            "status": "error",
+            "tool": "coderef_target_adopt",
+            "project_path": pp,
+            "error": f"dry_run 必须是布尔值，收到 {dry_run!r}",
+        }, ensure_ascii=False)
+    monitored = a.get("monitored", "free")
+    if monitored not in ("free", "all"):
+        return json.dumps({
+            "status": "error",
+            "tool": "coderef_target_adopt",
+            "project_path": pp,
+            "error": f"monitored 仅支持 free/all，收到 {monitored!r}",
+        }, ensure_ascii=False)
     r = adopt_free_modules(pp, ta, role_id=a.get("role_id"),
                            modules=a.get("modules"),
-                           monitored=a.get("monitored", "free"),
-                           dry_run=bool(a.get("dry_run", False)))
+                           monitored=monitored,
+                           dry_run=dry_run)
     r["tool"] = "coderef_target_adopt"
     r["project_path"] = pp
     return json.dumps(r, ensure_ascii=False)
