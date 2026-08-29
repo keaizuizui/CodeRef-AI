@@ -510,9 +510,16 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 >   设计并存 → "保留（不建议收敛，抽公共工具可选）"；真重复 → "建议收敛/抽公共工具"。
 >   `_duplicate_markdown`（P0-C 报告）同步分组展示「真重复」与「平行管线/设计并存」两小节。
 > - **自证**：目标项目 测试项目 15 项 duplicate **全部判为设计并存**（符合"平行管线保留"
->   预期，不再一刀切建议收敛）；`_is_parallel_structure` 单测 5 项 PASS（平行管线 True /
->   同目录 False / 分支后层级不同 False / 废弃目录复制 False / 浅层不同分支 False）；
+>   预期，不再一刀切建议收敛）；`_is_parallel_structure` 单测 **9 项 PASS**（根级分叉 /
+>   共同分支对称 / 分支后层级不同 / 废弃目录复制 / 分支名废弃提示 / 大小写不敏感等边界）；
 >   `py_compile` 通过。
+> - **CodeRabbit 评审修订（2 major，二次提交）**：① `_is_parallel_structure` 允许
+>   **共同前缀为 0**——平行管线可从项目根直接分叉（如 `alone_doc/...` vs `alone_web/...`），
+>   原 `common < 1` 硬性拒绝会漏判根级分叉的设计并存；② 废弃目录黑名单检查由"仅分支名"
+>   扩展为**分支名及其后全部目录段**，且**大小写不敏感**——`products/active/scripts/archive/`
+>   这类"分支下归档副本"不再误判设计并存。自测升级 9 项 PASS（新增根级分叉 True /
+>   分支后含 archive False / Archive 大写 False / 分支后含 legacy False），目标项目 测试项目
+>   15 项 duplicate 复跑仍全判设计并存（**无劣化**）；`py_compile` 过。
 > - **版本号**：5.8.1 → 5.9.0（minor，新功能语义分层）。
 
 ### v5.8.1 — 设计注册表可回收：coderef_registry 新增 delete（ 落地）
