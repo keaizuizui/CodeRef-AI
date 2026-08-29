@@ -432,14 +432,20 @@ def _detect_duplicates(project_path: str, db_path: str,
             mods = ",".join(sorted({cp.get("mod", "?") for cp in copies}))
             locs = [f"{cp.get('mod','?')}:{cp.get('file','')}:{cp.get('line',0)}"
                     for cp in copies]
+            semantic = c.get("semantic_kind", "true_duplicate")
+            if semantic == "designed_parallel":
+                advice = "平行管线/设计并存，保留（不建议收敛，抽公共工具可选）"
+            else:
+                advice = "真重复，建议收敛/抽公共工具"
             gaps.append({
                 "type": "duplicate",
                 "severity": SEVERITY["duplicate"],
                 "symbol": c.get("name", ""),
                 "copies": locs,
                 "similarity": c.get("max_sim", 0.0),
+                "semantic_kind": semantic,
                 "detail": (f"同构重复（孪生）: 符号 {c.get('name','')} 在 {mods} 跨目录重复实现，"
-                           f"相似度 {c.get('max_sim', 0.0):.0%}（建议收敛）"),
+                           f"相似度 {c.get('max_sim', 0.0):.0%}（{advice}）"),
             })
     # 2) 目录级重复（整个目录与其他目录同构）
     if parts.get("directory_duplicate", True):

@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.8.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.9.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -491,6 +491,29 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.9.0 — 双真身语义分层：平行管线/设计并存不机械收敛（P0 落地）
+
+> 承接治理闭环总验收反馈（duplicate 15 持平）与用户定夺：**双真身是项目的特别设计，
+> 架构探测没有捋清楚**。开发方在 目标项目 测试项目复现 15 项 duplicate 全清单，全部集中在
+> `alone_doc/doc-to-skill/scripts` 与 `alone_web/web-to-skill/scripts` 两条**平行技能生成
+> 管线**（文档转技能 vs 网页转技能，有意并存的产品线）之间——探针此前在函数粒度统一报
+> "跨目录重复、建议收敛"，把「管线级设计并存」与「函数级复制粘贴」混为一个信号，机械
+> 收敛最危险是误合并平行管线、破坏设计。本版为 duplicate 判定增加**语义分层**。
+> - **`duplicate_insight` 新增 `semantic_kind` 分类字段**（`core/arch_insight.py`）：
+>   - `designed_parallel`（设计并存）：副本目录在**共同分支点后结构对称**（分支后层级数
+>     相同、分支名不同），判为同一设计模板的平行实例，如 目标项目 两条技能生成管线；
+>     带 `_DEAD_DIR_HINTS` 黑名单（legacy/old/bak/backup/archive/deprecated/_v1 等），
+>     废弃/备份目录的复制**不**判设计并存，防死复制误判。
+>   - `true_duplicate`（真重复）：非对称结构的跨目录同构实现，维持收敛/抽公共建议。
+> - **`arch_gap` duplicate 差距 detail 按分类差异化建议**（`core/arch_gap_analyzer.py`）：
+>   设计并存 → "保留（不建议收敛，抽公共工具可选）"；真重复 → "建议收敛/抽公共工具"。
+>   `_duplicate_markdown`（P0-C 报告）同步分组展示「真重复」与「平行管线/设计并存」两小节。
+> - **自证**：目标项目 测试项目 15 项 duplicate **全部判为设计并存**（符合"平行管线保留"
+>   预期，不再一刀切建议收敛）；`_is_parallel_structure` 单测 5 项 PASS（平行管线 True /
+>   同目录 False / 分支后层级不同 False / 废弃目录复制 False / 浅层不同分支 False）；
+>   `py_compile` 通过。
+> - **版本号**：5.8.1 → 5.9.0（minor，新功能语义分层）。
 
 ### v5.8.1 — 设计注册表可回收：coderef_registry 新增 delete（ 落地）
 
