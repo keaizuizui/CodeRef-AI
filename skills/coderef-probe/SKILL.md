@@ -27,11 +27,11 @@ description: L1 小阶段治理编排 Skill（类 CodeRabbit，变更驱动）�
 |---|---|---|
 | 1. 触发 | `gov_schedule`（定时）/ git hook（变更）/ 手动 | cron/CI 或提交钩子或编程 AI 每次改完代码触发 |
 | 2. 策略路由 | `audit_advisor` | 判本次该增量还是全量（变更信号 + 影响闭包 + 图谱新旧）；调用前建议先 `memory_sync` 建基线 |
-| 3. 增量探查 | `scan`（单维，快一个量级）/ `audit`（全维） | 只查本次改动 + 影响闭包；`scan_list` 查可用维度 |
+| 3. 增量探查 | `scan`（单维，快一个量级）/ `audit`（全维） | 增量只查本次改动 + 影响闭包；`audit_advisor` 判**全量**时走 `audit` 全量范围（非增量闭包）；`scan_list` 查可用维度 |
 | 4. 确定性核验 | `verify_findings` | 用知识图谱 + 静态原语核验 LLM/CodeRabbit/探查论断，杜绝自查幻觉 |
-| 5. 变更防护 | `change_guard` + `change_report` | 提交前拦截"把旧代码改坏"（校验链删/重试削弱/约束移除/回归风险）；出人话变更说明 |
+| 5. 变更防护 | `change_guard` + `change_report` + `flow_verify` | 提交前拦截"把旧代码改坏"（校验链删/重试削弱/约束移除/回归风险）；出人话变更说明；对改动相关入口核验期望链路无 `outside` 新增 |
 | 6. 降噪 | `whitelist` | 确认的误报入白名单，收敛下次噪声 |
-| 7. 登记/升级 | `gov_start`/`gov_issues`/`gov_transition`（小问题即时闭环）；升级 L2（存量结构问题） | 小问题登记治理库即时闭环；存量问题移交 `coderef-governance` |
+| 7. 登记/升级 | `gov_start`/`gov_issues`/`gov_transition`（小问题即时闭环）；升级 L2（存量结构问题） | 小问题先 `gov_start` 建档（差距自动导入为工作项）→ `gov_issues` 确认登记 → `gov_transition` 流转即时闭环；存量问题移交 `coderef-governance` |
 
 **闭环判定**：增量回归 = 0（`change_guard` 无退化 + `flow_verify` 期望链路无 `outside` 新增）+ 白名单收敛（同误报不重复报）。三者满足即本轮 L1 探查闭环。
 
@@ -40,12 +40,13 @@ description: L1 小阶段治理编排 Skill（类 CodeRabbit，变更驱动）�
 ### 场景 A · 提交前快速探查（编程 AI 每次改完代码）
 
 1. `coderef_memory_sync` → 建立/刷新基线（首次或图谱较旧时）。
-2. `coderef_audit_advisor` → 判增量/全量；增量则进入 3。
-3. `coderef_scan`(tool=gov/td/...) → 单维快速探查本次改动 + 影响闭包。
+2. `coderef_audit_advisor` → 判增量/全量。
+3. 增量 → `coderef_scan`(tool=gov/td/...) → 单维快速探查本次改动 + 影响闭包；**全量 → `coderef_audit` → 全维探查（全量范围而非增量闭包）**。
 4. `coderef_change_guard` → 变更前后能力签名对比，拦截回归；`coderef_change_report` → 人话变更说明。
-5. 有疑问的论断 → `coderef_verify_findings` → 确定性核验后再采信。
-6. 确认误报 → `coderef_whitelist`(action=add) → 收敛。
-7. 本次改动引入的小问题 → `coderef_gov_transition` → 登记治理库即时闭环。
+5. `coderef_flow_verify`(entry=改动相关入口, steps=[期望链路]) → 确认无 `outside` 新增（回归不变量，闭环判定的组成）。
+6. 有疑问的论断 → `coderef_verify_findings` → 确定性核验后再采信。
+7. 确认误报 → `coderef_whitelist`(action=add) → 收敛。
+8. 本次改动引入的小问题 → `coderef_gov_start` 建档（差距自动导入为工作项）→ `coderef_gov_issues`(view=open) 确认登记 → `coderef_gov_transition` 流转即时闭环。
 
 ### 场景 B · 论断核验（LLM / CodeRabbit / 探查结论）
 

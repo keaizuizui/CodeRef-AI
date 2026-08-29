@@ -11,7 +11,7 @@
 
 ## 它是什么
 
-CodeRef-AI 通过 MCP 协议暴露 **60 个工具**，同时服务两类人：
+CodeRef-AI 通过 MCP 协议暴露 **58 个工具**，同时服务两类人：
 
 - **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险；持有一条 LLM/CodeRabbit 论断时，还能用静态图谱做确定性核验，再决定采不采信。
 - **非编程人员的技术助理**：把看不懂的代码变成通俗的健康仪表盘、Wiki 文档和流程确证，让你不用读代码，也能确认项目有没有按你的设想运转。
@@ -64,7 +64,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | **变更守护引擎** | 拦截 AI 把代码改坏，输出人能看懂的变更报告 | `coderef_change_guard` `coderef_change_report` |
 | **人话解读平台** | 把确定性格子结论翻译成非编程人员听得懂的"人话" | `coderef_interpret` |
 
-## 60 个 MCP 工具
+## 58 个 MCP 工具
 
 ### 审计引擎
 
@@ -79,6 +79,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_arch_audit` | 架构腐化诊断：复用知识图谱 CALLS 边做模块级静态诊断（循环依赖/上帝模块/分层违例/异常模块规模），聚合 0–10 架构健康度。纯静态、不依赖 LLM | 否 |
 | `coderef_target_arch_set` | 设置/更新目标架构 JSON（5.0 架构推回正轨的参照系），校验后落盘 `<project>/.coderef/target_arch.json`。纯确定性校验，不依赖 LLM | 否 |
 | `coderef_target_arch_get` | 获取当前目标架构 JSON | 否 |
+| `coderef_target_adopt` | 游离一键纳入（5.10 新增）：把 arch_gap 报出的游离/未建模模块按角色批量追加 target_modules（free=真游离孤儿 / unmodeled=被调用未建模；monitored=free/all；dry_run 预览；幂等），机械性归属动作工具化 | 否 |
 | `coderef_arch_gap` | 架构差距分析（5.0 核心）：对比现状知识图谱与目标架构，输出 9 类确定性差距（职责缺失/依赖违例/循环依赖/业务断链/游离模块/上帝模块/异常规模/同构重复/目录级重复），游离模块区分真游离（free）与未建模（unmodeled）并豁免 vendor/压缩产物噪声，summary 透出全量分档计数。纯静态、复用 arch_audit，不依赖 LLM | 否 |
 | `coderef_arch_canvas` | 可视化架构画布（5.0 Phase 1，5.4 自由布局版）：自包含 HTML 自由画布（业务/技术/代码三层节点），节点自由拖拽、任意连线、平移缩放、对齐吸附、缩略图、右键菜单、差距高亮、导出目标架构 JSON | 否 |
 | `coderef_flow_canvas` | 交互式流程画布（5.4）：从代码自动提取业务管线（P0-A 入口管线）+ 跨模块数据流，渲染为可自由拖拽的流程图（同一自由布局引擎） | 否 |
@@ -349,7 +350,7 @@ coderef_interpret(project_path="/path/to/project", action="health")
 ```
 coderef-ai/
 ├── core/                             # 核心引擎
-│   ├── mcp_server.py                 # MCP Server 入口（60 个工具）
+│   ├── mcp_server.py                 # MCP Server 入口（58 个工具）
 │   ├── pipeline_runner.py            # 管线引擎（audit/architecture/docs + 知识图谱）
 │   ├── tool_registry.py              # 工具注册中心（收敛管线引擎的上帝模块职责）
 │   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
@@ -510,7 +511,7 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 >   闭环判定：增量回归=0（change_guard 无退化 + flow_verify 无 outside 新增）+ 白名单收敛。
 >   与 CodeRabbit 边界（用户已拍板）：Coderef 自建完整探查链、不集成 CodeRabbit 编排；
 >   `verify_findings` 仍可核验 CodeRabbit 论断（确定性核验差异化优势）。
-> - **编排结构**：L0 工具层（60 个）→ L1 小阶段治理（coderef-probe，变更驱动轻量）→
+> - **编排结构**：L0 工具层（58 个）→ L1 小阶段治理（coderef-probe，变更驱动轻量）→
 >   L2 大阶段治理（coderef-governance，周期驱动五阶段）→ L3 资产沉淀（展望）。
 > - **自证**：两 SKILL 引用的全部工具与 `mcp_server.py` 注册清单交叉核对通过（governance 25 /
 >   probe 9，无失效引用）；frontmatter 可解析；五阶段工具数 ② 2→3、③ 2→4、④ 3→4。
