@@ -494,6 +494,10 @@ def _is_parallel_structure(project_path: str, copies: List[Dict]) -> bool:
     同一设计模板的两个平行实例，如 目标项目 的
     alone_doc/doc-to-skill/scripts vs alone_web/web-to-skill/scripts
     （文档转技能 vs 网页转技能，有意并存的产品线）。设计并存不应机械收敛。
+
+    共同前缀允许为 0（平行管线可从项目根直接分叉）；分支名及其后的所有目录段
+    任一段命中废弃/备份目录提示（legacy/old/bak/backup/archive/deprecated/
+    废弃/旧版/备份/_v1/_v2，大小写不敏感）→ 视为死复制而非设计并存。
     """
     paths = []
     for c in copies:
@@ -510,16 +514,22 @@ def _is_parallel_structure(project_path: str, copies: List[Dict]) -> bool:
             common = i + 1
         else:
             break
-    if common < 1:
-        return False
     depths = {len(p) - common - 1 for p in paths}
     if len(depths) != 1 or next(iter(depths)) < 1:
         return False
     branches = {p[common] for p in paths if len(p) > common}
     if len(branches) < 2:
         return False
-    if any(any(h in b for h in _DEAD_DIR_HINTS) for b in branches):
-        return False
+
+    def _hits_dead_hint(seg: str) -> bool:
+        low = seg.lower()
+        return any(h in low for h in _DEAD_DIR_HINTS)
+
+    # 分支名 + 分支后各目录段（不含文件名）任一段命中废弃提示 → 非设计并存
+    for p in paths:
+        for seg in p[common:-1]:
+            if _hits_dead_hint(seg):
+                return False
     return True
 
 
