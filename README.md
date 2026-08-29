@@ -500,7 +500,7 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 >   **游离/未建模模块按角色批量追加 `target_modules`**，把「游离模块靠手工在
 >   define-target 一条条补」的机械性归属动作工具化。游离口径与 arch_gap 完全一致
 >   （复用 `_detect_unassigned`）：`free`=真游离孤儿（fan_in=0）、`unmodeled`=被调用
->   但未建模。`role_id` 指定纳入角色（缺省第一个 tech_role）、`modules` 指定纳入模块
+>   但未建模（含已知入口脚本——CLI/命令入口 fan_in=0 系程序启动点，归入未建模而非真游离）。`role_id` 指定纳入角色（缺省第一个 tech_role）、`modules` 指定纳入模块
 >   （缺省按口径取全部）、`monitored=free|all` 控制纳入口径、`dry_run=true` 只预览
 >   不落盘；纳入后自动按写入后架构重评估剩余游离/未建模数。幂等：已纳入模块跳过不重复追加。
 > - **flow_verify 入口跨语言消歧**（`core/flow_verify.py`）：`find_entry` 限定前缀匹配
@@ -513,6 +513,15 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 >   free 纳入 163 模块 / dry_run all 纳入 439 / 指定 modules 精确纳入 / 指定 role_id /
 >   幂等跳过 / 真实落盘后架构仍合法且 remaining_free 正确更新；既有 86 项 unittest 全过
 >   （无回归）；`py_compile` 全过。
+> - **CodeRabbit 评审修订（2 major + 3 minor，二次提交）**：① major `find_entry`
+>   支持 **模块.类.方法** 限定——类名先与候选节点限定名后缀对齐扣除，剩余前导段才做
+>   file_path 路径段匹配（原逻辑把类名误当路径段，`pipeline_runner.Pipe.run` 无法解析）；
+>   ② major `adopt_free_modules` 显式 `modules=[]` 视为不纳入（原逻辑与缺省混同会全量
+>   纳入）；③ minor `monitored` 校验 enum（free/all，非法值报错，schema 同步加 enum）；
+>   ④ minor `dry_run` 校验为真布尔（拒绝 `"false"` 字符串）；⑤ minor README 补
+>   unmodeled 含已知入口脚本。修复后自测 **14 项 PASS**（新增 模块.类.方法 → method 节点 /
+>   Go `Receiver.Method` 限定 / modules=[] no-op / monitored 非法值 / dry_run 非布尔，
+>   原场景无劣化）+ 86 项 unittest 全过。
 > - **版本号**：5.9.0 → 5.10.0（minor，新增工具功能）。
 
 ### v5.9.0 — 双真身语义分层：平行管线/设计并存不机械收敛（P0 落地）

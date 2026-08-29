@@ -983,13 +983,18 @@ def adopt_free_modules(project_path: str,
     unassigned_gaps, _, free_cnt, unmodeled_cnt = _detect_unassigned(
         nodes, adj, project_path, assigned_ids, 100000)
 
-    # 选择纳入范围
-    if modules:
+    # 选择纳入范围（modules 显式空列表 = 不纳入任何模块，与缺省"按口径取全部"区分）
+    if modules is not None:
+        if not isinstance(modules, list) or any(not isinstance(m, str) for m in modules):
+            return {"status": "error", "error": "modules 必须是模块路径字符串数组"}
         want = {_norm_spec(m) for m in modules if m}
         have = {_norm_spec(u.get("module", "")) for u in unassigned_gaps}
         cands = [u for u in unassigned_gaps if _norm_spec(u.get("module", "")) in want]
         not_found = sorted(want - have)
     else:
+        if monitored not in ("free", "all"):
+            return {"status": "error",
+                    "error": f"monitored 仅支持 free/all，收到 {monitored!r}"}
         cands = [u for u in unassigned_gaps
                  if monitored == "all" or u.get("monitored") == "free"]
         not_found = []
