@@ -483,6 +483,27 @@ BUILTIN_TOOLS: List[Dict] = [
                         }, "required": ["project_path"]},
                 },
         {
+                    "name": "coderef_target_adopt",
+                    "description": (
+                        "游离一键纳入（②）——把 coderef_arch_gap 报出的游离/未建模模块按角色批量追加 target_modules。\n"
+                        "机械性归属动作工具化：消除『游离模块靠手工在 define-target 一条条补 target_modules』的低效。\n"
+                        "游离口径与 arch_gap 完全一致：free=真游离孤儿（fan_in=0 无调用者）；unmodeled=被调用但未建模。\n"
+                        "role_id 指定纳入角色（缺省取第一个 tech_role）；modules 指定纳入的游离模块（module 相对路径，\n"
+                        "缺省按 monitored 口径取全部）；monitored=free 仅纳真游离（缺省），all=free+unmodeled 一并纳入；\n"
+                        "dry_run=true 只预览不落盘（返回拟纳入清单与拟写入架构）。\n"
+                        "纳入后自动按写入后架构重评估剩余游离/未建模数，并写回 <project>/.coderef/target_arch.json。\n"
+                        "纯静态、确定性，不依赖 LLM。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "target_arch": {"type": ["object", "string"], "description": "目标架构 JSON（可选，缺省读已存储）"},
+                            "role_id": {"type": "string", "description": "纳入目标角色 id（可选，缺省取第一个 tech_role）"},
+                            "modules": {"type": "array", "items": {"type": "string"}, "description": "指定纳入的游离模块（module 相对路径，可选；缺省按 monitored 取全部）"},
+                            "monitored": {"type": "string", "description": "纳入口径：free=仅真游离孤儿（缺省）；all=free+unmodeled 一并纳入", "default": "free"},
+                            "dry_run": {"type": "boolean", "description": "只预览不落盘", "default": False},
+                        }, "required": ["project_path"]},
+                },
+        {
                     "name": "coderef_arch_gap",
                     "description": (
                         "架构差距分析 —— 对比现状知识图谱与目标架构，输出结构化差距清单（5.0 核心）。\n"
@@ -1837,6 +1858,50 @@ def _target_arch_get(a: dict) -> str:
     }, ensure_ascii=False)
 
 
+def _target_adopt(a: dict) -> str:
+    """游离一键纳入（coderef_target_adopt）"""
+    from core.arch_gap_analyzer import adopt_free_modules
+    from core.target_arch_schema import validate_target_arch
+    pp = a["project_path"]
+    ta = a.get("target_arch")
+    if ta is None:
+        try:
+            ta = _load_target_arch(pp)
+        except ValueError as e:
+            return json.dumps({
+                "status": "error",
+                "tool": "coderef_target_adopt",
+                "project_path": pp,
+                "error": str(e),
+            }, ensure_ascii=False)
+    else:
+        try:
+            ta = _coerce_target_arch("coderef_target_adopt", ta)
+        except ValueError as e:
+            return json.dumps({
+                "status": "error",
+                "tool": "coderef_target_adopt",
+                "project_path": pp,
+                "error": str(e),
+            }, ensure_ascii=False)
+    ok, errors = validate_target_arch(ta)
+    if not ok:
+        return json.dumps({
+            "status": "error",
+            "tool": "coderef_target_adopt",
+            "project_path": pp,
+            "error": f"目标架构无效（{len(errors)} 条），请先用 coderef_target_arch_set 设置合法目标架构",
+            "errors": errors,
+        }, ensure_ascii=False)
+    r = adopt_free_modules(pp, ta, role_id=a.get("role_id"),
+                           modules=a.get("modules"),
+                           monitored=a.get("monitored", "free"),
+                           dry_run=bool(a.get("dry_run", False)))
+    r["tool"] = "coderef_target_adopt"
+    r["project_path"] = pp
+    return json.dumps(r, ensure_ascii=False)
+
+
 def _arch_gap(a: dict) -> str:
     """架构差距分析（coderef_arch_gap）"""
     from core.arch_gap_analyzer import analyze_gap
@@ -2348,6 +2413,7 @@ class Server:
             "coderef_arch_audit": self._arch_audit,
             "coderef_target_arch_set": self._target_arch_set,
             "coderef_target_arch_get": self._target_arch_get,
+            "coderef_target_adopt": self._target_adopt,
             "coderef_arch_gap": self._arch_gap,
             "coderef_arch_canvas": self._arch_canvas,
             "coderef_flow_canvas": self._flow_canvas,
@@ -2610,6 +2676,9 @@ class Server:
 
     def _target_arch_get(self, a: dict):
         return _target_arch_get(a)
+
+    def _target_adopt(self, a: dict):
+        return _target_adopt(a)
 
     def _arch_gap(self, a: dict):
         return _arch_gap(a)

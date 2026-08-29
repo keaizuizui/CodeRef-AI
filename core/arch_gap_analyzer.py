@@ -22,6 +22,8 @@ arch_gap_analyzer — 架构差距分析器（5.0 Phase 0 核心）
 - 模块名匹配：相对路径精确匹配优先，basename 宽松匹配兜底。
 """
 
+import copy
+import json
 import os
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional, Set
@@ -913,3 +915,138 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
 
     result["ok"] = True
     return result
+
+
+def adopt_free_modules(project_path: str,
+                       target_arch: Dict[str, Any],
+                       role_id: Optional[str] = None,
+                       modules: Optional[List[str]] = None,
+                       monitored: str = "free",
+                       dry_run: bool = False,
+                       db_path: Optional[str] = None) -> dict:
+    """游离一键纳入（②）：把 arch_gap 报出的游离/未建模模块按 role 批量追加 target_modules。
+
+    机械性归属动作工具化：消除「游离模块靠手工在 define-target 一条条补 target_modules」的低效。
+    游离口径与 analyze_gap 完全一致（复用 _detect_unassigned）：
+      - free       真游离孤儿（fan_in=0，无任何调用者），治理候选，纳入优先级最高
+      - unmodeled  被调用（fan_in>0）或已知入口脚本但 target_modules 未覆盖，属"未建模"
+    确定性、不依赖 LLM。
+
+    入参：
+      project_path  目标项目路径
+      target_arch   目标架构 JSON（调用方须先经 target_arch_schema 校验）
+      role_id       纳入目标角色 id；缺省取第一个 tech_role
+      modules       指定纳入的游离模块（module 相对路径，即 arch_gap unassigned 的 module 值）；
+                    缺省按 monitored 口径取全部
+      monitored     'free'=仅真游离孤儿（缺省）；'all'=free + unmodeled 一并纳入
+      dry_run       只预览不落盘（返回拟纳入清单与拟写入架构，不写 target_arch.json）
+      db_path       知识图谱 db（缺省自动定位）
+
+    返回：
+      status: completed / error
+      adopted          本次纳入模块 [{module, monitored, fan_in, entry}]
+      adopted_count
+      remaining_free / remaining_unmodeled  纳入后剩余游离/未建模数（dry_run 为预计值）
+      role_id / role_name
+      target_arch      写入后的目标架构（dry_run 为拟写入结果，已应用追加）
+      path             写盘路径（dry_run 为空字符串）
+      not_found        指定 modules 中未出现在游离清单里的模块（仅 modules 参数给出时）
+    """
+    db = db_path or locate_kg_db(project_path)
+    if not db or not os.path.exists(db):
+        return {"status": "error",
+                "error": "知识图谱不存在，需先构建（coderef_audit / coderef_memory_sync）"}
+
+    nodes, adj = load_graph(db)
+    roles = target_arch.get("tech_roles") or []
+    if not roles:
+        return {"status": "error",
+                "error": "目标架构 tech_roles 为空，请先用 coderef_target_arch_set 定义角色"}
+
+    role_ids = [r.get("id", "") for r in roles]
+    if role_id:
+        if role_id not in role_ids:
+            return {"status": "error", "error": f"角色 {role_id} 不存在，可选：{role_ids}"}
+        idx = role_ids.index(role_id)
+    else:
+        idx = 0
+    role = roles[idx]
+
+    # 已归属模块（全部角色）→ 游离判定基准
+    mod_index = _build_module_index(nodes, project_path)
+    assigned_ids: Set[str] = set()
+    for r in roles:
+        assigned_ids |= _match_module_ids(
+            nodes, project_path, r.get("target_modules", []), idx=mod_index)
+
+    # 全量游离清单（max 给大值，adopt 面向批量归属，不用默认 50 的报出上限）
+    unassigned_gaps, _, free_cnt, unmodeled_cnt = _detect_unassigned(
+        nodes, adj, project_path, assigned_ids, 100000)
+
+    # 选择纳入范围
+    if modules:
+        want = {_norm_spec(m) for m in modules if m}
+        have = {_norm_spec(u.get("module", "")) for u in unassigned_gaps}
+        cands = [u for u in unassigned_gaps if _norm_spec(u.get("module", "")) in want]
+        not_found = sorted(want - have)
+    else:
+        cands = [u for u in unassigned_gaps
+                 if monitored == "all" or u.get("monitored") == "free"]
+        not_found = []
+
+    # 在深拷贝上应用追加（dry_run 与落盘共用同一套预览/校验/写回逻辑）
+    arch = copy.deepcopy(target_arch)
+    arch_role = arch["tech_roles"][idx]
+    existing = [_norm_spec(s) for s in arch_role.get("target_modules", [])]
+    existing_set = set(existing)
+    added = []
+    for u in cands:
+        spec = _norm_spec(u.get("module", ""))
+        if not spec or spec in existing_set:
+            continue
+        existing.append(spec)
+        existing_set.add(spec)
+        added.append({
+            "module": spec,
+            "monitored": u.get("monitored", ""),
+            "fan_in": u.get("fan_in", 0),
+            "entry": u.get("entry", False),
+        })
+    if not added:
+        return {"status": "completed", "adopted": [], "adopted_count": 0,
+                "remaining_free": free_cnt, "remaining_unmodeled": unmodeled_cnt,
+                "role_id": role.get("id", ""), "role_name": role.get("name", ""),
+                "target_arch": arch, "path": "",
+                "note": "没有可纳入的游离模块（或指定模块均已归属）", "not_found": not_found}
+    arch_role["target_modules"] = existing
+
+    # 纳入后剩余游离（按应用后架构重算）
+    new_assigned: Set[str] = set()
+    for r in arch.get("tech_roles", []):
+        new_assigned |= _match_module_ids(
+            nodes, project_path, r.get("target_modules", []), idx=mod_index)
+    _, _, rem_free, rem_unmodeled = _detect_unassigned(
+        nodes, adj, project_path, new_assigned, 100000)
+
+    if dry_run:
+        return {"status": "completed", "adopted": added, "adopted_count": len(added),
+                "remaining_free": rem_free, "remaining_unmodeled": rem_unmodeled,
+                "role_id": arch_role.get("id", ""), "role_name": arch_role.get("name", ""),
+                "target_arch": arch, "path": "", "dry_run": True, "not_found": not_found}
+
+    from core.target_arch_schema import normalize_arch, validate_target_arch
+    ok, errors = validate_target_arch(arch)
+    if not ok:
+        return {"status": "error",
+                "error": f"纳入后目标架构校验失败（{len(errors)} 条），未落盘",
+                "errors": errors}
+    arch = normalize_arch(arch)
+    path = os.path.join(project_path, ".coderef", "target_arch.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(arch, f, ensure_ascii=False, indent=2)
+
+    return {"status": "completed", "adopted": added, "adopted_count": len(added),
+            "remaining_free": rem_free, "remaining_unmodeled": rem_unmodeled,
+            "role_id": arch_role.get("id", ""), "role_name": arch_role.get("name", ""),
+            "target_arch": arch, "path": path, "not_found": not_found}

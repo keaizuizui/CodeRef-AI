@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.9.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.10.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -491,6 +491,29 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.10.0 — 游离一键纳入 + flow_verify 入口跨语言消歧（② + 测试断点 1）
+
+> 承接「定夺回应」 整改落地工具层②与测试断点 1：
+> - **新增 `coderef_target_adopt`（游离一键纳入）**（`core/arch_gap_analyzer.py` 新增
+>   `adopt_free_modules` + `core/mcp_server.py` 注册）：把 `coderef_arch_gap` 报出的
+>   **游离/未建模模块按角色批量追加 `target_modules`**，把「游离模块靠手工在
+>   define-target 一条条补」的机械性归属动作工具化。游离口径与 arch_gap 完全一致
+>   （复用 `_detect_unassigned`）：`free`=真游离孤儿（fan_in=0）、`unmodeled`=被调用
+>   但未建模。`role_id` 指定纳入角色（缺省第一个 tech_role）、`modules` 指定纳入模块
+>   （缺省按口径取全部）、`monitored=free|all` 控制纳入口径、`dry_run=true` 只预览
+>   不落盘；纳入后自动按写入后架构重评估剩余游离/未建模数。幂等：已纳入模块跳过不重复追加。
+> - **flow_verify 入口跨语言消歧**（`core/flow_verify.py`）：`find_entry` 限定前缀匹配
+>   由**子串包含**改为**文件路径段连续子序列精确匹配**（新增 `_path_seqs`），并把
+>   `go_func` 加入优先匹配类型——解决 目标项目 这类混合语言项目「项目根目录名命中所有
+>   Python 同名 `main`」的跨语言歧义（`cmd.目标项目.main` 此前误导向 Python `main`，
+>   现精确命中 Go 入口 `cmd/目标项目/main.go:main`）。
+> - **自证**：目标项目 测试项目端到端 **17 项 PASS**——flow_verify `cmd.目标项目.main`→Go
+>   入口 / `program.Run`→Go `Run` 正确命中；adopt_free_modules 非法角色报错 / dry_run
+>   free 纳入 163 模块 / dry_run all 纳入 439 / 指定 modules 精确纳入 / 指定 role_id /
+>   幂等跳过 / 真实落盘后架构仍合法且 remaining_free 正确更新；既有 86 项 unittest 全过
+>   （无回归）；`py_compile` 全过。
+> - **版本号**：5.9.0 → 5.10.0（minor，新增工具功能）。
 
 ### v5.9.0 — 双真身语义分层：平行管线/设计并存不机械收敛（P0 落地）
 
