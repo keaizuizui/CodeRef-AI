@@ -68,6 +68,22 @@ def ensure_kg(project_path: str, db_path: Optional[str] = None) -> str:
     return db_path
 
 
+def _path_seqs(segs: List[str], pat: List[str]) -> bool:
+    """pat 是否为 segs 的连续子序列（路径段精确匹配）。
+
+    限定前缀按 file_path 路径段做连续子序列匹配，而非子串包含——避免
+    目标项目 这类"项目根目录名 目标项目 命中所有 Python main"的跨语言歧义
+    （如 cmd.目标项目.main 误导向 clawbot/.../validate_crawl.py:main）。
+    """
+    n, m = len(segs), len(pat)
+    if m == 0 or n < m:
+        return False
+    for i in range(n - m + 1):
+        if segs[i:i + m] == pat:
+            return True
+    return False
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 验证器
 # ═══════════════════════════════════════════════════════════════════
@@ -101,17 +117,22 @@ class FlowVerifier:
             return spec
         if "." in spec:
             # 支持 模块.函数 / 模块.类.方法 / 任意层级限定。
-            # 取最后一段为符号名，其余为限定前缀（模块路径某一段或类名）。
+            # 取最后一段为符号名，其余为限定前缀（模块/包路径段）。
+            # 限定前缀按 file_path 路径段连续子序列精确匹配（而非子串包含），
+            # 避免 目标项目 这类"项目根目录名命中所有 Python main"的跨语言歧义；
+            # 符号名支持方法/限定名末段等值（Go 方法节点可能为 program.Run）。
             *prefixes, name = spec.split(".")
             prefixes = [p for p in prefixes if p]
             best = None
             for nid, n in self.nodes.items():
-                if n["name"] == name and prefixes:
-                    fp = (n.get("file_path") or "").lower()
-                    nm = n["name"].lower()
-                    if any(p in fp or p in nm for p in prefixes):
-                        if best is None or n["type"] in ("function", "method"):
-                            best = nid
+                nm = n["name"]
+                if not prefixes or not (nm == name or nm.split(".")[-1] == name):
+                    continue
+                fp = (n.get("file_path") or "").replace("\\", "/")
+                segs = [os.path.splitext(s)[0] for s in fp.lower().split("/") if s]
+                if _path_seqs(segs, [p.lower() for p in prefixes]):
+                    if best is None or n["type"] in ("function", "method", "go_func"):
+                        best = nid
             if best:
                 return best
         key = spec.lower()
