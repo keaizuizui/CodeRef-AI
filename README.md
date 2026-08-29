@@ -493,6 +493,27 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
 
+### v5.12.0 — 分层治理编排层补齐：L3 资产沉淀编排（P3 coderef-asset）
+
+> 承接《治理体系定位与编排层设计研究_20260829.md》落地路线 P3（L3 资产沉淀编排评估；
+> 用户定夺：评估 + 落地一起做、独立 SKILL）：
+> - **P3 L3 资产沉淀编排**（新建 `skills/coderef-asset/SKILL.md`，零新工具纯文档编排）：
+>   把治理/开发产出的高价值设计固化为可复用资产并复刻到新项目——
+>   **沉淀链**「`coderef_innovation` 识别 → `coderef_innovation_review` 确认（LLM 排查真创新/
+>   管线-wiki 一致性/复刻合理性）→ `coderef_registry` 登记归一（alias→canonical，防命名漂移）→
+>   `coderef_asset` commit 固化（≥2 workflow 采用 + evidence 防污染）→ `coderef_asset_blueprint`
+>   补全蓝图（entry_points/verified_findings）→ `coderef_interpret` 人话解读」；
+>   **复用链**「`coderef_replicate` 铺排（确定性缺口，人拍板）→ `coderef_replicate_apply`
+>   落地骨架（不自动改源码、冲突默认不覆盖）→ 回 L1/L2 验证」。治理成果 → 资产 → 新项目
+>   沉淀复用闭环。
+> - **L1/L2 衔接**：`coderef-governance` 加 L3 衔接（③ 抽公共工具、⑤ 体检高价值设计 → 沉淀；
+>   意图路由表加资产沉淀路由）；`coderef-probe` 加 L1→L3 衔接（探查发现多 workflow 采用设计 → 沉淀候选）。
+> - **编排结构**：L0 工具层（58 个）→ L1 小阶段治理（coderef-probe，变更驱动）→ L2 大阶段治理
+>   （coderef-governance，周期驱动）→ **L3 资产沉淀（coderef-asset，治理成果→资产）**。
+> - **自证**：三 SKILL 引用的全部工具与 `mcp_server.py` 注册清单交叉核对通过（asset 8 个均注册，
+>   无失效引用）；frontmatter 可解析；工具数不变（58）。
+> - **版本号**：5.11.0 → 5.12.0（minor，补齐 L3 资产沉淀编排层）。
+
 ### v5.11.0 — 分层治理编排层落地：L2 完整化（P1 收编执行增强层）+ L1 小阶段治理编排（P2 coderef-probe）
 
 > 承接《治理体系定位与编排层设计研究_20260829.md》落地路线 P1/P2（用户定夺：P1+P2 全做完再测）：

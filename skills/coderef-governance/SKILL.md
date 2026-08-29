@@ -1,6 +1,6 @@
 ---
 name: coderef-governance
-description: 治理主链场景化 Skill（外部建议 E 物化）。把 CodeRef-AI 的 58 个 MCP 工具收敛为「5 阶段 × 每阶段 2–5 个高频工具」的少而精工具链，让编程 AI 不必直面全部工具也能沿主链把屎山捋顺。当用户要做「架构治理 / 存量屎山收敛 / 重复与孪生治理 / 定期体检 / 治理工作项流转」时使用。核心逻辑：人工先捋对管线（map→target），编程 AI 照清单治理（refactor→verify），周期体检维持（health）。L2 大阶段治理编排（本 SKILL）+ L1 小阶段治理编排（`coderef-probe` SKILL，变更驱动探查/防护）互补衔接。
+description: 治理主链场景化 Skill（外部建议 E 物化）。把 CodeRef-AI 的 58 个 MCP 工具收敛为「5 阶段 × 每阶段 2–5 个高频工具」的少而精工具链，让编程 AI 不必直面全部工具也能沿主链把屎山捋顺。当用户要做「架构治理 / 存量屎山收敛 / 重复与孪生治理 / 定期体检 / 治理工作项流转」时使用。核心逻辑：人工先捋对管线（map→target），编程 AI 照清单治理（refactor→verify），周期体检维持（health）。L2 大阶段治理编排（本 SKILL）+ L1 小阶段治理编排（`coderef-probe` SKILL，变更驱动探查/防护）+ L3 资产沉淀编排（`coderef-asset` SKILL，治理成果→资产）互补衔接。
 ---
 
 # CodeRef 治理主链 · 少而精工具链（L2 大阶段治理编排）
@@ -8,6 +8,7 @@ description: 治理主链场景化 Skill（外部建议 E 物化）。把 CodeRe
 > 承接《建议书_治理主链与工具改造_20260826.md》§五「少而精工具链」与 §七 外部建议 E（场景化 Skill 封装层，P0 采纳）。
 > 目标：把 58 个 MCP 工具收敛成 **5 阶段 × 每阶段 2–5 个高频工具**，其余工具按需按名调用即可。
 > L2 编排定位：周期驱动的屎山系统性规整。已收编执行增强层（P1）：② 引 `coderef_role_boundary`、③ 引 `coderef_refactor_plan`/`coderef_gov_pipeline`、④ 引 `coderef_arch_verify`——整改环节从「人工逐条手工改 + arch_gap 复查」升级为「gov_pipeline 半自动整改闭环 + 人拍板确认」，但架构方向决策仍由人拍板（工具只做机械性归属动作）。
+> L3 衔接（P3）：治理成果——③ 抽出的可复用公共工具、⑤ 体检发现的高价值设计（多 workflow 采用）→ 沉淀走 `coderef-asset` SKILL（资产沉淀编排），避免成果随项目迁移流失。
 
 ## 核心原则（必须遵守）
 
@@ -36,6 +37,7 @@ description: 治理主链场景化 Skill（外部建议 E 物化）。把 CodeRe
 | 符号越界 / 职责归属错位 | `coderef_role_boundary` | + `coderef_arch_gap`（模块级缺失互补） |
 | 治理工作项怎么流转 / 豁免 | `coderef_gov_transition` | 参数速查见下 |
 | 定期体检 / 建档 / 闭环 | `coderef_gov_start` / `coderef_gov_close` | + `coderef_gov_board` / `coderef_gov_report` |
+| 治理出成果想沉淀 / 创新识别 / 资产复刻 | `coderef_asset` / `coderef_innovation` / `coderef_replicate` | 详见 `coderef-asset` SKILL（L3） |
 | AI 改完代码提交前确认没改坏 | `coderef_change_guard` | + `coderef_change_report` |
 | 查调用关系 / 影响面 | `coderef_query` | 替代 grep，省 token |
 | 安全合规（OWASP） | `coderef_owasp` | + `coderef_prompt_governance` |
@@ -117,6 +119,10 @@ description: 治理主链场景化 Skill（外部建议 E 物化）。把 CodeRe
 4. `coderef_gov_close` → 收尾闭环（cid 缺省时自动定位当前 open 周期）。
 
 **产出**：体检周期 + 跨期趋势报告。**定时化**：`coderef_gov_schedule` 生成 run_cycle.py 可纳入 cron/CI。
+
+### L3 衔接 · 治理成果 → 资产沉淀（见 `coderef-asset` SKILL）
+
+治理 ③ 抽出可复用公共工具、⑤ 体检发现高价值设计（多 workflow 采用）→ 走 `coderef-asset` 沉淀链：`innovation` 识别 → `innovation_review` 确认 → `registry` 登记归一（alias→canonical）→ `asset`(commit，≥2 采用 + evidence) 固化 → `asset_blueprint` 补全 → `interpret` 人话解读；复用走 `replicate` 铺排（人拍板）→ `replicate_apply` 落地骨架。`registry` canonical 是 L2 目标架构/duplicate 差距与 L3 资产的共同命名基准。
 
 ## 常见陷阱
 
