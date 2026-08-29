@@ -468,6 +468,61 @@ def _identity_markdown(data: Dict) -> str:
 # P0-C 重复/同构识别
 # ═══════════════════════════════════════════════════════════════════
 
+def _rel_parts(project_path: str, fp: str) -> List[str]:
+    """文件相对项目根的路径段列表（含文件名）。"""
+    fp = (fp or "").replace("\\", "/")
+    if os.path.isabs(fp):
+        try:
+            rel = os.path.relpath(fp, project_path)
+        except ValueError:
+            rel = fp
+        rel = rel.replace("\\", "/")
+    else:
+        rel = fp
+    return [p for p in rel.split("/") if p]
+
+
+# 分支名命中以下片段 → 疑似废弃/备份目录，不判设计并存（防死复制误判）
+_DEAD_DIR_HINTS = ("legacy", "old", "bak", "backup", "archive", "deprecated",
+                   "废弃", "旧版", "备份", "_v1", "_v2")
+
+
+def _is_parallel_structure(project_path: str, copies: List[Dict]) -> bool:
+    """平行管线/设计并存信号（ 语义分层）：副本目录在共同分支点后对称。
+
+    分支点后每侧目录层级数相同、分支名不同（且非废弃/备份目录）→ 判定为
+    同一设计模板的两个平行实例，如 目标项目 的
+    alone_doc/doc-to-skill/scripts vs alone_web/web-to-skill/scripts
+    （文档转技能 vs 网页转技能，有意并存的产品线）。设计并存不应机械收敛。
+    """
+    paths = []
+    for c in copies:
+        parts = _rel_parts(project_path, c.get("file") or "")
+        if len(parts) < 3:  # 至少 分支名/子目录/文件名
+            return False
+        paths.append(parts)
+    if len(paths) < 2:
+        return False
+    p0 = paths[0]
+    common = 0
+    for i, seg in enumerate(p0[:-1]):
+        if all(len(p) > i and p[i] == seg for p in paths):
+            common = i + 1
+        else:
+            break
+    if common < 1:
+        return False
+    depths = {len(p) - common - 1 for p in paths}
+    if len(depths) != 1 or next(iter(depths)) < 1:
+        return False
+    branches = {p[common] for p in paths if len(p) > common}
+    if len(branches) < 2:
+        return False
+    if any(any(h in b for h in _DEAD_DIR_HINTS) for b in branches):
+        return False
+    return True
+
+
 def _dir_inventory(project_path: str, fv) -> Dict[str, Dict]:
     """按相对目录聚合：文件 basename 集 + 函数签名集（供目录级同构比对）。"""
     dirs: Dict[str, Dict] = defaultdict(lambda: {"files": set(), "funcs": set()})
@@ -570,6 +625,9 @@ def duplicate_insight(project_path: str, db_path: Optional[str] = None,
             for c in cl:
                 c.pop("body", None)
             clusters.append({"name": name, "kind": "duplicate",
+                             "semantic_kind": ("designed_parallel"
+                                               if _is_parallel_structure(project_path, cl)
+                                               else "true_duplicate"),
                              "max_sim": round(max_sim, 2), "copies": cl})
         if singles:
             for c in singles:
@@ -598,11 +656,26 @@ def _duplicate_markdown(data: Dict) -> str:
     lines.append("> 聚焦业务级同名函数（已过滤 `__init__`/`to_dict`/`execute` 等通用方法名噪音）。")
     dup = [c for c in clusters if c.get("kind") == "duplicate"]
     cand = [c for c in clusters if c.get("kind") != "duplicate"]
-    if dup:
-        lines.append("### 重复实现簇（函数体相似度 ≥ 60%，建议收敛）")
+    true_dup = [c for c in dup if c.get("semantic_kind") != "designed_parallel"]
+    parallel = [c for c in dup if c.get("semantic_kind") == "designed_parallel"]
+    if true_dup:
+        lines.append("### 重复实现簇（真重复，建议收敛/抽公共工具）")
         lines.append("| 符号 | 实现数 | 相似度 | 模块 | 文件:行 |")
         lines.append("|------|--------|--------|------|---------|")
-        for c in dup:
+        for c in true_dup:
+            first = c["copies"][0]
+            rest = c["copies"][1:]
+            mods = "、".join(f"`{x['mod']}`" for x in c["copies"])
+            locs = f"`{first['file']}:{first['line']}`"
+            if rest:
+                locs += " 等 " + "、".join(f"`{x['file']}:{x['line']}`" for x in rest[:4])
+            lines.append(f"| `{c['name']}` | {len(c['copies'])} | {c.get('max_sim', 0)} | {mods} | {locs} |")
+        lines.append("")
+    if parallel:
+        lines.append("### 平行管线/设计并存（有意并存的产品线/多实现，保留，不建议收敛）")
+        lines.append("| 符号 | 实现数 | 相似度 | 模块 | 文件:行 |")
+        lines.append("|------|--------|--------|------|---------|")
+        for c in parallel:
             first = c["copies"][0]
             rest = c["copies"][1:]
             mods = "、".join(f"`{x['mod']}`" for x in c["copies"])
