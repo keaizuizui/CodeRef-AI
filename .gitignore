@@ -28,6 +28,9 @@ samples/
 # ─── 报告输出 ───
 coderef-report/
 
+# ─── 画布/生成产物（本地生成，不入库）───
+generate/
+
 # ─── Wiki 生成产物（不入库，本地生成即可）───
 docs/wiki/
 txt/
@@ -58,4 +61,5 @@ docs/operation-memory-design/
 docs/5.0-plan.md
 docs/5.1-plan.md
 docs/5.2-plan.md
+docs/U34-*.md
 docs/治理体系定位与编排层设计研究_*.md
