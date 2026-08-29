@@ -27,10 +27,20 @@ import os
 import json
 import tempfile
 import threading
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
 from loguru import logger
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - 非 Windows
+    msvcrt = None
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -40,11 +50,43 @@ from loguru import logger
 # 注册表文件版本
 REGISTRY_VERSION = 1
 
-# 跨实例写事务锁：同进程内多 DesignRegistry 实例并发变更时串行化。
-# 原子写只能防半写损坏，防不了「陈旧快照覆盖」——实例 A 基于旧快照的
-# add/alias/asset 写入会把实例 B 已 delete 的设计恢复回来。配合
-# _synchronized「变更前重载最新磁盘状态」，每次写都基于磁盘最新数据。
-_REGISTRY_LOCK = threading.Lock()
+# 跨实例写事务锁：进程内 RLock 串行化同进程多实例并发变更。
+# 进程外（setup.bat 每个动作是独立 python -c 进程、多终端并发）由
+# _file_lock 跨进程文件锁兜底。原子写只能防半写损坏，防不了「陈旧快照
+# 覆盖」——实例 A 基于旧快照的 add/alias/asset 写入会把实例 B 已 delete
+# 的设计恢复回来。配合 _synchronized「变更前重载最新磁盘状态」，每次写
+# 都基于磁盘最新数据。
+_REGISTRY_LOCK = threading.RLock()
+
+
+@contextmanager
+def _file_lock(registry_path: str):
+    """跨进程文件锁：锁文件为 <registry>.lock。
+
+    Windows 用 msvcrt.locking、POSIX 用 fcntl.flock，阻塞式获取。
+    保证多进程（多终端/多个 python -c）并发「读-改-写」串行化，
+    防止最后的 os.replace 丢弃先发生的变更。
+    """
+    lock_path = registry_path + ".lock"
+    lock_f = open(lock_path, "a+", encoding="utf-8")
+    try:
+        if msvcrt is not None:
+            lock_f.seek(0)
+            msvcrt.locking(lock_f.fileno(), msvcrt.LK_LOCK, 1)
+        elif fcntl is not None:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            if msvcrt is not None:
+                lock_f.seek(0)
+                msvcrt.locking(lock_f.fileno(), msvcrt.LK_UNLCK, 1)
+            elif fcntl is not None:
+                fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            logger.warning("注册表锁释放失败: %s", lock_path)
+        finally:
+            lock_f.close()
 
 # 内置常见设计种子（canonical 名称）
 SEED_DESIGNS: Dict[str, Dict[str, str]] = {
@@ -89,14 +131,14 @@ def _default_registry_path() -> str:
 
 
 def _synchronized(method):
-    """把注册表变更操作串行化：持锁 + 变更前重载最新磁盘状态。
+    """把注册表变更操作串行化：进程内 RLock + 跨进程文件锁 + 变更前重载。
 
     每次变更（add/alias/delete/add_asset）都基于磁盘最新数据执行，
-    避免多实例并发「读-改-写」时陈旧快照恢复已删除设计或丢弃其他更新。
+    避免多实例/多进程并发「读-改-写」时陈旧快照恢复已删除设计或丢弃其他更新。
     """
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
-        with _REGISTRY_LOCK:
+        with _REGISTRY_LOCK, _file_lock(self.registry_path):
             self._load()
             return method(self, *args, **kwargs)
     return wrapper
@@ -116,7 +158,9 @@ class DesignRegistry:
     def __init__(self, registry_path: Optional[str] = None):
         self.registry_path = registry_path or _default_registry_path()
         self._data: Dict[str, Any] = {}
-        self._load()
+        # 构造/种子初始化也在同一事务边界内，防止与并发变更交错写盘
+        with _REGISTRY_LOCK, _file_lock(self.registry_path):
+            self._load()
 
     # ─── 持久化（原子写） ────────────────────────────────────────
 

@@ -362,7 +362,7 @@ goto :registry_menu
 
 :reg_list
 cls
-python -c "from core.design_registry import DesignRegistry; r=DesignRegistry(); print('共 ' + str(len(r.list_designs())) + ' 条设计:'); [print('  - ' + d.get('canonical','') + ' (' + d.get('category','') + ') | 来源: ' + (d.get('source_project') or '(预置)')) for d in r.list_designs()]" 2>nul
+python -m core.cli registry list 2>nul
 if %errorlevel% neq 0 (
     echo [错误] Python 环境未就绪
 )
@@ -375,7 +375,7 @@ set /p reg_project="来源项目路径: "
 if "%reg_project%"=="" goto :registry_menu
 set /p reg_canonical="设计名（canonical）: "
 set /p reg_desc="设计说明: "
-python -c "from core.design_registry import DesignRegistry; r=DesignRegistry(); r.manage(project_path=r'%reg_project%', action='add', name='%reg_canonical%', description='%reg_desc%'); print('[OK] 已新增设计: %reg_canonical%')" 2>nul
+python -m core.cli registry add "%reg_project%" "%reg_canonical%" "%reg_desc%" 2>nul
 if %errorlevel% neq 0 (
     echo [错误] 新增失败，请检查设计名是否已存在
 )
@@ -387,7 +387,7 @@ set /p reg_project="来源项目路径: "
 if "%reg_project%"=="" goto :registry_menu
 set /p reg_canonical="目标设计名（canonical）: "
 set /p reg_alias="新别名: "
-python -c "from core.design_registry import DesignRegistry; r=DesignRegistry(); r.manage(project_path=r'%reg_project%', action='alias', canonical='%reg_canonical%', alias='%reg_alias%'); print('[OK] 别名已添加: %reg_alias%')" 2>nul
+python -m core.cli registry alias "%reg_project%" "%reg_canonical%" "%reg_alias%" 2>nul
 if %errorlevel% neq 0 (
     echo [错误] 添加别名失败，请检查 canonical 是否存在
 )
@@ -402,7 +402,7 @@ echo [警告] 将删除设计「%reg_name%」（含关联别名与资产），
 echo          且仅当来源项目与当前项目一致时才允许。
 set /p confirm="确认删除？(输入 yes 确认): "
 if not "%confirm%"=="yes" goto :registry_menu
-python -c "from core.design_registry import DesignRegistry; r=DesignRegistry(); r.manage(project_path=r'%reg_project%', action='delete', name='%reg_name%'); print('[OK] 已删除设计: %reg_name%')" 2>nul
+python -m core.cli registry delete "%reg_project%" "%reg_name%" 2>nul
 if %errorlevel% neq 0 (
     echo [错误] 删除失败：预置种子/他项目条目不可删，或设计不存在
 )
@@ -424,7 +424,7 @@ echo 按回车停止服务并返回主菜单。
 echo.
 set /p board_project="项目路径: "
 if "%board_project%"=="" goto :menu
-python -c "from core.gov_webdash import serve; r=serve(r'%board_project%'); print('治理看板已启动:'); print('  访问地址: ' + r['url']); print('按回车停止服务...'); input()" 2>nul
+python -m core.cli board serve "%board_project%" 2>nul
 if %errorlevel% neq 0 (
     echo [错误] 启动失败，请检查项目路径与 Python 环境
 )
@@ -448,7 +448,7 @@ echo.
 set /p canvas_project="项目路径: "
 if "%canvas_project%"=="" goto :menu
 set "canvas_file="
-for /f "delims=" %%i in ('python -c "from core.canvas_generator import ArchCanvas; print(ArchCanvas().generate(project_path=r'%canvas_project%'))" 2^>nul') do set "canvas_file=%%i"
+for /f "delims=" %%i in ('python -m core.cli canvas generate "%canvas_project%" 2^>nul') do set "canvas_file=%%i"
 if "%canvas_file%"=="" (
     echo [错误] 画布生成失败，请检查项目路径与扫描数据
 ) else (
