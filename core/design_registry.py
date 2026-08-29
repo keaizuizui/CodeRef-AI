@@ -68,6 +68,8 @@ def _file_lock(registry_path: str):
     防止最后的 os.replace 丢弃先发生的变更。
     """
     lock_path = registry_path + ".lock"
+    # 先确保锁文件父目录存在（新路径注册表初始化时目录可能尚未创建）
+    os.makedirs(os.path.dirname(os.path.abspath(registry_path)), exist_ok=True)
     lock_f = open(lock_path, "a+", encoding="utf-8")
     try:
         if msvcrt is not None:

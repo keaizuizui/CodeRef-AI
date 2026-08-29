@@ -12,7 +12,26 @@ setup.bat 的菜单值经 sys.argv 传入（作为数据而非代码），避免
   canvas generate <project>
 """
 
+import os
 import sys
+
+
+def _require_owned_project(project_path: str) -> str:
+    """校验传入项目路径与当前工作目录派生的项目身份一致。
+
+    CLI 是本地配置工具，项目身份只能来自可信执行上下文（cwd）：
+    若直接信任 argv 路径作为 delete 的所有权证明，从项目 A 传入项目 B
+    的路径即可绕过「来源项目校验」删除 B 的设计。变更操作仅允许
+    作用于当前所在项目。
+    """
+    cwd = os.path.normcase(os.path.abspath(os.getcwd()))
+    proj = os.path.normcase(os.path.abspath(project_path))
+    if cwd != proj:
+        raise ValueError(
+            "项目身份校验失败：当前目录与传入路径不一致。"
+            "请在目标项目根目录下运行本工具，注册表变更仅允许作用于当前项目。"
+        )
+    return proj
 
 
 def _registry(argv):
@@ -34,7 +53,7 @@ def _registry(argv):
             if len(argv) < 3:
                 print("add 需要: <project> <name> [desc]")
                 return 2
-            r.manage(project_path=argv[1], action="add", name=argv[2],
+            r.manage(project_path=_require_owned_project(argv[1]), action="add", name=argv[2],
                      description=argv[3] if len(argv) > 3 else "")
             print(f"[OK] 已新增设计: {argv[2]}")
             return 0
@@ -42,7 +61,7 @@ def _registry(argv):
             if len(argv) < 4:
                 print("alias 需要: <project> <canonical> <alias>")
                 return 2
-            r.manage(project_path=argv[1], action="alias",
+            r.manage(project_path=_require_owned_project(argv[1]), action="alias",
                      canonical=argv[2], alias=argv[3])
             print(f"[OK] 别名已添加: {argv[3]}")
             return 0
@@ -50,7 +69,7 @@ def _registry(argv):
             if len(argv) < 3:
                 print("delete 需要: <project> <name>")
                 return 2
-            r.manage(project_path=argv[1], action="delete", name=argv[2])
+            r.manage(project_path=_require_owned_project(argv[1]), action="delete", name=argv[2])
             print(f"[OK] 已删除设计: {argv[2]}")
             return 0
     except ValueError as e:
