@@ -22,9 +22,11 @@
 版本: v1.0
 """
 
+import functools
 import os
 import json
 import tempfile
+import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
@@ -37,6 +39,12 @@ from loguru import logger
 
 # 注册表文件版本
 REGISTRY_VERSION = 1
+
+# 跨实例写事务锁：同进程内多 DesignRegistry 实例并发变更时串行化。
+# 原子写只能防半写损坏，防不了「陈旧快照覆盖」——实例 A 基于旧快照的
+# add/alias/asset 写入会把实例 B 已 delete 的设计恢复回来。配合
+# _synchronized「变更前重载最新磁盘状态」，每次写都基于磁盘最新数据。
+_REGISTRY_LOCK = threading.Lock()
 
 # 内置常见设计种子（canonical 名称）
 SEED_DESIGNS: Dict[str, Dict[str, str]] = {
@@ -78,6 +86,20 @@ def _default_registry_path() -> str:
     """默认注册表文件路径：项目根目录下 data/design_registry.json"""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(root, "data", "design_registry.json")
+
+
+def _synchronized(method):
+    """把注册表变更操作串行化：持锁 + 变更前重载最新磁盘状态。
+
+    每次变更（add/alias/delete/add_asset）都基于磁盘最新数据执行，
+    避免多实例并发「读-改-写」时陈旧快照恢复已删除设计或丢弃其他更新。
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with _REGISTRY_LOCK:
+            self._load()
+            return method(self, *args, **kwargs)
+    return wrapper
 
 
 class DesignRegistry:
@@ -228,6 +250,7 @@ class DesignRegistry:
 
     # ─── 管理接口 ────────────────────────────────────────────────
 
+    @_synchronized
     def manage(
         self,
         project_path: str,
@@ -317,9 +340,19 @@ class DesignRegistry:
         if action == "delete":
             if not name or not name.strip():
                 raise ValueError("delete 操作必须提供目标名称（name）")
-            resolved = self.resolve(name)
-            if resolved not in self._data["designs"]:
-                raise ValueError(f"设计「{name}」不存在，无需删除。")
+            # 删除必须精确唯一：canonical/别名可能被多个设计共享，
+            # resolve() 只取首个匹配会删错，故要求恰好一个匹配才可删。
+            needle = name.strip().lower()
+            matches = [
+                canonical
+                for canonical, candidate in self._data["designs"].items()
+                if canonical.lower() == needle
+                or any(alias.lower() == needle
+                       for alias in candidate.get("aliases", []))
+            ]
+            if len(matches) != 1:
+                raise ValueError(f"设计「{name}」不存在或不唯一，无法删除。")
+            resolved = matches[0]
             entry = self._data["designs"].get(resolved, {})
             src = entry.get("source_project", "") or ""
             if not src:
@@ -347,6 +380,7 @@ class DesignRegistry:
 
     # ─── 资产（asset）区 ────────────────────────────────────────
 
+    @_synchronized
     def add_asset(self, asset: Dict[str, Any]) -> Dict[str, Any]:
         """写入/更新一个 WorkflowAsset 到资产区。"""
         canonical = asset.get("canonical", "") or ""

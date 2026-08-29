@@ -12,15 +12,21 @@ echo   1. 配置 LLM API 密钥
 echo   2. 管理 Cache（硬编码优化）
 echo   3. 清理 Cache（开源前/切换项目前）
 echo   4. 生成 LLM 审查报告
-echo   5. 退出
+echo   5. 设计注册表管理（list / add / alias / delete）
+echo   6. 激活治理看板前端（本地服务）
+echo   7. 生成并打开架构画布
+echo   8. 退出
 echo.
-set /p choice="请选择 [1-5]: "
+set /p choice="请选择 [1-8]: "
 
 if "%choice%"=="1" goto :config_llm
 if "%choice%"=="2" goto :cache_menu
 if "%choice%"=="3" goto :clear_cache
 if "%choice%"=="4" goto :llm_review
-if "%choice%"=="5" exit /b 0
+if "%choice%"=="5" goto :registry_menu
+if "%choice%"=="6" goto :board_menu
+if "%choice%"=="7" goto :canvas_menu
+if "%choice%"=="8" exit /b 0
 goto :menu
 
 :: ============================================================
@@ -325,3 +331,130 @@ if %errorlevel% neq 0 (
 echo.
 pause
 goto :llm_review
+
+:: ============================================================
+:: 5. 设计注册表管理（list / add / alias / delete）
+:: ============================================================
+:registry_menu
+cls
+echo ============================================
+echo   设计注册表管理
+echo ============================================
+echo.
+echo 注册表保存"已知设计"库（data\design_registry.json），
+echo 供 coderef_innovation / coderef_asset / coderef_registry 查询。
+echo delete 仅可删除「当前项目注册」的设计；预置种子与他项目条目受保护。
+echo.
+echo   a. 列出全部设计
+echo   b. 新增设计（add）
+echo   c. 添加别名（alias）
+echo   d. 删除设计（delete）
+echo   e. 返回主菜单
+echo.
+set /p reg_choice="请选择 [a-e]: "
+
+if "%reg_choice%"=="a" goto :reg_list
+if "%reg_choice%"=="b" goto :reg_add
+if "%reg_choice%"=="c" goto :reg_alias
+if "%reg_choice%"=="d" goto :reg_delete
+if "%reg_choice%"=="e" goto :menu
+goto :registry_menu
+
+:reg_list
+cls
+python -c "from core.design_registry import DesignRegistry; r=DesignRegistry(); print('共 ' + str(len(r.list_designs())) + ' 条设计:'); [print('  - ' + d.get('canonical','') + ' (' + d.get('category','') + ') | 来源: ' + (d.get('source_project') or '(预置)')) for d in r.list_designs()]" 2>nul
+if %errorlevel% neq 0 (
+    echo [错误] Python 环境未就绪
+)
+echo.
+pause
+goto :registry_menu
+
+:reg_add
+set /p reg_project="来源项目路径: "
+if "%reg_project%"=="" goto :registry_menu
+set /p reg_canonical="设计名（canonical）: "
+set /p reg_desc="设计说明: "
+python -c "from core.design_registry import DesignRegistry; r=DesignRegistry(); r.manage(project_path=r'%reg_project%', action='add', name='%reg_canonical%', description='%reg_desc%'); print('[OK] 已新增设计: %reg_canonical%')" 2>nul
+if %errorlevel% neq 0 (
+    echo [错误] 新增失败，请检查设计名是否已存在
+)
+pause
+goto :registry_menu
+
+:reg_alias
+set /p reg_project="来源项目路径: "
+if "%reg_project%"=="" goto :registry_menu
+set /p reg_canonical="目标设计名（canonical）: "
+set /p reg_alias="新别名: "
+python -c "from core.design_registry import DesignRegistry; r=DesignRegistry(); r.manage(project_path=r'%reg_project%', action='alias', canonical='%reg_canonical%', alias='%reg_alias%'); print('[OK] 别名已添加: %reg_alias%')" 2>nul
+if %errorlevel% neq 0 (
+    echo [错误] 添加别名失败，请检查 canonical 是否存在
+)
+pause
+goto :registry_menu
+
+:reg_delete
+set /p reg_project="当前项目路径: "
+if "%reg_project%"=="" goto :registry_menu
+set /p reg_name="要删除的设计名/别名: "
+echo [警告] 将删除设计「%reg_name%」（含关联别名与资产），
+echo          且仅当来源项目与当前项目一致时才允许。
+set /p confirm="确认删除？(输入 yes 确认): "
+if not "%confirm%"=="yes" goto :registry_menu
+python -c "from core.design_registry import DesignRegistry; r=DesignRegistry(); r.manage(project_path=r'%reg_project%', action='delete', name='%reg_name%'); print('[OK] 已删除设计: %reg_name%')" 2>nul
+if %errorlevel% neq 0 (
+    echo [错误] 删除失败：预置种子/他项目条目不可删，或设计不存在
+)
+pause
+goto :registry_menu
+
+:: ============================================================
+:: 6. 激活治理看板前端（本地服务）
+:: ============================================================
+:board_menu
+cls
+echo ============================================
+echo   激活治理看板前端
+echo ============================================
+echo.
+echo 将启动治理看板本地服务（仅回环 127.0.0.1，不暴露局域网），
+echo 用浏览器访问打印的地址即可交互（报告 / 问题 / 循环 / 流转）。
+echo 按回车停止服务并返回主菜单。
+echo.
+set /p board_project="项目路径: "
+if "%board_project%"=="" goto :menu
+python -c "from core.gov_webdash import serve; r=serve(r'%board_project%'); print('治理看板已启动:'); print('  访问地址: ' + r['url']); print('按回车停止服务...'); input()" 2>nul
+if %errorlevel% neq 0 (
+    echo [错误] 启动失败，请检查项目路径与 Python 环境
+)
+echo.
+pause
+goto :menu
+
+:: ============================================================
+:: 7. 生成并打开架构画布
+:: ============================================================
+:canvas_menu
+cls
+echo ============================================
+echo   生成并打开架构画布
+echo ============================================
+echo.
+echo 将基于项目图谱生成可交互架构画布（HTML），
+echo 随后用默认浏览器打开，可拖拽编辑、导出目标架构 JSON。
+echo 需项目已完成扫描（coderef_scan），否则生成失败。
+echo.
+set /p canvas_project="项目路径: "
+if "%canvas_project%"=="" goto :menu
+set "canvas_file="
+for /f "delims=" %%i in ('python -c "from core.canvas_generator import ArchCanvas; print(ArchCanvas().generate(project_path=r'%canvas_project%'))" 2^>nul') do set "canvas_file=%%i"
+if "%canvas_file%"=="" (
+    echo [错误] 画布生成失败，请检查项目路径与扫描数据
+) else (
+    echo [OK] 画布已生成: %canvas_file%
+    start "" "%canvas_file%"
+)
+echo.
+pause
+goto :menu
