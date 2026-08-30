@@ -89,10 +89,10 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_gov_close` | 收尾体检周期并输出本期统计（完成率/剩余/复发/豁免） | 否 |
 | `coderef_gov_issues` | 查询治理工作项（预置视图 open/all/high/recurred/rejected/archived/overdue/assigned/recent） | 否 |
 | `coderef_gov_transition` | 治理工作项状态流转（Detected→Confirmed→Fixing→Verified→Archived/Rejected）+ 豁免 | 否 |
-| `coderef_gov_report` | 体检报告 / 治理看板（action=report 单期+跨期趋势+自包含 HTML；action=board 交互 HTML 看板，缺省落盘 gov_board.html；5.13 合并 gov_board） | 否 |
+| `coderef_gov_report` | 体检报告 / 治理看板（action=report 单期+跨期趋势+自包含 HTML；action=board 交互 HTML 看板，缺省落盘 gov_board.html；5.12.1 合并 gov_board） | 否 |
 | `coderef_gov_pipeline` | 治理自动化流水线（5.2）：在途工作项 → 任务卡 → 复验 → Verified/附缺口，全程审计轨迹 | 否 |
 | `coderef_dynamic_probe` | 动态探针（5.2）：静态挖掘动态信号（动态导入/装饰器注册/间接索引/entry_points），零执行被检项目 | 否 |
-| `coderef_gov_board` | 治理 Web 看板（5.2 兼容别名；5.13 起转发到 coderef_gov_report(action=board)）：自包含交互 HTML 看板 + 只读服务 + 状态流转回写 | 否 |
+| `coderef_gov_board` | 治理 Web 看板（5.2 兼容别名；5.12.1 起转发到 coderef_gov_report(action=board)）：自包含交互 HTML 看板 + 只读服务 + 状态流转回写 | 否 |
 | `coderef_gov_workspace` | 多代码库聚合治理（5.2）：跨仓汇总治理状态与整体健康度 | 否 |
 | `coderef_gov_schedule` | 定时体检（5.2）：生成可执行触发脚本 run_cycle.py + 离期检查 | 否 |
 | `coderef_role_boundary` | 符号级职责越界检测（5.2）：模块归属正确但符号逾越角色边界（静态信号 + 可选语义） | 可选 |

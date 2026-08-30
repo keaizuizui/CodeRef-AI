@@ -681,7 +681,7 @@ BUILTIN_TOOLS: List[Dict] = [
         {
                     "name": "coderef_gov_report",
                     "description": (
-                        "体检报告 / 治理看板（单期 + 跨期趋势 + 交互看板）（5.1 起；5.13 合并 gov_board）。\n"
+                        "体检报告 / 治理看板（单期 + 跨期趋势 + 交互看板）（5.1 起；5.12.1 合并 gov_board）。\n"
                         "借鉴 plane 的 Dashboard/Analytics + Workspace View：持续监控健康状态。\n"
                         "action=report（默认）：返回当前 open 周期（或 cid）完成率/剩余/复发/豁免统计 + 跨期趋势\n"
                         "  （各已关闭周期整改量曲线）；out_format=json 返回结构化，out_format=html 额外写出 gov_report.html 并返回路径。\n"
@@ -1134,7 +1134,7 @@ BUILTIN_TOOLS: List[Dict] = [
         {
                     "name": "coderef_gov_board",
                     "description": (
-                        "治理 Web 看板（5.2 兼容别名；5.13 起转发到 coderef_gov_report(action=board)）。\n"
+                        "治理 Web 看板（5.2 兼容别名；5.12.1 起转发到 coderef_gov_report(action=board)）。\n"
                         "为既有调用方保留：生成自包含交互 HTML 看板并缺省落盘 <project>/.coderef/gov_board.html（），\n"
                         "返回确切 board_html 路径供浏览器直接打开。新调用请用 coderef_gov_report(action=board)，本别名行为与之一致。\n"
                         "interactive=true（默认）启用前端流转回写治理库（/api/transition，仅 127.0.0.1）；\n"
@@ -2117,7 +2117,7 @@ def _gov_transition(a: dict) -> str:
 
 
 def _gov_report(a: dict) -> str:
-    """体检报告/治理看板（coderef_gov_report，5.13 合并 report+board）"""
+    """体检报告/治理看板（coderef_gov_report，5.12.1 合并 report+board）"""
     from core.healthcycle import HealthCycle
     from core.gov_dashboard import render_report
     from core.gov_webdash import render_board, serve
