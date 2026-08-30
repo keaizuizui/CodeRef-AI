@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.12.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.12.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -89,10 +89,10 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_gov_close` | 收尾体检周期并输出本期统计（完成率/剩余/复发/豁免） | 否 |
 | `coderef_gov_issues` | 查询治理工作项（预置视图 open/all/high/recurred/rejected/archived/overdue/assigned/recent） | 否 |
 | `coderef_gov_transition` | 治理工作项状态流转（Detected→Confirmed→Fixing→Verified→Archived/Rejected）+ 豁免 | 否 |
-| `coderef_gov_report` | 体检报告（单期 + 跨期趋势 + 自包含 HTML） | 否 |
+| `coderef_gov_report` | 体检报告 / 治理看板（action=report 单期+跨期趋势+自包含 HTML；action=board 交互 HTML 看板，缺省落盘 gov_board.html；5.13 合并 gov_board） | 否 |
 | `coderef_gov_pipeline` | 治理自动化流水线（5.2）：在途工作项 → 任务卡 → 复验 → Verified/附缺口，全程审计轨迹 | 否 |
 | `coderef_dynamic_probe` | 动态探针（5.2）：静态挖掘动态信号（动态导入/装饰器注册/间接索引/entry_points），零执行被检项目 | 否 |
-| `coderef_gov_board` | 治理 Web 看板（5.2）：自包含交互 HTML 看板 + 只读服务 + 状态流转回写 | 否 |
+| `coderef_gov_board` | 治理 Web 看板（5.2 兼容别名；5.13 起转发到 coderef_gov_report(action=board)）：自包含交互 HTML 看板 + 只读服务 + 状态流转回写 | 否 |
 | `coderef_gov_workspace` | 多代码库聚合治理（5.2）：跨仓汇总治理状态与整体健康度 | 否 |
 | `coderef_gov_schedule` | 定时体检（5.2）：生成可执行触发脚本 run_cycle.py + 离期检查 | 否 |
 | `coderef_role_boundary` | 符号级职责越界检测（5.2）：模块归属正确但符号逾越角色边界（静态信号 + 可选语义） | 可选 |
@@ -282,7 +282,8 @@ coderef_gov_issues(project_path="/path/to/project", view="open")
 coderef_gov_transition(project_path="/path/to/project", issue_id="...", to="Fixing")
 coderef_gov_pipeline(project_path="/path/to/project")  # 在途项 → 任务卡 → 复验 → Verified/附缺口
 coderef_gov_close(project_path="/path/to/project")     # 收尾周期，输出完成率/复发/豁免统计
-coderef_gov_report(project_path="/path/to/project")    # 单期 + 跨期趋势报告
+coderef_gov_report(project_path="/path/to/project")                     # action=report 单期 + 跨期趋势报告
+coderef_gov_report(project_path="/path/to/project", action="board")     # action=board 交互 HTML 看板（落盘 gov_board.html）
 
 # 12. 记忆层 / 操作记忆：了解 AI 记住了什么；上下文丢失后恢复「工具位置 / 约定 / 陷阱」
 coderef_memory_status(project_path="/path/to/project")            # 项目认知覆盖度 + 盲区地图
@@ -492,6 +493,18 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 ## 更新日志
 
 > 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+
+### v5.12.1 — 工具收敛 A：合并 gov_report + gov_board（报表视图级收敛）
+
+> 承接《工具收敛评估_20260830.md》落地选项 A（用户 + 测试共识走 A，B 单独排期）：
+> - **合并**：`coderef_gov_report` 新增 `action=report/board` 参数——action=report（默认）单期 + 跨期趋势报告（JSON/HTML）；
+>   action=board 交互 HTML 看板（**守住  契约**：缺省落盘 `<project>/.coderef/gov_board.html` 并返回确切路径，
+>   interactive=false 只读、open_server 可选起本地服务）。
+> - **兼容别名**：`coderef_gov_board` 保留为兼容别名（转发 action=board，行为不变），既有调用零断链；
+>   工具总数仍 58（未删工具名）。
+> - **自证**：冒烟验证 4 路径全绿——action=report JSON/HTML、action=board 落盘断言（）、
+>   兼容别名转发 + 落盘；`Server()` 初始化正常。
+> - **版本号**：5.12.0 → 5.12.1（patch，报表视图级合并 + 兼容别名，不改治理能力）。
 
 ### v5.12.0 — 分层治理编排层补齐：L3 资产沉淀编排（P3 coderef-asset）
 

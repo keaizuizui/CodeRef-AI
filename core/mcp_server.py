@@ -681,18 +681,27 @@ BUILTIN_TOOLS: List[Dict] = [
         {
                     "name": "coderef_gov_report",
                     "description": (
-                        "体检报告（单期 + 跨期趋势）（5.1）。\n"
-                        "借鉴 plane 的 Dashboard/Analytics：持续监控健康状态。\n"
-                        "返回当前 open 周期（或指定 cid）的完成率/剩余/复发/豁免统计 + 跨期趋势\n"
-                        "（各已关闭周期的整改量曲线）。可选写出自包含 HTML 报告（含内联 SVG 趋势图，零 CDN）。\n"
-                        "out_format=json 返回结构化；out_format=html 额外写出 gov_report.html 并返回路径。\n"
+                        "体检报告 / 治理看板（单期 + 跨期趋势 + 交互看板）（5.1 起；5.13 合并 gov_board）。\n"
+                        "借鉴 plane 的 Dashboard/Analytics + Workspace View：持续监控健康状态。\n"
+                        "action=report（默认）：返回当前 open 周期（或 cid）完成率/剩余/复发/豁免统计 + 跨期趋势\n"
+                        "  （各已关闭周期整改量曲线）；out_format=json 返回结构化，out_format=html 额外写出 gov_report.html 并返回路径。\n"
+                        "action=board：生成自包含交互 HTML 看板（KPI/状态分布/跨期趋势/工作项表格/状态流转按钮）；\n"
+                        "   契约：缺省落盘 <project>/.coderef/gov_board.html 并返回确切路径；\n"
+                        "  interactive=false 退化为只读；open_server=true 可起本地 http.server 服务（进程常驻，返回 URL）。\n"
                         "纯静态、确定性，趋势由治理库聚合，不依赖 LLM。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
+                            "action": {"type": "string", "enum": ["report", "board"], "default": "report",
+                                       "description": "report=体检报告（JSON/HTML）；board=交互 HTML 看板"},
                             "cid": {"type": "string", "description": "指定周期 id（可选，缺省当前 open 周期）"},
-                            "out_format": {"type": "string", "enum": ["json", "html"], "default": "json"},
-                            "output_dir": {"type": "string", "description": "报告输出目录（可选，默认 <project>/.coderef/）"},
+                            "out_format": {"type": "string", "enum": ["json", "html"], "default": "json",
+                                           "description": "action=report 时输出格式"},
+                            "output_dir": {"type": "string", "description": "输出目录（可选，默认 <project>/.coderef/）"},
+                            "interactive": {"type": "boolean", "description": "action=board 时启用交互应用态（默认 true）", "default": True},
+                            "open_server": {"type": "boolean", "description": "action=board 时是否同时启动本地 http.server 服务（进程常驻）", "default": False},
+                            "host": {"type": "string", "description": "服务监听地址（open_server=true 时）", "default": "127.0.0.1"},
+                            "port": {"type": "integer", "description": "服务端口（open_server=true 时，0=自动分配）", "default": 0},
                         }, "required": ["project_path"]},
                 },
         {
@@ -1125,12 +1134,12 @@ BUILTIN_TOOLS: List[Dict] = [
         {
                     "name": "coderef_gov_board",
                     "description": (
-                        "治理 Web 看板（5.2）：生成自包含交互 HTML 看板（可应用态）。\n"
-                        "含 KPI（完成率/复发/剩余）、状态分布、按角色/模块分布、跨期趋势折线、\n"
-                        "工作项表格（按视图/状态/角色筛选、点击行展开详情、状态流转按钮）。\n"
+                        "治理 Web 看板（5.2 兼容别名；5.13 起转发到 coderef_gov_report(action=board)）。\n"
+                        "为既有调用方保留：生成自包含交互 HTML 看板并缺省落盘 <project>/.coderef/gov_board.html（），\n"
+                        "返回确切 board_html 路径供浏览器直接打开。新调用请用 coderef_gov_report(action=board)，本别名行为与之一致。\n"
                         "interactive=true（默认）启用前端流转回写治理库（/api/transition，仅 127.0.0.1）；\n"
                         "false 退化为只读。open=true 可起本地 http.server 服务（进程常驻，返回 URL）。\n"
-                        "纯静态、确定性，不依赖 LLM。产物落盘：生成本体 HTML 写盘到 <project>/.coderef/gov_board.html（），返回含确切 board_html 路径供浏览器直接打开；output_dir 可自定义。"
+                        "纯静态、确定性，不依赖 LLM。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
@@ -2108,19 +2117,42 @@ def _gov_transition(a: dict) -> str:
 
 
 def _gov_report(a: dict) -> str:
-    """体检报告（coderef_gov_report）"""
+    """体检报告/治理看板（coderef_gov_report，5.13 合并 report+board）"""
+    from core.healthcycle import HealthCycle
     from core.gov_dashboard import render_report
+    from core.gov_webdash import render_board, serve
     pp = a["project_path"]
+    if a.get("action", "report") == "board":
+        #  契约：缺省落盘 <project>/.coderef/gov_board.html，返回确切路径
+        interactive = a.get("interactive", True)
+        output_dir = a.get("output_dir", "")
+        if not output_dir:
+            output_dir = os.path.join(pp, ".coderef")
+        r = render_board(pp, output_dir=output_dir,
+                         cid=a.get("cid", ""), interactive=interactive)
+        r["tool"] = "coderef_gov_report"
+        r["project_path"] = pp
+        if a.get("open_server") or a.get("open"):
+            srv = serve(pp, host=a.get("host", "127.0.0.1"),
+                        port=a.get("port", 0))
+            r["server"] = srv
+        return json.dumps(r, ensure_ascii=False)
     if a.get("out_format", "json") == "html":
         r = render_report(pp, output_dir=a.get("output_dir", ""),
                           cid=a.get("cid", ""))
     else:
-        from core.healthcycle import HealthCycle
         hc = HealthCycle(pp)
         r = hc.report(cid=a.get("cid") or "")
         r["tool"] = "coderef_gov_report"
         r["project_path"] = pp
     return json.dumps(r, ensure_ascii=False)
+
+
+def _gov_board(a: dict) -> str:
+    """治理 Web 看板（coderef_gov_board 兼容别名，转发 coderef_gov_report action=board）"""
+    payload = json.loads(_gov_report({**a, "action": "board"}))
+    payload["tool"] = "coderef_gov_board"
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _gov_pipeline(a: dict) -> str:
@@ -2143,27 +2175,6 @@ def _dynamic_probe(a: dict) -> str:
     r = probe(pp, include_tests=a.get("include_tests", False))
     r["tool"] = "coderef_dynamic_probe"
     r["project_path"] = pp
-    return json.dumps(r, ensure_ascii=False)
-
-
-def _gov_board(a: dict) -> str:
-    """治理 Web 看板（coderef_gov_board）"""
-    from core.gov_webdash import render_board, serve
-    pp = a["project_path"]
-    interactive = a.get("interactive", True)
-    # 缺省落盘到 <project>/.coderef/gov_board.html（）：保证有可人工/浏览器
-    # 直接查看的 HTML 产物，而非只在返回里塞一整段 html 字符串。
-    output_dir = a.get("output_dir", "")
-    if not output_dir:
-        output_dir = os.path.join(pp, ".coderef")
-    r = render_board(pp, output_dir=output_dir,
-                     cid=a.get("cid", ""), interactive=interactive)
-    r["tool"] = "coderef_gov_board"
-    r["project_path"] = pp
-    if a.get("open"):
-        srv = serve(pp, host=a.get("host", "127.0.0.1"),
-                    port=a.get("port", 0))
-        r["server"] = srv
     return json.dumps(r, ensure_ascii=False)
 
 
