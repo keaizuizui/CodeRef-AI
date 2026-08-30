@@ -2,7 +2,7 @@
 """
 MemoryLayer v1.0 —— AI 代码记忆层（认知记忆层）
 
-为 MCP 工具 coderef_memory_sync / coderef_memory_query / coderef_memory_status
+为 MCP 工具 coderef_memory(action=sync/query/status)
 提供统一的"项目认知记忆"能力：
 
 1. sync(project_path, mode="full"|"incr")
