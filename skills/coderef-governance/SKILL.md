@@ -7,7 +7,7 @@ description: 治理主链场景化 Skill（外部建议 E 物化）。把 CodeRe
 
 > 承接《建议书_治理主链与工具改造_20260826.md》§五「少而精工具链」与 §七 外部建议 E（场景化 Skill 封装层，P0 采纳）。
 > 目标：把 58 个 MCP 工具收敛成 **5 阶段 × 每阶段 2–5 个高频工具**，其余工具按需按名调用即可。
-> L2 编排定位：周期驱动的屎山系统性规整。已收编执行增强层（P1）：② 引 `coderef_role_boundary`、③ 引 `coderef_refactor_plan`/`coderef_gov_pipeline`、④ 引 `coderef_arch_verify`——整改环节从「人工逐条手工改 + arch_gap 复查」升级为「gov_pipeline 半自动整改闭环 + 人拍板确认」，但架构方向决策仍由人拍板（工具只做机械性归属动作）。
+> L2 编排定位：周期驱动的屎山系统性规整。已收编执行增强层（P1/P1 补）：② 引 `coderef_role_boundary`、③ 引 `coderef_refactor_plan`/`coderef_target_adopt`/`coderef_gov_pipeline`、④ 引 `coderef_arch_verify`——整改环节从「人工逐条手工改 + arch_gap 复查」升级为「游离一键纳入 + gov_pipeline 半自动整改闭环 + 人拍板确认」，但架构方向决策仍由人拍板（工具只做机械性归属动作）。
 > L3 衔接（P3）：治理成果——③ 抽出的可复用公共工具、⑤ 体检发现的高价值设计（多 workflow 采用）→ 沉淀走 `coderef-asset` SKILL（资产沉淀编排），避免成果随项目迁移流失。
 
 ## 核心原则（必须遵守）
@@ -36,7 +36,7 @@ description: 治理主链场景化 Skill（外部建议 E 物化）。把 CodeRe
 | 重构后对齐度 / 是否达标 | `coderef_arch_verify` | 增量传 `changed_files` 快速反馈单卡 |
 | 符号越界 / 职责归属错位 | `coderef_role_boundary` | + `coderef_arch_gap`（模块级缺失互补） |
 | 治理工作项怎么流转 / 豁免 | `coderef_gov_transition` | 参数速查见下 |
-| 定期体检 / 建档 / 闭环 | `coderef_gov_start` / `coderef_gov_close` | + `coderef_gov_board` / `coderef_gov_report` |
+| 定期体检 / 建档 / 闭环 | `coderef_gov_start` / `coderef_gov_close` | + `coderef_gov_report`（action=report/board） |
 | 治理出成果想沉淀 / 创新识别 / 资产复刻 | `coderef_asset` / `coderef_innovation` / `coderef_replicate` | 详见 `coderef-asset` SKILL（L3） |
 | AI 改完代码提交前确认没改坏 | `coderef_change_guard` | + `coderef_change_report` |
 | 查调用关系 / 影响面 | `coderef_query` | 替代 grep，省 token |
@@ -78,13 +78,14 @@ description: 治理主链场景化 Skill（外部建议 E 物化）。把 CodeRe
 
 **目标**：按②的差距清单逐项治理，每动一处可验证、可回滚。治理动作分两类：**机械性归属**（游离纳入/照卡执行，工具可半自动完成）与**架构方向决策**（收敛哪条真身/拆不拆模块，人拍板后执行）。
 
-**工具（4 个）**：`coderef_gov_issues`（取队列）、`coderef_refactor_plan`（差距→任务卡）、`coderef_gov_pipeline`（治理自动化流水线）、`coderef_arch_gap`（治理后复查）
+**工具（5 个）**：`coderef_gov_issues`（取队列）、`coderef_refactor_plan`（差距→任务卡）、`coderef_target_adopt`（游离一键纳入）、`coderef_gov_pipeline`（治理自动化流水线）、`coderef_arch_gap`（治理后复查）
 
 **编排**：
 1. `coderef_gov_issues`(view=high) → 取去噪后的工作项队列（已按真实 severity 排序、unassigned 置底）。
 2. `coderef_refactor_plan` → 把差距清单转为可执行任务卡（type/operations/impact/verify，按执行顺序排序），作为逐项治理的作业单。
-3. 机械性归属 → `coderef_gov_pipeline`(issue_ids=[...]) → 自动走 Fixing→任务卡→复验→Verified 半自动闭环；架构方向决策由人拍板后执行（工具只做机械性归属动作，绝不自动改架构方向）。
-4. 治理后 `coderef_arch_gap` 复查 gap 总数下降。
+3. 游离模块（free/unmodeled）→ `coderef_target_adopt`(dry_run=true 预览 → 确认后落盘) → 按 role 批量追加 target_modules（机械性归属，幂等，已纳入跳过）。
+4. 机械性归属 → `coderef_gov_pipeline`(issue_ids=[...]) → 自动走 Fixing→任务卡→复验→Verified 半自动闭环；架构方向决策由人拍板后执行（工具只做机械性归属动作，绝不自动改架构方向）。
+5. 治理后 `coderef_arch_gap` 复查 gap 总数下降。
 
 **护栏**：任一治理动作前，确认目标不在 git 库/备份范围内；绝不动 git 库与备份。
 
@@ -92,13 +93,13 @@ description: 治理主链场景化 Skill（外部建议 E 物化）。把 CodeRe
 
 **目标**：流程合规验证 + 对齐度后验 + 治理状态流转。
 
-**工具（4 个）**：`coderef_flow_verify`、`coderef_arch_verify`、`coderef_gov_transition`、`coderef_gov_report`
+**工具（4 个）**：`coderef_flow_verify`、`coderef_arch_verify`、`coderef_gov_transition`、`coderef_gov_report`（action=report）
 
 **编排**：
 1. `coderef_flow_verify`(entry=入口, steps=[期望链路]) → 状态分 ordered/in_pipeline/outside/missing；`outside` 是诚实状态不是失败，如实转述。
 2. `coderef_arch_verify` → 0-100 对齐度后验（职责对齐 40% + 依赖健康 30% + 业务覆盖 20% + 代码健康 10%）+ 差距复检清单；增量模式传 `changed_files` 可对单张任务卡快速反馈是否达标（③ gov_pipeline 复验也复用它）。
 3. `coderef_gov_transition` → 沿状态机推进（Detected→Confirmed→Fixing→Verified→Archived）。
-4. `coderef_gov_report` → 单期报告 + 跨期趋势。
+4. `coderef_gov_report`(action=report) → 单期报告 + 跨期趋势。
 
 **gov_transition 参数速查（P2⑦）**：
 - `transition`：必填 issue_id + action='transition' + to_state（如 Confirmed→Fixing 传 to_state='Fixing'）
@@ -110,12 +111,12 @@ description: 治理主链场景化 Skill（外部建议 E 物化）。把 CodeRe
 
 **目标**：定期建档体检、跨期趋势、闭环归档。
 
-**工具（4 个）**：`coderef_gov_start`、`coderef_gov_issues`、`coderef_gov_board`/`coderef_gov_report`、`coderef_gov_close`
+**工具（4 个）**：`coderef_gov_start`、`coderef_gov_issues`、`coderef_gov_report`（action=report/board）、`coderef_gov_close`
 
 **编排**：
 1. `coderef_gov_start` → 建档 open 周期 + 差距全量导入（去重/复发/豁免生效）。
 2. `coderef_gov_issues`(view=high) → 看真实治理重点（已降噪）。
-3. `coderef_gov_board` → 交互看板（自动落盘 <project>/.coderef/gov_board.html）；`coderef_gov_report` → 单期报告。
+3. `coderef_gov_report`(action=board) → 交互看板（自动落盘 <project>/.coderef/gov_board.html，）；`coderef_gov_report`(action=report) → 单期报告。
 4. `coderef_gov_close` → 收尾闭环（cid 缺省时自动定位当前 open 周期）。
 
 **产出**：体检周期 + 跨期趋势报告。**定时化**：`coderef_gov_schedule` 生成 run_cycle.py 可纳入 cron/CI。
