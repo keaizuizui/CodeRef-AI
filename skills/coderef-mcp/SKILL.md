@@ -53,10 +53,7 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 
 | 工具 | 用途 | 备注 |
 |------|------|------|
-| `coderef_memory_sync` | 初始化/增量同步项目记忆层 | mtime+size 增量 |
-| `coderef_memory_query` | 供 AI 复用项目记忆（语义/结构查询） | 替代重扫 |
-| `coderef_memory_status` | 「AI 知道什么」：覆盖度 + 置信度 + 盲区 | 用户直观视角 |
-| `coderef_memory_quality` | 记忆质量评估 + 自动补全 | |
+| `coderef_memory` | 项目记忆层：action=sync 初始化/增量同步（mtime+size 增量）；action=query 语义/结构查询（替代重扫）；action=status 覆盖度+置信度+盲区；action=quality 质量评估+自动补全（5.12.2 合并 4 工具） | action=sync/status/quality 默认后台 |
 
 ### 操作记忆层 — 应对上下文丢失（4.8 新增）
 
@@ -161,12 +158,12 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 2. coderef_operation_memory_status         → 需要时：看覆盖度 + 待人工确认项
 3. coderef_operation_memory_query (query_type=all) → 深入恢复资源/决策/约定/踩坑
 4. coderef_operation_memory_find (name=test/.env/model) → 定位具体资源
-5. coderef_memory_query (query_type=semantic) → 恢复代码语义记忆
+5. coderef_memory (action=query, query_type=semantic) → 恢复代码语义记忆
 ```
 
 ## 常见陷阱
 
-- **不要同步等重型工具**：audit/docs/review/memory_sync 都默认后台，必须轮询 `coderef_task_status`。
+- **不要同步等重型工具**：audit/docs/review/coderef_memory（action=sync/status/quality）都默认后台，必须轮询 `coderef_task_status`。
 - **不要把诚实状态当失败**：`coderef_flow_verify` 返回 `missing`、`coderef_interpret` 提示"未审计"，都是如实反馈，要原样转述给用户。
 - **不要自己改 verify_findings 的 verdict**：它由确定性逻辑打出，你无权改变。
 - **没有 API Key 时的 LLM 工具**：`coderef_docs`(LLM 归纳部分)、`coderef_change_report`、`coderef_innovation_review`、`coderef_interpret action=wiki` 会诚实提示需配置 Key。如实告诉用户，不要伪造产物。

@@ -183,10 +183,7 @@ export CODEREF_API_KEY="ollama"
 | `coderef_task_status` | 后台任务状态查询 | 同步 | 否 |
 | `coderef_change_guard` | 变更守护：git 基层(ensure_git) + 退化检测(guard) + 健康基线(anchor/list_baselines)，git_bin 可由外层 AI 传入 | 后台 | 否 |
 | `coderef_change_report` | 变更人话版说明 | 后台 | 可选 |
-| `coderef_memory_sync` | 记忆层增量同步 | 后台 | 否 |
-| `coderef_memory_query` | 记忆语义检索 + 结构查询 | 同步 | 否 |
-| `coderef_memory_status` | 认知覆盖度 + 置信度 + 盲区地图 | 同步 | 否 |
-| `coderef_memory_quality` | 记忆质量评估 + 自动补全 | 后台 | 可选 |
+| `coderef_memory` | 记忆层：action=sync 同步/增量；action=query 语义/结构查询；action=status 覆盖度+盲区地图；action=quality 质量评估+自动补全（5.12.2 合并 4 工具） | sync/status/quality 后台、query 同步 | 否 |
 | `coderef_operation_memory_sync` | 操作记忆增量同步（ledger / BRAIN.md） | 后台 | 否 |
 | `coderef_operation_memory_query` | 操作记忆语义 / 结构查询 | 同步 | 否 |
 | `coderef_operation_memory_status` | 操作记忆状态概览 | 同步 | 否 |
@@ -323,7 +320,7 @@ python -m core.mcp_server
 
 为避免任意 MCP 客户端（Trae / Claude Desktop / Cursor / Cherry Studio 等）对单次 `tools/call` 的**超时限制**，**重型工具默认后台执行**：调用立即返回 `{"status":"running","task_id":"xxxx"}`，由外层 AI 轮询 `coderef_task_status(task_id="xxxx")` 取最终结果，不再撞超时。
 
-- 默认后台：`coderef_audit` / `coderef_docs` / `coderef_review` / `coderef_frontend` / `coderef_report` / `coderef_audit_advisor` / `coderef_architecture` / `coderef_memory_sync` / `coderef_memory_quality` / `coderef_owasp` / `coderef_innovation` / `coderef_asset` / `coderef_innovation_review` / `coderef_change_guard` / `coderef_change_report` / `coderef_verify_findings` / `coderef_replicate` / `coderef_replicate_apply` / `coderef_asset_blueprint` / `coderef_prompt_governance` / `coderef_interpret` / `coderef_scan`
+- 默认后台：`coderef_audit` / `coderef_docs` / `coderef_review` / `coderef_frontend` / `coderef_report` / `coderef_audit_advisor` / `coderef_architecture` / `coderef_memory`（action=sync/status/quality） / `coderef_owasp` / `coderef_innovation` / `coderef_asset` / `coderef_innovation_review` / `coderef_change_guard` / `coderef_change_report` / `coderef_verify_findings` / `coderef_replicate` / `coderef_replicate_apply` / `coderef_asset_blueprint` / `coderef_prompt_governance` / `coderef_interpret` / `coderef_scan`
 - 轻量工具（`coderef_query` / `coderef_whitelist` / `coderef_docs_read` 等）保持同步快速返回
 - 显式控制：传 `background=False` 强制同步（小项目想立即拿结果），传 `background=True` 强制后台
 
