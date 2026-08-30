@@ -55,16 +55,11 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 |------|------|------|
 | `coderef_memory` | 项目记忆层：action=sync 初始化/增量同步（mtime+size 增量）；action=query 语义/结构查询（替代重扫）；action=status 覆盖度+置信度+盲区；action=quality 质量评估+自动补全（5.12.2 合并 4 工具） | action=sync/status/quality 默认后台 |
 
-### 操作记忆层 — 应对上下文丢失（4.8 新增）
+### 操作记忆层 — 应对上下文丢失（4.8 新增，5.12.3 合并 6 工具）
 
 | 工具 | 用途 | 备注 |
 |------|------|------|
-| `coderef_operation_memory_recover` | 上下文丢失后一次调用恢复关键记忆（工具位置 + 约定/踩坑/决策摘要） | 工具/约定类任务**首选**，先于外部连接器 |
-| `coderef_operation_memory_sync` | 盘点 git/模型/API/测试工具/文档/依赖的位置 + 提炼决策/约定/踩坑 | 输出 ledger.json + BRAIN.md |
-| `coderef_operation_memory_query` | 按类别检索操作记忆（decision/convention/pitfall/resource/tool/doc） | 上下文丢失后快速恢复 |
-| `coderef_operation_memory_find` | 定位资源：「test 工具在哪儿」「.env 在哪儿」 | 别再满项目找 |
-| `coderef_operation_memory_status` | 操作记忆健康度 + 待人工确认项 | |
-| `coderef_operation_memory_export` | 操作记忆导出 Markdown + 冲突检测 | attach 到不支持 MCP 的 LLM 界面 |
+| `coderef_operation_memory` | 操作记忆层统一入口：action=recover 上下文丢失后一次调用恢复关键记忆（工具位置 + 约定/踩坑/决策摘要）；action=sync 盘点 git/模型/API/测试工具/文档/依赖位置 + 提炼决策/约定/踩坑；action=query 按类别检索；action=find 定位资源；action=status 健康度 + 待人工确认项；action=export 导出 Markdown + 冲突检测 | action=recover 工具/约定类任务**首选**，先于外部连接器；action=sync 默认后台，其余同步 |
 
 ### 创新引擎 — 挖出值得复用的设计
 
@@ -104,7 +99,7 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 | AI 改完代码提交前确认没改坏 | `coderef_change_guard` | + `coderef_change_report` |
 | 查调用关系 / 影响面 | `coderef_query` | 替代 grep，省 token |
 | 安全合规（OWASP） | `coderef_owasp` | + `coderef_prompt_governance` |
-| 上下文丢了，东西在哪儿 | `coderef_operation_memory_recover` | 强制 gate（见工作流 E） |
+| 上下文丢了，东西在哪儿 | `coderef_operation_memory`（action=recover） | 强制 gate（见工作流 E） |
 
 **结构性锈蚀场景（P0②）**：治理「存量结构」（重复/孪生/真身）时，重点看 `coderef_architecture` 的 P0-B/P0-C（真身判定/重复簇）与 `coderef_arch_gap` 的 duplicate/directory_duplicate 差距，勿只依赖 `coderef_audit` 的 diff 焦点。`strategy=incr` 仅用于回归复核新增改动，治理存量用 `strategy=full`。
 
@@ -131,13 +126,13 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 
 ### 工作流 C：AI 改完代码，提交前确认没改坏
 ```
-0. coderef_operation_memory_recover → 先恢复 git 工具定位与约定（强制 gate，见工作流 E）
+0. coderef_operation_memory (action=recover) → 先恢复 git 工具定位与约定（强制 gate，见工作流 E）
 1. 生成 git diff
 2. coderef_change_guard (action=guard, diff=...) → 退化检测
 3. 若发现退化高风险 → 如实报告，建议回滚（不自动改）
 4. coderef_change_report (diff=...) → 生成人话变更说明
 ```
-> 提示：git 常不在 PATH，先 `coderef_operation_memory_recover` 从操作记忆取 git 工具定位（含 WSL 内工具），
+> 提示：git 常不在 PATH，先 `coderef_operation_memory (action=recover)` 从操作记忆取 git 工具定位（含 WSL 内工具），
 > 取不到再 `Get-Command git` / `where git` 探测后用 `git_bin` 传入。
 
 ### 工作流 D：复刻一个值得复用的设计到另一个项目
@@ -154,10 +149,10 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 > **强制前置**：涉及 git / push / CodeRabbit / Release 等工具或约定类操作时，必须先走本工作流。
 > 禁止在未查询操作记忆前满 PATH 找工具，也禁止未查记忆直接抓取外部连接器（GitHub 等）。
 ```
-1. coderef_operation_memory_recover        → 首选：一次调用拿回关键工具位置 + 约定/踩坑/决策摘要
-2. coderef_operation_memory_status         → 需要时：看覆盖度 + 待人工确认项
-3. coderef_operation_memory_query (query_type=all) → 深入恢复资源/决策/约定/踩坑
-4. coderef_operation_memory_find (name=test/.env/model) → 定位具体资源
+1. coderef_operation_memory (action=recover)        → 首选：一次调用拿回关键工具位置 + 约定/踩坑/决策摘要
+2. coderef_operation_memory (action=status)         → 需要时：看覆盖度 + 待人工确认项
+3. coderef_operation_memory (action=query, query_type=all) → 深入恢复资源/决策/约定/踩坑
+4. coderef_operation_memory (action=find, name=test/.env/model) → 定位具体资源
 5. coderef_memory (action=query, query_type=semantic) → 恢复代码语义记忆
 ```
 
@@ -167,5 +162,5 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 - **不要把诚实状态当失败**：`coderef_flow_verify` 返回 `missing`、`coderef_interpret` 提示"未审计"，都是如实反馈，要原样转述给用户。
 - **不要自己改 verify_findings 的 verdict**：它由确定性逻辑打出，你无权改变。
 - **没有 API Key 时的 LLM 工具**：`coderef_docs`(LLM 归纳部分)、`coderef_change_report`、`coderef_innovation_review`、`coderef_interpret action=wiki` 会诚实提示需配置 Key。如实告诉用户，不要伪造产物。
-- **工具定位/约定类操作必须先查操作记忆（强制）**：需要 git/python/coderabbit 等工具位置，或涉及 push/CodeRabbit/Release 等约定时，先 `coderef_operation_memory_recover`（一次拿全），再按需 `coderef_operation_memory_find` / `coderef_operation_memory_query (query_type=tool)` 取定位，别满 PATH 找、也别直接抓外部连接器。coderabbit 等 CLI 常装在 WSL 的 `~/.local/bin`，不在 Windows PATH——`where` / `Get-Command` 找不到**不代表不存在**，不代表没装。
+- **工具定位/约定类操作必须先查操作记忆（强制）**：需要 git/python/coderabbit 等工具位置，或涉及 push/CodeRabbit/Release 等约定时，先 `coderef_operation_memory (action=recover)`（一次拿全），再按需 `coderef_operation_memory (action=find)` / `coderef_operation_memory (action=query, query_type=tool)` 取定位，别满 PATH 找、也别直接抓外部连接器。coderabbit 等 CLI 常装在 WSL 的 `~/.local/bin`，不在 Windows PATH——`where` / `Get-Command` 找不到**不代表不存在**，不代表没装。
 - **所有工具都要传 `project_path`**：这是必填参数，指向被测项目路径。

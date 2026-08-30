@@ -41,7 +41,7 @@ description: 治理主链场景化 Skill（外部建议 E 物化）。把 CodeRe
 | AI 改完代码提交前确认没改坏 | `coderef_change_guard` | + `coderef_change_report` |
 | 查调用关系 / 影响面 | `coderef_query` | 替代 grep，省 token |
 | 安全合规（OWASP） | `coderef_owasp` | + `coderef_prompt_governance` |
-| 上下文丢了，东西在哪儿 | `coderef_operation_memory_recover` | 强制 gate（见 coderef-mcp 工作流 E） |
+| 上下文丢了，东西在哪儿 | `coderef_operation_memory`（action=recover） | 强制 gate（见 coderef-mcp 工作流 E） |
 
 ## 主链五阶段 · 场景化编排
 

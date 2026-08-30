@@ -113,12 +113,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | 工具 | 功能 | 需要 LLM |
 |------|------|---------|
 | `coderef_memory` | 项目记忆层：action=sync 初始化/增量同步；action=query 语义检索（向量库）+结构查询（知识图谱）；action=status 认知覆盖度+置信度+盲区地图；action=quality 质量评估（引用完整性/语义覆盖/偏差）+自动补全（5.12.2 合并 4 工具） | 否 |
-| `coderef_operation_memory_sync` | 操作记忆增量同步（ledger / BRAIN.md） | 否 |
-| `coderef_operation_memory_query` | 操作记忆语义 / 结构查询 | 否 |
-| `coderef_operation_memory_status` | 操作记忆状态概览 | 否 |
-| `coderef_operation_memory_find` | 定位工具 / 约定 / 陷阱（跨进程并发安全） | 否 |
-| `coderef_operation_memory_recover` | 恢复关键工具位置 / 约定摘要 / 待人工确认项 | 否 |
-| `coderef_operation_memory_export` | 操作记忆导出 Markdown 知识库 + 冲突检测（attach 到不支持 MCP 的 LLM 界面） | 否 |
+| `coderef_operation_memory` | 操作记忆层：action=sync 增量同步；action=query 语义/结构查询；action=find 定位工具/约定/陷阱；action=status 状态概览；action=recover 恢复关键工具位置/约定摘要/待确认项；action=export 导出 Markdown 知识库+冲突检测（5.12.3 合并 6 工具） | 否 |
 
 ### 创新识别引擎
 
@@ -285,9 +280,9 @@ coderef_gov_report(project_path="/path/to/project", action="board")     # action
 # 12. 记忆层 / 操作记忆：了解 AI 记住了什么；上下文丢失后恢复「工具位置 / 约定 / 陷阱」
 coderef_memory(project_path="/path/to/project", action="sync")    # 初始化/增量同步项目记忆（默认后台）
 coderef_memory(project_path="/path/to/project", action="status")  # 项目认知覆盖度 + 盲区地图
-coderef_operation_memory_status(project_path="/path/to/project")  # 操作记忆概览
-coderef_operation_memory_find(project_path="/path/to/project", keyword="布局算法")
-coderef_operation_memory_recover(project_path="/path/to/project") # 恢复关键工具位置/约定摘要/待确认项
+coderef_operation_memory(project_path="/path/to/project", action="status")  # 操作记忆概览
+coderef_operation_memory(project_path="/path/to/project", action="find", name="布局算法")
+coderef_operation_memory(project_path="/path/to/project", action="recover") # 恢复关键工具位置/约定摘要/待确认项
 
 # 13. 人话解读（4.6+，可选）：健康仪表盘 / 健康总览（Wiki 需 LLM）
 coderef_interpret(project_path="/path/to/project", action="dashboard")
@@ -516,6 +511,19 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 > - **自证**：冒烟全绿——工具数 55、旧名 100% 消失、`Server()` 初始化正常、`_should_background` 矩阵 9 断言、
 >   sync/query/status/quality 4 action 全通。
 > - **版本号**：5.12.1 → 5.12.2（patch，暴露面精简，不改记忆能力）。
+
+### v5.12.3 — 工具收敛 B-2：合并操作记忆层 6 工具 → coderef_operation_memory（记忆簇收敛第 2 版）
+
+> 承接《工具收敛评估_B方案详细设计_20260830.md》B-2（OperationMemory 6→1）：
+> - **合并**：`coderef_operation_memory_sync/query/find/status/recover/export` 6 工具 → 单一 `coderef_operation_memory`，
+>   以 `action=sync/query/find/status/recover/export` 区分；handler 与注册表 6→1，核心模块（operation_memory.py）**零改动**，
+>   ledger.json / BRAIN.md 产物路径不变。
+> - **删旧名不保留别名**：旧 6 名从 tools/list 移除，既有调用须改用 `coderef_operation_memory(action=...)`；工具总数 55 → 50。
+> - **后台化矩阵不变（D2）**：`MERGE_SYNC_ACTIONS` 确保 action=query/find/status/recover/export 保持同步
+>   （尤其 recover 是 workflow E 强制 gate），action=sync 保持后台；行为与合并前完全一致。
+> - **自证**：冒烟全绿——工具数 50、旧名 100% 消失、`Server()` 初始化正常、`_should_background` 矩阵 10 断言、
+>   6 action 全通 + ledger.json / BRAIN.md 落盘断言。
+> - **版本号**：5.12.2 → 5.12.3（patch，暴露面精简，不改操作记忆能力）。
 
 ### v5.12.0 — 分层治理编排层补齐：L3 资产沉淀编排（P3 coderef-asset）
 
