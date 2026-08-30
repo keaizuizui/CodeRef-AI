@@ -115,6 +115,8 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_memory` | 项目记忆层：action=sync 初始化/增量同步；action=query 语义检索（向量库）+结构查询（知识图谱）；action=status 认知覆盖度+置信度+盲区地图；action=quality 质量评估（引用完整性/语义覆盖/偏差）+自动补全（5.12.2 合并 4 工具） | 否 |
 | `coderef_operation_memory` | 操作记忆层：action=sync 增量同步；action=query 语义/结构查询；action=find 定位工具/约定/陷阱；action=status 状态概览；action=recover 恢复关键工具位置/约定摘要/待确认项；action=export 导出 Markdown 知识库+冲突检测（5.12.3 合并 6 工具） | 否 |
 
+**记忆库落点约定**：`coderef_memory` 的认知记忆写入 `<项目根>/data/memory_state/`（`{项目hash}.json` 快照 + `{项目hash}.kb.db` 语义库）；`coderef_operation_memory` 的操作记忆写入 `<项目根>/data/operation_memory/<项目hash>/`（`ledger.json + BRAIN.md + timeline.md`）。两者均按项目 hash 隔离，属运行时产物——`data/` 已在 `.gitignore`（git 不追踪、不影响仓库干净度）；需要清空某项目记忆时删除对应 hash 文件/目录即可，测试产生的残留可整目录清理。
+
 ### 创新识别引擎
 
 | 工具 | 功能 | 需要 LLM |
