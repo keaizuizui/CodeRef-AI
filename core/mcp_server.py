@@ -795,6 +795,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         "keyword": {"type": "string", "description": "语义检索关键词或全文搜索关键词"},
                         "name": {"type": "string", "description": "实体名称（entity 用）"},
                         "func_name": {"type": "string", "description": "函数名（callers/callees/call_graph 用）"},
+                        "node_id": {"type": "string", "description": "节点 ID（query_type=relations 用）"},
                         "file_path": {"type": "string", "description": "文件路径（impact/file_entities 用）"},
                         "limit": {"type": "integer", "default": 10},
                         "auto_fix": {"type": "boolean", "default": False, "description": "action=quality 时自动补全"},
@@ -1254,7 +1255,9 @@ def _memory(a: dict) -> str:
     elif act == "query":
         qt = a.get("query_type", "semantic")
         kwargs = {k: v for k, v in a.items()
-                  if k not in ("project_path", "action", "query_type") and v}
+                  if k not in ("project_path", "action", "query_type", "node_id") and v}
+        if qt == "relations" and a.get("node_id"):
+            kwargs["keyword"] = a["node_id"]  # 底层 relations 以 keyword 复用为 node_id
         r = memory_layer.query(pp, query_type=qt, **kwargs)
     elif act == "status":
         r = memory_layer.status(pp)
@@ -1967,7 +1970,10 @@ def _gov_report(a: dict) -> str:
     from core.gov_dashboard import render_report
     from core.gov_webdash import render_board, serve
     pp = a["project_path"]
-    if a.get("action", "report") == "board":
+    action = a.get("action", "report")
+    if action not in ("report", "board"):
+        raise ValueError(f"coderef_gov_report: 未知 action={action}")
+    if action == "board":
         #  契约：缺省落盘 <project>/.coderef/gov_board.html，返回确切路径
         interactive = a.get("interactive", True)
         output_dir = a.get("output_dir", "")
