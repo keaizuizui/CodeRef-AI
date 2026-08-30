@@ -1,4 +1,4 @@
-<!-- AI Summary: CodeRef-AI exposes 57 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. Core results (audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, prompt compliance) are pure static analysis — no LLM, reproducible. LLM is only used for synthesis tasks (wiki, code review) and hard-blocks honestly without an API key. Builds a closed loop: verify LLM/CodeRabbit claims deterministically, replicate solidified design assets, and interpret everything in plain language for non-programmers. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams who want AI that augments rather than hallucinates. -->
+<!-- AI Summary: CodeRef-AI exposes 50 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. Core results (audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, prompt compliance) are pure static analysis — no LLM, reproducible. LLM is only used for synthesis tasks (wiki, code review) and hard-blocks honestly without an API key. Builds a closed loop: verify LLM/CodeRabbit claims deterministically, replicate solidified design assets, and interpret everything in plain language for non-programmers. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams who want AI that augments rather than hallucinates. -->
 [![MCP Badge](https://lobehub.com/badge/mcp/keaizuizui-coderef-ai?style=flat)](https://lobehub.com/mcp/keaizuizui-coderef-ai)
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
@@ -21,10 +21,10 @@ CodeRef-AI 通过 MCP 协议暴露 **50 个工具**，同时服务两类人：
 今天的能力地图上有五条主线，全部基于静态事实、确定且可复现：
 
 1. **静态审计与知识图谱**：11 个确定性检测器把工程体检成结构化 SQLite 图谱，编程 AI 用结构化查询替代 grep 与逐文件阅读（省 10-100 倍 token），非编程人员看降噪后的重点清单。
-2. **架构推回正轨（5.0）**：你定义目标架构（业务层 / 技术层 / 约束），CodeRef 对比现状图谱产出 9 类确定性差距、生成可视化自由布局画布、可执行重构任务卡，并四维打分验证是否真正回到正轨。
-3. **定期治理体检（5.1 / 5.2）**：把差距转成治理工作项，走「检出 → 确认 → 修复 → 验证 → 归档」状态闭环，配历史趋势报告、Web 看板、跨仓聚合治理与定时体检——让"正确状态"可维护、可追踪，而不是一次性的重构。
+2. **架构推回正轨**：你定义目标架构（业务层 / 技术层 / 约束），CodeRef 对比现状图谱产出 9 类确定性差距、生成可视化自由布局画布、可执行重构任务卡，并四维打分验证是否真正回到正轨。
+3. **定期治理体检**：把差距转成治理工作项，走「检出 → 确认 → 修复 → 验证 → 归档」状态闭环，配历史趋势报告、Web 看板、跨仓聚合治理与定时体检——让"正确状态"可维护、可追踪，而不是一次性的重构。
 4. **记忆层与操作记忆**：项目记忆（增量同步 + 语义检索 + 盲区地图 + 质量评估）与操作记忆（工具位置 / 约定 / 陷阱 + 崩溃恢复），让 AI 跨会话"记得住项目、找得回自己"。
-5. **人话解读（4.6+）**：把确定性格子结论翻译成健康仪表盘与 Wiki，让非编程人员第一次能"看懂"自己的项目。
+5. **人话解读**：把确定性格子结论翻译成健康仪表盘与 Wiki，让非编程人员第一次能"看懂"自己的项目。
 
 ## 核心优势
 
@@ -54,12 +54,12 @@ CodeRef-AI 通过 MCP 协议暴露 **50 个工具**，同时服务两类人：
 
 ## 四引擎架构
 
-CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → 守护」完整闭环；4.3–4.6 在四引擎之上补上「确定性核验 + 平台整合 + 复刻落地」，让闭环真正可落地：
+CodeRef 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → 守护」完整闭环，并补上「确定性核验 + 平台整合 + 复刻落地」能力，让闭环真正可落地：
 
 | 引擎 | 解决的问题 | 核心工具 |
 |------|-----------|---------|
 | **审计引擎** | 全维度代码体检 + 图谱 + 文档 + 审查 + 论断核验 | `coderef_audit` `coderef_query` `coderef_review` `coderef_verify_findings` 等 |
-| **记忆引擎** | AI 对项目「记住了什么」，增量同步 + 语义查询 + 治理 | `coderef_memory_*` `coderef_prompt_governance` |
+| **记忆引擎** | AI 对项目「记住了什么」，增量同步 + 语义查询 + 治理 | `coderef_memory` `coderef_operation_memory` `coderef_prompt_governance` |
 | **创新识别引擎** | 从项目里挖出值得复用的设计，固化为资产并复刻到其他项目 | `coderef_innovation` `coderef_asset` `coderef_replicate` `coderef_registry` |
 | **变更守护引擎** | 拦截 AI 把代码改坏，输出人能看懂的变更报告 | `coderef_change_guard` `coderef_change_report` |
 | **人话解读平台** | 把确定性格子结论翻译成非编程人员听得懂的"人话" | `coderef_interpret` |
@@ -77,25 +77,25 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_verify_findings` | 确定性核验 LLM/CodeRabbit 论断：论断引用的代码目标是否真实存在、是否在关键管线内。verdict（确证/证伪/部分确证/存疑）由静态图谱打出，诚实话标签来源分离，LLM 无权改结论 | 否 |
 | `coderef_prompt_governance` | Prompt 治理平台：一次调用编排 资产生命周期 × 合规审计 × 跨模块一致性（overview / assets / audit / cross_module）。`audit` 即原 `coderef_prompt_audit` 的注入风险 + 一致性检测。纯规则、确定性、不依赖 LLM | 否 |
 | `coderef_arch_audit` | 架构腐化诊断：复用知识图谱 CALLS 边做模块级静态诊断（循环依赖/上帝模块/分层违例/异常模块规模），聚合 0–10 架构健康度。纯静态、不依赖 LLM | 否 |
-| `coderef_target_arch_set` | 设置/更新目标架构 JSON（5.0 架构推回正轨的参照系），校验后落盘 `<project>/.coderef/target_arch.json`。纯确定性校验，不依赖 LLM | 否 |
+| `coderef_target_arch_set` | 设置/更新目标架构 JSON（架构推回正轨的参照系），校验后落盘 `<project>/.coderef/target_arch.json`。纯确定性校验，不依赖 LLM | 否 |
 | `coderef_target_arch_get` | 获取当前目标架构 JSON | 否 |
-| `coderef_target_adopt` | 游离一键纳入（5.10 新增）：把 arch_gap 报出的游离/未建模模块按角色批量追加 target_modules（free=真游离孤儿 / unmodeled=被调用未建模；monitored=free/all；dry_run 预览；幂等），机械性归属动作工具化 | 否 |
-| `coderef_arch_gap` | 架构差距分析（5.0 核心）：对比现状知识图谱与目标架构，输出 9 类确定性差距（职责缺失/依赖违例/循环依赖/业务断链/游离模块/上帝模块/异常规模/同构重复/目录级重复），游离模块区分真游离（free）与未建模（unmodeled）并豁免 vendor/压缩产物噪声，summary 透出全量分档计数。纯静态、复用 arch_audit，不依赖 LLM | 否 |
-| `coderef_arch_canvas` | 可视化架构画布（5.0 Phase 1，5.4 自由布局版）：自包含 HTML 自由画布（业务/技术/代码三层节点），节点自由拖拽、任意连线、平移缩放、对齐吸附、缩略图、右键菜单、差距高亮、导出目标架构 JSON | 否 |
-| `coderef_flow_canvas` | 交互式流程画布（5.4）：从代码自动提取业务管线（P0-A 入口管线）+ 跨模块数据流，渲染为可自由拖拽的流程图（同一自由布局引擎） | 否 |
-| `coderef_refactor_plan` | 重构任务卡（5.0 Phase 2）：把差距清单转为编程 AI 可执行的任务卡（create_module/fix_dependency/break_cycle/implement_flow/move_module/split_module + 影响范围 + 验证标准） | 否 |
-| `coderef_arch_verify` | 架构对齐验证（5.0 Phase 2）：四维对齐度评分（职责40%+依赖30%+业务20%+健康10%）+ 差距复检；支持 changed_files 增量模式 | 否 |
-| `coderef_gov_start` | 建档体检周期并导入差距为治理工作项（5.1 定期体检，借鉴 plane 的 Cycle） | 否 |
+| `coderef_target_adopt` | 游离一键纳入：把 arch_gap 报出的游离/未建模模块按角色批量追加 target_modules（free=真游离孤儿 / unmodeled=被调用未建模；monitored=free/all；dry_run 预览；幂等），机械性归属动作工具化 | 否 |
+| `coderef_arch_gap` | 架构差距分析（核心）：对比现状知识图谱与目标架构，输出 9 类确定性差距（职责缺失/依赖违例/循环依赖/业务断链/游离模块/上帝模块/异常规模/同构重复/目录级重复），游离模块区分真游离（free）与未建模（unmodeled）并豁免 vendor/压缩产物噪声，summary 透出全量分档计数。纯静态、复用 arch_audit，不依赖 LLM | 否 |
+| `coderef_arch_canvas` | 可视化架构画布（自由布局版）：自包含 HTML 自由画布（业务/技术/代码三层节点），节点自由拖拽、任意连线、平移缩放、对齐吸附、缩略图、右键菜单、差距高亮、导出目标架构 JSON | 否 |
+| `coderef_flow_canvas` | 交互式流程画布：从代码自动提取业务管线（P0-A 入口管线）+ 跨模块数据流，渲染为可自由拖拽的流程图（同一自由布局引擎） | 否 |
+| `coderef_refactor_plan` | 重构任务卡：把差距清单转为编程 AI 可执行的任务卡（create_module/fix_dependency/break_cycle/implement_flow/move_module/split_module + 影响范围 + 验证标准） | 否 |
+| `coderef_arch_verify` | 架构对齐验证：四维对齐度评分（职责40%+依赖30%+业务20%+健康10%）+ 差距复检；支持 changed_files 增量模式 | 否 |
+| `coderef_gov_start` | 建档体检周期并导入差距为治理工作项（定期体检，借鉴 plane 的 Cycle） | 否 |
 | `coderef_gov_close` | 收尾体检周期并输出本期统计（完成率/剩余/复发/豁免） | 否 |
 | `coderef_gov_issues` | 查询治理工作项（预置视图 open/all/high/recurred/rejected/archived/overdue/assigned/recent） | 否 |
 | `coderef_gov_transition` | 治理工作项状态流转（Detected→Confirmed→Fixing→Verified→Archived/Rejected）+ 豁免 | 否 |
-| `coderef_gov_report` | 体检报告 / 治理看板（action=report 单期+跨期趋势+自包含 HTML；action=board 交互 HTML 看板，缺省落盘 gov_board.html；5.12.1 合并 gov_board） | 否 |
-| `coderef_gov_pipeline` | 治理自动化流水线（5.2）：在途工作项 → 任务卡 → 复验 → Verified/附缺口，全程审计轨迹 | 否 |
-| `coderef_dynamic_probe` | 动态探针（5.2）：静态挖掘动态信号（动态导入/装饰器注册/间接索引/entry_points），零执行被检项目 | 否 |
-| `coderef_gov_board` | 治理 Web 看板（5.2 兼容别名；5.12.1 起转发到 coderef_gov_report(action=board)）：自包含交互 HTML 看板 + 只读服务 + 状态流转回写 | 否 |
-| `coderef_gov_workspace` | 多代码库聚合治理（5.2）：跨仓汇总治理状态与整体健康度 | 否 |
-| `coderef_gov_schedule` | 定时体检（5.2）：生成可执行触发脚本 run_cycle.py + 离期检查 | 否 |
-| `coderef_role_boundary` | 符号级职责越界检测（5.2）：模块归属正确但符号逾越角色边界（静态信号 + 可选语义） | 可选 |
+| `coderef_gov_report` | 体检报告 / 治理看板（action=report 单期+跨期趋势+自包含 HTML；action=board 交互 HTML 看板，缺省落盘 gov_board.html；已合并原 gov_board） | 否 |
+| `coderef_gov_pipeline` | 治理自动化流水线：在途工作项 → 任务卡 → 复验 → Verified/附缺口，全程审计轨迹 | 否 |
+| `coderef_dynamic_probe` | 动态探针：静态挖掘动态信号（动态导入/装饰器注册/间接索引/entry_points），零执行被检项目 | 否 |
+| `coderef_gov_board` | 治理 Web 看板（兼容别名，转发到 coderef_gov_report(action=board)）：自包含交互 HTML 看板 + 只读服务 + 状态流转回写 | 否 |
+| `coderef_gov_workspace` | 多代码库聚合治理：跨仓汇总治理状态与整体健康度 | 否 |
+| `coderef_gov_schedule` | 定时体检：生成可执行触发脚本 run_cycle.py + 离期检查 | 否 |
+| `coderef_role_boundary` | 符号级职责越界检测：模块归属正确但符号逾越角色边界（静态信号 + 可选语义） | 可选 |
 | `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 否 |
 | `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 是 |
 | `coderef_docs_read` | 按需读取已生成 Wiki 文档正文（返回内容而非路径，解决 AI 无法 fs 访问外部文件夹） | 否 |
@@ -112,8 +112,8 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 
 | 工具 | 功能 | 需要 LLM |
 |------|------|---------|
-| `coderef_memory` | 项目记忆层：action=sync 初始化/增量同步；action=query 语义检索（向量库）+结构查询（知识图谱）；action=status 认知覆盖度+置信度+盲区地图；action=quality 质量评估（引用完整性/语义覆盖/偏差）+自动补全（5.12.2 合并 4 工具） | 否 |
-| `coderef_operation_memory` | 操作记忆层：action=sync 增量同步；action=query 语义/结构查询；action=find 定位工具/约定/陷阱；action=status 状态概览；action=recover 恢复关键工具位置/约定摘要/待确认项；action=export 导出 Markdown 知识库+冲突检测（5.12.3 合并 6 工具） | 否 |
+| `coderef_memory` | 项目记忆层：action=sync 初始化/增量同步；action=query 语义检索（向量库）+结构查询（知识图谱）；action=status 认知覆盖度+置信度+盲区地图；action=quality 质量评估（引用完整性/语义覆盖/偏差）+自动补全（由原 4 个记忆工具合并而来） | 否 |
+| `coderef_operation_memory` | 操作记忆层：action=sync 增量同步；action=query 语义/结构查询；action=find 定位工具/约定/陷阱；action=status 状态概览；action=recover 恢复关键工具位置/约定摘要/待确认项；action=export 导出 Markdown 知识库+冲突检测（由原 6 个操作记忆工具合并而来） | 否 |
 
 **记忆库落点约定**：`coderef_memory` 的认知记忆写入 `<项目根>/data/memory_state/`（`{项目hash}.json` 快照 + `{项目hash}.kb.db` 语义库）；`coderef_operation_memory` 的操作记忆写入 `<项目根>/data/operation_memory/<项目hash>/`（`ledger.json + BRAIN.md + timeline.md`）。两者均按项目 hash 隔离，属运行时产物——`data/` 已在 `.gitignore`（git 不追踪、不影响仓库干净度）；需要清空某项目记忆时删除对应 hash 文件/目录即可，测试产生的残留可整目录清理。
 
@@ -124,10 +124,10 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 | `coderef_innovation` | 识别项目创新设计 + 传播缺口，理想清单 vs 实际实现对照 | 是 |
 | `coderef_asset` | 将验证过的设计固化 `WorkflowAsset` 资产（查询/导出/提交） | 是 |
 | `coderef_replicate` | 复刻铺排：检测目标项目对某已固化资产（蓝图）的采用缺口，并生成可复刻指引（steps + entry_points + verified_findings）。确定性缺口判定，不自动改代码 | 否 |
-| `coderef_replicate_apply` | 复刻落地（4.6 新增）：把已固化资产的复刻指引真正落到目标项目——写入 template_code 骨架 + patch_suggestion / migration_guide 说明，生成落地清单 manifest。诚实话护栏：只落地"确定性可给"内容，不自动接入目标源码；默认不覆盖已存在同名文件（冲突如实标注）；template_code 缺失明确标注待补全 | 否 |
+| `coderef_replicate_apply` | 复刻落地：把已固化资产的复刻指引真正落到目标项目——写入 template_code 骨架 + patch_suggestion / migration_guide 说明，生成落地清单 manifest。诚实话护栏：只落地"确定性可给"内容，不自动接入目标源码；默认不覆盖已存在同名文件（冲突如实标注）；template_code 缺失明确标注待补全 | 否 |
 | `coderef_asset_blueprint` | 把复刻铺排得出的确定性结论（entry_points / verified_findings）写回资产蓝图，补全为可复刻蓝图 | 否 |
 | `coderef_registry` | 管理已知设计库，别名归一（解决 LLM 命名漂移） | 否 |
-| `coderef_innovation_review` | 创新复刻的 LLM 协助排查（4.7 新增）：让 LLM 阅读源项目管线设计 + wiki，判定是否确属创新 workflow、管线与 wiki 是否一致、复刻是否合理；无 API Key 时硬阻断 | 是 |
+| `coderef_innovation_review` | 创新复刻的 LLM 协助排查：让 LLM 阅读源项目管线设计 + wiki，判定是否确属创新 workflow、管线与 wiki 是否一致、复刻是否合理；无 API Key 时硬阻断 | 是 |
 
 ### 变更守护引擎
 
@@ -146,7 +146,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 
 | 工具 | 功能 | 需要 LLM |
 |------|------|---------|
-| `coderef_interpret` | 把确定性格子结论翻译成非编程人员听得懂的"人话"：action=health 健康总览（人话健康分 + 高危清单 + 图谱/合规背景，未审计时诚实提示不给分）/ dashboard 健康仪表盘 HTML / wiki Wiki 生成（无 LLM 诚实阻断）/ prompt Prompt 治理总览 / assets 已固化资产解读。4.6 起 verify / verify_html 已收敛到 `coderef_verify_findings`，本平台不再转发 | 可选 |
+| `coderef_interpret` | 把确定性格子结论翻译成非编程人员听得懂的"人话"：action=health 健康总览（人话健康分 + 高危清单 + 图谱/合规背景，未审计时诚实提示不给分）/ dashboard 健康仪表盘 HTML / wiki Wiki 生成（无 LLM 诚实阻断）/ prompt Prompt 治理总览 / assets 已固化资产解读。verify / verify_html 已收敛到 `coderef_verify_findings`，本平台不再转发 | 可选 |
 
 ## 快速开始
 
@@ -263,14 +263,14 @@ coderef_asset(project_path="/path/to/project", action="list")
 # 9. 审查/治理：请求你的编程 AI 阅读报告，把误报写进白名单，
 #    并把问题归类为 4 种：① AI 可自行处理 ② 需要你介入 ③ 复杂需讨论 ④ 新建暂存区待定
 
-# 10. 架构推回正轨（5.0，可选）：目标架构 → 差距分析 → 可视化画布 → 重构任务卡 → 对齐验证
+# 10. 架构推回正轨（可选）：目标架构 → 差距分析 → 可视化画布 → 重构任务卡 → 对齐验证
 coderef_target_arch_set(project_path="/path/to/project", target_arch={...})  # 一次定义"正轨"
 coderef_arch_gap(project_path="/path/to/project")                              # 现状 vs 正轨的确定性差距
 coderef_arch_canvas(project_path="/path/to/project")                           # 自由布局画布，浏览器里核对/微调
 coderef_refactor_plan(project_path="/path/to/project")                         # 差距 → 可执行任务卡
 coderef_arch_verify(project_path="/path/to/project")                           # 修复后四维打分验证是否回正轨
 
-# 11. 定期治理体检（5.1/5.2，可选）：建档 → 导入差距 → 流转 → 收尾 → 报告 → 自动化流水线
+# 11. 定期治理体检（可选）：建档 → 导入差距 → 流转 → 收尾 → 报告 → 自动化流水线
 coderef_gov_start(project_path="/path/to/project")
 coderef_gov_issues(project_path="/path/to/project", view="open")
 coderef_gov_transition(project_path="/path/to/project", issue_id="...", to="Fixing")
@@ -286,7 +286,7 @@ coderef_operation_memory(project_path="/path/to/project", action="status")  # �
 coderef_operation_memory(project_path="/path/to/project", action="find", name="布局算法")
 coderef_operation_memory(project_path="/path/to/project", action="recover") # 恢复关键工具位置/约定摘要/待确认项
 
-# 13. 人话解读（4.6+，可选）：健康仪表盘 / 健康总览（Wiki 需 LLM）
+# 13. 人话解读（可选）：健康仪表盘 / 健康总览（Wiki 需 LLM）
 coderef_interpret(project_path="/path/to/project", action="dashboard")
 coderef_interpret(project_path="/path/to/project", action="health")
 ```
@@ -366,13 +366,13 @@ coderef-ai/
 │   ├── wiki_cross_verify.py          # Wiki 模块级交叉验证（确证徽章 + Mermaid 自愈）
 │   ├── flow_verify.py                # 流程合规验证（步骤级，coderef_flow_verify）
 │   ├── arch_audit.py                 # 架构腐化诊断（循环依赖/上帝模块/分层违例）
-│   ├── target_arch_schema.py         # 目标架构 JSON Schema（5.0：人定义的正轨）
-│   ├── arch_gap_analyzer.py          # 架构差距分析器（5.0：现状 vs 目标架构）
-│   ├── role_boundary.py             # 符号级职责越界检测（5.2：归属对但符号逾越角色边界）
-│   ├── arch_templates.py            # 软件形态模板体系（5.7：hexagonal/modular_monolith 初稿+整理建议）
-│   ├── canvas_generator.py           # 可视化架构画布（5.0 Phase 1：三层拖拽画布）
-│   ├── refactor_task_generator.py    # 重构任务卡生成器（5.0 Phase 2）
-│   ├── arch_alignment_verifier.py    # 架构对齐验证器（5.0 Phase 2：四维评分）
+│   ├── target_arch_schema.py         # 目标架构 JSON Schema（人定义的正轨）
+│   ├── arch_gap_analyzer.py          # 架构差距分析器（现状 vs 目标架构）
+│   ├── role_boundary.py             # 符号级职责越界检测（归属对但符号逾越角色边界）
+│   ├── arch_templates.py            # 软件形态模板体系（hexagonal/modular_monolith 初稿+整理建议）
+│   ├── canvas_generator.py           # 可视化架构画布（三层拖拽画布）
+│   ├── refactor_task_generator.py    # 重构任务卡生成器
+│   ├── arch_alignment_verifier.py    # 架构对齐验证器（四维评分）
 │   ├── graph_closure.py              # 调用闭包计算（flow_verify 与 wiki_cross_verify 共用）
 │   ├── workflow_graph.py             # 架构图生成器（vis-network）
 │   ├── diagram_generator.py          # 图表/画布生成
@@ -487,652 +487,16 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 
 ## 更新日志
 
-> 4.X 系列已定版，完整更新日志（v3.0 – v4.9.12）已归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+> 4.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.12.3）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### v5.12.1 — 工具收敛 A：合并 gov_report + gov_board（报表视图级收敛）
+### 当前版本 v5.12.3 — 合并操作记忆层 6 工具 → coderef_operation_memory
 
-> 承接《工具收敛评估_20260830.md》落地选项 A（用户 + 测试共识走 A，B 单独排期）：
-> - **合并**：`coderef_gov_report` 新增 `action=report/board` 参数——action=report（默认）单期 + 跨期趋势报告（JSON/HTML）；
->   action=board 交互 HTML 看板（**守住  契约**：缺省落盘 `<project>/.coderef/gov_board.html` 并返回确切路径，
->   interactive=false 只读、open_server 可选起本地服务）。
-> - **兼容别名**：`coderef_gov_board` 保留为兼容别名（转发 action=board，行为不变），既有调用零断链；
->   工具总数仍 58（未删工具名）。
-> - **自证**：冒烟验证 4 路径全绿——action=report JSON/HTML、action=board 落盘断言（）、
->   兼容别名转发 + 落盘；`Server()` 初始化正常。
-> - **版本号**：5.12.0 → 5.12.1（patch，报表视图级合并 + 兼容别名，不改治理能力）。
-
-### v5.12.2 — 工具收敛 B-1：合并记忆层 4 工具 → coderef_memory（记忆簇收敛第 1 版）
-
-> 承接《工具收敛评估_B方案详细设计_20260830.md》B-1（MemoryLayer 4→1）：
-> - **合并**：`coderef_memory_sync/query/status/quality` 4 工具 → 单一 `coderef_memory`，以 `action=sync/query/status/quality` 区分；
->   handler 与注册表 4→1，核心模块（memory_layer.py / memory_quality.py）**零改动**，SQLite 图谱 / 向量库 / 产物路径不变。
-> - **删旧名不保留别名**（与 A 方案刻意不同）：旧 4 名从 tools/list 移除，既有调用须改用 `coderef_memory(action=...)`；
->   工具总数 58 → 55。
-> - **后台化矩阵不变（D2）**：新增 `MERGE_SYNC_ACTIONS` 使 action=query 保持同步（秒级），action=sync/status/quality 保持后台
->   （全量扫描撞超时教训）；`background=true/false` 仍可显式覆盖；行为与合并前完全一致。
-> - **自证**：冒烟全绿——工具数 55、旧名 100% 消失、`Server()` 初始化正常、`_should_background` 矩阵 9 断言、
->   sync/query/status/quality 4 action 全通。
-> - **版本号**：5.12.1 → 5.12.2（patch，暴露面精简，不改记忆能力）。
-
-### v5.12.3 — 工具收敛 B-2：合并操作记忆层 6 工具 → coderef_operation_memory（记忆簇收敛第 2 版）
-
-> 承接《工具收敛评估_B方案详细设计_20260830.md》B-2（OperationMemory 6→1）：
 > - **合并**：`coderef_operation_memory_sync/query/find/status/recover/export` 6 工具 → 单一 `coderef_operation_memory`，
->   以 `action=sync/query/find/status/recover/export` 区分；handler 与注册表 6→1，核心模块（operation_memory.py）**零改动**，
->   ledger.json / BRAIN.md 产物路径不变。
-> - **删旧名不保留别名**：旧 6 名从 tools/list 移除，既有调用须改用 `coderef_operation_memory(action=...)`；工具总数 55 → 50。
-> - **后台化矩阵不变（D2）**：`MERGE_SYNC_ACTIONS` 确保 action=query/find/status/recover/export 保持同步
->   （尤其 recover 是 workflow E 强制 gate），action=sync 保持后台；行为与合并前完全一致。
-> - **自证**：冒烟全绿——工具数 50、旧名 100% 消失、`Server()` 初始化正常、`_should_background` 矩阵 10 断言、
->   6 action 全通 + ledger.json / BRAIN.md 落盘断言。
+>   以 `action=sync/query/find/status/recover/export` 区分；核心模块零改动，ledger.json / BRAIN.md 产物路径不变。
+> - **删旧名不保留别名**：旧 6 名从工具列表移除，既有调用须改用 `coderef_operation_memory(action=...)`；工具总数 55 → 50。
+> - **后台化矩阵不变**：`MERGE_SYNC_ACTIONS` 确保 action=query/find/status/recover/export 保持同步（recover 需即时返回），action=sync 保持后台；行为与合并前完全一致。
+> - **验证**：全量回归通过，无阻断缺陷。
 > - **版本号**：5.12.2 → 5.12.3（patch，暴露面精简，不改操作记忆能力）。
-
-> **发布收尾（验证项闭环，2026-08-30）**：
-> - **旧名文案残留清零**：`operation_memory.py` / `memory_layer.py` / `memory_quality.py` 的错误提示与 docstring
->   统一指向 `coderef_operation_memory(action=...)` / `coderef_memory(action=...)` 新命名（纯文案零逻辑）。
-> - **记忆库落点约定**：认知记忆 `data/memory_state/{项目hash}.json/.kb.db`、操作记忆 `data/operation_memory/<项目hash>/`
->   （ledger + BRAIN + timeline），均按项目 hash 隔离、`data/` git 不追踪、删对应 hash 即可清理。
-> - **语义检索降级体验**：Ollama 未就绪时 `coderef_memory(action=query, query_type=semantic)` 自动降级关键词检索
->   （停用词过滤 + 中文 bigram 召回增强、打分封顶 1.0），并返回 `engine` / `degraded` 标记，不再返空。
-> - **发布确认**：测试 99/99 全量回归全绿、三项验证项闭环、无 P0/P1 阻断缺陷。
-
-### v5.12.0 — 分层治理编排层补齐：L3 资产沉淀编排（P3 coderef-asset）
-
-> 承接《治理体系定位与编排层设计研究_20260829.md》落地路线 P3（L3 资产沉淀编排评估；
-> 用户定夺：评估 + 落地一起做、独立 SKILL）：
-> - **P3 L3 资产沉淀编排**（新建 `skills/coderef-asset/SKILL.md`，零新工具纯文档编排）：
->   把治理/开发产出的高价值设计固化为可复用资产并复刻到新项目——
->   **沉淀链**「`coderef_innovation` 识别 → `coderef_innovation_review` 确认（LLM 排查真创新/
->   管线-wiki 一致性/复刻合理性）→ `coderef_registry` 登记归一（alias→canonical，防命名漂移）→
->   `coderef_asset` commit 固化（≥2 workflow 采用 + evidence 防污染）→ `coderef_asset_blueprint`
->   补全蓝图（entry_points/verified_findings）→ `coderef_interpret` 人话解读」；
->   **复用链**「`coderef_replicate` 铺排（确定性缺口，人拍板）→ `coderef_replicate_apply`
->   落地骨架（不自动改源码、冲突默认不覆盖）→ 回 L1/L2 验证」。治理成果 → 资产 → 新项目
->   沉淀复用闭环。
-> - **L1/L2 衔接**：`coderef-governance` 加 L3 衔接（③ 抽公共工具、⑤ 体检高价值设计 → 沉淀；
->   意图路由表加资产沉淀路由）；`coderef-probe` 加 L1→L3 衔接（探查发现多 workflow 采用设计 → 沉淀候选）。
-> - **编排结构**：L0 工具层（58 个）→ L1 小阶段治理（coderef-probe，变更驱动）→ L2 大阶段治理
->   （coderef-governance，周期驱动）→ **L3 资产沉淀（coderef-asset，治理成果→资产）**。
-> - **自证**：三 SKILL 引用的全部工具与 `mcp_server.py` 注册清单交叉核对通过（asset 8 个均注册，
->   无失效引用）；frontmatter 可解析；工具数不变（58）。
-> - **版本号**：5.11.0 → 5.12.0（minor，补齐 L3 资产沉淀编排层）。
-
-### v5.11.0 — 分层治理编排层落地：L2 完整化（P1 收编执行增强层）+ L1 小阶段治理编排（P2 coderef-probe）
-
-> 承接《治理体系定位与编排层设计研究_20260829.md》落地路线 P1/P2（用户定夺：P1+P2 全做完再测）：
-> - **P1 L2 主链完整化**（`skills/coderef-governance/SKILL.md`）：收编执行增强层进主链——
->   ② define-target 引 `coderef_role_boundary`（符号级职责越界，与模块级差距互补）、
->   ③ refactor-along 引 `coderef_refactor_plan`（差距→任务卡）+ `coderef_gov_pipeline`
->   （治理自动化流水线：Fixing→任务卡→复验→Verified 半自动闭环）、④ verify-advance 引
->   `coderef_arch_verify`（0-100 对齐度后验：职责对齐40%+依赖健康30%+业务覆盖20%+代码健康10%）。
->   整改环节从「人工逐条手工改 + arch_gap 复查」升级为「gov_pipeline 半自动整改闭环 +
->   人拍板确认」，架构方向决策仍由人拍板（工具只做机械性归属动作）。主链工具 21 → 25。
-> - **P2 L1 小阶段治理编排**（新建 `skills/coderef-probe/SKILL.md`，零新工具纯文档编排）：
->   变更驱动的探查链「触发→策略路由→增量探查→确定性核验→变更防护→降噪→登记/升级」——
->   `gov_schedule`（定时触发）/ git hook（变更触发）→ `audit_advisor`（增量/全量路由）→
->   `scan`/`audit`（增量探查）→ `verify_findings`（确定性核验 LLM/CodeRabbit 论断）→
->   `change_guard`+`change_report`（变更防护）→ `whitelist`（降噪）→ `gov_*`（登记/升级 L2）。
->   闭环判定：增量回归=0（change_guard 无退化 + flow_verify 无 outside 新增）+ 白名单收敛。
->   与 CodeRabbit 边界（用户已拍板）：Coderef 自建完整探查链、不集成 CodeRabbit 编排；
->   `verify_findings` 仍可核验 CodeRabbit 论断（确定性核验差异化优势）。
-> - **编排结构**：L0 工具层（58 个）→ L1 小阶段治理（coderef-probe，变更驱动轻量）→
->   L2 大阶段治理（coderef-governance，周期驱动五阶段）→ L3 资产沉淀（展望）。
-> - **自证**：两 SKILL 引用的全部工具与 `mcp_server.py` 注册清单交叉核对通过（governance 25 /
->   probe 9，无失效引用）；frontmatter 可解析；五阶段工具数 ② 2→3、③ 2→4、④ 3→4。
-> - **版本号**：5.10.0 → 5.11.0（minor，新增 L1 编排层 + L2 完整化）。
-
-### v5.10.0 — 游离一键纳入 + flow_verify 入口跨语言消歧（② + 测试断点 1）
-
-> 承接「定夺回应」 整改落地工具层②与测试断点 1：
-> - **新增 `coderef_target_adopt`（游离一键纳入）**（`core/arch_gap_analyzer.py` 新增
->   `adopt_free_modules` + `core/mcp_server.py` 注册）：把 `coderef_arch_gap` 报出的
->   **游离/未建模模块按角色批量追加 `target_modules`**，把「游离模块靠手工在
->   define-target 一条条补」的机械性归属动作工具化。游离口径与 arch_gap 完全一致
->   （复用 `_detect_unassigned`）：`free`=真游离孤儿（fan_in=0）、`unmodeled`=被调用
->   但未建模（含已知入口脚本——CLI/命令入口 fan_in=0 系程序启动点，归入未建模而非真游离）。`role_id` 指定纳入角色（缺省第一个 tech_role）、`modules` 指定纳入模块
->   （缺省按口径取全部）、`monitored=free|all` 控制纳入口径、`dry_run=true` 只预览
->   不落盘；纳入后自动按写入后架构重评估剩余游离/未建模数。幂等：已纳入模块跳过不重复追加。
-> - **flow_verify 入口跨语言消歧**（`core/flow_verify.py`）：`find_entry` 限定前缀匹配
->   由**子串包含**改为**文件路径段连续子序列精确匹配**（新增 `_path_seqs`），并把
->   `go_func` 加入优先匹配类型——解决 目标项目 这类混合语言项目「项目根目录名命中所有
->   Python 同名 `main`」的跨语言歧义（`cmd.目标项目.main` 此前误导向 Python `main`，
->   现精确命中 Go 入口 `cmd/目标项目/main.go:main`）。
-> - **自证**：目标项目 测试项目端到端 **17 项 PASS**——flow_verify `cmd.目标项目.main`→Go
->   入口 / `program.Run`→Go `Run` 正确命中；adopt_free_modules 非法角色报错 / dry_run
->   free 纳入 163 模块 / dry_run all 纳入 439 / 指定 modules 精确纳入 / 指定 role_id /
->   幂等跳过 / 真实落盘后架构仍合法且 remaining_free 正确更新；既有 86 项 unittest 全过
->   （无回归）；`py_compile` 全过。
-> - **CodeRabbit 评审修订（2 major + 3 minor，二次提交）**：① major `find_entry`
->   支持 **模块.类.方法** 限定——类名先与候选节点限定名后缀对齐扣除，剩余前导段才做
->   file_path 路径段匹配（原逻辑把类名误当路径段，`pipeline_runner.Pipe.run` 无法解析）；
->   ② major `adopt_free_modules` 显式 `modules=[]` 视为不纳入（原逻辑与缺省混同会全量
->   纳入）；③ minor `monitored` 校验 enum（free/all，非法值报错，schema 同步加 enum）；
->   ④ minor `dry_run` 校验为真布尔（拒绝 `"false"` 字符串）；⑤ minor README 补
->   unmodeled 含已知入口脚本。修复后自测 **14 项 PASS**（新增 模块.类.方法 → method 节点 /
->   Go `Receiver.Method` 限定 / modules=[] no-op / monitored 非法值 / dry_run 非布尔，
->   原场景无劣化）+ 86 项 unittest 全过。
-> - **版本号**：5.9.0 → 5.10.0（minor，新增工具功能）。
-
-### v5.9.0 — 双真身语义分层：平行管线/设计并存不机械收敛（P0 落地）
-
-> 承接治理闭环总验收反馈（duplicate 15 持平）与用户定夺：**双真身是项目的特别设计，
-> 架构探测没有捋清楚**。开发方在 目标项目 测试项目复现 15 项 duplicate 全清单，全部集中在
-> `alone_doc/doc-to-skill/scripts` 与 `alone_web/web-to-skill/scripts` 两条**平行技能生成
-> 管线**（文档转技能 vs 网页转技能，有意并存的产品线）之间——探针此前在函数粒度统一报
-> "跨目录重复、建议收敛"，把「管线级设计并存」与「函数级复制粘贴」混为一个信号，机械
-> 收敛最危险是误合并平行管线、破坏设计。本版为 duplicate 判定增加**语义分层**。
-> - **`duplicate_insight` 新增 `semantic_kind` 分类字段**（`core/arch_insight.py`）：
->   - `designed_parallel`（设计并存）：副本目录在**共同分支点后结构对称**（分支后层级数
->     相同、分支名不同），判为同一设计模板的平行实例，如 目标项目 两条技能生成管线；
->     带 `_DEAD_DIR_HINTS` 黑名单（legacy/old/bak/backup/archive/deprecated/_v1 等），
->     废弃/备份目录的复制**不**判设计并存，防死复制误判。
->   - `true_duplicate`（真重复）：非对称结构的跨目录同构实现，维持收敛/抽公共建议。
-> - **`arch_gap` duplicate 差距 detail 按分类差异化建议**（`core/arch_gap_analyzer.py`）：
->   设计并存 → "保留（不建议收敛，抽公共工具可选）"；真重复 → "建议收敛/抽公共工具"。
->   `_duplicate_markdown`（P0-C 报告）同步分组展示「真重复」与「平行管线/设计并存」两小节。
-> - **自证**：目标项目 测试项目 15 项 duplicate **全部判为设计并存**（符合"平行管线保留"
->   预期，不再一刀切建议收敛）；`_is_parallel_structure` 单测 **9 项 PASS**（根级分叉 /
->   共同分支对称 / 分支后层级不同 / 废弃目录复制 / 分支名废弃提示 / 大小写不敏感等边界）；
->   `py_compile` 通过。
-> - **CodeRabbit 评审修订（2 major，二次提交）**：① `_is_parallel_structure` 允许
->   **共同前缀为 0**——平行管线可从项目根直接分叉（如 `alone_doc/...` vs `alone_web/...`），
->   原 `common < 1` 硬性拒绝会漏判根级分叉的设计并存；② 废弃目录黑名单检查由"仅分支名"
->   扩展为**分支名及其后全部目录段**，且**大小写不敏感**——`products/active/scripts/archive/`
->   这类"分支下归档副本"不再误判设计并存。自测升级 9 项 PASS（新增根级分叉 True /
->   分支后含 archive False / Archive 大写 False / 分支后含 legacy False），目标项目 测试项目
->   15 项 duplicate 复跑仍全判设计并存（**无劣化**）；`py_compile` 过。
-> - **版本号**：5.8.1 → 5.9.0（minor，新功能语义分层）。
-
-### v5.8.1 — 设计注册表可回收：coderef_registry 新增 delete（ 落地）
-
-> 承接 （多 AI × 多项目调 coderef 资料隔离）观察点：设计注册表此前仅 add/alias/list，
-> 多 agent 在任意项目 `registry add` 会永久写入全局共享池且不可自动回收。本版新增 `delete`
-> 动作，让来源项目可回收自己注册的设计，同时保留"全局共享 + source_project 溯源"的
-> 跨项目设计复用设计意图（测试实测"清单隔离成立，唯一共享面=设计注册表"）。
-> - **`coderef_registry` 新增 `delete` 动作（`core/design_registry.py` + `core/mcp_server.py`）**：
->   `name` 支持 canonical 或别名（自动归一化）；删除设计时**同步清理资产区同名资产**，
->   避免设计删除后资产残留。来源防护两级：① `source_project` 为空（预置种子/未标注来源）的
->   基础设计**不可删除**，保护通用设计库；② `source_project` 与当前 `project_path` 不一致的
->   条目**不可删除**，提示"请在来源项目下删除"，防止 A 项目误删 B 项目注册的哨兵。
-> - **CodeRabbit 评审修订（2 major + 复审 1 critical/1 major）**：
->   ① delete 改为「恰好一个 canonical/别名匹配才可删」（`resolve()` 只取首个匹配在共享
->   别名时会删错），歧义别名拒绝删除；② 注册表变更操作（add/alias/delete/add_asset）
->   加**跨实例写事务锁** `_synchronized`（持锁 + 变更前重载最新磁盘状态），防多实例
->   「陈旧快照覆盖」把已删除的设计恢复回来/丢弃他实例更新；③ **复审 Critical——`setup.bat`
->   命令注入**：原 `set /p` 输入被直接内插进 `python -c` 源码，恶意输入
->   （如 `x');import os;os.system('calc');#`）可执行任意代码；已新建 **`core/cli.py`**
->   （参数经 `sys.argv` 传入、只当数据不当代码编译），`setup.bat` 全部改调
->   `python -m core.cli ...`，注入 payload 实测仅作为普通设计名存储、不执行；④ **复审
->   Major——跨进程写锁**：`setup.bat` 每个动作是独立 `python -c` 进程，进程内 RLock 盖不住
->   多进程并发；升级为「进程内 RLock + 跨进程文件锁（`msvcrt.locking`/`fcntl.flock`）」
->   并让构造/种子初始化共用同一事务边界，实测双进程并发 add 全落盘无丢失。
-> - **`setup.bat` 菜单扩展**：新增「5 设计注册表管理（list/add/alias/delete）」「6 激活治理
->   看板前端（本地服务，回环 127.0.0.1，复用 `gov_webdash.serve`）」「7 生成并打开架构画布」，
->   注册表 delete 带来源校验与二次确认；原退出项顺延为 8。
-> - **自证**：临时注册表全流程 8 项 PASS（add→delete 同项目闭环、他项目条目防护拒绝、
->   预置种子保护、资产同步清理、唯一别名归一化删除、删除不存在报错、歧义别名拒绝、8 线程
->   并发 add 全落盘无丢失）；`py_compile` 通过；`setup.bat` 三入口在真实环境实测（reg
->   list/add/delete、看板 HTTP 200、画布生成 44KB HTML）。
-> - **CodeRabbit 终审修订（2 major）**：⑤ `core/cli.py` 项目身份校验——`argv` 传入的
->   `project_path` 被当作 delete 的所有权证明不可靠（从项目 A 传项目 B 路径即可绕过来源
->   防护）；修复为从**可信执行上下文（cwd）**派生项目身份 `_require_owned_project`，
->   add/alias/delete 变更操作仅允许作用于当前所在项目，路径不一致即拒绝；⑥
->   `core/design_registry.py` 锁文件父目录——`_file_lock` 打开 `.lock` 前未确保父目录存在，
->   新路径注册表初始化会抛 FileNotFoundError；修复为打开锁前
->   `os.makedirs(dirname, exist_ok=True)`。
-> - **版本号**：5.8.0 → 5.8.1（patch， 可回收补全）。
-
-### v5.8.0 — 业务层表达力扩展：阶段分组 × 子模块/适配器矩阵 × 分支回环（ 落地）
-
-> 承接 （画布/目标架构对"多阶段流程 × 模块/适配器矩阵"复杂架构呈现清晰度不足）：
-> working 调研工具真实流程是 8 阶段、阶段内含子模块矩阵、含众多分支回环决策点，而原
-> `business_flows.steps` 仅 `{id,name}`，无法承载"阶段×子项矩阵 + 回环"这类高密度业务架构。
-> 本版把业务层表达力从"线性 step"扩展为"阶段分组 + 成员矩阵 + 条件回环"，让画布能呈现
-> 真实架构主干而非 4 步粗主干。
-> - **schema 扩展（`core/target_arch_schema.py`）**：`steps[].kind`（`phase` 阶段/普通 step）、
->   `sub_module_refs`（阶段→子模块/适配器成员挂载，成员含 `module`/`role`/`alias`/`kind`/
->   `note`）、`branches`（step→step 条件/回环边，含 `to`/`type:loop|if|fallback`/`condition`）。
->   `sub_module_refs` 预留 `group` 嵌套槽位（子分组演进接口）；全部可选，`REQUIRED_STEP_KEYS`
->   保持 `{id,name}` 不动 → 旧 target_arch 零新增错误、向后兼容。
-> - **画布渲染（`core/canvas_generator.py`）**：`kind=="phase"` 渲染为阶段分组（🎯 + 阶段序号
->   徽章），与普通 step（📈）视觉区分；`sub_module_refs` 成员沿所属阶段拉进可视图——命中图谱
->   模块直连、图谱无独立节点的适配器类补"成员占位"节点强制纳入（消解"5 个搜索 Adapter 命中 0"）；
->   `branches` 绘制粉色虚线回环/条件边（label=condition）。图例新增"阶段成员挂载/分支回环"。
-> - **business_gap 成员断链（`core/arch_gap_analyzer.py`）**：`_detect_business_gaps` 新增可选
->   `member_resolved` 参数，主流程解析 `sub_module_refs` 成员是否实现，阶段声明成员全无实现时
->   追加"阶段→实现断链"提示（`member_missing`），不只是角色级断链。
-> - **自证与回归**：合成验证 8 项全 PASS（schema 合法/非法校验、阶段分组节点、成员占位、
->   分支回环边、成员挂载边、成员断链）；旧 target_arch 渲染路径不变，/14/30/31/32/33
->   不劣化。
-> - **CodeRabbit 评审修订（1 项 critical + 2 项 major + 1 项 minor）**：
->   `arch_gap_analyzer.py` 主流程与 `_detect_business_gaps` 统一解析 `group.items[].module`
->   并改用 `_module_exists`（文件系统+图谱双口径）判定成员实现；`target_arch_schema.py` 分支
->   后置校验防护非 dict step（防 AttributeError 崩溃）；`canvas_generator.py` 预收集步骤节点 id，
->   过滤指向不存在步骤的分支边。修复后合成验证 8 项全 PASS、`py_compile` 全过。
-> - **O-C3 模块边界口径（`core/arch_audit.py`）**：同顶层父包的子包互引（如
->   `route/gin↔route/client_side↔route/chat_claw`）在业务上属同一模块/层内部的组件纠缠，而非
->   "跨模块"真环。`audit()` 现按各 SCC 成员顶层父包集合分拣：纯同父包环 → 转 `package_cycles`
->   （包内子组件环，单独透出、不计入 health 扣分）；跨顶层包真环仍保留在 `cycles` 照常扣分，
->   保留真实耦合信息、对齐 LLM"包内循环"认知。
-> - **② 阈值去 overfit（`core/business_analyzer.py`）**：入口/基础设施模块判据由硬编码
->   比值（此前为避单一项目特例 1.5→2.0 收死）改为可配置常量
->   `ENTRY_DEGREE_RATIO/INFRA_DEGREE_RATIO/INFRA_MIN_DEGREE`（默认 2.0/2.0/2，即"出/入度
->   相差 2 倍以上即倾向该层"的通用显著失衡判据），`_hier_entry_modules/_hier_infra_modules`
->   可传参覆盖；注释不再引用单一项目业务名,消除工具对 working 的过拟合。
-> - **CodeRabbit 二轮修订（`arch_audit.py`，1 major + 1 minor）**：① **Major**——模块内自环
->   判定由"模块内任意符号调用"改为"按符号建模块内子图，仅当符号自递归或形成环(SCC≥2)才标
->   self_loop"，避免把同文件线性调用 a()→b()→c() 误报为模块自环；② **Minor**——no_code 判定
->   由 `len(nodes)==0` 改为"是否存在非 test 模块"，图谱只剩 test/tests 节点时不再误给满分 10.0
->   而判"无代码可评"。合成验证 9 项全 PASS、`py_compile` 过；`self_loops` 口径更精确（去掉线性误报）。
-> - **role_boundary 输出面细化（`core/role_boundary.py`）**：① definition 越界仅报**顶层类/
->   函数**（方法名是行为描述如 `_llm_edit`，非职责单元声明，方法级撞词全部归入 `call_hints`
->   弱信号，消除"类名撞词→类+全部方法刷屏"，如 `CheckpointManager` 曾 9 连报）；② 修复
->   `role_matchable` 计算后未接入 `def_hits` 的缺陷——role_keywords 全为中文（无法 token 化
->   提供英文锚点）的角色不判 definition，消除 business 模块因 `engine`/`research` 等跨语言
->   撞词的整模块误报；③ `call_hints` 通道降权 `error`/`logging` 支撑词（异常/日志属通用机制，
->   纯支撑词命中不构成跨角色提示）；④ **CodeRabbit 复审 3 发现修订**——本角色泛词关键词
->   （service/manager 等）不再作为越界锚点（防 `PaymentService` 被泛词锚定压掉真实越界）、
->   命中关键词保留完整文本（`service_client`/`error_handler` 不再被误判为纯泛词/纯 error
->   支撑词而降权删除）、definition 与 call_hints 各自达到上限才停止扫描（上限互不压制）。
->   working 实测：boundary_issues 200→3（仅剩 service 层
->   重复实现 code 层 checkpoint/chart 能力的真信号），call_hints 187→133（纯 error 撞词
->   清零）；目标产品 验收场景（waiter.cook→chef 越界）保持 PASS、本角色符号不误报。
->   **⑤ 测试观察点修订**——`package_cycles` 分拣由「顶层第一段」改为「直接父包」：
->   Go 标准布局下所有模块首段恒为 `internal`，原口径把 `business/manage/http_tools ↔
->   common/http_tools` 这类跨业务/公共层环误归「包内环」，修复后按完整父路径分拣
->   （目标项目 实测 package_cycles 2→1：route 包内环保留、http_tools 环正确归跨包
->   cycles）；detect 初稿递归展开跳过依赖/产物目录（`_COMMON_DIRS` 白名单补
->   vendor/volumes/public + libs 内 npm 包子目录启发），目标项目 初稿 target_modules
->   1000+→542（php/vendor、public/libs、logs、volumes 全清除，目标项目 libs 业务
->   子仓不受影响）。
-> - **版本号**：5.7.1 → 5.8.0（minor，业务层表达力扩展 + O-C3 口径 + ② 去 overfit）。
-
-### v5.7.1 — 架构判据口径校准：tests 排除 + 基础设施层归属 + detect 粒度/role_boundary 泛词/入口游离（新代码验收观察点）
-
-> 承接 2026-08-28 新代码验收（O-C1/O-C2 + 观察点 a/b/c/d）：用独立 LLM 子代理与
-> coderef 全量探测正面对比发现，coderef 健康分系统性低于人判（-4~-6），偏离集中在少数
-> 静态口径。本版校准：
-> - **O-C1** 循环/规模/分层判定排除顶层 `tests/`、`test/` 目录（`_is_test_path` 顶层片段
->   判定，不误杀 `src/utils` 等）。request 样例不再被 tests 边凑成 11 模块大环。
-> - **O-C2** 新增"基础设施层"（最低层 0，`ARCH_INFRA_DIRS` 配置 i18n/log/plugin/rpc 等），
->   "公共库依赖日志/国际化"这类合理依赖不再被判下层依赖上层，目标项目 的分层违例不再
->   被批量放大。
-> - **a** detect 生成初稿把 `target_modules` 展开到模块级与"目录前缀覆盖"匹配语义对齐，
->   消除"目录名 vs 子路径"粒度错位导致的初稿覆盖率极低。
-> - **b** `_COMMON_DIRS` 补充 `coderef-report`/`report`/`result`/`artifacts` 等输出制品目录，
->   不再把输出目录当业务模块。
-> - **c** `role_boundary` 关键词匹配由子串/前缀收敛为整词边界匹配 + 泛词（app/main/entry）
->   低置信降级，合理符号不再被泛词 `app` 误判越界；模板 `role_keywords` 与目录匹配词分离。
-> - **d** `main_*`/`bin/cmd/cli`/`manage`/`__main__` 入口脚本由"真游离 free"改为 `unmodeled`
->   （带 `entry` 标记），不再误导为需删除的危险游离物。
-> **CodeRabbit 评审修订（2 轮 5 发现全修）**：一轮 3 发现——① `_match_module_ids` 含 `/` 的
->   模块级 spec（模板展开的 domain/models 等）改精确路径匹配，防 basename 误配无关 `other/models`；
->   ② `_detect_unassigned` 与孪生判定的 fan_in 均排除测试调用边（防生产入口标记丢失、仅被测试
->   引用的孤本被误判活跃副本、整组收敛候选被丢弃）；③ role_boundary 泛词命中的 `uncertainty`
->   保持 high（与"静态-only 即不可靠"语义一致，防消费方把泛词命中当更高可信）+ 新增独立
->   `confidence=low` 表达低置信。二轮 2 发现——基础设施层（最低层 0）进出双向豁免分层违例
->   （跨切面横切非腐化信号，反向依赖业务属正常装配）；模块匹配/缺失判定改为一次预建索引
->   O(nodes)，模板生成千级 spec 不再退化为 O(specs×nodes) 的逐 spec 全扫 relpath。
-> - **版本号**：5.7.0 → 5.7.1（patch，架构判据口径校准 + CodeRabbit 两轮评审修订）
-
-### v5.7.0 — 软件形态模板体系：无 target 也能生成目标架构初稿与整理建议（ 解决方案落地）
-
-> 承接  尾部（多案例回归发现"部分样本不能产出对的架构图"）：无 `target_arch` 时画布
-> 缺业务/技术层退化为单层模块图。本版新增软件形态模板体系作为降级适配——识别项目属于
-> 哪种常见软件形态，按模板自动生成 `target_arch` 初稿 + 文件夹整理建议（引导非强求），
-> 先让"非编程人员 + 编程 AI"有架子可调，再谈三层泳道图。
-
-- **模板体系（新增 `core/arch_templates.py`）**：内置两种样板——`hexagonal` 六边形单体
-  （业务核心 domain/use-cases 与外部技术 adapters/infrastructure 解耦，依赖向内）与
-  `modular_monolith` 模块化单体（按业务域平铺模块 + 共享底座，模块间依赖受控）。每类模板含
-  识别特征（目录/依赖关键词）、角色骨架、期望目录与整理建议。纯静态、确定性，不依赖 LLM。
-- **define-target 模板初始化（`coderef_target_arch_set` 新增 `template`/`detect` 参数）**：
-  不传 `target_arch` 时，`template=hexagonal|modular_monolith` 按模板结合项目实际顶层目录生成
-  `target_arch` 初稿（tech_roles 自动匹配真实模块）；`detect=true` 自动识别项目类型并套用对应
-  模板（detect 优先级低于 template）。初稿仅供参考，可在此基础上完善；识别到的模板在返回值
-  `template` 字段说明。
-- **arch_gap 模板整理建议（新增 `templating` 输出）**：每次 `coderef_arch_gap` 自动 detect
-  项目形态，对比模板期望骨架输出整理建议（缺失目录 add_dir / 未落入角色目录 review_dir），
-  "按期望骨架整理文件夹有助于生成目标架构；可自主决定是否照做"。
-- **版本号**：5.6.7 → 5.7.0（minor，新增模板体系功能模块）
-
-### v5.6.7 — arch_audit cycle 口径分流 + 去样例化残留清理（ 复核）
-
-> 承接测试  待复核点 + 过拟合审计（`20260827-过拟合审计`）：多案例回归中 self
-> 实测 `arch_audit=0.0`，暴露 cycle 口径把"模块内互调自环"计入循环依赖并压健康分，
-> 对大型单体过度悲观。同步清理工具代码中全部 working 特有业务名残留。
-
-- **arch_audit 区分「模块间循环 vs 模块自环」（`core/arch_audit.py`）**：原 `self_edges`
-  只要模块内存在任意符号级 CALLS 边（无需成环）就记录，单模块分量命中即判循环依赖并扣健康分
-  ——模块内正常函数互调（如 `core/role_boundary` 无自引用 import 却成单元素 SCC）被误当架构腐化。
-  修复：`cycles` 只保留模块间 SCC≥2 的真循环（架构腐化，照常扣分）；模块自环单独透出
-  `self_loops` 字段与 `summary.self_loops` 计数（不扣健康分）。实证：self（2272 节点高耦合单体）
-  health 0.0→3.0（46 中 45 自环分流，core/* 24 模块真环保留）；requests 保持 2.0 不变
-  （tests/src 真循环仍在，证明不误伤模块间真环）。
-- **去样例化残留清理（① + 过拟合审计 D 节）**：全量替换 LLM prompt、MCP schema description、
-  SKILL、注释、docstring 中的 working 特有业务名（调研工具/洞察工具/方案工具/配置中心/创意引擎等）
-  与 `目标产品`、`working` 路径示例为中性占位（如 营销助手/业务工具.main/infra_layer）；
-  `_domain_flow_model` docstring 的 gptr_service 示例同步中性化。工具本体不再含任何单项目命名残留。
-- **版本号**：5.6.6 → 5.6.7（patch， 复核 + 去样例化）
-
-### v5.6.6 — target 与架构图真实化（ 覆盖引导/业务流建议/孪生真身孤本标注）
-
-> 承接测试 ：coderef 自动生成的分层/目标架构与 working 实际架构差异大
-> （覆盖率仅 0.06、业务流只有 1 条调研 4 步、source_engine/调研工具双真身被画成平级真身未标孤本），
-> 照这张图治理会漏掉真实主线（web 编排、洞察→方案→创意）。
-
-- **define-target 覆盖引导（`coderef_target_arch_set` / `arch_gap`）**：业务流为空或不足 2 条、
-  角色 `target_modules` 为空时显式提示（不阻断设置）；`arch_gap` 在 `module_assigned<0.3` 或业务流不足时
-  输出 `coverage_guidance`，防治理建在残缺图上。
-- **业务流校验/建议（`arch_gap` 新增 `domain_flow`）**：域间业务流量透视三层——`edges`（如实
-  跨域调用含证据）、`hubs`（逐域结构角色：共享层/双向枢纽/被共同依赖/业务编排源…，全程无项目名）、
-  `suggestions`（去掉共享层与叶子后的主干业务流，调用数 ≥3，并附具体调用证据）。共享层在"被
-  ≥50% 源域引用"时自动识别（零项目名硬编码）；"谁是技术底座"属项目语义（working 中 gptr_service
-  与真实业务终点创业咨询拓扑同构，工具不擅自下结论），经 `business_flow.scope.exclude_domains` /
-  `exclude_suffixes` 配置注入。保留 `flow_suggestions` 作为建议简表。真实主干（web→方案工具、
-  洞察→创业咨询 25、方案→目标产品 17、调研→source_engine 43）自动排前。
-- **双真身孤本标注进图（`arch_gap` 新增 `twin_identity` 差距 + 画布渲染）**：复用 `duplicate_insight`
-  目录级同构对，按跨模块 fan_in 判真身（最高且>0）/孤本（=0）/活跃副本（>0 非最高）；
-  画布真身绿 #22C55E、孤本灰 #A1A1AA、活跃副本橙 #F97316，节点子标签直显身份，图例同步。
-  working 实测 6 组孪生目录 97 模块全标注：source_engine/engine=真身(fan_in 68)、调研工具/engine=孤本(0)。
-- **回归不劣化**： 分层布局（47 层无坍缩）/  三层泳道 /  L0-L3 导航 /  统计联动
-  真实浏览器全 PASS。
-- **版本号**：5.6.5 → 5.6.6（patch， 修复）
-
-### v5.6.5 — 画布层级导航「统计随视图联动」（ 真实浏览器回归）
-
-> 承接测试  回归： 导航入口/过滤/下钻/回退在真实浏览器实测中，
-> 顶部「节点/连线/差距」统计恒为全量（537/2315/357）不随层级切换更新，被误判为"有入口、无行为"。
-
-- **定因**：`renderStats` 用 `nodes.length` / `edges.length` 全量 + 静态 `DATA.meta.summary`，
-  未随 `navVisible` 过滤联动——层级过滤/下钻/回退本身在真实浏览器已生效，
-  唯一失效的是统计面板反馈信号。
-- **修复（`core/canvas_engine.py` `renderStats`）**：统计改按当前 `navVisible` 过滤后的可见节点/连线
-  计数；全量视图保留整体差距摘要（含高中低分档），层级视图显示该层可见差距节点数，随视图切换更新。
-- **真实浏览器实测（working 537 节点/2315 边）全 PASS**：all 节点537→L0 节点7→L1 业务4/技术3/代码530→
-  L3 节点530→L2 下钻 run_cycle 23→回退还原 530，stats 数值与画布可见节点完全一致；差距开关在 L3 下
-  独立切换高亮（开=差距色、关=还原默认蓝）；/ 泳道不劣化。
-- **版本号**：5.6.4 → 5.6.5（patch， 修复）
-
-### v5.6.4 — 画布 L0→L3 逐层下钻导航（ 治理主链①捋管线堵点）
-
-> 承接测试 ：arch_canvas 把 537 节点全量平铺、只有三层泳道文本标签（不可交互），
-> 无法"先整体后局部"逐层捋清（架构→模块→模块内逻辑→代码管线）再谈对齐/治理。
-> 堵点是结构性的（工具不承载层级导航），非测试侧手法问题。
-
-- **画布新增层级导航（arch_canvas）**：工具栏加 `L0 总览 / L1 分层 / L2 模块 / L3 代码 / 全量`
-  视图切换 + 面包屑回退 + 差距开关（默认折叠、捋清后再叠加）：
-  - L0 总览：只看业务定位 + 角色（先整体）；
-  - L1 分层：按层聚焦（业务/技术/代码）；
-  - L2 模块：双击模块节点下钻其关联子图；
-  - L3 代码管线：只看代码层模块与依赖。
-  基于现有 layer/type 数据实现，不动布局引擎，（分层布局）/（三层泳道）不劣化；
-  flow_canvas 等无业务/技术/代码分层的画布自动不启用导航。
-- **coderef-governance SKILL.md 固化 L0-L3 铁律**：核心原则新增第 2 条——捋管线必须按
-  L0→L1→L2→L3 自顶向下走完，**未捋清 L0-L3 不得进入定标（define-target）与差距分析（arch_gap）**；
-  场景①编排同步改为逐层下钻流程。
-- **working 自证**：L0 总览 7 节点（先整体）→ L1 分层聚焦（业务4/技术3/代码530）→ L2 模块下钻
-  （双击模块聚焦子图 23 节点）→ L3 代码管线（530 模块），差距 367 节点可折叠，面包屑可回退。
-- **版本号**：5.6.3 → 5.6.4（patch， 修复）
-
-### v5.6.3 — arch_gap 游离分档全量计数透出（ 回归存疑项定因）
-
-> 承接测试 ：arch_gap 游离分级 unmodeled 实盘 0 与冒烟 free=189/unmodeled=11 不一致。
-> 定因：**展示截断，非检测分支遗漏**——游离按 free 置顶排序，默认 `max_unassigned=50` 只展示
-> 前 50 条（全 free），unmodeled 全量被截断；冒烟 189+11=200 恰是 `max_unassigned=200` 的截断口径。
-> 实盘全量（working 图谱 + target_arch v2）：free=189 / unmodeled=265 / total=454。
-
-- **summary 新增游离全量分档计数**：`unassigned_free` / `unassigned_unmodeled` 直接透出全量
-  free/unmodeled 计数，调用方不再受 `max_unassigned` 展示截断影响（此前 `_detect_unassigned` 已算
-  出两档计数但 `analyze_gap` 未解包、summary 未透出，属上一轮半成品，本轮补齐）。
-- **展开参数口径说明**：控制游离列表展开的参数是 `max_unassigned`（默认 50），非 `limit`；
-  传 `limit` 不影响展开属调用方口径，已在本条目与响应册说明。
-- **版本号**：5.6.2 → 5.6.3（patch， 修复）
-
-### v5.6.2 — 治理主链改造批次四收尾：gov 事务原子性 + 场景化 Skill 封装（外部 C/E）
-
-> 承接《建议书_治理主链与工具改造》批次四最后两块：外部 C（gov 状态机原子性/幂等性）与
-> 外部 E（场景化 Skill 封装层，P0 最高优先，即「少而精工具链」物化）。至此建议书 8 条改造点 +
-> 5 条外部建议全部收尾。
-
-- **gov 工作项写操作全部事务化**（外部 C，P2 中远期保底）：`GovernanceStore` 新增显式事务上下文
-  管理器 `_tx()`，建档/导入/流转/豁免/改元五个写入口统一包进 BEGIN/COMMIT，异常时 ROLLBACK 不留
-  半截状态——为未来多 Agent 协作（写/审/修）共享 governance.db 提供原子性保险；非法状态流转本就
-  不落库（幂等），现再多一层事务兜底。
-- **新增 coderef-governance 场景化 Skill**（外部 E，P0）：把 57 个 MCP 工具收敛为「治理主链
-  5 阶段 × 每阶段 2–4 个高频工具」编排（map-pipeline→define-target→refactor-along→
-  verify-advance→health-cycle），每阶段内含目标、工具、编排步骤、产出与常见坑；内置「意图→工具」
-  快速路由表（同义词/别名→主工具，即外部 A 轻量兜底）+ gov_transition 参数速查（P2⑦）+ 真身判定
-  看 fan_in 不看可达性 + 治理动作护栏（不动 git 库/备份）。
-- **coderef-mcp Skill 补「场景化路由」小节**：意图→工具路由表 + 结构性锈蚀场景指引（P0②），
-  与 coderef-governance 联动，编程 AI 不确定工具归属时先查表。
-- **版本号**：5.6.1 → 5.6.2（治理能力增强，走 minor）
-
-### v5.6.1 — 治理主链改造批次二三：arch_audit 真身透出 + gov_issues 去噪 + 记忆导出（建议书承接 P1⑤/⑥、P2⑦、外部 B/A/D）
-
-> 承接《建议书_治理主链与工具改造》批次二三四，让工具链沿治理主链更顺：真身判定信息直达
-> `arch_audit`、治理库封面不再被游离噪声淹没、超严格状态机有参数速查、记忆可导出为 Markdown
-> 供不支持的 LLM 界面复用。纯静态、确定性，全部不依赖 LLM。
-
-- **coderef_arch_audit 直接透出真身/孤本摘要**（P1⑤）：新增 `identity` 列表 + `identity_count`，
-  复用 `arch_insight` P0-B `identity_insight`，逐类列出「同名多目录实现」的副本数、活跃真身数、
-  无调用者孤本数、各副本 verdict 与优先来源文件——Skill 只看 arch_audit 健康度也不会漏真身判定。
-- **coderef_gov_issues 按真实 severity 排序 + unassigned 置底**（P1⑥）：`high`/`open`/`all` 默认
-  视图改为 severity 序（high>medium>low）优先、`gap_type=unassigned` 一律置底，再按 last_seen 稳定；
-  治理库封面不再被 `*.min.js`/`__init__`/游离噪声刷屏，治理重点（god/cycle/duplicate）能被看到。
-- **coderef_audit 补「结构锈蚀 + strategy 分场景」引导**（P0②/P1④/外部D）：description 明示
-  结构锈蚀要佐以 architecture P0-B/C 与 arch_gap 的 duplicate 差距；strategy 分场景——回归复核新
-  增改动用 `incr`，治理健康度体检/存量结构用 `full`，勿把治理存量当回归用 incr（存量重复不在 diff 内）。
-- **coderef_gov_transition 补「参数动作速查」**（P2⑦）：description 内置 transition/reject/meta
-  三种 action 所需参数速查，明示 action=meta 时勿传 to_state、非法跳转返回错误属正常。
-- **新增 coderef_operation_memory_export**（外部 B）：把操作记忆的 decision/convention/pitfall
-  渲染导出为 Markdown（缺省 `<项目>/data/operation_memory/OPERATION_MEMORY.md`），供 attach 到
-  不支持 MCP 的 LLM 界面（Claude Project / CustomGPT）；内置冲突检测——剥掉正/否定语气词后
-  主题核心相同的同类别条目若方向相反（如「禁止 X」vs「推荐 X」）标记潜在冲突，呼应双册对账防覆盖。
-- **外部 A（意图路由）轻量兜底**：通过各工具 description 的「适用/不适用」硬约束分场景定界，
-  后续由外部 E 场景化 Skill 封装整体路由；暂不做在线向量反射层（符合纯静态确定性原则）。
-- **版本号**：5.6.0 → 5.6.1（治理能力增强，走 minor）
-
-### v5.6.0 — 治理主链改造批次一：arch_gap 新增重复类差距 + 游离真身区分（建议书承接 P0①/P0③）
-
-> 承接测试《建议书_治理主链与工具改造》的第一批工具层改造（P0① + P0③），让 coderef 有能力**识别并排队治理清单里最该治理的「结构性锈蚀」**（重复/孪生/真游离），而非只盯单次变更。真实项目 working 冒烟：识别出 20 个同构孪生（`duplicate`）与 7 组目录级重复（`directory_duplicate`，如 `shared/chart_engine` 与 `目标产品/chart_engine` 100% 同构）。
-
-- **coderef_arch_gap 新增 `duplicate` 差距类型**（P0①）：同构孪生——同名实现跨目录函数体相似度 ≥60%（复用 `arch_insight` P0-C 同一切词/相似度/通用名过滤逻辑，不重写），逐条给出符号、跨目录实现位置与相似度，作为可收敛的治理候选。
-- **coderef_arch_gap 新增 `directory_duplicate` 差距类型**（P0①）：目录级重复——整目录与其他目录同构（文件清单 + 函数签名双指标），识别"同构孪生目录"（如多版本并存、主线与备份目录）。
-- **游离模块区分「真游离 vs 未建模」**（P0③）：`unassigned` 每条附带 `monitored=free`（fan_in=0，代码孤儿、治理候选，排最前）/ `monitored=unmodeled`（被跨模块真实调用但 target_modules 未覆盖，本质是"目标架构覆盖不足"而非孤儿，文案引导去 define-target 补 target_modules），不再把所有游离一律当孤儿刷屏。
-- **游离链路自动豁免噪声**（P0③）：`vendor` / `node_modules` / `*.min.js` / `*.min.css` / `__init__` / `dist` / `build` 自动豁免，避免第三方依赖与压缩静态产物淹没真游离。
-- **summary 新增 `duplicate`/`directory_duplicate` 计数**，供 `arch_verify`/`gov_start`/督办链路统一感知重复类差距规模。
-- **版本号**：5.5.4 → 5.6.0（治理能力增强，走 minor）
-
-### v5.5.4 — docs 超大项目并发提速（方案 B 能力增强：模块文档并行生成）
-
-> 针对测试对 v5.5.3 方案 (a)「仅接受边界、未增强能力」的反馈，补上工具的**自身能力增强**：LLM 生成模块文档的主耗时段从逐模块串行改为固定并发线程池并行，超大项目（working 573 文件/20 万+ 行 62 分钟级）单次全量耗时约按并发数线性下降，降低超大项目触底超时返回 partial 的概率。
-
-- **模块文档 LLM 调用并发化（`core/wiki_generator.py::_generate_module_docs`）**：原 `for mod in modules → self._llm_ask()` 逐模块串行（网络 IO 是主耗时段），现改为 `ThreadPoolExecutor` **固定并发池**并行执行所有模块的 LLM 生成；落盘 / `docs` 列表 / front_matter 注入 / 进度取消检查点收敛回主线程按原模块顺序执行——写文件与列表操作保持线程安全，输出顺序稳定与串行时一致
-- **并发度可控**：默认 `4` 个 worker，上限 `16`，环境变量 `CODEREF_WIKI_CONCURRENCY` 可调（防误设超大并发耗尽连接）；并发数仅影响执行速度，不改变产物内容与顺序
-- **取消 / 进度保持  语义**：预算阶段与落盘阶段各保留 `progress_cb` 检查点（`TaskCancelled` 仍可穿透），后台任务取消仍可在阶段点收尾
-- **线程安全**：每 worker 只调用 `self._llm_ask`（只读 prompt）；共享状态 `_last_llm_error` 仅作诊断提示、并发下最后写入者胜，不影响产物正确性；`_call_count` 隶属 LLM 客户端实例
-- **验证**：假 LLM（每调用固定 0.2s 延迟）10 模块并发耗时 0.63s（串行估算 2.0s，约 3.2× 加速），落盘篇数 / 内容 / front_matter / 顺序与串行一致；`py_compile` 通过
-- **版本号**：5.5.3 → 5.5.4
-
-### v5.5.3 — ~：全工具补齐对账修复（治理产出落盘 / 目标架构保真 / 排序追溯 / 后台任务取消）
-
-> 全工具补齐对账（20260826）沉取 6 项确证缺陷集中修复：治理看板 HTML 落盘、目标架构落盘保真、缺省关闭周期、后台任务取消、图谱 callers 追溯、operation_memory 异常兜底。
-
-- ** gov_board 落盘 HTML（`core/mcp_server.py`）**：缺省 output_dir 时自动生成本体 HTML 写盘到 `<project>/.coderef/gov_board.html`，description 明确产物路径，供人工/浏览器直接查看（不再"仅返回 JSON、无 HTML 产物"）
-- ** target_arch_set 落盘保真（实证核对）**：`normalize_arch` 以 `dict(arch)` 完整复制输入再补缺省空数组，`_target_arch_set` 全量 `json.dump`，version/tech_roles/business_flows/constraints 等顶层段落完整保真落盘；实测传入该 4 段富结构，落盘文件 4 段齐全无丢失。测试观察到的"丢段"根因为 TRAE coderef MCP（stdio 长驻进程）仍运行旧版本代码——重启 MCP 并重新 set 覆盖写入即可消除
-- ** gov_close 缺省关闭（`core/healthcycle.py`）**：缺省 cid 时自动定位当前 open 周期并关闭（与 gov_start 周期状态一致），无 open 周期时返回明确提示"请先用 coderef_gov_start 建档"，不再误导性报"周期不存在或已关闭"
-- ** query callers 追溯补全（`core/code_knowledge_graph.py`）**：方法调用侧 `call.func_name` 常带类/模块前缀（如 `self.run_bot` / `Bot.run_bot`），此前用纯短名 `run_bot` 精确匹配失败导致 CALLS 边漏建、callers 查询返空；现 `_find_node_by_name` 精确失败后做唯一候选模糊回退，建边时优先全名匹配再回退短名，`run_bot` 可追溯到真实调用者
-- ** operation_memory_sync 异常兜底（`core/operation_memory.py`）**：LLM 提炼路径整体捕获异常，返回结构化 `extract_error`，不再裸 `'"kind"'` JSON 解析报错崩溃后台任务；同时修复提炼提示模板花括号与 `str.format()` 冲突（`replace` 替代 `format`）
-- ** 后台任务取消接口 + 可定位状态（`core/mcp_server.py`）**：新增 `coderef_task_cancel` 工具同步置任务为 cancelled——随后 `coderef_task_status` 返回可定位的 `cancelled`（不再无限报"running、无部分结果"），且 `_bg` 的 progress 回调实现协作式取消（下一阶段点抛 `_TaskCancelled` 尽早收尾，非普通 error）。审计/docs 等逐阶段汇报工具可真正停止；取消前已产出的增量产物（文档/报告）按模块落盘可先用
-- **验证**： `.coderef/` 生成 gov_board.html； 富结构 4 段落盘归齐； 缺省关闭命中 open 周期； 模拟方法调用 `run_bot` 精确命中 `Bot.run_bot` 且 callers 返回真实调用者； sync 不再裸报错； cancel 后状态转 cancelled、协作收尾；全部改动 `py_compile` 通过
-- **CodeRabbit 评审修订**：① `self/cls` 方法调用先按调用者所在类解析（`self.run_bot`→`Bot.run_bot`），避免与顶层同名函数撞 CALLS 边，并加碰撞测试；② `coderef_docs` 透传 `progress_cb` 至扫描/图谱/wiki 生成阶段，docs 后台任务具备阶段内协作取消点；③ `coderef_task_cancel` 对曾取消已收尾的任务保持 `cancelled` 终态，不退化误报 `completed`
-- **CodeRabbit 二轮评审修订**：① 取消信号穿透——`TaskCancelled` 下沉定义于 `core/pipeline_runner`（被依赖方），audit/docs/wiki 各 `except Exception` 显式 re-raise，`_bg` 复用同一异常，取消不再被吞、daemon 线程不再跑到底；② WikiGenerator 逐模块生成循环加 `progress_cb` 检查点（`_generate_module_docs` 每模块先过取消点），docs 取消可在 wiki 生成内部生效；③ `self/cls` 调用改按调用者所在**模块+类**构造完整方法 id（`self.run_bot`→`method:<调用者mod>:<调用者类>.run_bot`）精确主键匹配，跨模块同名类方法不再误连（碰撞测试：modA/modB 各自 `Bot.run_bot` 均正确归属本模块）
-- **CodeRabbit 三审修复 + docs 超大项目定性（ 决策 (a)）**：① `progress_cb` 透传链补齐——`_generate_all_documents`/`_incremental_update` 及其类方法委托、`_generate_full_pipeline` 主项目与子项目两处调用全部透传，消除 NameError；② docs 定性采纳「接受边界」：`coderef_docs` 描述诚实注明超大项目（实测 573 文件/20 万+ 行）单次全量可能超后台兜底 860s 返回 partial，建议走分片/增量（coderef_audit incr / 按子项目维度逐个扫描），避免大项目预期失败
-- **版本号**：5.5.2 → 5.5.3
-
-### v5.5.2 — ~：专项工具可信度修复（owasp/change_guard 降噪 + 入口/描述指引）
-
-> 专项工具对账（20260826）暴露的工具可信度问题集中修复：owasp 静态检测 8/8 误报、change_guard 4/4 误报降噪，flow_verify 入口指引与相近符号提示，target_arch_set 描述补 role_keywords 说明。
-
-- ** owasp 静态检测降噪（`core/owasp_compliance.py`）**：新增 `_is_false_positive` 上下文识别，过滤 mock/测试桩、错误码常量、内部路径拼接、临时文件清理、标准库导入、台账 JSON 写入、角色顺序正确、密钥从配置读取等 8 类静态启发式误报；总量 906→726；summary 明确标注"静态启发式规则误报率较高，需人工复核"。CodeRabbit 评审后修订：临时文件清理需临时/缓存路径证据（`_has_temp_evidence`，避免抑制 `os.remove(request.args["path"])` 等破坏性删除）；角色扫描回溯方向修正（从 line_no 向文件开头回溯、遇 def/class 边界停止，原 `start=i+1` 更新无效导致 system append 在 def 之后时漏检）
-- ** change_guard 退化误报修复（`core/change_guard.py`）**：按行方向区分新增/删除校验（`+` 新增、`-` 删除），删除行须在新增行中无等价替代才报退化，避免把"重构/移动/新增校验"误判为"删能力"；4 个误报文件（canvas.py/db_schema.py/engine_v3.py/research_bridge.py）全部消除，真实退化仍能检出。CodeRabbit 评审后修订：重试削弱检测移除校验链前置条件（无校验链的客户端删除重试同样检出）；新增 `_is_decl_or_comment` 排除 SQL 建表/字段声明行、纯注释行，避免 SQL 字段名（如 `retry_count`）误判为删重试逻辑
-- ** change_guard 路径可读性（`core/change_guard.py`）**：`_clean_diff_path` 去掉 git diff 路径两端引号、`a/`/`b/` 前缀，解码 UTF-8 八进制字节转义，输出可读相对路径（如 `创意引擎/engine_v3.py`）
-- ** flow_verify 入口指引（`core/mcp_server.py` + `core/flow_verify.py`）**：description 补充 `相对目录名.符号名`（如 `调研工具.run_bot`）写法指引；入口未命中时新增 `suggest_entries` 相近符号候选（名称模糊匹配 top N，带文件路径+行号），summary 附候选减少试错
-- ** target_arch_set 描述补全（`core/mcp_server.py`）**：description 明确 `tech_roles.role_keywords`（可选，角色职责关键词表，供 coderef_role_boundary 符号级职责判定；缺省时 role_boundary 会提示未配置）
-- **验证**： 抽查 8 个误报位置全部过滤； 受控 diff 场景（删校验→检出、重构移动校验→不误报、重试削弱→检出）； 路径清理 4/4 通过； 实测 `调研工具.run_bot` 命中、错误入口附相近符号
-- **版本号**：5.5.1 → 5.5.2
-
-### v5.5.1 —  修复：target_arch_set 校验错误透传 + 描述与 schema 对齐 + arch_gap 显式提示
-
-> 治理决策链核心入口（目标架构 → 差距分析）的"静默返空"根因修复：校验失败不再被 TRAE 吞成空 `[]`，调用方不再误判"无差距"。
-
-- **校验错误透传（`core/mcp_server.py` `_target_arch_set`）**：校验失败由 `raise ValueError`（走 JSON-RPC error，TRAE 客户端吞成空 `[]`）改为返回结构化 `{status:error, error, errors:[...]}`（走 result.content 成功通道），调用方可读到含具体字段的可读错误（如 `business_flows[0] 缺少必填键: id`、`steps[0] 必须是对象`），不再与"成功返回空"混淆
-- **描述与 schema 对齐（`coderef_target_arch_set` description）**：明确 `business_flows` 每项必填 `id/name/steps`、`steps` 每项必须是 `{id,name}` 对象（非字符串）、可选 `tech_roles` 引用已定义角色 id；`tech_roles` 每项必填 `id/name/target_modules`；`constraints` 每项必填 `from/to/rule`——按描述构造即能通过校验
-- **arch_gap 显式提示（`core/mcp_server.py` `_arch_gap`）**：目标架构未设置（读存储抛错）或传入的 target_arch 无效（校验失败）时，返回 `{status:error, error:"目标架构无效（N 条）..."}` 显式提示，不再静默空、不再链式污染为"无差距"
-- **验证**：非法样例（flow+字符串 steps）返回 7 条可读错误；合法样例（id/name + {id,name} 步骤）成功落盘 `{roles:3, flows:1, constraints:3}`；arch_gap 未设置/无效 target 均返回显式 error
-- **版本号**：5.5.0 → 5.5.1
-
-### v5.5.0 —  + ：画布标签可读性揭示策略 + 业务/技术/代码三层架构对齐
-
-> 让自由画布从"一堆点线看不懂"走向"进门看懂"：标签展示分级揭示，架构按业务/技术/代码三层泳道对齐表达。
-
-- ** 节点标签可读性/揭示策略（`core/canvas_engine.py`）**
-  - **LOD 标签分级**：缩放低于 0.30 时自动隐藏标签文字只留色块/图标，杜绝"全局马赛克不可读"；缩放回升即恢复
-  - **长标签省略 + 悬停揭示**：标签超宽 `ellipsis` 截断，节点 DOM 携带 `title` 完整名/路径，悬停即显全名
-  - **最小可辨尺寸 + 对比度保障**：`fitView`「适应」后缩放下限保正节点最小可辨像素；节点背景 `#1E293B` + 标签文字 `#E2E8F0` 高对比可读
-- ** 三层架构对齐（业务/技术/代码泳道 + 跨层 trace）**
-  - **数据层 `tier` 语义**：节点支持 `tier`（business/service/code），边支持 `rel`（flow/align/land/depends）
-  - **三层横向泳道渲染**：`render_canvas` 按 tier 分三个横向泳道 + 层标题（业务层·业务/用户旅程 / 技术层·服务角色 / 代码层·落地构件），默认视图即呈现三层结构
-  - **泳道内保持业务流拓扑**：泳道内仅按本 tier 内部 flow 边算拓扑深度排序（`_split_layer_rows` 增 `topo_always`），保证"进门→点餐→吃饭→结账"链路从左到右可读，不被跨层边污染
-  - **跨层 trace 边可视化**：align（业务→技术，橙虚线）、land（技术→代码，绿点线）、depends（代码内部，灰实线）差异化配色/线型，纵向上逐层可追踪
-- **验证**：`restaurant_layers.json`（餐厅三层样例）端到端——三层泳道矩形 3 个且层标题可见；节点按 tier 三行纵排（y=124/428/732）；业务链路 x 顺序 1198→1406→1614→1822；跨层 align×6 + land×7 trace 边可见；默认视图 scale≈1.1 文字可读；缩小至 0.2 触发 LOD 文字隐藏
-- **版本号**：5.4.4 → 5.5.0
-
-### v5.4.4 —  修复：自由画布分层布局/默认视图 Y 轴坍缩
-
-> 解决 （前端渲染缺陷，首屏即不可用）：分层布局与默认初始视图把全部节点压成一条水平线。
-
-- **`core/canvas_engine.py` 分层布局 Y 轴坍缩修复**：根因是节点 layer 趋同（`_norm_node` 把 `layer` 回退到 `type`，arch_canvas 产出的节点 type 多为 module/default），`_layout_layered` 把所有节点归入同一层 → 只 X 分布、Y 全相等 → 一条线；默认初始布局即坏。新增按依赖 DAG 最长链深度（Kahn 拓扑）对单层/超宽节点排序并拆子行（`_node_depths` + `_split_layer_rows`，Python 端与 JS 端 `layoutLayered` 同步），Y 维逐行二维展开；单行上限 12 节点、总宽限幅占画布可辨宽；已显式定位的节点仍保留为锚点
-- **「适应」最小可辨识尺寸下限**：`fitView` 加缩放后节点最小可辨像素下限（24px），防止超大图把节点缩成不可辨，首屏与「适应」后均保持可读
-- **验证**：84 节点同层场景由 1 行坍缩 → 拆 7 行，Y 展开 [230,1490]，X 轴每行 12 节点；力导向对照（二维展开正常）不受影响
-- **版本号**：5.4.3 → 5.4.4
-
-### v5.4.3 —  强化：review 首调 JSON 命中率（零额外 LLM 耗时）
-
-- **`core/code_review.py` 首调命中强化**：system prompt 更强制（明确"输出会被程序直接解析、违反即失败、无问题输出 []"）+ 重试 prompt 更严格（只输出 JSON 数组、禁 Markdown 标记），从根因减少 v4-flash 输出散文导致的 JSON 解析失败
-- **零额外成本**：不增加 LLM 调用次数、不增加耗时，仅提升首调直接命中 JSON 的概率（冒烟验证：首调即命中、未触发重试）
-- **版本号**：5.4.2 → 5.4.3
-
-### v5.4.2 — RAE 记忆 × coderef 执行记忆双向落地
-
-> 解决"RAE 记忆与 coderef 执行记忆零互通"：开发 AI 的架构规则与操作规程印不进执行记忆，可恢复性差。
-
-- **方向 A（投放页，主）**：新增 `CODEREF.md` 操作红线与规程投放页，`AGENTS.md` 引入之——任何编程 AI 读仓即自然读到操作守则，规则随项目天然传播到执行记忆
-- **方向 B（自动同步，辅）**：`config/settings.py` 新增 `OMEM_AUTO_SYNC_ON_GOV` 开关，治理流程（audit/scan 等）收尾时后台线程增量同步操作记忆（`pipeline_runner._auto_sync_om_on_gov()`，30s 去重，不阻塞高频路径）
-- **版本号**：5.4.1 → 5.4.2
-
-### v5.4.1 — CodeRabbit 复审 4 findings：撤销语义/坐标偏移/自动布局不动已定位/角色高亮
-
-> 对 v5.4.0 自由布局画布进行 CodeRabbit 复审，采纳 4 findings（2 critical / 1 major / 1 minor）。
-
-- **`core/canvas_engine.py` undo/redo 语义修正**（critical）：撤销/重做栈原记录"修改后"状态，回退语义错误。重构为 `recordPre()`（mutation 前记录一次）`/`commitChange()`（mutation 后入栈）成对模式，并把全部 mutation 点接入——节点拖拽、方向键微调、任意连线、增删节点/连线、改属性、复制节点、导入 JSON——现在每个操作撤销时都回到操作前状态；无实际位移的单击不再污染历史栈
-- **`core/canvas_engine.py` 鼠标坐标 44px 偏移**（major）：`toLocal`/`toWorld` 视口变换将 client 坐标换算为 canvasWrap 局部坐标，修复工具栏导致的连线/吸附/右键落点系统性偏差
-- **`core/canvas_engine.py` 自动布局不再覆盖已定位节点**（minor）：`auto_layout` 与分层/力导向布局仅对未定位节点（x=0 且 y=0）赋坐标，已显式定位的节点作为固定锚点保留，避免覆盖调用方排好的位置；力导向布局中锚点只推挤可动节点、自身不移位
-- **`core/canvas_generator.py` 角色节点高亮**（critical）：缺角色判定由 `id.endswith(":")` 改为 `id.startswith("role:")`，缺失角色节点恢复红色高亮
-- **版本号**：5.4.0 → 5.4.1
-
-### v5.4.0 — 自由布局画布引擎：架构图/流程图可自由拖拽
-
-> 自研轻量实现纯 HTML/CSS/JS + SVG 自由布局画布，零外部依赖、离线可用。拖拽、任意连线、平移缩放、缩略图、右键菜单、自动布局等交互能力为业界自由/流程画布工具的通用范式，实现为独立编写的自有代码，不复制或翻译任何第三方实现。
-
-- **`core/canvas_engine.py` 自由布局画布引擎**（新增）：纯 HTML/CSS/JS + SVG 自包含、零外部依赖、离线可用。完整交互：节点自由拖拽（网格 + 节点边缘对齐吸附）、端口拖出任意连线成流（自动选端口）、画布平移/缩放（滚轮 + 按钮）、缩略图导航（mini-map 点击跳转）、右键菜单（添加/复制/删除节点、连线样式、自动布局、导出 JSON）、快捷键（Ctrl+Z 撤销 / Ctrl+Shift+Z 重做 / Delete 删除 / Ctrl+A 全选 / 方向键微调 / Ctrl+± 缩放）、属性面板（编辑节点/连线 label、颜色、props JSON）、分层/力导向自动布局、导出/导入画布 JSON、撤销/重做历史栈
-- **`core/canvas_generator.py` 架构画布升级为自由布局版**：三层布局（业务步骤 → 技术角色 → 代码模块）改为自由画布节点 + 连线；差距高亮保留（游离灰/循环黄/缺失红虚线/依赖违例红连线）；业务步骤→角色映射、角色→模块归属、模块→模块依赖均以可拖拽连线呈现
-- **`core/flow_canvas.py` 交互式流程画布**（新增，MCP `coderef_flow_canvas`）：从代码自动提取业务管线（`pipeline_insight` P0-A 入口管线，沿 CALLS 归纳阶段序）+ 跨模块业务数据流（`cross_module_flows`），渲染为可自由拖拽的流程图；每条管线一个图层，步骤按序连线，跨模块数据流带调用次数标签
-- **MCP 工具**：`coderef_arch_canvas` 升级为自由布局版；新增 `coderef_flow_canvas`（project_path / output_dir / max_entries / max_depth，默认后台执行，加入 HEAVY_TOOLS）
-- **版本号**：5.3.4 → 5.4.0
-
-### v5.3.4 — CodeRabbit 复审 4 findings：测试目录识别/跨目录判定/import 歧义/同构空集
-
-- **`_is_test_file` 根级测试目录识别**（minor）：路径段拆分检查 `test/tests/测试` 目录段，修复根级 `tests/foo.py`（相对路径无前导斜杠）漏判为测试文件——`source_engine/engine.py` 因此被正确标为"活跃真身"（被引用 17，引用方含 `research_queue.py`）
-- **`duplicate_insight` 跨目录判定**（major）：改用相对路径目录（`_rel_dir`）判断跨目录，修复 `apps/worker` 与 `legacy/worker` 同名 basename 被 `_mod_of` 合并误判同目录而漏报；`_mod_of` 仅用于报告展示
-- **`_resolve_import_target` 歧义兜底**（major）：tail fallback 收集全部匹配模块 ID，仅恰好一个匹配时返回，歧义返回空——不再依赖 `mod_ids` 集合迭代顺序选目标
-- **`_dir_isomorph_insight` 空函数集跳过**（major）：任一侧函数签名集为空时跳过该目录对，避免空集 Jaccard=1.0 把纯文件目录误判为同构
-- **版本号**：5.3.3 → 5.3.4
-
-### v5.3.3 —  业务级判定增强：真身/重复聚焦业务类，目录级同构识别
-
-- ** P0-B 真身判定业务级增强**（r9 交叉对比反馈）：聚合范围从"通用方法名"改为"业务级同名类"——过滤 `__init__`/`to_dict`/`execute`/`render` 等通用方法名噪音与 Config/Result/TestCase 等通用类名；每个副本报告引用方详情（文件:行 + 符号名，排除测试文件），判定区分"生产入口候选（无被调用者）" / "活跃真身" / "仅测试引用"；业务类名（Bot/Engine/Workflow 等后缀）优先展示，避免双真身被 3+ 副本通用类挤出 top 列表
-- ** P0-C 重复识别目录级同构**：新增目录级同构比对——按相对目录聚合文件清单 + 函数签名，双指标 Jaccard 相似度 ≥ 阈值判定"同构重复候选"（如 `调研工具/` 与 `source_engine/` 全目录同构：文件 0.83 / 函数 0.96），报告目录 A/B、相似度、文件数
-- **图谱节点 ID 相对路径化**（真实屎山治理发现）：模块/函数/类/方法节点 ID 前缀由 basename 改为相对 project_path 的路径，修复跨目录同名文件（如 `source_engine/engine.py` 与 `调研工具/engine.py`）被 `INSERT OR REPLACE` 互相覆盖导致的图谱漏扫；`_resolve_import_target` 支持点分路径精确匹配 + 跨目录同名模块兜底
-- **FlowVerifier 函数体提取修复**：`graph_closure.load_graph` 节点查询补 `end_line` 字段，修复函数体切片为空导致的重复识别失真
-- **版本号**：5.3.2 → 5.3.3
-
-### v5.3.2 —  集成加固：图谱 db 直喂洞察，消除二次探测竞态
-
-- ** 集成加固**（r8 反馈）：`Pipe.architecture` 把 `_build_kg` 刚构建的图谱 `db_path` 直接传给 `insight_markdown`，消除 insight 内部二次 `ensure_kg` 探测/重建的时序竞态——MCP 长驻进程下首调即出洞察（不再偶发 790B 壳）
-- **洞察为空不再静默**：若图谱不可用导致洞察为空，`errors` 明确记录原因（"洞察为空（图谱 … 不可用）"），不再无声产出壳报告
-- **版本号**：5.3.1 → 5.3.2
-
-### v5.3.1 —  修复：MCP 中文路径编解码
-
-- ** MCP 中文 output_dir 写盘乱码**：`Server.run()` 强制 stdin/stdout 为 UTF-8——TRAE 经 stdio 发送的 JSON 是 UTF-8 字节，Windows 下 stdin 若按 GBK 解码，中文 output_dir（如"测试归档"）会被误解码成乱码目录名（如 `娴嬭瘯褰掓。`）。修复后中文路径正确落盘
-- **版本号**：5.3.0 → 5.3.1
-
-### v5.3.0 — 架构洞察：管线/真身/重复自动产出人话结论（，P0 级）
-
-- **P0-A 管线自动梳理**（新增 `core/arch_insight.py`）：自动发现入口（无被调用方 + 启发式），沿 CALLS 归纳阶段序管线（x→y→z 带文件/行号/说明），输出 Markdown 表格；另附跨模块业务数据流
-- **P0-B 真身/入口判定**：同名多目录实现（如 check_plan_coverage 同时存在于多个子系统），报告各副本被谁引用 / 是否活跃；仅无被调用者的 root 副本标"生产入口候选"（dunder 特殊方法单独标注），无 root 时只标"被引用最多的副本"，不单凭被引用数推断入口
-- **P0-C 重复/同构识别**：同名函数跨模块实现按函数体相似度分区——相似度 ≥60% 的副本聚成独立"重复实现簇"（建议收敛），未配对（低相似度）副本归入"同名候选"（仅同名、契约可能不同，不推荐合并）
-- **`coderef_architecture` 报告升级**：不再只是"790B 壳"，自动追加三段洞察；`insight_llm` 参数可选追加 LLM 人话总结（需 API Key，缺省静态结果完整可用；非布尔值拒绝）
-- ** `coderef_arch_canvas` 后台化**：加入 HEAVY_TOOLS 默认后台执行（超大项目不再同步撞 MCP 超时），支持 `background=false` 强制同步
-- ** cache 收口**：清理主仓历史残留图谱库（10.9MB），图谱库已随 project_path 落位
-- **CodeRabbit 复审**：6 条 findings 已全部修复——P0-B/C 判定严谨性、洞察失败显式渲染、insight_llm 布尔校验、P0-C 重复簇按相似度分区（未配对副本不误并入重复簇）、gov_pipeline 流水线契约文档对齐（仅 Confirmed/Fixing）
-- **版本号**：5.2.3 → 5.3.0
-
-### v5.2.3 — 真实屎山扫描落点修复（r6 红线段落）
-
-- **P1-1 `coderef_architecture` 报告落点可控**：报告默认落 `<project_path>/coderef-report/`（不再写 MCP 进程 cwd 的 `coderef-report/`），支持 `output_dir` 显式外置——避免真实多项目/跨仓协作污染对方主仓
-- **P2-1 知识图谱库跟随被检项目**：`cache/kg/*.db` 由安装根迁移至 `<project_path>/cache/kg/`，读方经 `CodeKnowledgeGraph.db_path` 一致定位，不再把 9.7MB+ 图谱库写进调用方 cwd
-- **版本号**：5.2.2 → 5.2.3
-
-### v5.2.0 — 5.2 三项预想落地 + 治理自动化流水线贯通
-
-- **符号级职责越界检测**（新增 `role_boundary`）：模块归属正确但符号逾越角色边界（如 waiter.py 里有 cook()），静态信号（定义/调用关键词命中）+ 可选语义判定接口，纯静态确定性
-- **治理自动化流水线**（新增 `gov_pipeline`）：把在途工作项串成可追踪闭环——状态→Fixing、凭差距快照生成任务卡（复用 refactor_task_generator）、调 arch_alignment_verifier 复验、达标自动 Verified / 未达标保持 Fixing 附缺口，全程写活动日志
-- **动态探针**（新增 `dynamic_probe`）：补全静态图谱盲区，挖掘动态信号（动态导入 / 装饰器注册 / 间接索引 / entry_points），默认零执行被检项目代码
-- **Web 看板应用态增强**（`gov_webdash`）：自包含交互 HTML 看板（筛选 / 详情 / 状态流转按钮）+ `/api/transition` 数据回写接口（仅限本机）
-- **多代码库聚合治理**（新增 `gov_workspace`）：跨仓汇总治理状态，输出整体健康度视图
-- **定时体检实跑落地**（`gov_schedule`）：从"产出 cron 片段"升级为生成可直接运行的 `run_cycle.py` 触发脚本 + `--check` 离期检查
-- **新增 MCP 工具**（6 个）：`coderef_gov_pipeline` / `coderef_dynamic_probe` / `coderef_gov_board` / `coderef_gov_workspace` / `coderef_gov_schedule` / `coderef_role_boundary`
-- **开发计划**：`docs/5.2-plan.md`（内部规划，未公开）
-- **版本号**：5.1.0 → 5.2.0（工具数 48 → 54）
-
-### v5.1.0 — 5.1 定期体检：从"一次性重构"升级为"定期体检"
-
-- **治理持久层**（新增 `governance_store`）：SQLite 存储体检周期 / 治理工作项 / 活动日志，状态机 Detected→Confirmed→Fixing→Verified→Archived/Rejected + 去重/复发/豁免语义
-- **体检周期编排**（新增 `healthcycle`）：建档 / 导入差距 / 流转 / 豁免 / 收尾 / 报告
-- **预置视图**（新增 `gov_view`）：open / all / high / recurred / rejected / archived / overdue / assigned / recent 固定查询入口
-- **报告与趋势**（新增 `gov_dashboard`）：单期报告 + 跨期趋势 + 自包含 HTML（零 CDN）
-- **新增 MCP 工具**（5 个）：`coderef_gov_start` / `coderef_gov_close` / `coderef_gov_issues` / `coderef_gov_transition` / `coderef_gov_report`
-- **开发计划**：`docs/5.1-plan.md`（内部规划，未公开）
-- **版本号**：5.0.0 → 5.1.0（工具数 43 → 48）
-
-### v5.0.0 — 5.0 启动：架构推回正轨（Phase 0-2 核心闭环）
-
-- **目标架构 JSON Schema**（新增 `target_arch_schema`）：定义"人定义的正轨"标准结构（业务层 business_flows / 技术层 tech_roles / 约束 constraints），零依赖手写校验，结构化错误返回
-- **架构差距分析器**（新增 `arch_gap_analyzer`）：对比现状知识图谱与目标架构，输出 7 类确定性差距（missing 职责缺失 / dependency_violation 依赖违例 / cycle 循环依赖 / business_gap 业务断链 / unassigned 游离模块 / god_module 上帝模块 / large_module 异常规模），复用 arch_audit 不重写
-- **可视化架构画布**（新增 `canvas_generator`，Phase 1）：自包含 HTML 三层画布（业务/技术/代码层），拖拽定义归属、业务→技术连线、差距高亮、导出目标架构 JSON，零外部依赖离线可用
-- **重构任务卡生成器**（新增 `refactor_task_generator`，Phase 2）：差距清单 → 编程 AI 可执行任务卡（create_module/fix_dependency/break_cycle/implement_flow/move_module/split_module + 图谱影响范围 + 验证标准）
-- **架构对齐验证器**（新增 `arch_alignment_verifier`，Phase 2）：四维对齐度评分（职责40%+依赖30%+业务20%+健康10%）+ 差距复检，支持 changed_files 增量模式
-- **新增 MCP 工具**（6 个）：`coderef_target_arch_set` / `coderef_target_arch_get` / `coderef_arch_gap` / `coderef_arch_canvas` / `coderef_refactor_plan` / `coderef_arch_verify`，全部纯静态、确定性、轻量同步
-- **开发计划**：`docs/5.0-plan.md`（内部规划，Phase 0-2 详细设计，未公开）
-- **版本号**：4.9.12 → 5.0.0（工具数 37 → 43）
-
-### v4.9.12 — 修复 Coderef-Test 测试报告（20260823-v4.9.11-r5）遗留项
-
-- **P2 review 占位率收敛与降级信息增强**（`code_review`）：prompt 加"内容截断属正常"提示（system/diff/batch），从根因减少 v4-flash 因文件截断输出的散文；重试仍失败时改用 `_degraded_comment_from_text`，把 LLM 散文线索压缩进降级评论 detail
-- 版本号：4.9.11 → 4.9.12
 
 ## 设计借鉴
 
