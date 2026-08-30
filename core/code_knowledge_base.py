@@ -61,6 +61,12 @@ _ZH_STOPWORDS = frozenset("""的 是 做 用 什么 怎么 如何 哪里 哪 谁
 不 和 与 及 或 这 那 个 中 里 对 为 在 也 都 就 能 会 要 把 被 让 从 到 向 于 等 其
 该 这个 那个 一下 一段 一段代码 哪些 哪个 起来 出来 进去 干嘛 干啥 作用 功能 用途
 代码 这段 那个 哪些""".split())
+# 单字符中文停用词（逐字符过滤）与多字符中文停用词（整体剔除，长词优先）
+_ZH_CHAR_STOPWORDS = frozenset(w for w in _ZH_STOPWORDS if len(w) == 1)
+_ZH_TERM_STOPWORDS = tuple(
+    sorted((w for w in _ZH_STOPWORDS if len(w) > 1),
+           key=lambda w: (-len(w), w))
+)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -484,10 +490,10 @@ class CodeKnowledgeBase:
             text = self._chunk_to_text(chunk).lower()
             hits = sum(1 for f in features if f in text)
             if hits > 0:
-                # 命中率打分；name/docstring 命中给小幅加成（更可能相关）
+                # 命中率打分；name/docstring 命中给小幅加成（更可能相关），封顶 1.0
                 score = hits / len(features)
                 if any(f in (chunk.name or "").lower() for f in features):
-                    score += 0.1
+                    score = min(score + 0.1, 1.0)
                 scores.append((chunk, score))
 
         scores.sort(key=lambda x: x[1], reverse=True)
@@ -504,7 +510,9 @@ class CodeKnowledgeBase:
             if w not in _EN_STOPWORDS and len(w) > 1:
                 feats.append(w)
         for zh in re.findall(r"[\u4e00-\u9fff]+", q):
-            core = "".join(ch for ch in zh if ch not in _ZH_STOPWORDS)
+            for stopword in _ZH_TERM_STOPWORDS:
+                zh = zh.replace(stopword, "")
+            core = "".join(ch for ch in zh if ch not in _ZH_CHAR_STOPWORDS)
             if not core:
                 continue
             if len(core) >= 2:
