@@ -4,8 +4,9 @@
 
 ## 根文档
 
-- `README.md` — 项目总览、四引擎架构、37 个 MCP 工具、审计管线、更新日志
+- `README.md` — 项目总览、四引擎架构、50 个 MCP 工具、审计管线、当前版本摘要
 - `MCP_SETUP.md` — MCP Server 配置指南（工具清单、知识图谱查询速查、白名单、架构说明）
+- `changelog/CHANGELOG.md` — 完整逐版本更新日志归档
 
 ## core/ 模块文档
 
@@ -26,7 +27,7 @@
 
 | 路径 | 说明 |
 |------|------|
-| `core/mcp_server.py` | MCP Server 入口，暴露 24 个工具 |
+| `core/mcp_server.py` | MCP Server 入口，暴露 50 个工具 |
 | `core/pipeline_runner.py` | 审计管线引擎（audit / architecture / docs + 知识图谱） |
 | `core/governance_audit.py` | 治理审计检测器（架构 / 变更 / 质量 / 安全铁律） |
 | `core/agent_security_auditor.py` | Agent 安全审计检测器 |

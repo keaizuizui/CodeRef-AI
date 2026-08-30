@@ -2,7 +2,7 @@
 
 ## 概述
 
-CodeRef-AI 通过 MCP (Model Context Protocol) 协议暴露 37 个工具给 AI 编程助手使用。配置一次后，AI 可以分析**任何项目**——每次调用时传入 `project_path` 参数即可，不需要重复配置。
+CodeRef-AI 通过 MCP (Model Context Protocol) 协议暴露 50 个工具给 AI 编程助手使用。配置一次后，AI 可以分析**任何项目**——每次调用时传入 `project_path` 参数即可，不需要重复配置。
 
 **适用客户端：** Trae / Claude Desktop / Cursor / 任何支持 MCP 的 AI 编程助手
 
@@ -183,17 +183,17 @@ export CODEREF_API_KEY="ollama"
 | `coderef_task_status` | 后台任务状态查询 | 同步 | 否 |
 | `coderef_change_guard` | 变更守护：git 基层(ensure_git) + 退化检测(guard) + 健康基线(anchor/list_baselines)，git_bin 可由外层 AI 传入 | 后台 | 否 |
 | `coderef_change_report` | 变更人话版说明 | 后台 | 可选 |
-| `coderef_memory` | 记忆层：action=sync 同步/增量；action=query 语义/结构查询；action=status 覆盖度+盲区地图；action=quality 质量评估+自动补全（5.12.2 合并 4 工具） | sync/status/quality 后台、query 同步 | 否 |
-| `coderef_operation_memory` | 操作记忆层：action=sync 增量同步；action=query 语义/结构查询；action=find 定位工具/约定/陷阱；action=status 状态概览；action=recover 恢复关键工具位置/约定摘要/待确认项；action=export 导出 Markdown+冲突检测（5.12.3 合并 6 工具） | sync 后台，其余同步 | 否 |
-| `coderef_prompt_governance` | Prompt 治理平台（资产生命周期 × 合规审计 × 跨模块一致性，4.6 合并原 prompt_mgmt + prompt_audit） | 后台 | 否 |
+| `coderef_memory` | 记忆层：action=sync 同步/增量；action=query 语义/结构查询；action=status 覆盖度+盲区地图；action=quality 质量评估+自动补全（由原 4 个记忆工具合并而来） | sync/status/quality 后台、query 同步 | 否 |
+| `coderef_operation_memory` | 操作记忆层：action=sync 增量同步；action=query 语义/结构查询；action=find 定位工具/约定/陷阱；action=status 状态概览；action=recover 恢复关键工具位置/约定摘要/待确认项；action=export 导出 Markdown+冲突检测（由原 6 个操作记忆工具合并而来） | sync 后台，其余同步 | 否 |
+| `coderef_prompt_governance` | Prompt 治理平台（资产生命周期 × 合规审计 × 跨模块一致性，已合并原 prompt_mgmt + prompt_audit） | 后台 | 否 |
 | `coderef_verify_findings` | 论断确定性核验（确证/证伪/部分确证/存疑） | 后台 | 否 |
 | `coderef_innovation` | 识别项目创新设计 + 传播缺口 | 后台 | 是 |
 | `coderef_asset` | 设计固化 WorkflowAsset 资产 | 后台 | 是 |
 | `coderef_registry` | 已知设计库管理，别名归一 | 同步 | 否 |
 | `coderef_asset_blueprint` | 已固化资产蓝图/复刻指引读取 | 同步 | 否 |
 | `coderef_replicate` | 复刻铺排（蓝图 → 缺口 → 可复刻指引） | 后台 | 否 |
-| `coderef_replicate_apply` | 复刻落地（把指引落到目标项目，4.6 新增） | 后台 | 否 |
-| `coderef_innovation_review` | 创新复刻的 LLM 协助排查（4.7 新增）：让 LLM 阅读源项目管线设计（知识图谱调用链）+ wiki，判定是否确属创新 workflow、管线与 wiki 是否一致、复刻是否合理。无 API Key 时硬阻断（只给确定性管线摘要，不产出降级判断） | 后台 | 是 |
+| `coderef_replicate_apply` | 复刻落地（把指引落到目标项目） | 后台 | 否 |
+| `coderef_innovation_review` | 创新复刻的 LLM 协助排查：让 LLM 阅读源项目管线设计（知识图谱调用链）+ wiki，判定是否确属创新 workflow、管线与 wiki 是否一致、复刻是否合理。无 API Key 时硬阻断（只给确定性管线摘要，不产出降级判断） | 后台 | 是 |
 | `coderef_interpret` | 人话解读（把审计/图谱结论转成人人可读） | 后台 | 是 |
 | `coderef_owasp` | OWASP LLM Top 10 合规检测 | 后台 | 否 |
 
@@ -316,7 +316,7 @@ python -m core.mcp_server
 
 为避免任意 MCP 客户端（Trae / Claude Desktop / Cursor / Cherry Studio 等）对单次 `tools/call` 的**超时限制**，**重型工具默认后台执行**：调用立即返回 `{"status":"running","task_id":"xxxx"}`，由外层 AI 轮询 `coderef_task_status(task_id="xxxx")` 取最终结果，不再撞超时。
 
-- 默认后台：`coderef_audit` / `coderef_docs` / `coderef_review` / `coderef_frontend` / `coderef_report` / `coderef_audit_advisor` / `coderef_architecture` / `coderef_memory`（action=sync/status/quality） / `coderef_operation_memory`（action=sync） / `coderef_owasp` / `coderef_innovation` / `coderef_asset` / `coderef_innovation_review` / `coderef_change_guard` / `coderef_change_report` / `coderef_verify_findings` / `coderef_replicate` / `coderef_replicate_apply` / `coderef_asset_blueprint` / `coderef_prompt_governance` / `coderef_interpret` / `coderef_scan`
+- 默认后台：`coderef_audit` / `coderef_docs` / `coderef_review` / `coderef_frontend` / `coderef_report` / `coderef_audit_advisor` / `coderef_architecture` / `coderef_arch_canvas` / `coderef_flow_canvas` / `coderef_memory`（action=sync/status/quality） / `coderef_operation_memory`（action=sync） / `coderef_owasp` / `coderef_innovation` / `coderef_asset` / `coderef_innovation_review` / `coderef_change_guard` / `coderef_change_report` / `coderef_verify_findings` / `coderef_replicate` / `coderef_replicate_apply` / `coderef_asset_blueprint` / `coderef_prompt_governance` / `coderef_interpret` / `coderef_scan`
 - 轻量工具（`coderef_query` / `coderef_whitelist` / `coderef_docs_read` 等）保持同步快速返回
 - 显式控制：传 `background=False` 强制同步（小项目想立即拿结果），传 `background=True` 强制后台
 
@@ -361,7 +361,7 @@ print(client.models.list())
 ```
 AI 编程助手 (Trae / Claude Desktop / Cursor)
    │
-   └── coderef-ai MCP Server (v4.8.1, 32 个工具)
+   └── coderef-ai MCP Server (v5.12.3, 50 个工具)
           │
           ├── coderef_audit ─── 11 检测器管线
           │      ├── 治理审计 (governance_audit)
@@ -398,7 +398,7 @@ AI 编程助手 (Trae / Claude Desktop / Cursor)
           ├── coderef_frontend ─── 前端交互审查（按钮/菜单静态枚举）
           ├── coderef_report ─── 审计报告/图谱/Wiki 聚合 HTML 报告
           ├── coderef_audit_advisor ─── 审计策略判定（增量/全量）
-          ├── coderef_memory_* ─── 记忆引擎（sync/query/status/quality）
+          ├── coderef_memory / coderef_operation_memory ─── 记忆引擎（项目记忆 + 操作记忆）
           ├── coderef_prompt_governance ─── Prompt 治理（生命周期 × 合规 × 跨模块）
           ├── coderef_verify_findings ─── 论断确定性核验
           ├── coderef_innovation / coderef_asset / coderef_registry ─── 创新识别引擎
@@ -408,7 +408,7 @@ AI 编程助手 (Trae / Claude Desktop / Cursor)
 
 ### 关键设计决策
 
-1. **单 Server 集中管控**：32 个工具统一暴露，无需为每个检测器单独配置 MCP Server
+1. **单 Server 集中管控**：50 个工具统一暴露，无需为每个检测器单独配置 MCP Server
 2. **审计无需 LLM**：11 个检测器均基于静态分析，离线可用，零 API 成本
 3. **知识图谱持久化**：一次构建，跨会话复用，节省重复分析时间
 4. **交叉验证反幻觉**：多工具独立分析同一项目，相互验证，解决 AI 自查幻觉
