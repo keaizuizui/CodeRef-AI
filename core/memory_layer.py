@@ -528,7 +528,8 @@ class MemoryLayer:
                     "end_line": c.end_line,
                 })
             return {"status": "ok", "query_type": "semantic",
-                    "engine": "knowledge_base", "keyword": keyword,
+                    "engine": kb.last_engine, "keyword": keyword,
+                    "degraded": kb.last_engine == "keyword",
                     "total": len(out), "results": out}
         except Exception as e:
             return {"status": "error", "query_type": "semantic",

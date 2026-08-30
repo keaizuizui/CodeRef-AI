@@ -49,6 +49,19 @@ _EMBED_TIMEOUT_S = 10
 # 连续失败触底熔断的阈值：达到后彻底降级为关键词检索，不再逐条请求
 _EMBED_CONSEC_FAIL_LIMIT = 3
 
+# 关键词降级检索的停用词（查询特征提取时过滤虚词/疑问词，聚焦实体词）
+_EN_STOPWORDS = frozenset("""a an the is are was were be been being am do does did doing
+done to of for in on at by with from as or and but not no nor so if then than that
+this these those it its i you he she they we them what which who whom whose when where
+why how can could should would will shall may might must about above after before
+during under over between into through up down out off again once here there all any
+both each few more most other some such only own same just also have has had having
+get got""".split())
+_ZH_STOPWORDS = frozenset("""的 是 做 用 什么 怎么 如何 哪里 哪 谁 吗 呢 了 过 有 没
+不 和 与 及 或 这 那 个 中 里 对 为 在 也 都 就 能 会 要 把 被 让 从 到 向 于 等 其
+该 这个 那个 一下 一段 一段代码 哪些 哪个 起来 出来 进去 干嘛 干啥 作用 功能 用途
+代码 这段 那个 哪些""".split())
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 数据结构
@@ -197,6 +210,7 @@ class CodeKnowledgeBase:
         self.db_path = db_path
         self.embedder = OllamaEmbedder()
         self.chunks: Dict[str, CodeChunk] = {}
+        self.last_engine = "keyword"  # 最近一次 search 实际使用的引擎（vector/keyword）
         self._init_db()
 
     def _init_db(self):
@@ -414,19 +428,27 @@ class CodeKnowledgeBase:
         """
         语义检索代码块
 
-        优先使用向量相似度，Ollama 不可用时降级为关键词匹配
+        优先使用向量相似度，Ollama 不可用时自动降级为关键词匹配；
+        本次实际使用的引擎记录在 self.last_engine（"vector"/"keyword"）。
         """
         if not self.chunks:
             self._load_chunks()
 
-        query_embedding = self.embedder.embed(query) if self.embedder.is_available() else None
+        try:
+            query_embedding = (self.embedder.embed(query)
+                               if self.embedder.is_available() else None)
+        except Exception:
+            # 半可用 Ollama（如服务重启/模型未就绪）embed 也可能抛异常，一律降级
+            query_embedding = None
 
-        if query_embedding is not None and any(c.embedding is not None for c in self.chunks.values()):
+        if query_embedding is not None and any(
+                c.embedding is not None for c in self.chunks.values()):
             # 向量检索
+            self.last_engine = "vector"
             return self._vector_search(query_embedding, top_k, chunk_type)
-        else:
-            # 关键词检索（降级）
-            return self._keyword_search(query, top_k, chunk_type)
+        # 关键词检索（降级）
+        self.last_engine = "keyword"
+        return self._keyword_search(query, top_k, chunk_type)
 
     def _vector_search(self, query_emb: np.ndarray, top_k: int,
                        chunk_type: str = None) -> List[SearchResult]:
@@ -451,18 +473,21 @@ class CodeKnowledgeBase:
 
     def _keyword_search(self, query: str, top_k: int,
                         chunk_type: str = None) -> List[SearchResult]:
-        """关键词匹配检索（降级方案）"""
-        keywords = set(re.findall(r'[\w\u4e00-\u9fff]+', query.lower()))
+        """关键词匹配检索（降级方案）——提取实体特征（去虚词）做子串匹配"""
+        features = self._query_features(query)
+        if not features:
+            return []
         scores = []
-
         for chunk in self.chunks.values():
             if chunk_type and chunk.chunk_type != chunk_type:
                 continue
             text = self._chunk_to_text(chunk).lower()
-            # 计算关键词命中率
-            hits = sum(1 for kw in keywords if kw in text)
+            hits = sum(1 for f in features if f in text)
             if hits > 0:
-                score = hits / len(keywords)
+                # 命中率打分；name/docstring 命中给小幅加成（更可能相关）
+                score = hits / len(features)
+                if any(f in (chunk.name or "").lower() for f in features):
+                    score += 0.1
                 scores.append((chunk, score))
 
         scores.sort(key=lambda x: x[1], reverse=True)
@@ -470,6 +495,24 @@ class CodeKnowledgeBase:
             SearchResult(chunk=c, score=s, rank=i + 1)
             for i, (c, s) in enumerate(scores[:top_k])
         ]
+
+    def _query_features(self, query: str) -> List[str]:
+        """从查询提取检索特征：英文去停用词，中文去虚词并拆 bigram"""
+        q = query.lower()
+        feats: List[str] = []
+        for w in re.findall(r"[a-z][a-z0-9_]*", q):
+            if w not in _EN_STOPWORDS and len(w) > 1:
+                feats.append(w)
+        for zh in re.findall(r"[\u4e00-\u9fff]+", q):
+            core = "".join(ch for ch in zh if ch not in _ZH_STOPWORDS)
+            if not core:
+                continue
+            if len(core) >= 2:
+                feats.append(core)
+                feats.extend(core[i:i + 2] for i in range(len(core) - 1))
+            else:
+                feats.append(core)
+        return feats
 
     def find_similar(self, chunk_id: str, top_k: int = 5) -> List[SearchResult]:
         """找到与指定代码块相似的代码"""
