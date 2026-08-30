@@ -2,7 +2,7 @@
 """
 CodeRef MCP Server v4.6 — 四大引擎 + 工具
   审计引擎     → coderef_audit / coderef_scan / coderef_scan_list / architecture / docs / query / review / frontend / whitelist / task_status
-  记忆引擎     → coderef_memory（5.12.2 合并 sync/query/status/quality）/ coderef_operation_memory（操作经验层）
+  记忆引擎     → coderef_memory（5.12.2 合并 sync/query/status/quality）/ coderef_operation_memory（5.12.3 合并 6 工具）
   创新识别引擎 → coderef_innovation / asset / replicate / replicate_apply / asset_blueprint / registry
   变更守护引擎 → coderef_change_guard / change_report
   OWASP 合规   → coderef_owasp
@@ -802,91 +802,28 @@ BUILTIN_TOOLS: List[Dict] = [
                     }, "required": ["project_path"]},
                 },
         {
-                    "name": "coderef_operation_memory_sync",
+                    "name": "coderef_operation_memory",
                     "description": (
-                        "初始化 / 增量同步「AI 操作记忆层」。静态审计识别主目录 + 旁目录资源位置"
-                        "（git / 模型权重 / API 引用 / 测试工具 / 文档报告 / 依赖清单），可选 LLM 提炼"
-                        "隐性知识（决策理由 / 约定俗成 / 踩坑解法）。输出 ledger.json + BRAIN.md，"
-                        "供对话上下文丢失后快速恢复。mode=full 全量盘点；mode=incr 增量（mtime+size 快照）。"
-                        "with_llm=false 跳过 LLM 提炼以省调用；API Key 缺失时自动降级为待人工确认。"
-                    ),
-                    "inputSchema": {"type": "object", "properties": {
-                        "project_path": {"type": "string", "description": "目标项目路径"},
-                        "mode": {"type": "string", "enum": ["full", "incr"], "default": "full",
-                                 "description": "full=全量盘点；incr=基于快照只重扫变更"},
-                        "with_llm": {"type": "boolean", "default": True,
-                                     "description": "是否启用 LLM 提炼隐性知识"},
-                        "background": {"type": "boolean", "description": "后台执行（同步含 LLM 提炼较慢，默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-                    }, "required": ["project_path"]},
-                },
-        {
-                    "name": "coderef_operation_memory_query",
-                    "description": (
-                        "按类别检索操作记忆（替代重新扫描）。query_type=decision / convention / "
-                        "pitfall 检索隐性知识；resource / tool / doc 检索资源定位；all 全量。"
-                        "keyword 可选，做 name/summary/path 模糊过滤。供 AI 上下文丢失后快速恢复。"
-                    ),
-                    "inputSchema": {"type": "object", "properties": {
-                        "project_path": {"type": "string", "description": "目标项目路径"},
-                        "query_type": {"type": "string",
-                                       "enum": ["all", "resource", "tool", "doc", "decision", "convention", "pitfall"],
-                                       "default": "all"},
-                        "keyword": {"type": "string", "description": "可选，模糊匹配 name/summary/path"},
-                        "limit": {"type": "integer", "default": 10},
-                    }, "required": ["project_path"]},
-                },
-        {
-                    "name": "coderef_operation_memory_find",
-                    "description": (
-                        "定位资源：给定资源名 / 路径片段，返回实际位置、来源、主目录 / 旁目录归属。"
-                        "例如想知道『test 工具在哪儿』『模型文件在哪儿』『API 配在哪儿』，别再满项目找。"
-                    ),
-                    "inputSchema": {"type": "object", "properties": {
-                        "project_path": {"type": "string", "description": "目标项目路径"},
-                        "name": {"type": "string", "description": "资源名或路径片段，如 'test'、'model'、'.env'"},
-                        "limit": {"type": "integer", "default": 5},
-                    }, "required": ["project_path", "name"]},
-                },
-        {
-                    "name": "coderef_operation_memory_status",
-                    "description": (
-                        "操作记忆健康状态：已覆盖分类、各分类条目数（资源 / 知识 / 旁目录）、"
-                        "LLM 可用性、待人工确认项。快速判断『这份操作记忆还新鲜吗、够覆盖吗』。"
-                    ),
-                    "inputSchema": {"type": "object", "properties": {
-                        "project_path": {"type": "string", "description": "目标项目路径"},
-                    }, "required": ["project_path"]},
-                },
-        {
-                    "name": "coderef_operation_memory_recover",
-                    "description": (
-                        "上下文丢失后『一次调用』恢复关键记忆：返回关键工具位置（env_tool，含 git / "
-                        "python / wsl / coderabbit 等）+ 已确认的约定 / 踩坑 / 决策摘要 + 待人工确认项。"
+                        "操作记忆层——上下文丢失后恢复（4.8 起；5.12.3 合并 6 工具）。\n"
+                        "action=sync（默认）：初始化/增量同步（识别资源位置 + 可选 LLM 提炼隐性知识，输出 ledger.json + BRAIN.md）；\n"
+                        "action=query：按类别检索（decision/convention/pitfall/resource/tool/doc/all）；\n"
+                        "action=find：定位资源（name=test/.env/model）；\n"
+                        "action=status：健康状态 + 待人工确认项；\n"
+                        "action=recover：上下文丢失后一次调用恢复关键记忆（强制 gate，涉及 git/约定类操作先调用，勿满 PATH 找工具）；\n"
+                        "action=export：导出 Markdown 知识库 + 冲突检测（attach 到不支持 MCP 的 LLM 界面）。\n"
                         "供 AI 在上下文被压缩后最小成本拿回『东西在哪儿、过去的规范是什么』。"
-                        "涉及 git / push / CodeRabbit / Release 等工具或约定类操作时，先调用本工具，"
-                        "勿满 PATH 找工具，也勿在未查询操作记忆前直接抓取外部连接器。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                         "project_path": {"type": "string", "description": "目标项目路径"},
-                        "limit": {"type": "integer", "default": 8,
-                                  "description": "每类隐性知识（决策/约定/踩坑）最多返回条数"},
-                    }, "required": ["project_path"]},
-                },
-        {
-                    "name": "coderef_operation_memory_export",
-                    "description": (
-                        "操作记忆导出为 Markdown + 冲突检测（外部建议 B）。\n"
-                        "把 decision/convention/pitfall 三段隐性知识渲染为 Markdown 导出（缺省 "
-                        "<项目> data/operation_memory/OPERATION_MEMORY.md），供 attach 到不支持 MCP 的 "
-                        "LLM 界面（Claude Project / CustomGPT 等）复用，打破『记忆只在 SQLite、换界面就得重同步』。\n"
-                        "内置冲突检测：同类别、摘要方向相反的两条记忆（如『禁止 X』与『推荐 X』）标记潜在冲突，"
-                        "呼应测试AI/开发AI 双册对账防覆盖。纯静态、不依赖 LLM。\n"
-                        "返回 output_path + markdown 内容 + conflicts 告警列表。"
-                    ),
-                    "inputSchema": {"type": "object", "properties": {
-                        "project_path": {"type": "string", "description": "目标项目路径"},
-                        "output_path": {"type": "string",
-                                        "description": "导出文件路径（可选，缺省 <项目>/data/operation_memory/OPERATION_MEMORY.md）"},
+                        "action": {"type": "string", "enum": ["sync", "query", "find", "status", "recover", "export"], "default": "sync"},
+                        "mode": {"type": "string", "enum": ["full", "incr"], "default": "full", "description": "action=sync 时增量/全量"},
+                        "with_llm": {"type": "boolean", "default": True, "description": "action=sync 时是否启用 LLM 提炼"},
+                        "query_type": {"type": "string", "enum": ["all", "resource", "tool", "doc", "decision", "convention", "pitfall"], "default": "all", "description": "action=query 时类别"},
+                        "keyword": {"type": "string", "description": "模糊匹配 name/summary/path"},
+                        "name": {"type": "string", "description": "资源名或路径片段（find 用，如 'test'、'.env'）"},
+                        "limit": {"type": "integer", "description": "返回条数上限（各 action 默认：query=10 / find=5 / recover=8）"},
+                        "output_path": {"type": "string", "description": "导出文件路径（export 用，缺省 <项目>/data/operation_memory/OPERATION_MEMORY.md）"},
+                        "background": {"type": "boolean", "description": "是否后台执行；未指定时 action=sync 默认后台，recover/query/find/status/export 保持同步（返回 task_id 用 coderef_task_status 查询）"},
                     }, "required": ["project_path"]},
                 },
         {
@@ -1330,71 +1267,29 @@ def _memory(a: dict) -> str:
     return json.dumps(r, ensure_ascii=False)
 
 
-def _operation_memory_sync(a: dict) -> str:
-    """初始化/增量同步操作记忆层（coderef_operation_memory_sync）"""
+def _operation_memory(a: dict) -> str:
+    """操作记忆层（coderef_operation_memory，5.12.3 合并 6 工具）"""
     from core.operation_memory import operation_memory
     pp = a["project_path"]
-    mode = a.get("mode", "full")
-    with_llm = a.get("with_llm", True)
-    r = operation_memory.sync(pp, mode=mode, with_llm=with_llm)
-    r["tool"] = "coderef_operation_memory_sync"
-    r["project_path"] = pp
-    return json.dumps(r, ensure_ascii=False)
-
-
-def _operation_memory_query(a: dict) -> str:
-    """按类别检索操作记忆（coderef_operation_memory_query）"""
-    from core.operation_memory import operation_memory
-    pp = a["project_path"]
-    qt = a.get("query_type", "all")
-    kw = a.get("keyword", "")
-    limit = a.get("limit", 10)
-    r = operation_memory.query(pp, query_type=qt, keyword=kw, limit=limit)
-    r["tool"] = "coderef_operation_memory_query"
-    r["project_path"] = pp
-    return json.dumps(r, ensure_ascii=False)
-
-
-def _operation_memory_find(a: dict) -> str:
-    """定位资源（coderef_operation_memory_find）"""
-    from core.operation_memory import operation_memory
-    pp = a["project_path"]
-    name = a.get("name", "")
-    limit = a.get("limit", 5)
-    r = operation_memory.find(pp, name=name, limit=limit)
-    r["tool"] = "coderef_operation_memory_find"
-    r["project_path"] = pp
-    return json.dumps(r, ensure_ascii=False)
-
-
-def _operation_memory_status(a: dict) -> str:
-    """操作记忆健康状态（coderef_operation_memory_status）"""
-    from core.operation_memory import operation_memory
-    pp = a["project_path"]
-    r = operation_memory.status(pp)
-    r["tool"] = "coderef_operation_memory_status"
-    r["project_path"] = pp
-    return json.dumps(r, ensure_ascii=False)
-
-
-def _operation_memory_recover(a: dict) -> str:
-    """上下文丢失后一次调用恢复关键记忆（coderef_operation_memory_recover）"""
-    from core.operation_memory import operation_memory
-    pp = a["project_path"]
-    limit = int(a.get("limit", 8))
-    r = operation_memory.recover(pp, limit=limit)
-    r["tool"] = "coderef_operation_memory_recover"
-    r["project_path"] = pp
-    return json.dumps(r, ensure_ascii=False)
-
-
-def _operation_memory_export(a: dict) -> str:
-    """操作记忆导出为 Markdown + 冲突检测（coderef_operation_memory_export）"""
-    from core.operation_memory import operation_memory
-    pp = a["project_path"]
-    out = a.get("output_path", "")
-    r = operation_memory.export_markdown(pp, output_path=out)
-    r["tool"] = "coderef_operation_memory_export"
+    act = a.get("action", "sync")
+    if act == "sync":
+        r = operation_memory.sync(pp, mode=a.get("mode", "full"),
+                                  with_llm=a.get("with_llm", True))
+    elif act == "query":
+        r = operation_memory.query(pp, query_type=a.get("query_type", "all"),
+                                   keyword=a.get("keyword", ""),
+                                   limit=a.get("limit", 10))
+    elif act == "find":
+        r = operation_memory.find(pp, name=a.get("name", ""), limit=a.get("limit", 5))
+    elif act == "status":
+        r = operation_memory.status(pp)
+    elif act == "recover":
+        r = operation_memory.recover(pp, limit=int(a.get("limit", 8)))
+    elif act == "export":
+        r = operation_memory.export_markdown(pp, output_path=a.get("output_path", ""))
+    else:
+        raise ValueError(f"coderef_operation_memory: 未知 action={act}")
+    r["tool"] = "coderef_operation_memory"
     r["project_path"] = pp
     return json.dumps(r, ensure_ascii=False)
 
@@ -2411,12 +2306,7 @@ class Server:
             "coderef_change_guard": self._change_guard,
             "coderef_change_report": self._change_report,
             "coderef_memory": self._memory,
-            "coderef_operation_memory_sync": self._operation_memory_sync,
-            "coderef_operation_memory_query": self._operation_memory_query,
-            "coderef_operation_memory_find": self._operation_memory_find,
-            "coderef_operation_memory_status": self._operation_memory_status,
-            "coderef_operation_memory_recover": self._operation_memory_recover,
-            "coderef_operation_memory_export": self._operation_memory_export,
+            "coderef_operation_memory": self._operation_memory,
             # 4.6 兼容层：coderef_prompt_mgmt / coderef_prompt_audit 已从 tools/list 移除
             #（收敛到 coderef_prompt_governance 唯一入口），此处保留 handler 供旧调用向后兼容转发。
             "coderef_prompt_mgmt": self._prompt_mgmt,
@@ -2445,7 +2335,7 @@ class Server:
             "coderef_report", "coderef_audit_advisor", "coderef_architecture",
             "coderef_arch_canvas", "coderef_flow_canvas",
             "coderef_memory",
-            "coderef_operation_memory_sync",
+            "coderef_operation_memory",
             "coderef_owasp",
             "coderef_innovation", "coderef_asset", "coderef_change_guard",
             "coderef_change_report", "coderef_verify_findings",
@@ -2465,6 +2355,7 @@ class Server:
         # 强制 gate，不可后台化须先拿 task_id 再轮询）。行为与合并前完全一致。
         self.MERGE_SYNC_ACTIONS = {
             "coderef_memory": {"query"},
+            "coderef_operation_memory": {"query", "find", "status", "recover", "export"},
         }
 
     def _should_background(self, n: str, a: Dict) -> bool:
@@ -2581,23 +2472,8 @@ class Server:
     def _memory(self, a: dict):
         return _memory(a)
 
-    def _operation_memory_sync(self, a: dict):
-        return _operation_memory_sync(a)
-
-    def _operation_memory_query(self, a: dict):
-        return _operation_memory_query(a)
-
-    def _operation_memory_find(self, a: dict):
-        return _operation_memory_find(a)
-
-    def _operation_memory_status(self, a: dict):
-        return _operation_memory_status(a)
-
-    def _operation_memory_recover(self, a: dict):
-        return _operation_memory_recover(a)
-
-    def _operation_memory_export(self, a: dict):
-        return _operation_memory_export(a)
+    def _operation_memory(self, a: dict):
+        return _operation_memory(a)
 
     def _prompt_mgmt(self, a: dict):
         return _prompt_mgmt(a)
