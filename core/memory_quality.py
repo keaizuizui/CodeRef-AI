@@ -2,7 +2,7 @@
 """
 记忆质量体检 —— MemoryQuality
 
-对项目的「代码记忆层」做三项体检，供 MCP 工具 coderef_memory_quality 调用：
+对项目的「代码记忆层」做三项体检，供 MCP 工具 coderef_memory(action=quality) 调用：
 
 1. 引用完整性(integrity) —— 校验知识图谱中的边所指向的节点是否真实存在，清理孤儿边；
 2. 语义覆盖(coverage)   —— 对比源码函数/类与记忆摘要，找出未被记忆摘要覆盖的遗漏；

@@ -2,7 +2,7 @@
 """
 OperationMemory v1.0 —— AI 辅助编程的操作记忆层
 
-为 MCP 工具 coderef_operation_memory_sync / query / find / status
+为 MCP 工具 coderef_operation_memory(action=sync/query/find/status)
 提供"东西在哪儿、从哪儿来、到哪儿去、过去的规范是什么"的持久记忆。
 
 设计参考：本模块的 `BRAIN.md` 命名、判存标准（能否从代码重建）与
@@ -841,7 +841,7 @@ class KnowledgeExtractor:
                 result[k].append({
                     "summary": f"{_KIND_LABELS.get(k, k)}知识待人工确认",
                     "detail": "运行 sync 时未检测到可用 LLM / API Key，未自动提炼。"
-                              "请人工补充，或配置 LLM 后重跑 coderef_operation_memory_sync。",
+                              "请人工补充，或配置 LLM 后重跑 coderef_operation_memory(action=sync)。",
                     "source": "operation_memory",
                     "time": now,
                     "pending": True,
@@ -1119,7 +1119,7 @@ class OperationMemory:
         project_path = os.path.abspath(project_path)
         ledger = self._load_ledger(project_path)
         if not ledger:
-            return {"status": "error", "message": "操作记忆尚未同步，请先调用 coderef_operation_memory_sync",
+            return {"status": "error", "message": "操作记忆尚未同步，请先调用 coderef_operation_memory(action=sync)",
                     "query_type": query_type}
 
         category = _classify_category(query_type)
@@ -1165,7 +1165,7 @@ class OperationMemory:
         project_path = os.path.abspath(project_path)
         ledger = self._load_ledger(project_path)
         if not ledger:
-            return {"status": "error", "message": "操作记忆尚未同步，请先调用 coderef_operation_memory_sync",
+            return {"status": "error", "message": "操作记忆尚未同步，请先调用 coderef_operation_memory(action=sync)",
                     "name": name}
 
         kw = (name or "").strip().lower()
@@ -1205,7 +1205,7 @@ class OperationMemory:
         ledger = self._load_ledger(project_path)
         if not ledger:
             return {"status": "error",
-                    "message": "操作记忆尚未同步，请先调用 coderef_operation_memory_sync"}
+                    "message": "操作记忆尚未同步，请先调用 coderef_operation_memory(action=sync)"}
 
         resources = ledger.get("resources", {})
         counts = _count_resources(resources.items())
@@ -1242,7 +1242,7 @@ class OperationMemory:
         ledger = self._load_ledger(project_path)
         if not ledger:
             return {"status": "error",
-                    "message": "操作记忆尚未同步，请先调用 coderef_operation_memory_sync",
+                    "message": "操作记忆尚未同步，请先调用 coderef_operation_memory(action=sync)",
                     "tool": "recover"}
         if limit < 1:
             return {"status": "error", "message": "limit 必须大于 0", "tool": "recover"}
@@ -1314,7 +1314,7 @@ class OperationMemory:
         ledger = self._load_ledger(project_path)
         if not ledger:
             return {"status": "error",
-                    "message": "操作记忆尚未同步，请先调用 coderef_operation_memory_sync"}
+                    "message": "操作记忆尚未同步，请先调用 coderef_operation_memory(action=sync)"}
 
         knowledge = ledger.get("knowledge", {})
         header = [
@@ -1447,7 +1447,7 @@ def _render_side_dirs(side_dirs: List[dict]) -> str:
 
 def _render_knowledge(knowledge: dict) -> str:
     if not any(knowledge.values()):
-        return "（暂无，可运行 coderef_operation_memory_sync 启用 LLM 提炼）"
+        return "（暂无，可运行 coderef_operation_memory(action=sync) 启用 LLM 提炼）"
     out: List[str] = []
     labels = _KIND_LABELS
     for k, items in knowledge.items():
