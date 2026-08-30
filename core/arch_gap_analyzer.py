@@ -700,7 +700,7 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
         "graph_stats": {"has_kg": False},
     }
     if not db or not os.path.exists(db):
-        result["summary"] = "知识图谱不存在，需先构建（coderef_audit / coderef_memory_sync）"
+        result["summary"] = "知识图谱不存在，需先构建（coderef_audit / coderef_memory(action=sync)）"
         return result
 
     nodes, adj = load_graph(db)
@@ -955,7 +955,7 @@ def adopt_free_modules(project_path: str,
     db = db_path or locate_kg_db(project_path)
     if not db or not os.path.exists(db):
         return {"status": "error",
-                "error": "知识图谱不存在，需先构建（coderef_audit / coderef_memory_sync）"}
+                "error": "知识图谱不存在，需先构建（coderef_audit / coderef_memory(action=sync)）"}
 
     nodes, adj = load_graph(db)
     roles = target_arch.get("tech_roles") or []

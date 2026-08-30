@@ -697,7 +697,7 @@ def audit(project_path: str, db_path: str = None,
     result = {"project_path": project_path, "tool": "coderef_arch_audit",
               "graph_stats": {"has_kg": False}, "summary": {}, "ok": False}
     if not db or not os.path.exists(db):
-        result["summary"] = "知识图谱不存在，需先构建（coderef_audit / coderef_memory_sync）"
+        result["summary"] = "知识图谱不存在，需先构建（coderef_audit / coderef_memory(action=sync)）"
         return result
 
     nodes, adj = load_graph(db)

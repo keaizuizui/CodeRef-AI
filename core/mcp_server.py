@@ -2,7 +2,7 @@
 """
 CodeRef MCP Server v4.6 — 四大引擎 + 工具
   审计引擎     → coderef_audit / coderef_scan / coderef_scan_list / architecture / docs / query / review / frontend / whitelist / task_status
-  记忆引擎     → coderef_memory_sync / memory_query / memory_status / memory_quality
+  记忆引擎     → coderef_memory（5.12.2 合并 sync/query/status/quality）/ coderef_operation_memory（操作经验层）
   创新识别引擎 → coderef_innovation / asset / replicate / replicate_apply / asset_blueprint / registry
   变更守护引擎 → coderef_change_guard / change_report
   OWASP 合规   → coderef_owasp
@@ -65,7 +65,7 @@ RELIABILITY_GUIDE = (
     "CodeRef 工具可靠性清单（供外层 AI 选工具时参考）：\n"
     "【可靠，可放心日常使用】coderef_audit / coderef_scan / coderef_owasp / "
     "coderef_architecture / coderef_change_guard / coderef_change_report / coderef_query / "
-    "coderef_review / coderef_memory_* / coderef_task_status / coderef_verify_findings / "
+    "coderef_review / coderef_memory / coderef_operation_memory / coderef_task_status / coderef_verify_findings / "
     "coderef_prompt_governance / coderef_flow_verify / coderef_arch_audit。\n"
     "【有使用边界，需注意场景】\n"
     "  - coderef_frontend：仅静态枚举按钮/菜单'是否存在'，不确证'交互逻辑正确'；SPA 组件逻辑改用 mode=runtime 浏览器抽查。\n"
@@ -374,7 +374,7 @@ BUILTIN_TOOLS: List[Dict] = [
                             "依据：变更信号（记忆层快照 diff）+ 知识图谱影响闭包（多跳 BFS）+ 图谱新旧。\n"
                             "同时给出应重点审查的功能维度（创新传播/结构复杂度/回归一致性等），\n"
                             "并可选叠加 LLM 功能审查（with_functional=True 时）。\n"
-                            "建议：调用前先 coderef_memory_sync 建立基线，效果最佳。"
+                            "建议：调用前先 coderef_memory(action=sync) 建立基线，效果最佳。"
                         ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
@@ -419,7 +419,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         "steps 传期望步骤的符号关键词（中英文均可，编程 AI 需先把中文期望步骤映射为代码符号）。\n"
                         "状态语义：ordered=调用链确证(含顺序)；in_pipeline=在管线但顺序未确证(可能并行)；"
                         "outside=管线外/动态调用，需编程AI复核；missing=项目内无对应符号。\n"
-                        "图谱不存在时会明确反馈需先构建（coderef_audit / coderef_memory_sync）。"
+                        "图谱不存在时会明确反馈需先构建（coderef_audit / coderef_memory(action=sync)）。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                         "project_path": {"type": "string", "description": "目标项目路径"},
@@ -437,7 +437,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         "cycles=循环依赖（模块依赖图强连通分量）；god_modules=上帝模块（扇出过高）；"
                         "layer_violations=分层违例（低层依赖高层）；large_modules=异常模块规模。\n"
                         "聚合为 0-10 架构健康度。纯静态、确定性，不依赖 LLM。\n"
-                        "图谱不存在时会明确反馈需先构建（coderef_audit / coderef_memory_sync）。"
+                        "图谱不存在时会明确反馈需先构建（coderef_audit / coderef_memory(action=sync)）。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
@@ -514,7 +514,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         "纯静态、确定性，复用 arch_audit 与知识图谱，不依赖 LLM。\n"
                         "target_arch 可选：不传则读取已存储的目标架构（coderef_target_arch_set）。\n"
                         "max_unassigned 控制游离模块报出上限（默认 50）。\n"
-                        "图谱不存在时会明确反馈需先构建（coderef_audit / coderef_memory_sync）。"
+                        "图谱不存在时会明确反馈需先构建（coderef_audit / coderef_memory(action=sync)）。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
@@ -716,7 +716,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         "findings 传论断列表，每条含 title（必填）+ detail/file/line/rule/severity/symbols（可选）；\n"
                         "entry 可选：指定入口符号（模块.函数）核验符号是否在关键管线内；\n"
                         "out_format=html 输出自包含人话 HTML 报告（非编程人员可读）。\n"
-                        "图谱不存在会明确反馈需先构建（coderef_audit / coderef_memory_sync），不返回空结论。"
+                        "图谱不存在会明确反馈需先构建（coderef_audit / coderef_memory(action=sync)），不返回空结论。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                         "project_path": {"type": "string", "description": "目标项目路径（自动定位知识图谱）"},
@@ -778,56 +778,27 @@ BUILTIN_TOOLS: List[Dict] = [
                     }, "required": ["project_path", "diff"]},
                 },
         {
-                    "name": "coderef_memory_sync",
+                    "name": "coderef_memory",
                     "description": (
-                        "初始化 / 增量同步项目记忆层。用 mtime+size 快照做增量，只重扫变更文件。\n"
-                        "mode=full 全量初始化；mode=incr 增量（改一行只重扫该文件）。\n"
-                        "返回认知覆盖度、置信度、图谱/向量库统计。供所有 AI 助手复用项目记忆。"
+                        "项目记忆层——AI 对项目「记住了什么」（4.8 起；5.12.2 合并 sync/query/status/quality 4 工具）。\n"
+                        "action=sync（默认）：初始化/增量同步（mode=full 全量 / incr 增量 mtime+size）；\n"
+                        "action=query：语义检索（走向量库，Ollama 缺失降级关键词）+ 结构查询（走知识图谱）；\n"
+                        "action=status：认知覆盖度 + 置信度 + 盲区地图 + 认知地图 HTML；\n"
+                        "action=quality：记忆质量评估（引用完整性/语义覆盖/偏差）+ auto_fix 自动补全。\n"
+                        "供所有 AI 助手复用项目记忆（替代重扫）。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                         "project_path": {"type": "string", "description": "目标项目路径"},
-                        "mode": {"type": "string", "enum": ["full", "incr"], "default": "full"},
-                        "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
-                    }, "required": ["project_path"]},
-                },
-        {
-                    "name": "coderef_memory_query",
-                    "description": (
-                        "供 AI 助手复用项目记忆（替代重扫）。\n"
-                        "query_type=semantic 语义检索（走向量库，Ollama 缺失降级关键词）；\n"
-                        "query_type=stats/entity/callers/callees/impact/relations/file_entities/search/call_graph 结构查询（走知识图谱）。"
-                    ),
-                    "inputSchema": {"type": "object", "properties": {
-                        "project_path": {"type": "string", "description": "目标项目路径"},
-                        "query_type": {"type": "string", "enum": ["semantic","stats","entity","callers","callees","impact","relations","file_entities","search","call_graph"], "default": "semantic"},
+                        "action": {"type": "string", "enum": ["sync", "query", "status", "quality"], "default": "sync"},
+                        "mode": {"type": "string", "enum": ["full", "incr"], "default": "full", "description": "action=sync 时增量/全量"},
+                        "query_type": {"type": "string", "enum": ["semantic","stats","entity","callers","callees","impact","relations","file_entities","search","call_graph"], "default": "semantic", "description": "action=query 时检索类型"},
                         "keyword": {"type": "string", "description": "语义检索关键词或全文搜索关键词"},
                         "name": {"type": "string", "description": "实体名称（entity 用）"},
                         "func_name": {"type": "string", "description": "函数名（callers/callees/call_graph 用）"},
                         "file_path": {"type": "string", "description": "文件路径（impact/file_entities 用）"},
                         "limit": {"type": "integer", "default": 10},
-                    }, "required": ["project_path"]},
-                },
-        {
-                    "name": "coderef_memory_status",
-                    "description": (
-                        "「AI 知道什么」：认知覆盖度 + 每模块置信度 + 盲区地图 + 认知地图 HTML。\n"
-                        "用户直观看到项目哪些部分已被 AI 理解、哪些未理解。"
-                    ),
-                    "inputSchema": {"type": "object", "properties": {
-                        "project_path": {"type": "string", "description": "目标项目路径"},
-                    }, "required": ["project_path"]},
-                },
-        {
-                    "name": "coderef_memory_quality",
-                    "description": (
-                        "记忆质量评估 + 自动补全。三项体检：引用完整性、语义覆盖、偏差检测。\n"
-                        "auto_fix=True 自动补全缺失上下文并标注来源；偏差检测自动注入全局 LLM（有 API Key 时真正复核），"
-                        "无可用 LLM 时降级 pending-human。"
-                    ),
-                    "inputSchema": {"type": "object", "properties": {
-                        "project_path": {"type": "string", "description": "目标项目路径"},
-                        "auto_fix": {"type": "boolean", "default": False},
-                        "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                        "auto_fix": {"type": "boolean", "default": False, "description": "action=quality 时自动补全"},
+                        "background": {"type": "boolean", "description": "是否后台执行；未指定时 action=sync/status/quality 默认后台、action=query 默认同步（返回 task_id 用 coderef_task_status 查询）"},
                     }, "required": ["project_path"]},
                 },
         {
@@ -1335,47 +1306,26 @@ def _change_report(a: dict) -> str:
     return json.dumps(r, ensure_ascii=False)
 
 
-def _memory_sync(a: dict) -> str:
-    """初始化/增量同步项目记忆层（coderef_memory_sync）"""
+def _memory(a: dict) -> str:
+    """项目记忆层（coderef_memory，5.12.2 合并 4 工具）"""
     from core.memory_layer import memory_layer
-    pp = a["project_path"]
-    mode = a.get("mode", "full")
-    r = memory_layer.sync(pp, mode=mode)
-    r["tool"] = "coderef_memory_sync"
-    r["project_path"] = pp
-    return json.dumps(r, ensure_ascii=False)
-
-
-def _memory_query(a: dict) -> str:
-    """供 AI 助手复用项目记忆（coderef_memory_query）"""
-    from core.memory_layer import memory_layer
-    pp = a["project_path"]
-    qt = a.get("query_type", "semantic")
-    kwargs = {k: v for k, v in a.items()
-              if k not in ("project_path", "query_type") and v}
-    r = memory_layer.query(pp, query_type=qt, **kwargs)
-    r["tool"] = "coderef_memory_query"
-    r["project_path"] = pp
-    return json.dumps(r, ensure_ascii=False)
-
-
-def _memory_status(a: dict) -> str:
-    """「AI 知道什么」认知地图（coderef_memory_status）"""
-    from core.memory_layer import memory_layer
-    pp = a["project_path"]
-    r = memory_layer.status(pp)
-    r["tool"] = "coderef_memory_status"
-    r["project_path"] = pp
-    return json.dumps(r, ensure_ascii=False)
-
-
-def _memory_quality(a: dict) -> str:
-    """记忆质量评估 + 自动补全（coderef_memory_quality）"""
     from core.memory_quality import MemoryQuality
     pp = a["project_path"]
-    auto_fix = a.get("auto_fix", False)
-    r = MemoryQuality().assess(pp, auto_fix=auto_fix)
-    r["tool"] = "coderef_memory_quality"
+    act = a.get("action", "sync")
+    if act == "sync":
+        r = memory_layer.sync(pp, mode=a.get("mode", "full"))
+    elif act == "query":
+        qt = a.get("query_type", "semantic")
+        kwargs = {k: v for k, v in a.items()
+                  if k not in ("project_path", "action", "query_type") and v}
+        r = memory_layer.query(pp, query_type=qt, **kwargs)
+    elif act == "status":
+        r = memory_layer.status(pp)
+    elif act == "quality":
+        r = MemoryQuality().assess(pp, auto_fix=a.get("auto_fix", False))
+    else:
+        raise ValueError(f"coderef_memory: 未知 action={act}")
+    r["tool"] = "coderef_memory"
     r["project_path"] = pp
     return json.dumps(r, ensure_ascii=False)
 
@@ -2460,10 +2410,7 @@ class Server:
             "coderef_verify_findings": self._verify_findings,
             "coderef_change_guard": self._change_guard,
             "coderef_change_report": self._change_report,
-            "coderef_memory_sync": self._memory_sync,
-            "coderef_memory_query": self._memory_query,
-            "coderef_memory_status": self._memory_status,
-            "coderef_memory_quality": self._memory_quality,
+            "coderef_memory": self._memory,
             "coderef_operation_memory_sync": self._operation_memory_sync,
             "coderef_operation_memory_query": self._operation_memory_query,
             "coderef_operation_memory_find": self._operation_memory_find,
@@ -2497,7 +2444,7 @@ class Server:
             "coderef_audit", "coderef_docs", "coderef_review", "coderef_frontend",
             "coderef_report", "coderef_audit_advisor", "coderef_architecture",
             "coderef_arch_canvas", "coderef_flow_canvas",
-            "coderef_memory_sync", "coderef_memory_quality", "coderef_memory_status",
+            "coderef_memory",
             "coderef_operation_memory_sync",
             "coderef_owasp",
             "coderef_innovation", "coderef_asset", "coderef_change_guard",
@@ -2511,16 +2458,26 @@ class Server:
             "coderef_scan",
         }
 
+        # ─── 合并工具内保持同步的轻量 action ───────────────────────────
+        # B 方案（5.12.2/5.12.3）：记忆簇收敛为 coderef_memory / coderef_operation_memory
+        # 后，整工具进 HEAVY_TOOLS 会让轻量 action 一并后台化。此集合内的 action 保持同步
+        # （尤其 operation_memory 的 recover 是 workflow E 上下文丢失后「一次调用拿回」的
+        # 强制 gate，不可后台化须先拿 task_id 再轮询）。行为与合并前完全一致。
+        self.MERGE_SYNC_ACTIONS = {
+            "coderef_memory": {"query"},
+        }
+
     def _should_background(self, n: str, a: Dict) -> bool:
         """决定工具是否后台执行：
-        - background=true 显式要求 → 后台
-        - background=false 显式要求 → 同步
-        - 未指定 → 重型工具默认后台，轻量工具同步
+        - background=true 显式要求 → 后台；background=false 显式要求 → 同步
+        - 未指定 → 重型工具默认后台（合并工具内轻量 action 例外保持同步），轻量工具同步
         """
         explicit = a.get("background")
         if explicit is True:
             return True
         if explicit is False:
+            return False
+        if n in self.MERGE_SYNC_ACTIONS and a.get("action", "sync") in self.MERGE_SYNC_ACTIONS[n]:
             return False
         return n in self.HEAVY_TOOLS
 
@@ -2621,17 +2578,8 @@ class Server:
         return _change_report(a)
 
     # ── 引擎一 · 记忆层 ─────────────────────────────────────────────
-    def _memory_sync(self, a: dict):
-        return _memory_sync(a)
-
-    def _memory_query(self, a: dict):
-        return _memory_query(a)
-
-    def _memory_status(self, a: dict):
-        return _memory_status(a)
-
-    def _memory_quality(self, a: dict):
-        return _memory_quality(a)
+    def _memory(self, a: dict):
+        return _memory(a)
 
     def _operation_memory_sync(self, a: dict):
         return _operation_memory_sync(a)

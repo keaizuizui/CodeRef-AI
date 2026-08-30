@@ -97,7 +97,7 @@ class EvidenceLabeler:
         6. 入口管线外 → 降级 partially_confirmed 并说明
         """
         if not graph_exists:
-            return VERDICT_UNVERIFIABLE, "知识图谱不存在，无法进行确定性核验（请先运行 coderef_audit 或 coderef_memory_sync 构建图谱）"
+            return VERDICT_UNVERIFIABLE, "知识图谱不存在，无法进行确定性核验（请先运行 coderef_audit 或 coderef_memory(action=sync) 构建图谱）"
         if not has_ref:
             return VERDICT_UNVERIFIABLE, "论断未包含可静态核验的符号或文件引用，无法确证"
         if file_found is False:
@@ -451,7 +451,7 @@ class FindingsVerifier:
                 "ok": False,
                 "graph_stats": {"has_kg": False, "db": self.db_path},
                 "summary": (f"知识图谱不存在({self.db_path or '未定位'})，"
-                            f"请先运行 coderef_audit 或 coderef_memory_sync 构建知识图谱后再核验"),
+                            f"请先运行 coderef_audit 或 coderef_memory(action=sync) 构建知识图谱后再核验"),
                 "results": [],
             }
         results = [self.verify_one(f, entry=entry) for f in findings if isinstance(f, dict)]

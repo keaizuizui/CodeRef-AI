@@ -47,7 +47,7 @@ def _kg_db_path(project_path: str) -> str:
 def ensure_kg(project_path: str, db_path: Optional[str] = None) -> str:
     """确保知识图谱就绪：图谱缺失时自动构建（full 全量），返回 db 路径。
 
-    流程验证依赖图谱 CALLS 边。若调用方未预先执行 coderef_memory_sync 构建图谱，
+    流程验证依赖图谱 CALLS 边。若调用方未预先执行 coderef_memory(action=sync) 构建图谱，
     本函数会就地补建，避免 flow_verify 因图谱缺失而整体短路（defect-hit 0% 的根因）。
     构建失败时返回原 db_path（交给调用方按 has_kg:false 诚实反馈）。
     """
@@ -682,7 +682,7 @@ def verify_flow(project_path: str, entry: str, steps: List[str],
         depth = 8
     if db_path is None:
         db_path = _kg_db_path(project_path)
-    # 图谱缺失时自动构建（coderef_memory_sync），避免 flow_verify 因图谱缺失整体短路。
+    # 图谱缺失时自动构建（coderef_memory(action=sync)），避免 flow_verify 因图谱缺失整体短路。
     db_path = ensure_kg(project_path, db_path)
     if not os.path.exists(db_path):
         return {
@@ -691,7 +691,7 @@ def verify_flow(project_path: str, entry: str, steps: List[str],
             "steps": [],
             "graph_stats": {"has_kg": False, "db": db_path},
             "summary": f"知识图谱不存在({db_path})，"
-                       f"请先运行 coderef_audit 或 coderef_memory_sync 构建知识图谱",
+                       f"请先运行 coderef_audit 或 coderef_memory(action=sync) 构建知识图谱",
         }
     _log(f"verify_flow entry={entry} steps={steps} db={db_path}")
     result = FlowVerifier(db_path).verify(entry, list(steps), max_depth=depth)
@@ -727,7 +727,7 @@ def render_report(result: dict) -> str:
     # 附带结果，不应误报为"入口未找到"。必须在 missing-entry 分支之前处理。
     if gs.get("has_kg") is False:
         lines.append(f"知识图谱不存在: {gs.get('db', '')}")
-        lines.append("请先运行 coderef_audit 或 coderef_memory_sync 构建知识图谱，再执行流程验证。")
+        lines.append("请先运行 coderef_audit 或 coderef_memory(action=sync) 构建知识图谱，再执行流程验证。")
         return "\n".join(lines)
 
     en = result.get("entry", {})
@@ -798,7 +798,7 @@ def render_html(result: dict) -> str:
     <div style="background:#EFAA17;border-left:4px solid #EFAA17;padding:12px 16px;border-radius:8px;margin-top:16px;">
       <strong>知识图谱不存在</strong>
       <div style="margin-top:6px;color:#555;font-size:13px;">{_esc(gs.get('db',''))}</div>
-      <div style="margin-top:6px;color:#555;font-size:13px;">请先运行 coderef_audit 或 coderef_memory_sync 构建知识图谱，再执行流程验证。</div>
+      <div style="margin-top:6px;color:#555;font-size:13px;">请先运行 coderef_audit 或 coderef_memory(action=sync) 构建知识图谱，再执行流程验证。</div>
     </div>
   </div>
 </div></body></html>"""

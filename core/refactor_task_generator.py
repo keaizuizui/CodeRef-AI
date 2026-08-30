@@ -68,7 +68,7 @@ class RefactorTaskGenerator:
             return {
                 "ok": False,
                 "project_path": project_path,
-                "message": "知识图谱不存在，需先构建（coderef_audit / coderef_memory_sync）",
+                "message": "知识图谱不存在，需先构建（coderef_audit / coderef_memory(action=sync)）",
                 "tasks": [],
                 "summary": {"total": 0},
             }

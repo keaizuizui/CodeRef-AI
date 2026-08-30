@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.12.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.12.2** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -112,10 +112,7 @@ CodeRef 4.0 由四个引擎驱动，覆盖「审计 → 记忆 → 创新 → �
 
 | 工具 | 功能 | 需要 LLM |
 |------|------|---------|
-| `coderef_memory_sync` | 初始化 / mtime+size 增量同步项目记忆层 | 否 |
-| `coderef_memory_query` | 语义检索（向量库）+ 结构查询（知识图谱）复用项目记忆 | 否 |
-| `coderef_memory_status` | 「AI 知道什么」：认知覆盖度 + 置信度 + 盲区地图 | 否 |
-| `coderef_memory_quality` | 记忆质量评估（引用完整性/语义覆盖/偏差）+ 自动补全 | 可选 |
+| `coderef_memory` | 项目记忆层：action=sync 初始化/增量同步；action=query 语义检索（向量库）+结构查询（知识图谱）；action=status 认知覆盖度+置信度+盲区地图；action=quality 质量评估（引用完整性/语义覆盖/偏差）+自动补全（5.12.2 合并 4 工具） | 否 |
 | `coderef_operation_memory_sync` | 操作记忆增量同步（ledger / BRAIN.md） | 否 |
 | `coderef_operation_memory_query` | 操作记忆语义 / 结构查询 | 否 |
 | `coderef_operation_memory_status` | 操作记忆状态概览 | 否 |
@@ -286,7 +283,8 @@ coderef_gov_report(project_path="/path/to/project")                     # action
 coderef_gov_report(project_path="/path/to/project", action="board")     # action=board 交互 HTML 看板（落盘 gov_board.html）
 
 # 12. 记忆层 / 操作记忆：了解 AI 记住了什么；上下文丢失后恢复「工具位置 / 约定 / 陷阱」
-coderef_memory_status(project_path="/path/to/project")            # 项目认知覆盖度 + 盲区地图
+coderef_memory(project_path="/path/to/project", action="sync")    # 初始化/增量同步项目记忆（默认后台）
+coderef_memory(project_path="/path/to/project", action="status")  # 项目认知覆盖度 + 盲区地图
 coderef_operation_memory_status(project_path="/path/to/project")  # 操作记忆概览
 coderef_operation_memory_find(project_path="/path/to/project", keyword="布局算法")
 coderef_operation_memory_recover(project_path="/path/to/project") # 恢复关键工具位置/约定摘要/待确认项
@@ -505,6 +503,19 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 > - **自证**：冒烟验证 4 路径全绿——action=report JSON/HTML、action=board 落盘断言（）、
 >   兼容别名转发 + 落盘；`Server()` 初始化正常。
 > - **版本号**：5.12.0 → 5.12.1（patch，报表视图级合并 + 兼容别名，不改治理能力）。
+
+### v5.12.2 — 工具收敛 B-1：合并记忆层 4 工具 → coderef_memory（记忆簇收敛第 1 版）
+
+> 承接《工具收敛评估_B方案详细设计_20260830.md》B-1（MemoryLayer 4→1）：
+> - **合并**：`coderef_memory_sync/query/status/quality` 4 工具 → 单一 `coderef_memory`，以 `action=sync/query/status/quality` 区分；
+>   handler 与注册表 4→1，核心模块（memory_layer.py / memory_quality.py）**零改动**，SQLite 图谱 / 向量库 / 产物路径不变。
+> - **删旧名不保留别名**（与 A 方案刻意不同）：旧 4 名从 tools/list 移除，既有调用须改用 `coderef_memory(action=...)`；
+>   工具总数 58 → 55。
+> - **后台化矩阵不变（D2）**：新增 `MERGE_SYNC_ACTIONS` 使 action=query 保持同步（秒级），action=sync/status/quality 保持后台
+>   （全量扫描撞超时教训）；`background=true/false` 仍可显式覆盖；行为与合并前完全一致。
+> - **自证**：冒烟全绿——工具数 55、旧名 100% 消失、`Server()` 初始化正常、`_should_background` 矩阵 9 断言、
+>   sync/query/status/quality 4 action 全通。
+> - **版本号**：5.12.1 → 5.12.2（patch，暴露面精简，不改记忆能力）。
 
 ### v5.12.0 — 分层治理编排层补齐：L3 资产沉淀编排（P3 coderef-asset）
 
