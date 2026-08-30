@@ -527,6 +527,15 @@ CodeRef-AI 从"一份看得懂的项目简报"出发，一步步长出静态审�
 >   6 action 全通 + ledger.json / BRAIN.md 落盘断言。
 > - **版本号**：5.12.2 → 5.12.3（patch，暴露面精简，不改操作记忆能力）。
 
+> **发布收尾（验证项闭环，2026-08-30）**：
+> - **旧名文案残留清零**：`operation_memory.py` / `memory_layer.py` / `memory_quality.py` 的错误提示与 docstring
+>   统一指向 `coderef_operation_memory(action=...)` / `coderef_memory(action=...)` 新命名（纯文案零逻辑）。
+> - **记忆库落点约定**：认知记忆 `data/memory_state/{项目hash}.json/.kb.db`、操作记忆 `data/operation_memory/<项目hash>/`
+>   （ledger + BRAIN + timeline），均按项目 hash 隔离、`data/` git 不追踪、删对应 hash 即可清理。
+> - **语义检索降级体验**：Ollama 未就绪时 `coderef_memory(action=query, query_type=semantic)` 自动降级关键词检索
+>   （停用词过滤 + 中文 bigram 召回增强、打分封顶 1.0），并返回 `engine` / `degraded` 标记，不再返空。
+> - **发布确认**：测试 99/99 全量回归全绿、三项验证项闭环、无 P0/P1 阻断缺陷。
+
 ### v5.12.0 — 分层治理编排层补齐：L3 资产沉淀编排（P3 coderef-asset）
 
 > 承接《治理体系定位与编排层设计研究_20260829.md》落地路线 P3（L3 资产沉淀编排评估；
