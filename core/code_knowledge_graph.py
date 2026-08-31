@@ -105,7 +105,10 @@ def _is_excluded_path(rel: str, project_path: str, exclude_dirs) -> bool:
             rel_n = os.path.relpath(rel, project_path).replace("\\", "/")
         except Exception:
             pass
-    rel_n = rel_n.lstrip("./")
+    # 只剥相对路径标记 ./，保留以点开头的目录名（如 .cache/.generated）——
+    # lstrip("./") 会把 .cache 剥成 cache，导致排除匹配失效（CodeRabbit major）
+    while rel_n.startswith("./"):
+        rel_n = rel_n[2:]
     return any(rel_n == d or rel_n.startswith(d + "/")
                for d in exclude_dirs)
 
