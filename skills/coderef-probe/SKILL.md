@@ -5,7 +5,6 @@ description: L1 小阶段治理编排 Skill（类 CodeRabbit，变更驱动）�
 
 # CodeRef 探查链 · L1 小阶段治理编排
 
-> 承接《治理体系定位与编排层设计研究_20260829.md》§3.2（L1 小阶段治理编排）与 §7 开放决策 1/2（独立 SKILL + 先文档编排、零新工具）。
 > 定位：**变更驱动的轻量持续探查与防护**——每次提交/CI/日常改动都被快速探查、回归被拦截、结论被确定性核验、误报被收敛。与 `coderef-governance`（L2 大阶段治理）、`coderef-asset`（L3 资产沉淀）互补衔接：L1 发现存量结构问题 → 升级 L2 立项系统性规整；L1 发现高采用率设计 → 走 L3 沉淀复用；L2/L3 治理完成后 L1 持续维持防再腐化。
 
 ## 核心原则（必须遵守）
@@ -51,7 +50,7 @@ description: L1 小阶段治理编排 Skill（类 CodeRabbit，变更驱动）�
 ### 场景 B · 论断核验（LLM / CodeRabbit / 探查结论）
 
 `coderef_verify_findings`(findings=[...]) → verdict（确证/证伪/部分确证/无法核验）+ 证据链 + 影响面；`entry` 可指定入口核验符号是否在关键管线内。
-> 边界：`verify_findings` 是**核验**不是评审——它确证"引用目标真实存在"，不代表语义结论正确。语义评审交 CodeRabbit 本体或 LLM，Coderef 只做确定性核验（用户已拍板：不集成 CodeRabbit 编排，Coderef 自建完整探查链）。
+> 边界：`verify_findings` 是**核验**不是评审——它确证"引用目标真实存在"，不代表语义结论正确。语义评审交 CodeRabbit 本体或 LLM，Coderef 只做确定性核验（Coderef 自建完整探查链）。
 
 ### 场景 C · 定时体检（周期触发）
 
