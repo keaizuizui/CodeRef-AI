@@ -18,6 +18,9 @@ logs/
 *.log
 .gitnexus/
 
+# ─── 治理状态（内部过程资料，不入库）───
+.coderef/
+
 # ─── 测试缓存 ───
 .pytest_cache/
 
