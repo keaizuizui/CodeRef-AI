@@ -734,7 +734,7 @@ def _llm_summary(project_path: str, data: Dict) -> str:
             f"- 管线梳理：{n_entries} 条入口管线，{n_flows} 条跨模块数据流\n"
             f"- 真身判定：{n_identity} 组同名业务级多实现\n"
             f"- 重复识别：{n_dup} 组跨模块重复实现簇，{n_dir} 组目录级同构重复\n"
-            f"请用 3-5 句话概括该项目的架构健康状况与治理重点（通俗中文，面向治理屎山代码的工程师）。"
+            f"请用 3-5 句话概括该项目的架构健康状况与治理重点（通俗中文，面向维护中大型代码的工程师）。"
         )
         return llm.chat_completion([
             {"role": "system", "content": "你是一位资深架构治理工程师，请用通俗中文给出简洁的架构洞察总结。"},
