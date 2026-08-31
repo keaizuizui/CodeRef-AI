@@ -788,15 +788,29 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
         })
 
     # 4) 循环依赖（复用 arch_audit，过滤纯测试模块组成的环）
-    for cyc in arch.get("cycles", []):
+    cycle_details = arch.get("cycle_details", [])
+    for idx, cyc in enumerate(arch.get("cycles", [])):
         prod = [m for m in cyc if not _is_test_module(m)]
         if not prod:
             continue  # 环完全由测试模块组成，对齐目标不关注
+        detail = f"循环依赖: {' → '.join(cyc)}"
+        min_cycle = None
+        key_edges = []
+        if idx < len(cycle_details):
+            cd = cycle_details[idx]
+            min_cycle = cd.get("min_cycle")
+            key_edges = cd.get("key_edges") or []
+            if min_cycle:
+                detail += f"；最小真环: {' → '.join(min_cycle)}"
+            if cd.get("hint_large_scc"):
+                detail += "；该环节点数较多，可能是整个子图被圈为强连通分量而非局部循环，请核对是否真需重构"
         gaps.append({
             "type": "cycle",
             "severity": SEVERITY["cycle"],
             "modules": cyc,
-            "detail": f"循环依赖: {' → '.join(cyc)}",
+            "min_cycle": min_cycle,
+            "key_edges": key_edges,
+            "detail": detail,
         })
 
     # 5) 上帝模块（复用 arch_audit，过滤测试模块）

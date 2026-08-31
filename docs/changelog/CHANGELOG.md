@@ -4,6 +4,13 @@
 
 ---
 
+### v5.12.6 — 外部用户反馈驱动的判定精度修复
+
+> 承接外部用户第二轮反馈（《CodeRef-缺陷反馈稿_v1》）：同名方法簇相似度被夸大误报为"真重复" / cycle 循环依赖判定过粗无法判断真伪，2 项修复：
+> - **同名方法按宿主类 + 契约区分**：`duplicate` 匹配不再仅按方法短名聚合——method 保留宿主类全名（`类名.方法名`，如 `DeepSeekClient.chat` vs `DiscussionEngine.chat`），新增 `_contract_compatible` 契约兼容判断（参数列表 + 返回类型，`self` 排除、空返回不阻断），契约不兼容的副本降为"同名候选"（kind=candidate，标注"仅同名、契约不同"）；新增短方法体过滤（归一化后 < 20 字符不参与相似度聚类，避免 `return x` vs `return y` 短文本 bigram 虚高）。duplicate 报告新增"契约（签名 → 返回）"列，便于快速过滤。
+> - **cycle 输出最小真环 + 关键逆向边**：`coderef_arch_audit` 对每个模块级 SCC 新增 `cycle_details`——BFS 提取最小真环路径（`min_cycle`，模块名序列首尾相同，替代超长无序列表）、环上具体边清单（`key_edges`，起点/终点 + 跨层逆向标注，与 `layer_viol` 同口径：低层依赖上层才标 reverse）、大环提示（`hint_large_scc`，SCC 节点数 > 12 时提示"整个子图被圈为强连通分量"而非局部循环）；`coderef_arch_gap` 的 cycle 差距展示同步带出最小环与关键边。
+> - **版本号**：5.12.5 → 5.12.6（patch，反馈驱动修复，不改工具暴露面）。
+
 ### v5.12.5 — 外部用户反馈驱动的可用性修复
 
 > 承接外部用户使用反馈（备份目录污染符号级判定 / target_modules 语义坑 / 异步轮询繁琐 / 大输出转义膨胀），4 项修复：
