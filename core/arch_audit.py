@@ -735,7 +735,7 @@ def audit(project_path: str, db_path: str = None,
     # 5) 函数级递归（ARC-08）：AST 扫描源码，检测函数级递归调用（直接/间接）
     result["function_recursions"] = _scan_function_recursion(project_path)
 
-    # 5.5) 真身/孤本摘要（P1⑤，建议书承接）：复用 arch_insight P0-B identity_insight，
+    # 5.5) 真身/孤本摘要（P0-B）：复用 arch_insight P0-B identity_insight，
     #      让 arch_audit 直接透出"同名多目录实现里谁是活跃真身/谁是孤本"，
     #      不再埋在 architecture 报告内（Skill 只看 arch_audit 健康度也不会漏真身判定）。
     result["identity"] = _identity_briefing(project_path, db)

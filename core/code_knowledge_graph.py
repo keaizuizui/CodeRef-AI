@@ -76,7 +76,7 @@ def _module_key(project_path: str, rel: str) -> str:
 
     用相对路径而非 basename 作 id 前缀，避免跨目录同名文件（如
     业务工具/engine.py 与 分析中心/engine.py）生成相同 id 被
-    INSERT OR REPLACE 互相覆盖，导致图谱漏扫（真实屎山治理发现）。
+    INSERT OR REPLACE 互相覆盖，导致图谱漏扫（真实存量工程治理中发现的问题）。
     """
     if not rel:
         return ""
