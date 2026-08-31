@@ -636,7 +636,7 @@ def _scan_function_recursion(project_path: str) -> list:
 
 
 def _identity_briefing(project_path: str, db_path: str) -> list:
-    """真身/孤本摘要（P1⑤）：复用 arch_insight P0-B identity_insight，
+    """真身/孤本摘要：复用 arch_insight P0-B identity_insight，
     让 arch_audit 直接透出"同名多目录实现里谁是活跃真身/谁是孤本"。
 
     返回紧凑摘要列表：[{class_name, copies: 总数, active: 活跃真身副本数,

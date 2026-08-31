@@ -101,7 +101,7 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 | 安全合规（OWASP） | `coderef_owasp` | + `coderef_prompt_governance` |
 | 上下文丢了，东西在哪儿 | `coderef_operation_memory`（action=recover） | 强制 gate（见工作流 E） |
 
-**结构性锈蚀场景（P0②）**：治理「存量结构」（重复/孪生/真身）时，重点看 `coderef_architecture` 的 P0-B/P0-C（真身判定/重复簇）与 `coderef_arch_gap` 的 duplicate/directory_duplicate 差距，勿只依赖 `coderef_audit` 的 diff 焦点。`strategy=incr` 仅用于回归复核新增改动，治理存量用 `strategy=full`。
+**结构性锈蚀场景**：治理「存量结构」（重复/孪生/真身）时，重点看 `coderef_architecture` 的 P0-B/P0-C（真身判定/重复簇）与 `coderef_arch_gap` 的 duplicate/directory_duplicate 差距，勿只依赖 `coderef_audit` 的 diff 焦点。`strategy=incr` 仅用于回归复核新增改动，治理存量用 `strategy=full`。
 
 ## 标准工作流
 

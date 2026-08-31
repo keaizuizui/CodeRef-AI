@@ -223,7 +223,7 @@ def _detect_missing(roles: List[dict], project_path: str,
 def _detect_unassigned(nodes: Dict[str, dict], adj: Dict[str, List[str]],
                        project_path: str, assigned_ids: Set[str],
                        max_n: int) -> tuple:
-    """游离模块：不在任何角色 target_modules 中的代码模块（建议书 P0③ 增强）。
+    """游离模块：不在任何角色 target_modules 中的代码模块（结构锈蚀增强）。
 
     区分两类（入口脚本豁免见下）：
       - monitored=free（真游离）：模块无任何调用者（fan_in=0），代码孤儿，治理候选，
@@ -407,7 +407,7 @@ def _detect_business_gaps(flows: List[dict],
 def _detect_duplicates(project_path: str, db_path: str,
                        parts: Dict[str, bool],
                        ds: Optional[dict] = None) -> List[dict]:
-    """同构重复 / 目录级重复差距（建议书 P0①，复用 arch_insight P0-C）。
+    """同构重复 / 目录级重复差距（复用 arch_insight P0-C）。
 
     复用 duplicate_insight() 的同一切词/相似度/通用名过滤逻辑，避免重复实现：
       - clusters[kind=duplicate]（函数体相似度 ≥60% 的跨模块同构孪生）→ type=duplicate
@@ -746,7 +746,7 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
     gaps.extend(_detect_dependency_violations(
         nodes, adj, project_path, role_of, constraints))
 
-    # 3.5) 同构重复 / 目录级重复（建议书 P0①，复用 arch_insight P0-C）
+    # 3.5) 同构重复 / 目录级重复（复用 arch_insight P0-C）
     #       ds 一次调用，供重复差距与孪生判定复用，避免重复计算
     ds = duplicate_insight(project_path, db_path=db)
     gaps.extend(_detect_duplicates(project_path, db, {"duplicate": True,
