@@ -88,6 +88,30 @@ def _jaccard(a: str, b: str) -> float:
     return len(sa & sb) / len(union) if union else 0.0
 
 
+def _contract_compatible(a: Dict, b: Dict) -> bool:
+    """契约兼容：参数列表 + 返回类型（非空时）差异显著视为契约不同。
+
+    外部反馈：同名方法（如 DeepSeekClient.chat 调 API vs DiscussionEngine.chat
+    管理会话）参数/返回契约完全不同，仅凭方法名+结构会被误报真重复。
+    契约不兼容的副本不聚入同一重复簇（降权为"仅同名、契约不同"候选）。
+    图谱无 params/return_type（旧图谱/非 Python）时不阻断。
+    """
+    pa = [p for p in (a.get("params") or []) if p != "self"]
+    pb = [p for p in (b.get("params") or []) if p != "self"]
+    if len(pa) != len(pb):
+        return False
+    if pa and pb:
+        sa, sb = set(pa), set(pb)
+        sim = len(sa & sb) / len(sa | sb)
+        if sim < 0.6:
+            return False
+    ra = (a.get("return_type") or "").strip()
+    rb = (b.get("return_type") or "").strip()
+    if ra and rb and ra != rb:
+        return False
+    return True
+
+
 def _partition_copies(copies: List[Dict], sim_threshold: float):
     """把副本按函数体相似度 ≥ 阈值贪心聚类。
 
@@ -100,6 +124,8 @@ def _partition_copies(copies: List[Dict], sim_threshold: float):
         best_idx, best_sim = -1, 0.0
         for i, cl in enumerate(clusters):
             for m in cl:
+                if not _contract_compatible(c, m):
+                    continue
                 s = _jaccard(c["body"], m["body"])
                 if s > best_sim:
                     best_sim, best_idx = s, i
@@ -486,6 +512,9 @@ def _rel_parts(project_path: str, fp: str) -> List[str]:
 _DEAD_DIR_HINTS = ("legacy", "old", "bak", "backup", "archive", "deprecated",
                    "废弃", "旧版", "备份", "_v1", "_v2")
 
+# 重复识别：归一化后方法体最小长度（短文本 bigram 相似度虚高，如 return x vs return y）
+_MIN_BODY_LEN = 20
+
 
 def _is_parallel_structure(project_path: str, copies: List[Dict]) -> bool:
     """平行管线/设计并存信号（ 语义分层）：副本目录在共同分支点后对称。
@@ -598,8 +627,14 @@ def duplicate_insight(project_path: str, db_path: Optional[str] = None,
     for nid, n in fv.nodes.items():
         if n.get("type") not in ("function", "method"):
             continue
-        nm = n["name"].split(".")[-1]
-        if _is_generic_name(nm):
+        if n.get("type") == "method":
+            # method 保留宿主类全名（类名.方法名）：不同宿主类的同名方法（如
+            # DeepSeekClient.chat 调 API vs DiscussionEngine.chat 管理会话）契约不同，
+            # 是正常多态而非重复，按短名聚合会误报真重复（外部反馈）。
+            nm = n["name"]
+        else:
+            nm = n["name"].split(".")[-1]
+        if _is_generic_name(nm.split(".")[-1]):
             continue
         by_name[nm].append(nid)
 
@@ -613,18 +648,27 @@ def duplicate_insight(project_path: str, db_path: Optional[str] = None,
             n = fv.nodes[nid]
             fp = (n.get("file_path") or "").replace("\\", "/")
             mod = _mod_of(n.get("file_path") or "")
+            props = n.get("props") or {}
             copies.append({
                 "file": fp, "line": n.get("start_line", 0), "mod": mod,
                 "body": _norm_body(_abs_path(project_path, fp),
                                    n.get("start_line", 0), n.get("end_line", 0)),
+                "params": props.get("params") or [],
+                "return_type": props.get("return_type") or "",
             })
             # 跨目录判定用相对路径目录（避免 apps/worker 与 legacy/worker 同名
             # basename 被 _mod_of 合并误判同目录）；_mod_of 仅用于报告展示
             dirs.add(_rel_dir(project_path, n.get("file_path") or ""))
         if len(dirs) < 2:  # 跨目录才算"重复/同名候选"
             continue
-        # 按函数体相似度分区：相似度 ≥ 阈值的副本聚成独立重复簇，未配对副本作同名候选
-        dup_clusters, singles = _partition_copies(copies, sim_threshold)
+        # 短方法体过滤：归一化后过短的副本不参与相似度聚类（短文本 bigram 虚高，
+        # 如 return x vs return y 契约不同却被算 0.7+ 相似），降为同名候选
+        long_copies = [c for c in copies if len(c["body"]) >= _MIN_BODY_LEN]
+        short_copies = [c for c in copies if len(c["body"]) < _MIN_BODY_LEN]
+        # 按函数体相似度分区：相似度 ≥ 阈值且契约兼容的副本聚成独立重复簇，
+        # 未配对/契约不同/短方法体副本作同名候选
+        dup_clusters, singles = _partition_copies(long_copies, sim_threshold)
+        singles = singles + short_copies
         for cl in dup_clusters:
             max_sim = 0.0
             for i in range(len(cl)):
@@ -649,6 +693,14 @@ def duplicate_insight(project_path: str, db_path: Optional[str] = None,
     dir_isomorph = _dir_isomorph_insight(project_path, fv)
     return {"ok": True, "clusters": clusters[:max_clusters],
             "dir_isomorph": dir_isomorph}
+
+
+def _contract_desc(c: Dict) -> str:
+    """生成副本契约描述（签名 + 返回类型），供 duplicate 结果区分理由。"""
+    params = [p for p in (c.get("params") or []) if p != "self"]
+    sig = "(" + ", ".join(params) + ")"
+    rt = (c.get("return_type") or "").strip()
+    return f"{sig} → {rt}" if rt else sig
 
 
 def _duplicate_markdown(data: Dict) -> str:
@@ -696,11 +748,12 @@ def _duplicate_markdown(data: Dict) -> str:
         lines.append("")
     if cand:
         lines.append("### 同名候选（仅同名、契约可能不同，不推荐合并）")
-        lines.append("| 符号 | 实现数 | 相似度 | 模块 |")
-        lines.append("|------|--------|--------|------|")
+        lines.append("| 符号 | 实现数 | 相似度 | 契约（签名 → 返回） | 模块 |")
+        lines.append("|------|--------|--------|-------------------|------|")
         for c in cand:
             mods = "、".join(f"`{x['mod']}`" for x in c["copies"])
-            lines.append(f"| `{c['name']}` | {len(c['copies'])} | {c.get('max_sim', 0)} | {mods} |")
+            contracts = " / ".join(f"`{_contract_desc(x)}`" for x in c["copies"][:4])
+            lines.append(f"| `{c['name']}` | {len(c['copies'])} | {c.get('max_sim', 0)} | {contracts} | {mods} |")
         lines.append("")
     if dir_isomorph:
         lines.append("### 目录级同构重复（文件清单 + 函数签名相似度，可合并候选）")

@@ -185,6 +185,7 @@ def _kg_method_node(rel: str, module_key: str, cls, m) -> KGNode:
         start_line=getattr(m, "start_line", 0),
         end_line=getattr(m, "end_line", 0),
         props={"params": getattr(m, "parameters", []),
+               "return_type": getattr(m, "return_type", "") or "",
                "doc": (getattr(m, "docstring", "") or "")[:200]})
 
 

@@ -25,8 +25,8 @@ arch_audit — 架构腐化诊断（coderef_arch_audit）
 
 import ast
 import os
-from collections import defaultdict
-from typing import Dict, List
+from collections import defaultdict, deque
+from typing import Dict, List, Optional
 
 from config.settings import (
     ARCH_SCC_CYCLE_MIN_SIZE,
@@ -51,6 +51,9 @@ for _infra_dir in ARCH_INFRA_DIRS:
     _LAYER_ORDER.setdefault(_infra_dir, 0)
 _LAYER_NAME = {3: "应用层", 2: "引擎层", 1: "基础层", 0: "基础设施层"}
 _DEFAULT_LAYER = 2
+
+# cycle 大环提示阈值：SCC 节点数超过该值提示"整个子图被圈为强连通分量"（外部反馈）
+_CYCLE_HINT_THRESHOLD = 12
 
 
 def locate_kg_db(project_path: str):
@@ -254,18 +257,68 @@ def find_sccs(adj: Dict[str, List[str]]) -> List[List[str]]:
     return _collect_components(_reverse_graph(adj), order)
 
 
+def _module_layer(module_name: str) -> int:
+    """从模块相对路径首段推断分层（与 layer_of 同口径，供环边逆向标注）。"""
+    parts = (module_name or "").replace("\\", "/").split("/")
+    parent = parts[0] if parts else ""
+    return _LAYER_ORDER.get(parent, _DEFAULT_LAYER)
+
+
+def _min_cycle_path(graph: Dict[str, List[str]], comp: List[str]) -> Optional[List[str]]:
+    """在强连通分量内找最短闭环（BFS，逐起点求回到自身的最短路径）。
+
+    外部反馈：cycle 只回超长模块列表，无法判断真伪。返回一条最小真环
+    （模块名序列，首尾相同），供使用者一眼定位环的构成。
+    """
+    comp_set = set(comp)
+    best = None
+    for start in comp:
+        queue = deque([(start, [start])])
+        seen = {start}
+        while queue:
+            node, path = queue.popleft()
+            for nxt in graph.get(node, []):
+                if nxt not in comp_set:
+                    continue
+                if nxt == start:
+                    if best is None or len(path) + 1 < len(best):
+                        best = path + [start]
+                    continue
+                if nxt not in seen:
+                    seen.add(nxt)
+                    queue.append((nxt, path + [nxt]))
+    return best
+
+
+def _key_edges(min_cycle: List[str]) -> List[Dict]:
+    """环路径上的边清单（起点/终点）；层可区分且方向异常（低→高）标注逆向。
+
+    与 _layer_violations 同口径：下层依赖上层（lm < lt）才是分层违例/逆向边，
+    上层依赖下层是正常依赖方向，不标注。
+    """
+    edges = []
+    for i in range(len(min_cycle) - 1):
+        a, b = min_cycle[i], min_cycle[i + 1]
+        la, lb = _module_layer(a), _module_layer(b)
+        edges.append({"source": a, "target": b, "reverse": la < lb})
+    return edges
+
+
 def _find_cycles(mod_adj: Dict[str, List[str]], self_edges: set, sc_min: int):
     """模块级 SCC 中区分「模块间真循环」与「模块内自环」。
 
-    返回 (module_cycles, self_loops)：
+    返回 (module_cycles, self_loops, cycle_details)：
       module_cycles  多模块 SCC（尺寸 ≥ sc_min）→ 模块间循环依赖，属架构腐化，参与健康分扣分
       self_loops     单模块分量且模块内存在符号互调/自环 → 模块内自环，
                      是大型单体正常协作形态（如 core/role_boundary 内部函数互调），
                      不当作循环依赖、不扣健康分（ 复核：原口径把模块内互调
                      全计入 cycles，致大型单体 health 被压到 0.0 过度悲观）
+      cycle_details  每个环的最小真环路径 + 关键边 + 大环提示（外部反馈：环报得太粗
+                     无法判断真伪，需展示最小环与具体边）
     """
     module_cycles: List[List[str]] = []
     self_loops: List[str] = []
+    cycle_details: List[Dict] = []
     # 自环模块即使无跨模块边也不在 mod_adj，需并入 SCC 节点集才能被识别
     scc_adj = dict(mod_adj)
     for module in self_edges:
@@ -273,9 +326,17 @@ def _find_cycles(mod_adj: Dict[str, List[str]], self_edges: set, sc_min: int):
     for comp in find_sccs(scc_adj):
         if len(comp) >= 2 and len(comp) >= sc_min:
             module_cycles.append(comp)
+            min_cycle = _min_cycle_path(mod_adj, comp)
+            cycle_details.append({
+                "modules": comp,
+                "min_cycle": min_cycle,
+                "key_edges": _key_edges(min_cycle) if min_cycle else [],
+                "size": len(comp),
+                "hint_large_scc": len(comp) > _CYCLE_HINT_THRESHOLD,
+            })
         elif len(comp) == 1 and comp[0] in self_edges:
             self_loops.append(comp[0])
-    return module_cycles, self_loops
+    return module_cycles, self_loops, cycle_details
 
 
 def _module_symbol_counts(nodes: dict, project_path: str) -> Dict[str, int]:
@@ -710,7 +771,7 @@ def audit(project_path: str, db_path: str = None,
     result["graph_stats"]["modules"] = len(mod_adj)
 
     # 1) 循环依赖（模块级 SCC：模块间真循环 + 模块内自环分流，自环不扣健康分）
-    module_cycles, self_loops = _find_cycles(mod_adj, self_edges, sc_min)
+    module_cycles, self_loops, cycle_details = _find_cycles(mod_adj, self_edges, sc_min)
     # O-C3 + Major(CodeRabbit 复审)：同直接父包的子包互引（如 route/gin↔route/client_side）
     #  在业务上是同一模块/层内部的组件纠缠，单独透出为 package_cycles 作补充观察；
     #  但它们仍是文件级的真实循环依赖，不能因同包就完全不扣健康分。因此把全部
@@ -718,6 +779,7 @@ def audit(project_path: str, db_path: str = None,
     package_cycles = [comp for comp in module_cycles
                       if len({_parent_package(m) for m in comp}) == 1]
     result["cycles"] = module_cycles
+    result["cycle_details"] = cycle_details
     result["package_cycles"] = package_cycles
     result["self_loops"] = self_loops
 
