@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.12.3** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.12.4** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -405,15 +405,13 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 ## 更新日志
 
-> 4.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.12.3）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
+> 4.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.12.4）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.12.3 — 合并操作记忆层 6 工具 → coderef_operation_memory
+### 当前版本 v5.12.4 — 治理断链 + 治理状态目录隔离
 
-> - **合并**：`coderef_operation_memory_sync/query/find/status/recover/export` 6 工具 → 单一 `coderef_operation_memory`，以 `action=sync/query/find/status/recover/export` 区分；核心模块零改动，产物路径不变。
-> - **删旧名不保留别名**：旧 6 名从工具列表移除，需改用 `coderef_operation_memory(action=...)`；工具总数 55 → 50。
-> - **后台化矩阵不变**：`MERGE_SYNC_ACTIONS` 确保 query/find/status/recover/export 同步、sync 保持后台，行为与合并前一致。
-> - **验证**：全量回归通过，无阻断缺陷。
-> - **版本号**：5.12.2 → 5.12.3（patch，暴露面精简，不改操作记忆能力）。
+> - **断链**：`health_dashboard` 对 `pipeline_runner` 的顶层运行时依赖改为 TYPE_CHECKING 类型引用 + 方法内延迟导入，消除模块级循环依赖，降低加载耦合。
+> - **隔离**：`.gitignore` 新增 `.coderef/` 治理状态目录（内部过程资料不入库）。
+> - **版本号**：5.12.3 → 5.12.4（patch，治理改动，不改工具暴露面）。
 
 ---
 
