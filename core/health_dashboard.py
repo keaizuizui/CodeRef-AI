@@ -12,12 +12,15 @@ HealthDashboard v1.0 -- 项目健康仪表盘
 输出: coderef-report/health_dashboard_{timestamp}.html
 """
 
+from __future__ import annotations
+
 import os
 import json
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
 
-from .pipeline_runner import PipeResult, Finding, Tier
+if TYPE_CHECKING:  # 仅类型引用；运行时断环（Tier 在用到处延迟导入）
+    from .pipeline_runner import PipeResult, Finding, Tier
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -427,6 +430,8 @@ class HealthDashboard:
           - LOW: -0.2 分/条
           - 最低 0 分
         """
+        from .pipeline_runner import Tier
+
         if not findings:
             return 100
 
@@ -445,6 +450,7 @@ class HealthDashboard:
 
     def _render_html(self, pr: PipeResult, kg_stats: dict, score: int) -> str:
         """渲染完整 HTML"""
+        from .pipeline_runner import Tier
 
         project_name = os.path.basename(self.project_path.rstrip(os.sep))
         build_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -481,6 +487,8 @@ class HealthDashboard:
 
     def _render_tier_dist(self, findings: List[Finding]) -> str:
         """渲染 tier 分布条"""
+        from .pipeline_runner import Tier
+
         h = sum(1 for f in findings if f.tier == Tier.HIGH)
         m = sum(1 for f in findings if f.tier == Tier.MEDIUM)
         lo = sum(1 for f in findings if f.tier == Tier.LOW)
@@ -666,6 +674,8 @@ class HealthDashboard:
 
     def _render_top_risks(self, findings: List[Finding]) -> str:
         """渲染 TOP 10 HIGH 发现"""
+        from .pipeline_runner import Tier
+
         high_findings = [f for f in findings if f.tier == Tier.HIGH]
         if not high_findings:
             return '<div class="empty-state">暂无 HIGH 风险</div>'
