@@ -1114,6 +1114,16 @@ BUILTIN_TOOLS: List[Dict] = [
                             "max_issues": {"type": "integer", "description": "越界符号报出上限", "default": 200},
                             "semantic": {"type": "boolean", "description": "是否启用可选语义判定（需 LLM）", "default": False},
                         }, "required": ["project_path"]},
+                },
+        {
+                    "name": "coderef_version",
+                    "description": (
+                        "轻量版本探针（只读、零副作用）：返回当前 CodeRef-AI 进程加载的版本号。\n"
+                        "一行调用即可断言 版本==target，杜绝「结果字段反推版本」的进程新旧误判\n"
+                        "（测试方 2026-08-31 反馈：v5.12.6 首探即因进程未重启加载旧代码而误判）。\n"
+                        "无需 project_path，秒级返回，不触发任何扫描/图谱构建。"
+                    ),
+                    "inputSchema": {"type": "object", "properties": {}, "required": []},
                 }
 ]
 
@@ -1208,6 +1218,20 @@ def _scan_list() -> str:
         "status": "completed",
         "tool": "coderef_scan_list",
         "dimensions": Pipe.list_single_tools(),
+    }, ensure_ascii=False)
+
+
+def _version(a: dict) -> str:
+    """轻量版本探针（coderef_version）：返回当前进程加载的版本号。
+
+    测试方反馈：靠「结果字段反推版本」会因进程未重启加载旧代码而误判进程新旧，
+    需一行调用即可断言 版本==target。只读、零副作用、不触发扫描/图谱构建。
+    """
+    return json.dumps({
+        "status": "completed",
+        "tool": "coderef_version",
+        "name": "coderef-ai",
+        "version": PKG_VERSION,
     }, ensure_ascii=False)
 
 
@@ -2401,6 +2425,7 @@ class Server:
             "coderef_registry": self._registry,
             "coderef_prompt_governance": self._govern,
             "coderef_interpret": self._interpret,
+            "coderef_version": self._version,
         }
 
         # ─── 重型工具：默认后台执行 ───────────────────────────────────
@@ -2572,6 +2597,9 @@ class Server:
 
     def _scan_list(self):
         return _scan_list()
+
+    def _version(self, a: dict):
+        return _version(a)
 
     def _change_guard(self, a: dict):
         return _change_guard(a)
