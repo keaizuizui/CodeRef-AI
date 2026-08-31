@@ -350,7 +350,8 @@ class CodeKnowledgeGraph:
     # 构建
     # ═══════════════════════════════════════════════════════════════════
 
-    def build(self, analysis=None, ast_results=None, gitnexus_dir=None) -> dict:
+    def build(self, analysis=None, ast_results=None, gitnexus_dir=None,
+              exclude_dirs=None) -> dict:
         """
         构建知识图谱。
 
@@ -358,6 +359,9 @@ class CodeKnowledgeGraph:
             analysis: CodeAnalyzer.analyze_project() 返回值（ProjectAnalysis）
             ast_results: AstParser 批量解析结果 Dict[str, AstFileResult]
             gitnexus_dir: .gitnexus/csv/ 目录路径
+            exclude_dirs: 需排除的目录相对路径列表（如 ["_refactor_backup"]）。
+                目录下的文件不进入图谱，避免备份/镜像目录污染符号级真身判定、
+                循环与重复匹配。目录名按相对路径子串匹配（含路径分隔符边界）。
 
         Returns:
             {"nodes": N, "edges": M, "errors": [...]}
@@ -365,6 +369,8 @@ class CodeKnowledgeGraph:
         self._init_schema()
         self._clear()
         stats = {"nodes": 0, "edges": 0, "errors": []}
+        self._exclude_dirs = [d.replace("\\", "/").strip("/")
+                              for d in (exclude_dirs or []) if d]
 
         try:
             if analysis:
@@ -391,6 +397,21 @@ class CodeKnowledgeGraph:
         self._conn.execute("DELETE FROM edges")
         self._conn.execute("DELETE FROM meta")
 
+    def _is_excluded(self, rel: str) -> bool:
+        """判断相对路径是否位于排除目录下（含路径分隔符边界，防前缀误伤）。"""
+        if not self._exclude_dirs:
+            return False
+        # 绝对路径先归一化为相对 project_path 的路径（与 _module_key 一致）
+        rel_n = rel.replace("\\", "/")
+        if self.project_path and os.path.isabs(rel):
+            try:
+                rel_n = os.path.relpath(rel, self.project_path).replace("\\", "/")
+            except Exception:
+                pass
+        rel_n = rel_n.lstrip("./")
+        return any(rel_n == d or rel_n.startswith(d + "/")
+                   for d in self._exclude_dirs)
+
     def _set_meta(self, key: str, value: str):
         self._conn.execute(
             "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", (key, value))
@@ -410,6 +431,8 @@ class CodeKnowledgeGraph:
         for cf in getattr(analysis, "files", []):
             rel = getattr(cf, "file_path", "")
             if not rel:
+                continue
+            if self._is_excluded(rel):
                 continue
 
             # 模块节点（id 前缀用相对路径，跨目录同名文件不冲突）
@@ -466,6 +489,8 @@ class CodeKnowledgeGraph:
         """从 AstParser 批量解析结果构建调用关系和配置节点"""
         n = 0
         for file_path, ar in ast_results.items():
+            if self._is_excluded(file_path):
+                continue
             module_key = _module_key(self.project_path, file_path)
             rel = file_path
 
@@ -549,6 +574,10 @@ class CodeKnowledgeGraph:
             dirs[:] = [d for d in dirs if not d.startswith('.') and d not in
                        ('node_modules', 'venv', '.venv', 'env', '.git', 'dist',
                         'build', 'vendor')]
+            if self._exclude_dirs:
+                rel_root = os.path.relpath(root, project_path).replace("\\", "/")
+                dirs[:] = [d for d in dirs
+                           if not self._is_excluded(os.path.join(rel_root, d))]
             for fn in files:
                 if not fn.endswith('.go'):
                     continue
@@ -1035,10 +1064,12 @@ class CodeKnowledgeGraph:
 def build_knowledge_graph(project_path: str,
                           analysis=None,
                           ast_results=None,
-                          gitnexus_dir=None) -> CodeKnowledgeGraph:
+                          gitnexus_dir=None,
+                          exclude_dirs=None) -> CodeKnowledgeGraph:
     """构建并返回知识图谱实例"""
     kg = CodeKnowledgeGraph(project_path)
-    kg.build(analysis=analysis, ast_results=ast_results, gitnexus_dir=gitnexus_dir)
+    kg.build(analysis=analysis, ast_results=ast_results,
+             gitnexus_dir=gitnexus_dir, exclude_dirs=exclude_dirs)
     return kg
 
 

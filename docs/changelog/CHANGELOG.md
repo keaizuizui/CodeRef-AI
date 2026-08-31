@@ -4,6 +4,15 @@
 
 ---
 
+### v5.12.5 — 外部用户反馈驱动的可用性修复
+
+> 承接外部用户使用反馈（备份目录污染符号级判定 / target_modules 语义坑 / 异步轮询繁琐 / 大输出转义膨胀），4 项修复：
+> - **目录级排除**：`coderef_whitelist` 支持 `dir` 字段（目录相对路径），白名单目录不进入知识图谱符号级分析（真身判定/循环/重复匹配），备份/镜像目录不再污染生产代码判定。`_build_kg` 读取白名单 dir 条目传给图谱构建，`CodeKnowledgeGraph.build` 新增 `exclude_dirs` 参数（analysis/ast/go 三路过滤）。
+> - **target_modules 目录展开**：`coderef_arch_gap` 的 `_match_module_ids` 支持目录路径 spec 自动展开为该目录下全部模块（含子目录），不再因按目录写 target_modules 而误判游离。
+> - **wait 阻塞等待**：重型工具支持 `wait=true` 阻塞等待任务完成直接返回最终结果，免去手动轮询 `coderef_task_status`（`_call` 后台化分支增强）。
+> - **大结果落盘**：超过 10KB 的 JSON 结果自动落盘到 `cache/mcp_out/result_<hash>.json` 并返回文件路径+摘要，避免 MCP text 转义膨胀与超 64KB 限制（`_ok` 增强）。
+> - **版本号**：5.12.4 → 5.12.5（patch，反馈驱动修复，不改工具暴露面）。
+
 ### v5.12.4 — 治理断链 + 治理状态目录隔离
 
 > - **断链**：`health_dashboard` 对 `pipeline_runner` 的顶层运行时依赖改为 TYPE_CHECKING 类型引用 + 方法内延迟导入，消除模块级循环依赖（AST 级真实 import 扫描验证 core 层模块级依赖环归零）。

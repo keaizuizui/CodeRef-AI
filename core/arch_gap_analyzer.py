@@ -154,7 +154,9 @@ def _match_module_ids(nodes: Dict[str, dict], project_path: str,
     """把 target_modules specs 匹配到知识图谱 mod 节点 id 集合。
 
     匹配规则：相对路径精确匹配优先（module_of 结果），纯 basename spec 保留
-    basename 宽松兜底。idx 可传 _build_module_index 结果避免调用方重复全扫。
+    basename 宽松兜底。spec 若为目录路径（如 入口与启动），自动展开为该目录下
+    全部模块——避免用户按目录写 target_modules 时全部模块被判游离。
+    idx 可传 _build_module_index 结果避免调用方重复全扫。
     """
     by_rel, by_base = idx or _build_module_index(nodes, project_path)
     matched: Set[str] = set()
@@ -172,6 +174,13 @@ def _match_module_ids(nodes: Dict[str, dict], project_path: str,
             for nid, t in by_base.get(ns, ()):
                 if t == "module":
                     matched.add(nid)
+        # 目录 spec 自动展开：spec 是目录前缀时，纳入该目录下全部模块
+        # （含子目录），避免按目录写 target_modules 时误判游离。
+        for rel, entries in by_rel.items():
+            if rel.startswith(ns + "/"):
+                for nid, t in entries:
+                    if t == "module":
+                        matched.add(nid)
     return matched
 
 
