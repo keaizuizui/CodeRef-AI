@@ -565,6 +565,10 @@ def _build_kg(project_path: str, analysis) -> dict:
         if not os.path.isdir(gx):
             gx = None
 
+        # 白名单中的 dir 条目 → 图谱排除目录（备份/镜像目录不污染符号级判定）
+        exclude_dirs = [e["dir"] for e in whitelist_list(project_path)
+                        if e.get("dir")]
+
         # 批量 AST 解析 Python 文件
         ast_results = {}
         py_files = [cf for cf in getattr(analysis, "files", [])
@@ -592,7 +596,8 @@ def _build_kg(project_path: str, analysis) -> dict:
 
         kg = build_knowledge_graph(
             project_path, analysis=analysis,
-            ast_results=ast_results, gitnexus_dir=gx)
+            ast_results=ast_results, gitnexus_dir=gx,
+            exclude_dirs=exclude_dirs)
         return kg.get_stats()
     except Exception as e:
         return {"error": str(e)}
@@ -685,7 +690,9 @@ def whitelist_add(project_path: str, entries: List[dict]) -> int:
     """AI 可调用：添加白名单条目。返回新增数量。
 
     每个 entry 可含：file（匹配 file_path 子串）、rule（匹配 title 子串）、
-    category（匹配 category 子串）。三者 AND 逻辑。
+    category（匹配 category 子串）、dir（排除目录相对路径，作用于知识图谱
+    符号级分析——目录下文件不参与真身判定/循环/重复匹配）。file/rule/category
+    三者 AND 逻辑；dir 独立生效。
     """
     path = Pipe._whitelist_path(project_path)
     existing = []
@@ -696,7 +703,11 @@ def whitelist_add(project_path: str, entries: List[dict]) -> int:
         except: pass
     added = 0
     for e in entries:
-        entry = {k: str(v).lower() for k, v in e.items() if v}
+        entry = {}
+        for k in ("file", "rule", "category", "dir"):
+            v = e.get(k)
+            if v:
+                entry[k] = str(v).lower()
         if entry and entry not in existing:
             existing.append(entry)
             added += 1

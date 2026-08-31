@@ -150,7 +150,10 @@ BUILTIN_TOOLS: List[Dict] = [
                             "action=core_rules_get → 查看当前核心模块判定规则；\n"
                             "action=core_rules_set → 设置核心模块规则（entry_files入口文件名列表/core_names强制核心模块名/min_files文件数阈值）；\n"
                             "action=core_rules_reset → 重置为默认规则。\n"
-                            "你审查完报告后，把确认无误的误报条目写入白名单。发现 Wiki 漏了核心模块时，用 core_rules_set 追加。"
+                            "你审查完报告后，把确认无误的误报条目写入白名单。发现 Wiki 漏了核心模块时，用 core_rules_set 追加。\n"
+                            "【目录级排除】entry 带 dir 字段（目录相对路径，如 _refactor_backup）时，"
+                            "该目录下文件不进入知识图谱符号级分析（真身判定/循环/重复匹配），"
+                            "用于排除备份/镜像目录对生产代码的污染。"
                         ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
@@ -161,6 +164,7 @@ BUILTIN_TOOLS: List[Dict] = [
                                         "file": {"type": "string", "description": "文件路径子串"},
                                         "rule": {"type": "string", "description": "规则名/标题子串"},
                                         "category": {"type": "string", "description": "分类子串"},
+                                        "dir": {"type": "string", "description": "排除目录相对路径（作用于知识图谱符号级分析，如 _refactor_backup）"},
                                     }
                                 },
                                 "description": "要加入白名单的条目 (action=add 时必填)"
@@ -197,6 +201,7 @@ BUILTIN_TOOLS: List[Dict] = [
                             "project_path": {"type": "string", "description": "目标项目路径"},
                             "output_dir": {"type": "string", "description": "报告输出目录（默认 coderef-report/）"},
                             "background": {"type": "boolean", "description": "后台执行", "default": True},
+                            "wait": {"type": "boolean", "description": "阻塞等待任务完成，直接返回最终结果（免轮询 coderef_task_status）；默认 False 返回 task_id", "default": False},
                             "strategy": {"type": "string",
                                 "enum": ["auto", "full", "incr", "no_change"],
                                 "default": "auto",
@@ -215,6 +220,7 @@ BUILTIN_TOOLS: List[Dict] = [
                             "output_dir": {"type": "string", "description": "报告输出目录（默认 <project_path>/coderef-report/，可选外置）"},
                             "insight_llm": {"type": "boolean", "description": "架构洞察（管线/真身/重复）追加 LLM 人话总结（需配置 API Key，缺省静态结果完整可用）", "default": False},
                             "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                            "wait": {"type": "boolean", "description": "阻塞等待任务完成，直接返回最终结果（免轮询 coderef_task_status）；默认 False 返回 task_id", "default": False},
                         }, "required": ["project_path"]},
                     },
         {
@@ -2244,7 +2250,34 @@ def _query(a) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+_MCP_OUT_MAX = 10 * 1024  # 大结果落盘阈值：超过则写入文件，避免 MCP text 转义膨胀/超限
+
 def _ok(rid, text):
+    # 大 JSON 结果落盘：合法 JSON 且超过阈值时，写入 cache/mcp_out/ 并返回
+    # 文件路径 + 摘要，调用方用 Read 读文件而非解析层层转义的字符串。
+    if isinstance(text, str) and len(text) > _MCP_OUT_MAX:
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = None
+        if parsed is not None:
+            try:
+                import hashlib
+                out_dir = os.path.join(os.path.dirname(os.path.dirname(
+                    os.path.abspath(__file__))), "cache", "mcp_out")
+                os.makedirs(out_dir, exist_ok=True)
+                h = hashlib.md5(text.encode("utf-8")).hexdigest()[:12]
+                fp = os.path.join(out_dir, f"result_{h}.json")
+                with open(fp, "w", encoding="utf-8") as f:
+                    f.write(text)
+                summary = {
+                    "note": "结果较大，已落盘（避免 MCP 转义膨胀）。请用 Read 读取文件内容。",
+                    "file_path": fp,
+                    "chars": len(text),
+                }
+                text = json.dumps(summary, ensure_ascii=False)
+            except Exception:
+                pass  # 落盘失败则原样返回，不阻断
     return {"jsonrpc":"2.0","id":rid,"result":{"content":[{"type":"text","text":text}]}}
 class Server:
 
@@ -2437,6 +2470,17 @@ class Server:
                     tasks[tid] = {"thread":t,"result":rc,"tool":n,
                                   "started_at":time.time()}
                 logger.info(f"后台: {tid} {n}")
+                # wait=True → 阻塞等待任务完成，直接返回最终结果（免轮询）
+                if a.get("wait"):
+                    t.join()
+                    with self._locked_tasks() as tasks:
+                        tasks.pop(tid, None)
+                    if rc.get("error"):
+                        return self._ok(rid, json.dumps(
+                            {"status": "error", "error": rc["error"]},
+                            ensure_ascii=False))
+                    return self._ok(rid, rc.get("result") or json.dumps(
+                        {"status": "done", "task_id": tid}, ensure_ascii=False))
                 return self._ok(rid, json.dumps({"status":"running","task_id":tid,
                     "message":f"已启动。coderef_task_status(task_id='{tid}') 查询进度"}, ensure_ascii=False))
             return self._ok(rid, self._run(n, a))
