@@ -73,15 +73,15 @@
 
 ### v5.11.0 — 分层治理编排层落地：L2 完整化（收编执行增强层）+ L1 小阶段治理编排（coderef-probe）
 
-> 治理体系编排层落地路线 P1/P2：
-> - **P1 L2 主链完整化**（`skills/coderef-governance/SKILL.md`）：收编执行增强层进主链——
+> 治理体系编排层落地路线分两阶段：
+> - **阶段一：L2 主链完整化**（`skills/coderef-governance/SKILL.md`）：收编执行增强层进主链——
 >   ② define-target 引 `coderef_role_boundary`（符号级职责越界，与模块级差距互补）、
 >   ③ refactor-along 引 `coderef_refactor_plan`（差距→任务卡）+ `coderef_gov_pipeline`
 >   （治理自动化流水线：Fixing→任务卡→复验→Verified 半自动闭环）、④ verify-advance 引
 >   `coderef_arch_verify`（0-100 对齐度后验：职责对齐40%+依赖健康30%+业务覆盖20%+代码健康10%）。
 >   整改环节从「人工逐条手工改 + arch_gap 复查」升级为「gov_pipeline 半自动整改闭环 +
->   人拍板确认」，架构方向决策仍由人拍板（工具只做机械性归属动作）。主链工具 21 → 25。
-> - **P2 L1 小阶段治理编排**（新建 `skills/coderef-probe/SKILL.md`，零新工具纯文档编排）：
+>   人确认），架构方向决策仍由人确认（工具只做机械性归属动作）。主链工具 21 → 25。
+> - **阶段二：L1 小阶段治理编排**（新建 `skills/coderef-probe/SKILL.md`，零新工具纯文档编排）：
 >   变更驱动的探查链「触发→策略路由→增量探查→确定性核验→变更防护→降噪→登记/升级」——
 >   `gov_schedule`（定时触发）/ git hook（变更触发）→ `audit_advisor`（增量/全量路由）→
 >   `scan`/`audit`（增量探查）→ `verify_findings`（确定性核验 LLM/CodeRabbit 论断）→
@@ -707,7 +707,7 @@
 
 ### v4.9.4 — CodeRabbit 全量审查（67 条）修复闭环（4.X 系列收尾）
 
-- 对全仓库 89 个文件跑 CodeRabbit 全量审查，共 67 条 finding（major/minor），按两个并行组全部处理：官方 major 风险组 23 条、其余 minor 组 30 条、文档一致类与 core 小缺陷由主流程处理，`config/settings.py` 中开发者专属路径（目标工具/测试项目）按指示保留
+- 对全仓库 89 个文件跑 CodeRabbit 全量审查，共 67 条 finding（major/minor），按两个并行组全部处理：官方 major 风险组 23 条、其余 minor 组 30 条、文档一致类与 core 小缺陷由主流程处理，`config/settings.py` 中开发者专属路径（个人用例路径）按指示保留
 - 本轮主要修复项：
   - **图谱与调用链正确性**：`ast_signals` 仅模块级函数用裸名注册、类方法/嵌套函数用限定名，避免同名覆盖；`code_knowledge_graph` Go 处理跳过 `if(/len(` 等关键字避免误建 CALLS 边；`memory_layer` 覆盖率用文件集合判成员，`arch_audit` 递归模块经 self_edges 正确报为循环，`memory_quality` 识别 AsyncFunctionDef 并修正覆盖率守卫
   - **输入与输出健壮性**：`blind_spot_detector` 查询达 5000 行上限视为结果不完整而跳过（不把截断当完整）；`code_review` AST 上下文截断 + changed_lines 计入无换行末行；`wiki_generator` front matter 标量统一 YAML 双引号并转义；`pipeline_runner` 记忆同步仅增量策略触发、`_finding_to_dict/_from_dict` 持久化 count/locations
