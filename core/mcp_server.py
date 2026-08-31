@@ -658,7 +658,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         "action=transition + to_state 做流转；action=reject + reason(必留) 做豁免；\n"
                         "action=meta 更新优先级/负责人/截止/备注。每次流转写活动日志形成审计轨迹。\n"
                         "issue_id 为工作项 id。纯静态、确定性，不依赖 LLM。\n\n"
-                        "【参数动作速查（P2⑦）】\n"
+                        "【参数动作速查】\n"
                         "  transition：必填 issue_id + action='transition' + to_state（如 Confirmed→Fixing 传 to_state='Fixing'）\n"
                         "  reject    ：必填 issue_id + action='reject' + reason（豁免理由必留，缺省会报错）\n"
                         "  meta      ：必填 issue_id + action='meta' + 至少一项（priority/assignee/due_date/note）；to_state 会被忽略，无需传\n"
