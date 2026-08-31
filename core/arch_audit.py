@@ -258,35 +258,62 @@ def find_sccs(adj: Dict[str, List[str]]) -> List[List[str]]:
 
 
 def _module_layer(module_name: str) -> int:
-    """从模块相对路径首段推断分层（与 layer_of 同口径，供环边逆向标注）。"""
+    """从模块相对路径直接父目录推断分层（与 layer_of 同口径，供环边逆向标注）。
+
+    用直接父目录（parts[-2]）而非顶层目录（parts[0]）：嵌套路径
+    utils/internal/a.py 与 app/web/b.py 的分层应分别取 utils/app，
+    与 layer_of() 的 os.path.basename(os.path.dirname(fp)) 保持一致。
+    """
     parts = (module_name or "").replace("\\", "/").split("/")
-    parent = parts[0] if parts else ""
+    parent = parts[-2] if len(parts) > 1 else ""
     return _LAYER_ORDER.get(parent, _DEFAULT_LAYER)
 
 
+def _rebuild_cycle(prev: Dict[str, str], node: str, start: str) -> List[str]:
+    """沿前驱链回溯重建 start → ... → node → start 的环路径。"""
+    path = [node]
+    cur = node
+    while cur != start:
+        cur = prev[cur]
+        path.append(cur)
+    path.reverse()
+    path.append(start)
+    return path
+
+
 def _min_cycle_path(graph: Dict[str, List[str]], comp: List[str]) -> Optional[List[str]]:
-    """在强连通分量内找最短闭环（BFS，逐起点求回到自身的最短路径）。
+    """在强连通分量内找最短闭环（BFS + 前驱追踪）。
 
     外部反馈：cycle 只回超长模块列表，无法判断真伪。返回一条最小真环
     （模块名序列，首尾相同），供使用者一眼定位环的构成。
+    BFS 用 dist/prev 记录最短路径树，仅在命中返回边时回溯重建环，
+    避免为每个入队节点保存路径副本；加总探索工作量上限，保证大 SCC 下 audit 响应。
     """
     comp_set = set(comp)
     best = None
+    work_budget = max(20000, len(comp) * 2000)
     for start in comp:
-        queue = deque([(start, [start])])
-        seen = {start}
+        dist = {start: 0}
+        prev = {}
+        queue = deque([start])
         while queue:
-            node, path = queue.popleft()
+            node = queue.popleft()
+            if best is not None and dist[node] + 1 >= len(best):
+                continue  # 已无法比 best 更短，剪枝
             for nxt in graph.get(node, []):
                 if nxt not in comp_set:
                     continue
                 if nxt == start:
-                    if best is None or len(path) + 1 < len(best):
-                        best = path + [start]
+                    if best is None or dist[node] + 1 < len(best):
+                        best = _rebuild_cycle(prev, node, start)
                     continue
-                if nxt not in seen:
-                    seen.add(nxt)
-                    queue.append((nxt, path + [nxt]))
+                if nxt not in dist:
+                    dist[nxt] = dist[node] + 1
+                    prev[nxt] = node
+                    queue.append(nxt)
+                    work_budget -= 1
+                    if work_budget <= 0:
+                        return best
     return best
 
 
