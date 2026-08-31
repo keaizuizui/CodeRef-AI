@@ -87,7 +87,7 @@
 >   `scan`/`audit`（增量探查）→ `verify_findings`（确定性核验 LLM/CodeRabbit 论断）→
 >   `change_guard`+`change_report`（变更防护）→ `whitelist`（降噪）→ `gov_*`（登记/升级 L2）。
 >   闭环判定：增量回归=0（change_guard 无退化 + flow_verify 无 outside 新增）+ 白名单收敛。
->   与 CodeRabbit 边界（用户已拍板）：Coderef 自建完整探查链、不集成 CodeRabbit 编排；
+>   与 CodeRabbit 边界（编排定位已定）：Coderef 自建完整探查链、不集成 CodeRabbit 编排；
 >   `verify_findings` 仍可核验 CodeRabbit 论断（确定性核验差异化优势）。
 > - **编排结构**：L0 工具层（58 个）→ L1 小阶段治理（coderef-probe，变更驱动轻量）→
 >   L2 大阶段治理（coderef-governance，周期驱动五阶段）→ L3 资产沉淀（展望）。
@@ -348,7 +348,7 @@
 
 ### v5.6.5 — 画布层级导航「统计随视图联动」
 
-> 承接回归验证：导航入口/过滤/下钻/回退在真实浏览器实测中，
+> 回归验证发现：导航入口/过滤/下钻/回退在真实浏览器实测中，
 > 顶部「节点/连线/差距」统计恒为全量（537/2315/357）不随层级切换更新，被误判为"有入口、无行为"。
 
 - **定因**：`renderStats` 用 `nodes.length` / `edges.length` 全量 + 静态 `DATA.meta.summary`，
@@ -363,7 +363,7 @@
 
 ### v5.6.4 — 画布 L0→L3 逐层下钻导航
 
-> 承接回归验证：arch_canvas 把 537 节点全量平铺、只有三层泳道文本标签（不可交互），
+> 回归验证发现：arch_canvas 把 537 节点全量平铺、只有三层泳道文本标签（不可交互），
 > 无法"先整体后局部"逐层捋清（架构→模块→模块内逻辑→代码管线）再谈对齐/治理。
 > 堵点是结构性的（工具不承载层级导航），非测试侧手法问题。
 
@@ -384,7 +384,7 @@
 
 ### v5.6.3 — arch_gap 游离分档全量计数透出
 
-> 承接回归验证：arch_gap 游离分级 unmodeled 实盘 0 与冒烟 free=189/unmodeled=11 不一致。
+> 回归验证发现：arch_gap 游离分级 unmodeled 实盘 0 与冒烟 free=189/unmodeled=11 不一致。
 > 定因：**展示截断，非检测分支遗漏**——游离按 free 置顶排序，默认 `max_unassigned=50` 只展示
 > 前 50 条（全 free），unmodeled 全量被截断；冒烟 189+11=200 恰是 `max_unassigned=200` 的截断口径。
 > 实盘全量（真实项目 图谱 + target_arch v2）：free=189 / unmodeled=265 / total=454。
@@ -393,12 +393,12 @@
   free/unmodeled 计数，调用方不再受 `max_unassigned` 展示截断影响（此前 `_detect_unassigned` 已算
   出两档计数但 `analyze_gap` 未解包、summary 未透出，属上一轮半成品，本轮补齐）。
 - **展开参数口径说明**：控制游离列表展开的参数是 `max_unassigned`（默认 50），非 `limit`；
-  传 `limit` 不影响展开属调用方口径，已在本条目与响应册说明。
+  传 `limit` 不影响展开属调用方口径，已在本条目说明。
 - **版本号**：5.6.2 → 5.6.3（patch，游离全量计数透出）
 
 ### v5.6.2 — 治理主链改造批次四收尾：gov 事务原子性 + 场景化 Skill 封装
 
-> 承接治理主链与工具改造建议批次四最后两块：gov 状态机原子性/幂等性与
+> 治理主链与工具改造建议批次四最后两块收尾：gov 状态机原子性/幂等性与
 > 场景化 Skill 封装层（即「少而精工具链」物化）。至此 8 条改造点 +
 > 5 条建议全部收尾。
 
@@ -417,7 +417,7 @@
 
 ### v5.6.1 — 治理主链改造批次二三：arch_audit 真身透出 + gov_issues 去噪 + 记忆导出
 
-> 承接治理主链与工具改造建议批次二三四，让工具链沿治理主链更顺：真身判定信息直达
+> 治理主链与工具改造建议批次二三四收尾，让工具链沿治理主链更顺：真身判定信息直达
 > `arch_audit`、治理库封面不再被游离噪声淹没、超严格状态机有参数速查、记忆可导出为 Markdown
 > 供不支持的 LLM 界面复用。纯静态、确定性，全部不依赖 LLM。
 
@@ -435,14 +435,14 @@
 - **新增 coderef_operation_memory_export**：把操作记忆的 decision/convention/pitfall
   渲染导出为 Markdown（缺省 `<项目>/data/operation_memory/OPERATION_MEMORY.md`），供 attach 到
   不支持 MCP 的 LLM 界面（Claude Project / CustomGPT）；内置冲突检测——剥掉正/否定语气词后
-  主题核心相同的同类别条目若方向相反（如「禁止 X」vs「推荐 X」）标记潜在冲突，呼应双册对账防覆盖。
+  主题核心相同的同类别条目若方向相反（如「禁止 X」vs「推荐 X」）标记潜在冲突，防正反规则覆盖遗漏。
 - **意图路由轻量兜底**：通过各工具 description 的「适用/不适用」硬约束分场景定界，
   后续由场景化 Skill 封装整体路由；暂不做在线向量反射层（符合纯静态确定性原则）。
 - **版本号**：5.6.0 → 5.6.1（治理能力增强，走 minor）
 
 ### v5.6.0 — 治理主链改造批次一：arch_gap 新增重复类差距 + 游离真身区分
 
-> 承接治理主链与工具改造建议的第一批工具层改造，让 coderef 有能力**识别并排队治理清单里最该治理的「结构性锈蚀」**（重复/孪生/真游离），而非只盯单次变更。真实项目冒烟：识别出 20 个同构孪生（`duplicate`）与 7 组目录级重复（`directory_duplicate`，如 `shared/chart_engine` 与 `示例项目/chart_engine` 100% 同构）。
+> 治理主链与工具改造建议的第一批工具层改造收尾，让 coderef 有能力**识别并排队治理清单里最该治理的「结构性锈蚀」**（重复/孪生/真游离），而非只盯单次变更。真实项目冒烟：识别出 20 个同构孪生（`duplicate`）与 7 组目录级重复（`directory_duplicate`，如 `shared/chart_engine` 与 `示例项目/chart_engine` 100% 同构）。
 
 - **coderef_arch_gap 新增 `duplicate` 差距类型**：同构孪生——同名实现跨目录函数体相似度 ≥60%（复用 `arch_insight` 重复识别同一切词/相似度/通用名过滤逻辑，不重写），逐条给出符号、跨目录实现位置与相似度，作为可收敛的治理候选。
 - **coderef_arch_gap 新增 `directory_duplicate` 差距类型**：目录级重复——整目录与其他目录同构（文件清单 + 函数签名双指标），识别"同构孪生目录"（如多版本并存、主线与备份目录）。
