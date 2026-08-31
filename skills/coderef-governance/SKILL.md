@@ -1,14 +1,13 @@
 ---
 name: coderef-governance
-description: 治理主链场景化 Skill（外部建议 E 物化）。把 CodeRef-AI 的 58 个 MCP 工具收敛为「5 阶段 × 每阶段 2–5 个高频工具」的少而精工具链，让编程 AI 不必直面全部工具也能沿主链把屎山捋顺。当用户要做「架构治理 / 存量屎山收敛 / 重复与孪生治理 / 定期体检 / 治理工作项流转」时使用。核心逻辑：人工先捋对管线（map→target），编程 AI 照清单治理（refactor→verify），周期体检维持（health）。L2 大阶段治理编排（本 SKILL）+ L1 小阶段治理编排（`coderef-probe` SKILL，变更驱动探查/防护）+ L3 资产沉淀编排（`coderef-asset` SKILL，治理成果→资产）互补衔接。
+description: 治理主链场景化 Skill。把 CodeRef-AI 的 MCP 工具收敛为「5 阶段 × 每阶段 2–5 个高频工具」的少而精工具链，让编程 AI 不必直面全部工具也能沿主链把存量工程捋顺。当用户要做「架构治理 / 存量结构收敛 / 重复与孪生治理 / 定期体检 / 治理工作项流转」时使用。核心逻辑：人工先捋对管线（map→target），编程 AI 照清单治理（refactor→verify），周期体检维持（health）。L2 大阶段治理编排（本 SKILL）+ L1 小阶段治理编排（`coderef-probe` SKILL，变更驱动探查/防护）+ L3 资产沉淀编排（`coderef-asset` SKILL，治理成果→资产）互补衔接。
 ---
 
 # CodeRef 治理主链 · 少而精工具链（L2 大阶段治理编排）
 
-> 承接《建议书_治理主链与工具改造_20260826.md》§五「少而精工具链」与 §七 外部建议 E（场景化 Skill 封装层，P0 采纳）。
-> 目标：把 58 个 MCP 工具收敛成 **5 阶段 × 每阶段 2–5 个高频工具**，其余工具按需按名调用即可。
-> L2 编排定位：周期驱动的屎山系统性规整。已收编执行增强层（P1/P1 补）：② 引 `coderef_role_boundary`、③ 引 `coderef_refactor_plan`/`coderef_target_adopt`/`coderef_gov_pipeline`、④ 引 `coderef_arch_verify`——整改环节从「人工逐条手工改 + arch_gap 复查」升级为「游离一键纳入 + gov_pipeline 半自动整改闭环 + 人拍板确认」，但架构方向决策仍由人拍板（工具只做机械性归属动作）。
-> L3 衔接（P3）：治理成果——③ 抽出的可复用公共工具、⑤ 体检发现的高价值设计（多 workflow 采用）→ 沉淀走 `coderef-asset` SKILL（资产沉淀编排），避免成果随项目迁移流失。
+> 目标：把 MCP 工具收敛成 **5 阶段 × 每阶段 2–5 个高频工具**，其余工具按需按名调用即可。
+> L2 编排定位：周期驱动的存量工程系统性规整。整改环节通过「游离一键纳入 + gov_pipeline 半自动整改闭环 + 人拍板确认」完成，但架构方向决策仍由人拍板（工具只做机械性归属动作）。
+> L3 衔接：治理成果——③ 抽出的可复用公共工具、⑤ 体检发现的高价值设计（多 workflow 采用）→ 沉淀走 `coderef-asset` SKILL（资产沉淀编排），避免成果随项目迁移流失。
 
 ## 核心原则（必须遵守）
 
@@ -16,10 +15,10 @@ description: 治理主链场景化 Skill（外部建议 E 物化）。把 CodeRe
 2. **L0→L3 逐层捋清铁律（）**：捋管线必须按自顶向下顺序走完四层——**L0 架构总览**（这是什么业务/商店还是饭店/客人是谁）→ **L1 模块盘点**（厨房/卫生间/前台/大厅有哪些模块，按层聚焦）→ **L2 模块内逻辑**（点进"业务工具"看内部 N 步流程）→ **L3 代码管线**（从模块穿透到具体代码流转/调用链）。**未捋清 L0-L3 不得进入定标（define-target）与差距分析（arch_gap）**；画布默认全量平铺是"并列展示"，必须先经层级导航（L0/L1/L2/L3 视图 + 面包屑回退）逐层捋清后，才叠加差距高亮（差距开关默认折叠）。
 3. **结构性锈蚀 ≠ 回归复核**：`strategy=incr` 只用于「回归复核新增改动」；治理存量结构（重复/孪生/真身）必须走 `strategy=full` + 结构锈蚀扫描，否则双真身/重复库会被完全漏掉。
 4. **真身判定看 fan_in，不看可达性**：双孪生入口的 flow_verify 结果可能完全同构（孤本也调 shared 层）。判定活跃真身 vs 无调用者孤本，唯一可靠信号是 `architecture` P0-B 的 fan_in（who-calls-me）。
-5. **治理动作护栏**：任一治理动作前，确认目标不在 git 库/备份范围内（项目硬约束）；测试不写开发侧文件夹、编程 AI 不写测试侧文件夹，双册对账。
+5. **治理动作护栏**：任一治理动作前，确认目标不在 git 库/备份范围内（项目硬约束）；测试不写开发侧文件夹、编程 AI 不写测试侧文件夹。
 6. **闭环判定**：治理成功的量化信号 = `alignment.module_assigned` 上升 + gap 总数（尤其 unassigned/duplicate）下降 + `flow_verify` 期望链路 `outside` 收敛为 `ordered/in_pipeline`；大阶段收尾再叠加 `coderef_arch_verify` 对齐度四维（职责对齐/依赖健康/业务覆盖/代码健康）确认达标。
 
-## 意图 → 工具快速路由（外部 A 兜底，轻量版）
+## 意图 → 工具快速路由（轻量版）
 
 > 编程 AI 不确定该用哪个工具时，先查这张表。同义词/别名 → 主工具。
 
@@ -101,7 +100,7 @@ description: 治理主链场景化 Skill（外部建议 E 物化）。把 CodeRe
 3. `coderef_gov_transition` → 沿状态机推进（Detected→Confirmed→Fixing→Verified→Archived）。
 4. `coderef_gov_report`(action=report) → 单期报告 + 跨期趋势。
 
-**gov_transition 参数速查（P2⑦）**：
+**gov_transition 参数速查**：
 - `transition`：必填 issue_id + action='transition' + to_state（如 Confirmed→Fixing 传 to_state='Fixing'）
 - `reject`：必填 issue_id + action='reject' + reason（豁免理由必留，缺省会报错）
 - `meta`：必填 issue_id + action='meta' + 至少一项（priority/assignee/due_date/note）；**勿传 to_state**（否则报「需 provide to_state」）
