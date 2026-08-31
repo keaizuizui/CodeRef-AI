@@ -4,6 +4,12 @@
 
 ---
 
+### v5.12.4 — 治理断链 + 治理状态目录隔离
+
+> - **断链**：`health_dashboard` 对 `pipeline_runner` 的顶层运行时依赖改为 TYPE_CHECKING 类型引用 + 方法内延迟导入，消除模块级循环依赖（AST 级真实 import 扫描验证 core 层模块级依赖环归零）。
+> - **隔离**：`.gitignore` 新增 `.coderef/` 治理状态目录（含 governance.db / target_arch.json 等内部过程资料，不入库）。
+> - **版本号**：5.12.3 → 5.12.4（patch，治理改动，不改工具暴露面）。
+
 ### v5.12.3 — 合并操作记忆层 6 工具 → coderef_operation_memory
 
 > 操作记忆层工具收敛（OperationMemory 6→1）：
