@@ -89,7 +89,28 @@ def _module_key(project_path: str, rel: str) -> str:
     return os.path.splitext(rel)[0]
 
 
-def _collect_analysis_ids(analysis):
+def _is_excluded_path(rel: str, project_path: str, exclude_dirs) -> bool:
+    """判断相对路径是否位于排除目录下（含路径分隔符边界，防前缀误伤）。
+
+    模块级纯函数：供 _collect_analysis_ids 与 CodeKnowledgeGraph._is_excluded
+    复用同一套判定语义，避免 id 预收集与节点构造对排除目录判断不一致
+    （CodeRabbit major：排除目录下文件的模块/类 id 不得进入 mod_ids /
+    class_ids_by_name，否则 IMPORTS/INHERITS 边会引用被排除文件的节点）。
+    """
+    if not exclude_dirs:
+        return False
+    rel_n = rel.replace("\\", "/")
+    if project_path and os.path.isabs(rel):
+        try:
+            rel_n = os.path.relpath(rel, project_path).replace("\\", "/")
+        except Exception:
+            pass
+    rel_n = rel_n.lstrip("./")
+    return any(rel_n == d or rel_n.startswith(d + "/")
+               for d in exclude_dirs)
+
+
+def _collect_analysis_ids(analysis, exclude_dirs=None):
     """预收集项目内模块节点 id 与「类名→类节点 id」映射。
 
     mod_ids 供 IMPORTS 边过滤：仅当 import 目标是项目内真实存在的模块才建边，
@@ -98,17 +119,20 @@ def _collect_analysis_ids(analysis):
     class_ids_by_name 供 INHERITS 边做与 IMPORTS 一致的目标存在性过滤：仅当
     基类是项目内已注册的类才建边，排除 str/Enum/unittest.TestCase/HTMLParser
     等标准库或第三方基类，避免指向不存在节点的孤儿 INHERITS 边。
+    exclude_dirs 传入时，被排除目录下的文件不进入 id 集合（与节点构造一致）。
     """
     proj = getattr(analysis, "project_path", "") or ""
+    excl = exclude_dirs or []
     mod_ids = {
         f"mod:{_module_key(proj, getattr(cf, 'file_path', ''))}"
         for cf in getattr(analysis, "files", [])
         if getattr(cf, "file_path", "")
+        and not _is_excluded_path(getattr(cf, "file_path", ""), proj, excl)
     }
     class_ids_by_name: Dict[str, str] = {}
     for cf in getattr(analysis, "files", []):
         _rel = getattr(cf, "file_path", "")
-        if not _rel:
+        if not _rel or _is_excluded_path(_rel, proj, excl):
             continue
         _key = _module_key(proj, _rel)
         for _cls in getattr(cf, "classes", []):
@@ -398,19 +422,8 @@ class CodeKnowledgeGraph:
         self._conn.execute("DELETE FROM meta")
 
     def _is_excluded(self, rel: str) -> bool:
-        """判断相对路径是否位于排除目录下（含路径分隔符边界，防前缀误伤）。"""
-        if not self._exclude_dirs:
-            return False
-        # 绝对路径先归一化为相对 project_path 的路径（与 _module_key 一致）
-        rel_n = rel.replace("\\", "/")
-        if self.project_path and os.path.isabs(rel):
-            try:
-                rel_n = os.path.relpath(rel, self.project_path).replace("\\", "/")
-            except Exception:
-                pass
-        rel_n = rel_n.lstrip("./")
-        return any(rel_n == d or rel_n.startswith(d + "/")
-                   for d in self._exclude_dirs)
+        """判断相对路径是否位于排除目录下（复用模块级 _is_excluded_path）。"""
+        return _is_excluded_path(rel, self.project_path, self._exclude_dirs)
 
     def _set_meta(self, key: str, value: str):
         self._conn.execute(
@@ -425,7 +438,8 @@ class CodeKnowledgeGraph:
         _kg_*_node / _resolve_import_target 纯函数，本方法仅作编排，
         节点/边内容与建边过滤语义与拆分前逐字段一致。
         """
-        mod_ids, class_ids_by_name = _collect_analysis_ids(analysis)
+        mod_ids, class_ids_by_name = _collect_analysis_ids(
+            analysis, exclude_dirs=self._exclude_dirs)
         proj = getattr(analysis, "project_path", "") or ""
         n = 0
         for cf in getattr(analysis, "files", []):
@@ -689,6 +703,10 @@ class CodeKnowledgeGraph:
                         tgt = row.get("to", "")
                         rtype = row.get("type", "")
                         if src and tgt:
+                            # 排除目录下的引用不建边（GitNexus ID 常含路径，
+                            # 指向备份/镜像目录的边会污染符号级判定，CodeRabbit major）
+                            if self._ref_is_excluded(src) or self._ref_is_excluded(tgt):
+                                continue
                             # GitNexus 的 ID 可能含路径，我们尝试匹配
                             src_id = self._find_or_create_ref(src)
                             tgt_id = self._find_or_create_ref(tgt)
@@ -800,6 +818,16 @@ class CodeKnowledgeGraph:
                ORDER BY (end_line - start_line) ASC LIMIT 1""",
             (file_path, line, line)).fetchone()
         return row["id"] if row else None
+
+    def _ref_is_excluded(self, name: str) -> bool:
+        """判断 GitNexus 引用名是否指向被排除目录下的符号。
+
+        引用名含路径分隔符时按路径判定；纯符号名（函数/类名）无法判断
+        路径归属，保守放行避免误杀正常引用。
+        """
+        if "/" not in name and "\\" not in name:
+            return False
+        return self._is_excluded(name)
 
     def _find_or_create_ref(self, name: str) -> str:
         """查找或创建引用节点（用于 GitNexus 关系）；引用名称精确匹配，
