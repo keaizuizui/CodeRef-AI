@@ -106,7 +106,7 @@ OMEM_ENV_TOOL_ROOTS = (
     # ── 个人化工具根（项目内嵌解释器 / 私有 test venv）──────────────────
     # 不再硬编码到版本库：由环境变量 CODEREF_EXTRA_TOOL_ROOTS（分号分隔 glob）
     # 或 config/config.json 的 extra_tool_roots 字段注入，保持代码库通用。
-    # 例：CODEREF_EXTRA_TOOL_ROOTS="~/Desktop/目标工具/目标工具;C:/my/venvs/*"
+    # 例：CODEREF_EXTRA_TOOL_ROOTS="~/env/tools/root1;C:/my/venvs/*"
 )
 
 # 个人化工具根的环境变量名（分号分隔的 glob 列表，最高优先级）
@@ -143,7 +143,7 @@ def omem_extra_tool_roots():
     return extra
 
 # 便携根下的 bin 子目录名（相对便携根）
-# "python" 用于 目标工具 内嵌解释器（位于 <root>/python/python.exe）
+# "python" 用于自建工具根的内嵌解释器（位于 <root>/python/python.exe）
 OMEM_ENV_TOOL_BIN_SUBDIRS = ("bin", "cmd", "mingw64/bin", "usr/bin", "Scripts", "python")
 
 # WSL 子系统内工具清单（如 coderabbit 住在 WSL 的 /root/.local/bin）。
