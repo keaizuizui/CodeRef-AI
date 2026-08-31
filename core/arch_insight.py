@@ -101,9 +101,9 @@ def _contract_compatible(a: Dict, b: Dict) -> bool:
     if len(pa) != len(pb):
         return False
     if pa and pb:
-        sa, sb = set(pa), set(pb)
-        sim = len(sa & sb) / len(sa | sb)
-        if sim < 0.6:
+        # 保序比较：逐位置一致率（set 会丢失参数顺序，如 (a,b) vs (b,a) 被误判一致）
+        pos_hit = sum(1 for x, y in zip(pa, pb) if x == y)
+        if pos_hit / len(pa) < 0.6:
             return False
     ra = (a.get("return_type") or "").strip()
     rb = (b.get("return_type") or "").strip()
@@ -123,9 +123,10 @@ def _partition_copies(copies: List[Dict], sim_threshold: float):
     for c in copies:
         best_idx, best_sim = -1, 0.0
         for i, cl in enumerate(clusters):
+            # 候选须与簇内所有成员契约兼容，防止经单个兼容成员混入契约不同的副本
+            if not all(_contract_compatible(c, m) for m in cl):
+                continue
             for m in cl:
-                if not _contract_compatible(c, m):
-                    continue
                 s = _jaccard(c["body"], m["body"])
                 if s > best_sim:
                     best_sim, best_idx = s, i
