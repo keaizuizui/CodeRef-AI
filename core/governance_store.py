@@ -473,7 +473,7 @@ class GovernanceStore:
         if view == "recent":
             sql += " ORDER BY last_seen DESC"
         else:
-            # P1⑥（建议书）：high/open/all 默认视图按真实 severity 排序、unassigned 置底。
+            # 视图排序增强：high/open/all 默认视图按真实 severity 排序、unassigned 置底。
             # 避免封面被游离/噪声刷屏、治理重点（god/cycle/duplicate）被埋没。
             # severity 序 high>medium>low；gap_type=unassigned 一律置底；其余按 last_seen 稳定。
             sql += (

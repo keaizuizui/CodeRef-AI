@@ -1298,7 +1298,7 @@ class OperationMemory:
 
     def export_markdown(self, project_path: str,
                         output_path: str = "") -> dict:
-        """外部 B（建议书）：把操作记忆导出为 Markdown 知识库 + 冲突检测。
+        """外部导出：把操作记忆导出为 Markdown 知识库 + 冲突检测。
 
         - 导出：decision/convention/pitfall 三段渲染为 Markdown，供 attach 到
           不支持 MCP 的 LLM 界面（Claude Project / CustomGPT 等），打破"记忆只
