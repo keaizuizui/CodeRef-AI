@@ -707,7 +707,9 @@ def whitelist_add(project_path: str, entries: List[dict]) -> int:
         for k in ("file", "rule", "category", "dir"):
             v = e.get(k)
             if v:
-                entry[k] = str(v).lower()
+                # dir 是目录相对路径，保留原始大小写（Linux 区分大小写）；
+                # file/rule/category 为匹配子串，统一小写归一
+                entry[k] = str(v) if k == "dir" else str(v).lower()
         if entry and entry not in existing:
             existing.append(entry)
             added += 1

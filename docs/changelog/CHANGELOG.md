@@ -11,6 +11,7 @@
 > - **target_modules 目录展开**：`coderef_arch_gap` 的 `_match_module_ids` 支持目录路径 spec 自动展开为该目录下全部模块（含子目录），不再因按目录写 target_modules 而误判游离。
 > - **wait 阻塞等待**：重型工具支持 `wait=true` 阻塞等待任务完成直接返回最终结果，免去手动轮询 `coderef_task_status`（`_call` 后台化分支增强）。
 > - **大结果落盘**：超过 10KB 的 JSON 结果自动落盘到 `cache/mcp_out/result_<hash>.json` 并返回文件路径+摘要，避免 MCP text 转义膨胀与超 64KB 限制（`_ok` 增强）。
+> - **CodeRabbit 复审收尾**（9 项 finding）：`dir` 白名单保留原始大小写（Linux 路径匹配）；`target_modules` 目录展开建 `by_dir` 前缀索引（O(1) 查索引 + 文件 spec 不误配子路径）；`coderef_docs_read` 大正文豁免落盘；`wait=true` 阻塞等待加 300s 有界超时（超时返回 task_id 供轮询）；知识图谱排除目录语义统一到 `_collect_analysis_ids` 与 GitNexus 引用（排除目录下模块/类 id 不进入 IMPORTS/INHERITS 目标集合）；重型工具 schema 统一暴露 `wait` 参数；大结果落盘加 TTL/数量上限 + 原子替换。
 > - **版本号**：5.12.4 → 5.12.5（patch，反馈驱动修复，不改工具暴露面）。
 
 ### v5.12.4 — 治理断链 + 治理状态目录隔离

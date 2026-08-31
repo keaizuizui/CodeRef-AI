@@ -2251,11 +2251,49 @@ def _query(a) -> str:
 
 
 _MCP_OUT_MAX = 10 * 1024  # 大结果落盘阈值：超过则写入文件，避免 MCP text 转义膨胀/超限
+_MCP_OUT_TTL = 3600       # 落盘结果保留时长（秒），过期文件在下次写入时清理
+_MCP_OUT_MAX_FILES = 200  # 落盘结果目录内最多保留文件数，超出按最旧淘汰
+_WAIT_TIMEOUT = 300       # wait=true 阻塞等待上限（秒），超时返回 task_id 供轮询
 
-def _ok(rid, text):
+
+def _prune_mcp_out(out_dir: str):
+    """有界保留落盘结果：清理过期文件，超出数量上限时按最旧淘汰。"""
+    try:
+        now = time.time()
+        files = []
+        for fn in os.listdir(out_dir):
+            fp = os.path.join(out_dir, fn)
+            if not os.path.isfile(fp):
+                continue
+            try:
+                age = now - os.path.getmtime(fp)
+            except Exception:
+                age = _MCP_OUT_TTL + 1
+            if age > _MCP_OUT_TTL:
+                try:
+                    os.remove(fp)
+                except Exception:
+                    pass
+            else:
+                files.append(fp)
+        if len(files) > _MCP_OUT_MAX_FILES:
+            files.sort(key=lambda p: os.path.getmtime(p))
+            for fp in files[:-_MCP_OUT_MAX_FILES]:
+                try:
+                    os.remove(fp)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def _ok(rid, text, tool=None):
     # 大 JSON 结果落盘：合法 JSON 且超过阈值时，写入 cache/mcp_out/ 并返回
     # 文件路径 + 摘要，调用方用 Read 读文件而非解析层层转义的字符串。
-    if isinstance(text, str) and len(text) > _MCP_OUT_MAX:
+    # coderef_docs_read 返回文档正文（可能恰好是 JSON 大文本），保留直接
+    # content 字段不被落盘替换（CodeRabbit major）。
+    if (isinstance(text, str) and len(text) > _MCP_OUT_MAX
+            and tool != "coderef_docs_read"):
         try:
             parsed = json.loads(text)
         except Exception:
@@ -2266,10 +2304,13 @@ def _ok(rid, text):
                 out_dir = os.path.join(os.path.dirname(os.path.dirname(
                     os.path.abspath(__file__))), "cache", "mcp_out")
                 os.makedirs(out_dir, exist_ok=True)
+                _prune_mcp_out(out_dir)
                 h = hashlib.md5(text.encode("utf-8")).hexdigest()[:12]
                 fp = os.path.join(out_dir, f"result_{h}.json")
-                with open(fp, "w", encoding="utf-8") as f:
+                tmp = f"{fp}.{os.getpid()}.tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
                     f.write(text)
+                os.replace(tmp, fp)  # 原子替换，避免半写文件被读到
                 summary = {
                     "note": "结果较大，已落盘（避免 MCP 转义膨胀）。请用 Read 读取文件内容。",
                     "file_path": fp,
@@ -2444,6 +2485,19 @@ class Server:
                 if note:
                     t = dict(t)
                     t["description"] = (t.get("description", "") + note).strip()
+                # 重型工具统一暴露 wait 参数（wait=true 阻塞等待直接返回结果，
+                # 免轮询 coderef_task_status），与 _call 的实际行为对齐（CodeRabbit minor）
+                if t["name"] in self.HEAVY_TOOLS:
+                    t = dict(t)
+                    schema = t.get("inputSchema") or {}
+                    props = schema.get("properties")
+                    if isinstance(props, dict) and "wait" not in props:
+                        props = dict(props)
+                        props["wait"] = {"type": "boolean",
+                                         "description": "阻塞等待任务完成，直接返回最终结果（免轮询 coderef_task_status）；默认 False 返回 task_id",
+                                         "default": False}
+                        t["inputSchema"] = dict(schema)
+                        t["inputSchema"]["properties"] = props
                 tools.append(t)
             return {"jsonrpc":"2.0","id":rid,"result":{"tools":tools}}
         if m == "tools/call":
@@ -2455,9 +2509,9 @@ class Server:
         try:
             # 状态查询/取消永远同步返回，不后台化
             if n == "coderef_task_status":
-                return self._ok(rid, self._tsk(a))
+                return self._ok(rid, self._tsk(a), tool=n)
             if n == "coderef_task_cancel":
-                return self._ok(rid, self._task_cancel(a))
+                return self._ok(rid, self._task_cancel(a), tool=n)
             # 未知工具提前拦截，避免落入 _run 才报"未知"
             if n not in self._handlers and n not in ("coderef_audit", "coderef_docs"):
                 return {"jsonrpc":"2.0","id":rid,"error":{"code":-32602,"message":f"未知工具: {n}"}}
@@ -2470,20 +2524,27 @@ class Server:
                     tasks[tid] = {"thread":t,"result":rc,"tool":n,
                                   "started_at":time.time()}
                 logger.info(f"后台: {tid} {n}")
-                # wait=True → 阻塞等待任务完成，直接返回最终结果（免轮询）
+                # wait=True → 阻塞等待任务完成，直接返回最终结果（免轮询）。
+                # 有界超时：挂起的审计/LLM/文件操作不能无限阻塞串行 MCP 请求循环
+                # （CodeRabbit major），超时返回 task_id 供调用方轮询。
                 if a.get("wait"):
-                    t.join()
+                    t.join(timeout=_WAIT_TIMEOUT)
+                    if t.is_alive():
+                        return self._ok(rid, json.dumps(
+                            {"status": "running", "task_id": tid,
+                             "note": "等待超时，任务仍在后台运行，请用 coderef_task_status 查询"},
+                            ensure_ascii=False), tool=n)
                     with self._locked_tasks() as tasks:
                         tasks.pop(tid, None)
                     if rc.get("error"):
                         return self._ok(rid, json.dumps(
                             {"status": "error", "error": rc["error"]},
-                            ensure_ascii=False))
+                            ensure_ascii=False), tool=n)
                     return self._ok(rid, rc.get("result") or json.dumps(
-                        {"status": "done", "task_id": tid}, ensure_ascii=False))
+                        {"status": "done", "task_id": tid}, ensure_ascii=False), tool=n)
                 return self._ok(rid, json.dumps({"status":"running","task_id":tid,
-                    "message":f"已启动。coderef_task_status(task_id='{tid}') 查询进度"}, ensure_ascii=False))
-            return self._ok(rid, self._run(n, a))
+                    "message":f"已启动。coderef_task_status(task_id='{tid}') 查询进度"}, ensure_ascii=False), tool=n)
+            return self._ok(rid, self._run(n, a), tool=n)
         except Exception as e:
             return {"jsonrpc":"2.0","id":rid,"error":{"code":-32000,"message":str(e)}}
 
@@ -2892,8 +2953,8 @@ class Server:
     def _query(self, a):
         return _query(a)
 
-    def _ok(self, rid, text):
-        return _ok(rid, text)
+    def _ok(self, rid, text, tool=None):
+        return _ok(rid, text, tool=tool)
 
     def run(self):
         # 强制 stdin/stdout 为 UTF-8，解决 Windows 下中文参数/输出乱码

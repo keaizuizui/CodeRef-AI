@@ -131,22 +131,27 @@ def _norm_spec(spec: str) -> str:
 def _build_module_index(nodes: Dict[str, dict], project_path: str):
     """预构建模块匹配索引，避免每个 spec 都全量扫描 nodes 并重复 module_of/relpath。
 
-    返回 (by_rel, by_base)：相对路径 → [(nid, type)]、basename → [(nid, type)]。
+    返回 (by_rel, by_base, by_dir)：相对路径 → [(nid, type)]、basename → [(nid, type)]、
+    目录前缀 → [(nid, type)]（模块 rel 的每一级父目录都登记，供目录 spec 自动展开）。
     CodeRabbit 三轮 major：模板生成数以千计的模块级 spec，逐 spec 全扫节点会退化为
     O(specs×nodes) 的 relpath 调用；一次建索引后按 key O(1) 查找。
     """
     by_rel: Dict[str, List[tuple]] = defaultdict(list)
     by_base: Dict[str, List[tuple]] = defaultdict(list)
+    by_dir: Dict[str, List[tuple]] = defaultdict(list)
     for nid, n in nodes.items():
         if n.get("type") not in ("module", "go_func"):
             continue
         rel = module_of(n, project_path)
         if rel:
             by_rel[rel].append((nid, n.get("type")))
+            parts = rel.split("/")
+            for i in range(1, len(parts)):
+                by_dir["/".join(parts[:i])].append((nid, n.get("type")))
         name = n.get("name")
         if name:
             by_base[name].append((nid, n.get("type")))
-    return by_rel, by_base
+    return by_rel, by_base, by_dir
 
 
 def _match_module_ids(nodes: Dict[str, dict], project_path: str,
@@ -158,9 +163,10 @@ def _match_module_ids(nodes: Dict[str, dict], project_path: str,
     全部模块——避免用户按目录写 target_modules 时全部模块被判游离。
     idx 可传 _build_module_index 结果避免调用方重复全扫。
     """
-    by_rel, by_base = idx or _build_module_index(nodes, project_path)
+    by_rel, by_base, by_dir = idx or _build_module_index(nodes, project_path)
     matched: Set[str] = set()
     for spec in specs:
+        raw = (spec or "").strip().replace("\\", "/")
         ns = _norm_spec(spec)
         if not ns:
             continue
@@ -174,13 +180,14 @@ def _match_module_ids(nodes: Dict[str, dict], project_path: str,
             for nid, t in by_base.get(ns, ()):
                 if t == "module":
                     matched.add(nid)
-        # 目录 spec 自动展开：spec 是目录前缀时，纳入该目录下全部模块
-        # （含子目录），避免按目录写 target_modules 时误判游离。
-        for rel, entries in by_rel.items():
-            if rel.startswith(ns + "/"):
-                for nid, t in entries:
-                    if t == "module":
-                        matched.add(nid)
+        # 目录 spec 自动展开：by_dir 只登记「确有模块位于该目录前缀下」的 key，
+        # 且 O(1) 查索引而非逐 spec 全扫 by_rel（CodeRabbit 性能 major）。
+        # 原始 spec 以 .py 结尾视为文件路径，跳过展开——否则 foo/bar.py 归一化后
+        # 与目录 foo/bar 撞名，会误配 foo/bar/child.py（CodeRabbit major）。
+        if not raw.endswith(".py"):
+            for nid, t in by_dir.get(ns, ()):
+                if t == "module":
+                    matched.add(nid)
     return matched
 
 
@@ -199,7 +206,7 @@ def _module_exists(project_path: str, spec: str, nodes: Dict[str, dict],
         p = os.path.join(project_path, cand.replace("/", os.sep))
         if os.path.isfile(p) or os.path.isdir(p):
             return True
-    by_rel, by_base = idx or _build_module_index(nodes, project_path)
+    by_rel, by_base, _ = idx or _build_module_index(nodes, project_path)
     if by_rel.get(ns):
         return True
     # 与 _match_module_ids 对齐：含路径分隔符的 spec 不做 basename 兜底，
