@@ -147,16 +147,10 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 > 提示：git 常不在 PATH，先 `coderef_operation_memory (action=recover)` 从操作记忆取 git 工具定位（含 WSL 内工具），
 > 取不到再 `Get-Command git` / `where git` 探测后用 `git_bin` 传入。
 
-### 工作流 D：复刻一个值得复用的设计到另一个项目
-> 顺序遵「先评审后固化」：确认真创新 + canonical 归一后才可 commit，禁止提交未经评审的设计（与 governance G2 成果沉淀链一致）。
-```
-1. coderef_innovation (project_path=源) → 识别创新
-2. coderef_innovation_review → LLM 复查是否真创新（需 API Key）
-3. coderef_registry (action=list) → 确认 canonical
-4. coderef_asset (action=commit) → 固化为资产
-5. coderef_replicate (project_path=目标, canonical=...) → 复刻铺排
-6. coderef_replicate_apply → 落地到目标项目
-```
+### 工作流 D：复刻一个值得复用的设计到另一个项目（→ 转场 coderef-asset）
+
+> **转场**：创新识别 / 资产复刻 / 设计沉淀等资产生命周期请求 → **转场到 `coderef-asset`（L3）承接**，不在本 skill 重复编排（与顶层入口判定一致，见上表）。
+> asset 主链已含正确顺序：先 `innovation_review` 排查确认 → `registry`(alias/add) 归一 canonical → `asset`(commit) 固化 → 才到 `replicate`/`replicate_apply` 复刻地板。**禁止绕过 asset 直接在本 skill 做 commit/复刻。**
 
 ### 工作流 E：上下文丢失后恢复项目记忆（强制 gate）
 > **强制前置**：涉及 git / push / CodeRabbit / Release 等工具或约定类操作时，必须先走本工作流。
