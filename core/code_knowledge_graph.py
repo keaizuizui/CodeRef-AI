@@ -109,6 +109,12 @@ def _is_excluded_path(rel: str, project_path: str, exclude_dirs) -> bool:
     # lstrip("./") 会把 .cache 剥成 cache，导致排除匹配失效（CodeRabbit major）
     while rel_n.startswith("./"):
         rel_n = rel_n[2:]
+    # 目录名精确匹配任意层级：排除条目为纯目录名（如 _refactor_backup）时，
+    # 任意子目录下的同名目录也命中（core/_refactor_backup 同样排除），
+    # 保证 innovation/wiki/gov 等全校工具与 arch_* 共享同一排除口径。
+    if any("/" not in d and ("/" + d + "/") in ("/" + rel_n + "/")
+           for d in exclude_dirs):
+        return True
     return any(rel_n == d or rel_n.startswith(d + "/")
                for d in exclude_dirs)
 

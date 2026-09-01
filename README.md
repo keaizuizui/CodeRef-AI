@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.12.8** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.12.9** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -405,14 +405,14 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 ## 更新日志
 
-> 4.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.12.8）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
+> 4.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.12.9）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.12.8 — 外部用户试用反馈驱动的治理精度修复
+### 当前版本 v5.12.9 — 外部用户反馈驱动的可用性修复
 
-> 承接外部用户试用反馈（gov_start 不吃 whitelist 目录排除 / flow_verify 对 self.method() 调用边覆盖不全），2 项修复：
-> - **whitelist 目录排除实时生效**：`coderef_arch_gap` 动态读取 whitelist 的 `dir` 条目，加载图谱后实时过滤排除目录下的节点与 CALLS 边——即使图谱是 whitelist 配置前构建的旧图，备份/镜像目录噪声也不再重入治理工作项（unassigned / duplicate 差距）。
-> - **self.method() 调用边落到方法节点**：`_find_containing_node` 同区间 method 优先于 function——类方法同时注册为 func 与 method 两个节点时，调用边正确关联到方法节点，`coderef_flow_verify` 的 method 入口下游闭包不再断裂。
-> - **版本号**：5.12.7 → 5.12.8（patch，反馈驱动修复，不改工具暴露面）。
+> 承接外部用户试用反馈（innovation_review/interpret 无 LLM Key 时卡 pending 空转 / _refactor_backup 备份目录污染 adopters 列表与 wiki），2 项修复：
+> - **无有效 LLM Key 快速阻断**：`is_available()` 不再把占位符/示例 Key（ollama、sk-xxx 等）误判为可用；`chat_completion` 对占位符 Key 直接返回结构化错误、不发起真实请求；客户端超时从 120s 收紧为「连接 10s + 总 60s」，网络不通时不再空转 1 分多钟。innovation_review / interpret / wiki 等依赖 LLM 的入口在无有效 Key 时立即给确定性摘要并明确告知。
+> - **whitelist dir 排除覆盖全校工具**：`_is_excluded_path` 增强为「目录名任意层级匹配」（排除 `_refactor_backup` 时，`core/_refactor_backup` 同样命中），innovation 签名收集、wiki 模块发现、governance 三处扫描统一接入 whitelist 动态排除，与 arch_* 共享同一排除口径——备份/镜像目录噪声不再进入 adopters 列表、wiki 文档与治理审计。
+> - **版本号**：5.12.8 → 5.12.9（patch，反馈驱动修复，不改工具暴露面）。
 
 ---
 
