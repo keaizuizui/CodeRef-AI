@@ -28,6 +28,8 @@ from typing import Dict, List, Optional
 
 from loguru import logger
 
+from core.graph_closure import filter_excluded
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 公共：图谱就绪 + FlowVerifier
@@ -609,7 +611,8 @@ def _dir_isomorph_insight(project_path: str, fv, max_pairs: int = 10,
 
 
 def duplicate_insight(project_path: str, db_path: Optional[str] = None,
-                      max_clusters: int = 20, sim_threshold: float = 0.6) -> Dict:
+                      max_clusters: int = 20, sim_threshold: float = 0.6,
+                      exclude_dirs: Optional[List[str]] = None) -> Dict:
     """P0-C：重复/同构识别（ 业务级增强）。
 
     同名函数/方法跨模块（不同目录）实现 → 先按函数体相似度分区：
@@ -618,11 +621,21 @@ def duplicate_insight(project_path: str, db_path: Optional[str] = None,
       仅同名、契约可能不同，不推荐合并）
     过滤通用方法名噪音（__init__/to_dict 等），并附加目录级同构比对
     （dir_isomorph: 文件清单 + 函数签名相似度，识别全目录同构重复）。
+    exclude_dirs: 需排除的目录相对路径列表（whitelist dir 实时生效，
+        加载图谱后过滤，避免旧图谱未排除的备份目录噪声进入重复识别）。
     返回 {"ok", "clusters":[...], "dir_isomorph":[...]}。
     """
     fv = _verifier(project_path, db_path)
     if fv is None:
         return {"ok": False, "clusters": [], "dir_isomorph": []}
+    if exclude_dirs:
+        fv.nodes, _ = filter_excluded(fv.nodes, fv.adj, project_path, exclude_dirs)
+        # 重建名称索引，保证过滤后索引与节点集一致
+        fv.name_index = defaultdict(list)
+        for nid, n in fv.nodes.items():
+            fv.name_index[n["name"].lower()].append(nid)
+            if "." in n["name"]:
+                fv.name_index[n["name"].split(".")[-1].lower()].append(nid)
 
     by_name: Dict[str, List[str]] = defaultdict(list)
     for nid, n in fv.nodes.items():

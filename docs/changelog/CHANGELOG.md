@@ -4,6 +4,14 @@
 
 ---
 
+### v5.12.8 — 外部用户试用反馈驱动的治理精度修复
+
+> 承接外部用户试用反馈（《CodeRef-缺陷反馈稿》试用轮）：gov_start 不吃 whitelist 目录排除（备份噪声在治理工作项重出现）/ flow_verify 对 self.method() 调用边覆盖不全，2 项修复：
+> - **whitelist 目录排除实时生效（gov_start 不吃排除）**：`coderef_arch_gap` 的 `analyze_gap` 新增 `_whitelist_exclude_dirs` 动态读取 whitelist 的 `dir` 条目，加载图谱后经 `filter_excluded` 实时过滤排除目录下的节点与 CALLS 边——即使图谱是 whitelist 配置前构建的旧图（不重建），备份/镜像目录噪声也不再重入治理工作项（unassigned / duplicate / 架构诊断差距）。`filter_excluded` 为公共函数（`core/graph_closure.py`），`arch_audit.audit` 与 `arch_insight.duplicate_insight` 同步新增 `exclude_dirs` 参数复用同一过滤语义，保证治理工作项、架构诊断、重复识别三处口径一致。
+> - **self.method() 调用边落到方法节点（flow_verify 覆盖不全）**：`_find_containing_node` 查询节点时按类型优先级排序（method 优先于 function）——CodeAnalyzer 会把类方法同时注册为 `func:<mod>:<短名>` 与 `method:<mod>:<类>.<方法>` 两个节点（行区间相同），此前命中 func 节点导致 self.method() 调用边建到 func 节点而非 method 节点，`coderef_flow_verify` 以 method 为入口时下游闭包断裂。同区间优先 method 后，调用边正确关联到方法节点，method 入口下游闭包完整。
+> - **回归测试**：`tests/test_feedback_fixes.py` 新增 17 用例（`IsExcludedPathTest` 路径判定含前缀边界防误伤 / `FilterExcludedTest` 节点与 CALLS 边实时过滤 / `WhitelistExcludeDirsTest` whitelist dir 条目读取与异常降级 / `FindContainingNodeTest` 同区间 method 优先 + function/class 回退 + 无命中返回 None），全量 119 用例通过。
+> - **版本号**：5.12.7 → 5.12.8（patch，反馈驱动修复，不改工具暴露面）。
+
 ### v5.12.7 — 新增轻量版本探针 coderef_version
 
 > 承接测试方建议课题（登记册 §4）：靠「结果字段反推版本」会因进程未重启加载旧代码而误判进程新旧（v5.12.6 首探即因此误判），需一行调用即可断言 版本==target。

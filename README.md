@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.12.5** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.12.8** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -405,16 +405,14 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 ## 更新日志
 
-> 4.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.12.5）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
+> 4.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.12.8）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.12.5 — 外部用户反馈驱动的可用性修复
+### 当前版本 v5.12.8 — 外部用户试用反馈驱动的治理精度修复
 
-> 承接外部用户使用反馈（备份目录污染符号级判定 / target_modules 语义坑 / 异步轮询繁琐 / 大输出转义膨胀），4 项修复：
-> - **目录级排除**：`coderef_whitelist` 支持 `dir` 字段，白名单目录不进入知识图谱符号级分析（真身判定/循环/重复匹配），备份/镜像目录不再污染生产代码判定。
-> - **target_modules 目录展开**：`coderef_arch_gap` 的 target_modules 支持目录路径自动展开为该目录下全部模块，不再误判游离。
-> - **wait 阻塞等待**：重型工具支持 `wait=true` 阻塞等待完成直接返回结果，免去手动轮询 `coderef_task_status`。
-> - **大结果落盘**：超过 10KB 的 JSON 结果自动落盘到 `cache/mcp_out/` 并返回文件路径，避免 MCP 转义膨胀与超限。
-> - **版本号**：5.12.4 → 5.12.5（patch，反馈驱动修复，不改工具暴露面）。
+> 承接外部用户试用反馈（gov_start 不吃 whitelist 目录排除 / flow_verify 对 self.method() 调用边覆盖不全），2 项修复：
+> - **whitelist 目录排除实时生效**：`coderef_arch_gap` 动态读取 whitelist 的 `dir` 条目，加载图谱后实时过滤排除目录下的节点与 CALLS 边——即使图谱是 whitelist 配置前构建的旧图，备份/镜像目录噪声也不再重入治理工作项（unassigned / duplicate 差距）。
+> - **self.method() 调用边落到方法节点**：`_find_containing_node` 同区间 method 优先于 function——类方法同时注册为 func 与 method 两个节点时，调用边正确关联到方法节点，`coderef_flow_verify` 的 method 入口下游闭包不再断裂。
+> - **版本号**：5.12.7 → 5.12.8（patch，反馈驱动修复，不改工具暴露面）。
 
 ---
 
