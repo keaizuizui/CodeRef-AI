@@ -35,7 +35,7 @@ from core.arch_audit import (
     module_of,
 )
 from core.arch_insight import duplicate_insight
-from core.graph_closure import load_graph
+from core.graph_closure import load_graph, filter_excluded
 
 # 各差距类型严重级
 SEVERITY = {
@@ -691,6 +691,19 @@ def _domain_flow_model(nodes: Dict[str, dict], adj: Dict[str, List[str]],
     }
 
 
+def _whitelist_exclude_dirs(project_path: str) -> List[str]:
+    """读取 whitelist 中的 dir 条目（目录级排除，备份/镜像目录不污染差距分析）。
+
+    延迟 import pipeline_runner 避免模块级循环依赖（pipeline_runner 不 import
+    arch_gap_analyzer，但保持函数内加载更稳妥）。
+    """
+    try:
+        from core.pipeline_runner import whitelist_list
+        return [e["dir"] for e in whitelist_list(project_path) if e.get("dir")]
+    except Exception:  # pragma: no cover
+        return []
+
+
 def analyze_gap(project_path: str, target_arch: Dict[str, Any],
                 max_unassigned: int = DEFAULT_MAX_UNASSIGNED,
                 db_path: Optional[str] = None) -> dict:
@@ -719,7 +732,13 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
         result["summary"] = "知识图谱不存在，需先构建（coderef_audit / coderef_memory(action=sync)）"
         return result
 
+    # whitelist dir 实时生效：即使图谱是 whitelist 配置前构建的旧图，也过滤掉
+    # 备份/镜像目录噪声，避免其重入治理工作项（外部反馈：gov_start 不吃排除）
+    exclude_dirs = _whitelist_exclude_dirs(project_path)
+
     nodes, adj = load_graph(db)
+    if exclude_dirs:
+        nodes, adj = filter_excluded(nodes, adj, project_path, exclude_dirs)
     result["graph_stats"] = {
         "has_kg": True,
         "nodes": len(nodes),
@@ -727,7 +746,7 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
     }
 
     # 现状症状（复用 arch_audit）
-    arch = arch_audit(project_path, db_path=db)
+    arch = arch_audit(project_path, db_path=db, exclude_dirs=exclude_dirs)
 
     roles = target_arch.get("tech_roles") or []
     flows = target_arch.get("business_flows") or []
@@ -764,7 +783,7 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
 
     # 3.5) 同构重复 / 目录级重复（复用 arch_insight P0-C）
     #       ds 一次调用，供重复差距与孪生判定复用，避免重复计算
-    ds = duplicate_insight(project_path, db_path=db)
+    ds = duplicate_insight(project_path, db_path=db, exclude_dirs=exclude_dirs)
     gaps.extend(_detect_duplicates(project_path, db, {"duplicate": True,
                                                       "directory_duplicate": True},
                                    ds=ds))

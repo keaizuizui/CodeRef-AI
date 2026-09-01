@@ -814,12 +814,19 @@ class CodeKnowledgeGraph:
         return f"method:{mod}:{cls}.{method_name}"
 
     def _find_containing_node(self, file_path: str, line: int) -> Optional[str]:
-        """找到包含指定行号的函数/方法/类节点"""
+        """找到包含指定行号的函数/方法/类节点。
+
+        method 优先于 function：CodeAnalyzer 会把类方法同时注册为
+        func:<mod>:<短名> 与 method:<mod>:<类>.<方法> 两个节点（行区间相同），
+        若命中 func 节点，self.method() 调用边会建到 func 节点而非 method 节点，
+        导致 flow_verify 的 method 入口下游闭包断裂（外部反馈）。同区间优先 method。
+        """
         row = self._conn.execute(
             """SELECT id FROM nodes
                WHERE file_path=? AND start_line <= ? AND end_line >= ?
                AND type IN ('function','method','class')
-               ORDER BY (end_line - start_line) ASC LIMIT 1""",
+               ORDER BY CASE WHEN type='method' THEN 0 ELSE 1 END,
+                        (end_line - start_line) ASC LIMIT 1""",
             (file_path, line, line)).fetchone()
         return row["id"] if row else None
 

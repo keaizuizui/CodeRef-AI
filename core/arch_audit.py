@@ -38,7 +38,7 @@ from config.settings import (
     ARCH_HEALTH_WEIGHT_LARGE,
     ARCH_INFRA_DIRS,
 )
-from core.graph_closure import load_graph
+from core.graph_closure import load_graph, filter_excluded
 
 
 # 目录 → 分层（3=应用层 2=引擎层 1=基础层 0=基础设施层）；未知目录保守视为引擎层
@@ -763,7 +763,8 @@ def _identity_briefing(project_path: str, db_path: str) -> list:
 def audit(project_path: str, db_path: str = None,
           fan_out_threshold: int = None,
           large_symbol_threshold: int = None,
-          scc_min_size: int = None) -> dict:
+          scc_min_size: int = None,
+          exclude_dirs: Optional[List[str]] = None) -> dict:
     """架构腐化诊断主入口。
 
     Args:
@@ -772,6 +773,8 @@ def audit(project_path: str, db_path: str = None,
         fan_out_threshold: 上帝模块扇出阈值（缺省取 settings）
         large_symbol_threshold: 异常模块规模符号阈值（缺省取 settings）
         scc_min_size: 循环依赖 SCC 最小尺寸（缺省取 settings）
+        exclude_dirs: 需排除的目录相对路径列表（whitelist dir 实时生效，
+            加载图谱后过滤，避免旧图谱未排除的备份目录噪声进入诊断）。
 
     Returns:
         结构化诊断 dict：graph_stats / cycles / god_modules / fan_top /
@@ -789,6 +792,8 @@ def audit(project_path: str, db_path: str = None,
         return result
 
     nodes, adj = load_graph(db)
+    if exclude_dirs:
+        nodes, adj = filter_excluded(nodes, adj, project_path, exclude_dirs)
     result["graph_stats"] = {
         "has_kg": True, "nodes": len(nodes),
         "calls_edges": sum(len(v) for v in adj.values()),

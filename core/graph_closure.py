@@ -42,6 +42,31 @@ def load_graph(db_path: str) -> Tuple[Dict[str, dict], Dict[str, List[str]]]:
     return nodes, adj
 
 
+def filter_excluded(nodes, adj, project_path, exclude_dirs):
+    """过滤掉排除目录下的节点与相关 CALLS 边（whitelist dir 实时生效）。
+
+    图谱构建时已应用 exclude_dirs，但 whitelist 变更后旧图谱不会自动重建；
+    差距分析/架构诊断在加载图谱后实时过滤，避免备份目录噪声重入治理工作项
+    （外部反馈：gov_start 不吃 whitelist 目录排除）。
+    """
+    if not exclude_dirs:
+        return nodes, adj
+    from core.code_knowledge_graph import _is_excluded_path
+    drop = {nid for nid, n in nodes.items()
+            if _is_excluded_path(n.get("file_path") or "", project_path, exclude_dirs)}
+    if not drop:
+        return nodes, adj
+    nodes2 = {nid: n for nid, n in nodes.items() if nid not in drop}
+    adj2 = {}
+    for src, tgts in adj.items():
+        if src in drop:
+            continue
+        kept = [t for t in tgts if t not in drop]
+        if kept:
+            adj2[src] = kept
+    return nodes2, adj2
+
+
 def load_call_edges(db_path: str) -> Dict[Tuple[str, str], List[dict]]:
     """加载全部 CALLS 边的 props（含 line / full_name / keyword_args）。
 
@@ -49,8 +74,6 @@ def load_call_edges(db_path: str) -> Dict[Tuple[str, str], List[dict]]:
     避免 dict 覆盖只留最后一个调用点的 line / keyword_args（参数契约漏报根因）。
     与 load_graph 分离，避免破坏 `nodes, adj = load_graph(...)` 的三处既有调用方。
     """
-    if not os.path.isfile(db_path):
-        raise FileNotFoundError(f"知识图谱数据库不存在: {db_path}")
     out: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
