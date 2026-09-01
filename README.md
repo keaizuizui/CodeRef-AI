@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.12.9** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.13.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -231,7 +231,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 | `coderef_gov_close` | 收尾周期，输出完成率/剩余/复发/豁免统计 | 否 |
 | `coderef_gov_issues` | 查询治理工作项（预置视图 open/all/high/recurred/rejected/archived/overdue/assigned/recent） | 否 |
 | `coderef_gov_transition` | 工作项状态流转 + 豁免 | 否 |
-| `coderef_gov_report` | 体检报告 / 治理看板（report 单期+跨期趋势；board 交互 HTML；已合并原 gov_board） | 否 |
+| `coderef_gov_report` | 体检报告 / 治理看板 / 项目总览（report 单期+跨期趋势；board 交互 HTML；overview 健康+架构+Wiki+人话解读+工作项总览；已合并原 gov_board） | 否 |
 | `coderef_gov_pipeline` | 治理自动流水线：在途项 → 任务卡 → 复验 → Verified/附缺口 | 否 |
 | `coderef_dynamic_probe` | 动态探针：静态挖掘动态信号（动态导入/装饰器注册/间接索引），零执行被检项目 | 否 |
 | `coderef_gov_board` | 治理 Web 看板（兼容别名，转发到 gov_report action=board） | 否 |
@@ -405,14 +405,18 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 ## 更新日志
 
-> 4.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.12.9）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
+> 4.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.13.0）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.12.9 — 外部用户反馈驱动的可用性修复
+### 当前版本 v5.13.0 — 新增项目总览报告（架构图/Wiki/人话解读/治理工作项一屏收拢）
 
-> 承接外部用户试用反馈（innovation_review/interpret 无 LLM Key 时卡 pending 空转 / _refactor_backup 备份目录污染 adopters 列表与 wiki），2 项修复：
-> - **无有效 LLM Key 快速阻断**：`is_available()` 不再把占位符/示例 Key（ollama、sk-xxx 等）误判为可用；`chat_completion` 对占位符 Key 直接返回结构化错误、不发起真实请求；客户端超时从 120s 收紧为「连接 10s + 总 60s」，网络不通时不再空转 1 分多钟。innovation_review / interpret / wiki 等依赖 LLM 的入口在无有效 Key 时立即给确定性摘要并明确告知。
-> - **whitelist dir 排除覆盖全校工具**：`_is_excluded_path` 增强为「目录名任意层级匹配」（排除 `_refactor_backup` 时，`core/_refactor_backup` 同样命中），innovation 签名收集、wiki 模块发现、governance 三处扫描统一接入 whitelist 动态排除，与 arch_* 共享同一排除口径——备份/镜像目录噪声不再进入 adopters 列表、wiki 文档与治理审计。
-> - **版本号**：5.12.8 → 5.12.9（patch，反馈驱动修复，不改工具暴露面）。
+> 承接外部测试反馈：治理看板 gov_board.html「什么有价值的信息都没有」，确认架构图、项目 wiki、人话解读三大高价值产物均为旁立岛屿、从未聚入综合报告。新增 `gov_report(action=overview)` 项目总览，五区块一屏收拢：
+> - **① 一句话体检结论（顶栏大字）**：健康分 + 高危/中危/低危 + 在途/已豁免 + 治理周期结论（对齐度/管线合规/差距收敛）——此前压在 cycle description 里从不见面，现直出到 KPI。
+> - **② 项目架构图**：`<iframe>` 引用 `arch_canvas_*.html`；未生成则诚实占位「需先运行 coderef_arch_canvas」。
+> - **③ 项目 Wiki 介绍**：内联 WIKI_INDEX/OVERVIEW 核心文档 + 全库链接；轻量 Markdown→HTML（front matter 跳过/表格/加粗/链接），file:// 可开可点。
+> - **④ 人话解读摘要**：高危清单 + 分项计数 + 确定性总结（无审计则诚实显示「未审计 ≠ 无风险」）。
+> - **⑤ 治理工作项**：完整标题列；差距快照 + 活动日志直接内联 `__DATA__`、展开不 fetch——根治 gov_board 静态打开详情必失败的缺陷；无服务环境流转降级为只读。
+> - **静态自包含**：单文件 HTML、零 CDN，file:// 直接可开；缺省落盘 `<project>/.coderef/project_overview.html`。
+> - **版本号**：5.12.9 → 5.13.0（minor，新增项目总览 feature；不改既有工具暴露面）。
 
 ---
 
