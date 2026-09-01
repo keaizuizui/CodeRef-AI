@@ -694,12 +694,19 @@ BUILTIN_TOOLS: List[Dict] = [
                         "action=board：生成自包含交互 HTML 看板（KPI/状态分布/跨期趋势/工作项表格/状态流转按钮）；\n"
                         "   契约：缺省落盘 <project>/.coderef/gov_board.html 并返回确切路径；\n"
                         "  interactive=false 退化为只读；open_server=true 可起本地 http.server 服务（进程常驻，返回 URL）。\n"
+                        "action=overview：生成'项目总览'自包含 HTML（5.13 起）——五区块一屏收拢：\n"
+                        "  ① 一句话体检结论（健康分 + 治理差距/豁免结论，顶栏大字）；\n"
+                        "  ② 项目架构图（iframe 引用 arch_canvas_*.html，未生成则诚实占位）；\n"
+                        "  ③ 项目 wiki 介绍（WIKI_INDEX/OVERVIEW 核心内联 + 全库链接）；\n"
+                        "  ④ 人话解读摘要（高危清单 + 分项计数 + 确定性总结）；\n"
+                        "  ⑤ 治理工作项（完整标题列 + 详情内联展开 + 全量统计）。\n"
+                        "   契约：缺省落盘 <project>/.coderef/project_overview.html；静态自包含、file:// 直接可开、详情不做 fetch。\n"
                         "纯静态、确定性，趋势由治理库聚合，不依赖 LLM。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
-                            "action": {"type": "string", "enum": ["report", "board"], "default": "report",
-                                       "description": "report=体检报告（JSON/HTML）；board=交互 HTML 看板"},
+                            "action": {"type": "string", "enum": ["report", "board", "overview"], "default": "report",
+                                       "description": "report=体检报告（JSON/HTML）；board=交互 HTML 看板；overview=项目总览 HTML"},
                             "cid": {"type": "string", "description": "指定周期 id（可选，缺省当前 open 周期）"},
                             "out_format": {"type": "string", "enum": ["json", "html"], "default": "json",
                                            "description": "action=report 时输出格式"},
@@ -2001,8 +2008,23 @@ def _gov_report(a: dict) -> str:
     from core.gov_webdash import render_board, serve
     pp = a["project_path"]
     action = a.get("action", "report")
-    if action not in ("report", "board"):
+    if action not in ("report", "board", "overview"):
         raise ValueError(f"coderef_gov_report: 未知 action={action}")
+    if action == "overview":
+        #  契约：缺省落盘 <project>/.coderef/project_overview.html，返回确切路径
+        from core.project_overview import render_overview
+        interactive = a.get("interactive", True)
+        output_dir = a.get("output_dir", "")
+        if not output_dir:
+            output_dir = os.path.join(pp, ".coderef")
+        r = render_overview(pp, output_dir=output_dir,
+                            cid=a.get("cid", ""), interactive=interactive)
+        r["project_path"] = pp
+        if a.get("open_server") or a.get("open"):
+            srv = serve(pp, host=a.get("host", "127.0.0.1"),
+                        port=a.get("port", 0))
+            r["server"] = srv
+        return json.dumps(r, ensure_ascii=False)
     if action == "board":
         #  契约：缺省落盘 <project>/.coderef/gov_board.html，返回确切路径
         interactive = a.get("interactive", True)

@@ -4,6 +4,18 @@
 
 ---
 
+### v5.13.0 — 新增项目总览报告（架构图/Wiki/人话解读/治理工作项一屏收拢）
+
+> 承接外部测试反馈：治理看板 gov_board.html「什么有价值的信息都没有」，追问确认三大高价值产物（架构图、项目 wiki、人话解读）均为旁立岛屿、从未聚入任何综合报告。新增 `gov_report(action=overview)` 项目总览，五区块一屏收拢：
+> - **① 一句话体检结论（顶栏大字）**：健康分 + 高危/中危/低危计数 + 在途/已豁免 + 当前治理周期结论（对齐度/管线合规/差距收敛）——此前这些结论压在 cycle description 里从不见面，现直出到 KPI。
+> - **② 项目架构图**：`<iframe>` 引用已生成的 `arch_canvas_*.html`（可拖拽/导出）；未生成则诚实占位「需先运行 coderef_arch_canvas」，不臆造。
+> - **③ 项目 Wiki 介绍**：内联 `WIKI_INDEX`/`OVERVIEW`/`README` 核心文档 + 全库相对链接；新增轻量 Markdown→HTML 渲染（跳过 YAML front matter、表格、代码块、行内加粗/链接），file:// 直接可开可点。
+> - **④ 人话解读摘要**：高危清单 + 分项计数 + 确定性总结，直接复用 `interpretation_platform`（无审计数据则诚实显示「未审计 ≠ 无风险」并给确定性背景）。
+> - **⑤ 治理工作项**：表格含完整「标题」列；每个工作项的差距快照(snapshot) + 活动日志(events) 直接内联 `window.__DATA__`，展开行不做 fetch——根治 gov_board 静态打开时详情必失败的缺陷；无服务环境流转按钮降级为只读提示。
+> - **静态自包含**：单文件 HTML + 内联 CSS/JS，零 CDN；缺省落盘 `<project>/.coderef/project_overview.html`；`interactive=False` 只读；`open_server=true` 起本地服务时流转写回治理库。
+> - **回归测试**：`tests/test_project_overview.py` 新增 5 用例（md 转换 front matter 跳过/表格/行内加粗链接 + render_overview 聚合分区与架构图诚实占位 + interactive=False 只读降级），全量 134 用例通过。
+> - **版本号**：5.12.9 → 5.13.0（minor，新增项目总览报告 feature；不改既有工具暴露面，扩展 `gov_report` 的 `action=overview` 分支）。
+
 ### v5.12.9 — 外部用户反馈驱动的可用性修复
 
 > 承接外部用户试用反馈（《CodeRef-缺陷反馈稿》试用轮）：innovation_review/interpret 无 LLM Key 时卡 pending 空转 / _refactor_backup 备份目录污染 adopters 列表与 wiki，2 项修复：
