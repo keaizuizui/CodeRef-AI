@@ -84,7 +84,7 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 
 ## 先判场景，再选链（顶层入口判定）
 
-> 意图宽泛时（如「审查/治理/体检这个项目」），先按下表判**该从哪条链进**，别默认在本 skill 打转到底。判则：**命中治理/变更/沉滞意图就主动转场到对应 skill**，只有「单次体检、验证流程、AI 改坏没、上下文丢了」这类留在本 skill。
+> 意图宽泛时（如「审查/治理/体检这个项目」），先按下表判**该从哪条链进**，别默认在本 skill 打转到底。判则：**命中治理/资产沉淀等链归属意图就主动转场到对应 skill**，只有「单次体检、验证流程、查调用、AI 改坏没、上下文丢了」这类留在本 skill。
 
 | 你的意图 | 主链入口 | 说明 |
 |---|---|---|
@@ -148,11 +148,12 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 > 取不到再 `Get-Command git` / `where git` 探测后用 `git_bin` 传入。
 
 ### 工作流 D：复刻一个值得复用的设计到另一个项目
+> 顺序遵「先评审后固化」：确认真创新 + canonical 归一后才可 commit，禁止提交未经评审的设计（与 governance G2 成果沉淀链一致）。
 ```
 1. coderef_innovation (project_path=源) → 识别创新
-2. coderef_asset (action=commit) → 固化为资产
+2. coderef_innovation_review → LLM 复查是否真创新（需 API Key）
 3. coderef_registry (action=list) → 确认 canonical
-4. coderef_innovation_review → LLM 复查是否真创新（需 API Key）
+4. coderef_asset (action=commit) → 固化为资产
 5. coderef_replicate (project_path=目标, canonical=...) → 复刻铺排
 6. coderef_replicate_apply → 落地到目标项目
 ```
