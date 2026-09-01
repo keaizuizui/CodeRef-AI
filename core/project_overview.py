@@ -125,19 +125,25 @@ def _md_to_html(md: str) -> str:
     """轻量 Markdown → HTML：代码块 → pre、表格 → table、其余逐行块级。
 
     自动跳过 YAML front matter；行内支持 code/bold/italic/链接。
+    代码块用占位符替换避免被行级处理包裹进 <p>。
     """
     if not md:
         return "<p style='color:#94a3b8'>（无内容）</p>"
 
-    def _fence(m: "re.Match") -> str:
+    placeholders: Dict[str, str] = {}
+
+    def _fence_to_placeholder(m: "re.Match") -> str:
         body = m.group(2)
-        return ("<pre style='background:#0f172a;color:#e2e8f0;border-radius:8px;"
+        html = ("<pre style='background:#0f172a;color:#e2e8f0;border-radius:8px;"
                 "padding:10px;overflow:auto;font-size:12px'>"
                 f"{_esc(body)}</pre>")
+        key = f"\x00FENCE_{len(placeholders):X}\x00"
+        placeholders[key] = html
+        return key
 
-    md = _CODE_FENCE.sub(_fence, md)
+    md = _CODE_FENCE.sub(_fence_to_placeholder, md)
     lines = md.splitlines()
-    # 跳过 YAML front matter（开头 --- 到下一个 ---）
+    # 跳过 YAML front matter
     if lines and lines[0].strip() == "---":
         for i in range(1, len(lines)):
             if lines[i].strip() == "---":
@@ -149,6 +155,13 @@ def _md_to_html(md: str) -> str:
     while i < len(lines):
         ln = lines[i]
         stripped = ln.strip()
+        if stripped in placeholders:
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            out.append(placeholders[stripped])
+            i += 1
+            continue
         if stripped.startswith("|") and stripped.endswith("|"):
             tbl = []
             while (i < len(lines) and lines[i].strip().startswith("|")
@@ -207,7 +220,7 @@ def _govern_data(project_path: str, cid: str = "") -> Dict[str, Any]:
 
 
 def _find_arch_canvas(project_path: str) -> Optional[str]:
-    """找到最新生成的架构画布相对文件名；无则 None。"""
+    """找到最新生成的架构画布**绝对路径**；无则 None。"""
     cfg = os.path.join(project_path, ".coderef")
     if not os.path.isdir(cfg):
         return None
@@ -217,7 +230,7 @@ def _find_arch_canvas(project_path: str) -> Optional[str]:
         return None
     cands.sort(key=lambda f: os.path.getmtime(os.path.join(cfg, f)),
                reverse=True)
-    return cands[0]
+    return os.path.join(cfg, cands[0])
 
 
 def _wiki_href(wiki_abs: str, out_dir: str) -> str:
@@ -274,7 +287,7 @@ def render_overview(project_path: str, output_dir: str = "",
     arch = _find_arch_canvas(project_path)
     payload["health"] = health
     payload["wiki"] = wiki
-    payload["arch_canvas"] = arch
+    payload["arch_canvas"] = os.path.basename(arch) if arch else None
     payload["interactive"] = interactive
     payload["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -313,11 +326,12 @@ def render_overview(project_path: str, output_dir: str = "",
 
     # ── ② 架构图 ──
     if arch:
+        arch_basename = os.path.basename(arch)
         arch_html = (
-            f"<iframe src='{_esc(arch)}' title='架构画布' "
+            f"<iframe src='{_wiki_href(arch, out_dir)}' title='架构画布' "
             "style='width:100%;height:520px;border:1px solid #e2e8f0;"
             "border-radius:12px;background:#fff'></iframe>"
-            f"<p style='color:#94a3b8;font-size:12px'>画布 {_esc(arch)}；"
+            f"<p style='color:#94a3b8;font-size:12px'>画布 {_esc(arch_basename)}；"
             "浏览器打开可拖拽编辑、导出目标架构 JSON。</p>")
     else:
         arch_html = ("<p style='color:#64748b'>尚未生成架构画布。"
