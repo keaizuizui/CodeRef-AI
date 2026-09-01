@@ -415,7 +415,7 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 > - **③ 项目 Wiki 介绍**：内联 WIKI_INDEX/OVERVIEW 核心文档 + 全库链接；轻量 Markdown→HTML（front matter 跳过/表格/加粗/链接），file:// 可开可点。
 > - **④ 人话解读摘要**：高危清单 + 分项计数 + 确定性总结（无审计则诚实显示「未审计 ≠ 无风险」）。
 > - **⑤ 治理工作项**：完整标题列；差距快照 + 活动日志直接内联 `__DATA__`、展开不 fetch——根治 gov_board 静态打开详情必失败的缺陷；无服务环境流转降级为只读。
-> - **静态自包含**：单文件 HTML、零 CDN，file:// 直接可开；缺省落盘 `<project>/.coderef/project_overview.html`。
+> - **聚合形态**：健康结论/Wiki/人话解读/治理工作项均内联单文件、file:// 直接可开；架构图区块以 `<iframe>` 引用同目录 `arch_canvas_*.html`（画布为独立交互产物，非单文件内联）；缺省落盘 `<project>/.coderef/project_overview.html`。
 > - **版本号**：5.12.9 → 5.13.0（minor，新增项目总览 feature；不改既有工具暴露面）。
 
 ---
