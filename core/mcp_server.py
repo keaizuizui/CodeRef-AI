@@ -2012,8 +2012,11 @@ def _gov_report(a: dict) -> str:
         raise ValueError(f"coderef_gov_report: 未知 action={action}")
     if action == "overview":
         #  契约：缺省落盘 <project>/.coderef/project_overview.html，返回确切路径
+        #  缺省只读（静态自包含）；显式起服务时才默认启用交互流转
         from core.project_overview import render_overview
-        interactive = a.get("interactive", True)
+        interactive = a.get("interactive")
+        if interactive is None:
+            interactive = bool(a.get("open_server") or a.get("open"))
         output_dir = a.get("output_dir", "")
         if not output_dir:
             output_dir = os.path.join(pp, ".coderef")
