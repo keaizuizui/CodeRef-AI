@@ -50,13 +50,28 @@ def _health_color(score: Optional[int]) -> str:
 _CODE_FENCE = re.compile(r"```(\w*)\n(.*?)```", re.S)
 
 
+def _safe_href(url: str) -> bool:
+    """Markdown 链接仅允许相对路径与 http/https，拒绝 javascript:/data: 等。"""
+    if not url or "://" in url:
+        return url.lower().startswith(("http://", "https://")) if "://" in url else False
+    if ":" in url:
+        return False
+    return True
+
+
+def _link_repl(m: "re.Match") -> str:
+    label, url = m.group(1), m.group(2)
+    if not _safe_href(url):
+        return m.group(0)
+    return f'<a href="{url}" style="color:#2563eb">{label}</a>'
+
+
 def _inline_md(text: str) -> str:
-    """行内 Markdown：code/bold/italic/链接。"""
+    """行内 Markdown：code/bold/italic/链接（链接 scheme 白名单）。"""
     text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", text)
-    text = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)",
-                  r'<a href="\2" style="color:#2563eb">\1</a>', text)
+    text = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", _link_repl, text)
     return text
 
 
@@ -205,6 +220,15 @@ def _find_arch_canvas(project_path: str) -> Optional[str]:
     return cands[0]
 
 
+def _wiki_href(wiki_abs: str, out_dir: str) -> str:
+    """wiki 文件相对产物的 href；跨盘符时回退为 file:// 绝对路径。"""
+    try:
+        rel = os.path.relpath(wiki_abs, out_dir).replace(os.sep, "/")
+        return _esc(rel)
+    except ValueError:  # 跨盘符无相对路径
+        return _esc("file:///" + wiki_abs.replace(os.sep, "/"))
+
+
 def _wiki_sections(project_path: str) -> Dict[str, Any]:
     """聚合 wiki 概览：读 WIKI_INDEX + README/OVERVIEW，其余列链接。"""
     wiki_dir = os.path.join(project_path, "docs", "wiki")
@@ -254,17 +278,19 @@ def render_overview(project_path: str, output_dir: str = "",
     payload["interactive"] = interactive
     payload["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # 输出目录前置计算（wiki 全库链接需相对最终产物所在目录）
+    out_dir = output_dir or os.path.join(os.path.abspath(project_path), ".coderef")
+    os.makedirs(out_dir, exist_ok=True)
+
     data_json = (json.dumps(payload, ensure_ascii=False, default=str)
                  .replace("<", "\\u003c").replace(">", "\\u003e")
                  .replace("&", "\\u0026"))
 
     score = health.get("score")
     tally = health.get("tally") or {}
-    cycle_opts = "".join(
-        f"<option value='{_esc(cy.get('id',''))}'"
-        f"{' selected' if cy.get('id') == (payload.get('active_cycle') or {}).get('id', '') else ''}>"
-        f"{_esc(cy.get('name',''))} ({_esc(cy.get('id',''))})</option>"
-        for cy in payload.get("cycles", []))
+    cycle = payload.get("active_cycle") or {}
+    cycle_label = f"{_esc(cycle.get('name',''))} ({_esc(cycle.get('id',''))})" \
+        if cycle.get("id") else "（无活动周期）"
     status_opts = "".join(
         f"<option>{_esc(_s)}</option>"
         for _s in ["Detected", "Confirmed", "Fixing", "Verified",
@@ -300,9 +326,10 @@ def render_overview(project_path: str, output_dir: str = "",
 
     # ── ③ wiki ──
     if wiki.get("available"):
+        wiki_dir = os.path.join(project_path, "docs", "wiki")
         file_links = "".join(
-            f"<a href='{_esc(wiki['directory'] + f)}' target='_blank' "
-            f"style='margin-right:12px;font-size:12px;color:#2563eb'>"
+            f"<a href='{_wiki_href(os.path.join(wiki_dir, f), out_dir)}' "
+            f"target='_blank' style='margin-right:12px;font-size:12px;color:#2563eb'>"
             f"{_esc(f)}</a>" for f in wiki.get("files", []))
         wiki_html = (
             f"<div style='display:flex;gap:16px;flex-wrap:wrap'>"
@@ -390,7 +417,7 @@ ul{{margin:6pt 0;padding-left:20px}} li{{font-size:13px;margin:3px 0}}
 
 <div class="card"><h2>⑤ 治理工作项 <span style="color:#94a3b8;font-size:12px">已筛 <b id="cnt"></b></span></h2>
 <div class="toolbar">
-  <label>周期 <select id="f-cycle" onchange="pickCyc()">{cycle_opts}</select></label>
+  <span style="color:#334155;font-size:13px">当前周期 <b>{cycle_label}</b></span>
   <label>状态 <select id="f-status" onchange="render()"><option value="">全部</option>{status_opts}</select></label>
   <label>严重级 <select id="f-sev" onchange="render()">
     <option value="">全部</option><option>high</option><option>medium</option><option>low</option>
@@ -456,12 +483,9 @@ async function act(btn){{
     if(j&&j.ok){{toast('→ '+to+' ✓',true);setTimeout(()=>location.reload(),500);}}
     else toast((j&&j.message)||'流转失败',false);}}
   catch(e){{toast('需启动本地服务才能流转: '+e,false);}}}}
-function pickCyc(){{location.reload();}}
 document.addEventListener('DOMContentLoaded',render);
 </script></body></html>"""
 
-    out_dir = output_dir or os.path.join(os.path.abspath(project_path), ".coderef")
-    os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, "project_overview.html")
     with open(path, "w", encoding="utf-8") as f:
         f.write(html_str)
