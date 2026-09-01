@@ -1,6 +1,6 @@
 ---
 name: coderef-asset
-description: L3 资产沉淀编排 Skill。把治理/开发产出的高价值设计沉淀成可复用资产，串成「识别→登记→固化→解读→复用」资产链，让治理成果不随项目迁移而流失。当用户要「把某设计沉淀成可复用资产 / 创新识别与确认 / 设计登记与归一 / 把资产复刻到新项目 / 人话解读资产 / 资产体检」时使用。核心逻辑：沉淀有门槛（≥2 workflow 采用 + evidence，防污染）、命名先归一（registry alias→canonical）、复用不自动改代码（replicate 只铺排、replicate_apply 只落地骨架+说明）。零新工具，纯文档编排；与 coderef-governance（L2 大阶段）/ coderef-probe（L1 小阶段）平级衔接，L2 治理成果与 L1 高采用率设计是沉淀上游。
+description: L3 资产沉淀编排 Skill。把治理/开发产出的高价值设计沉淀成可复用资产，串成「识别→登记→固化→解读→复用」资产链，让治理成果不随项目迁移而流失。当用户要「把某设计沉淀成可复用资产 / 创新识别与确认 / 设计登记与归一 / 把资产复刻到新项目 / 人话解读资产 / 资产体检」时使用。核心逻辑：沉淀有门槛（≥2 workflow 采用 + evidence，防污染）、命名先归一（registry alias→canonical）、复用不自动改代码（replicate 只铺排、replicate_apply 只落地骨架+说明）。零新工具，纯文档编排；与 coderef-governance（L2 大阶段）/ coderef-probe（L1 小阶段）平级衔接，L2 治理成果与 L1 高采用率设计是沉淀上游。**L2 经编排 gate G2（③ 收尾 / ⑤ 体检 / 软入口档摸底发现高价值设计）强制转场进入本链评估沉淀。**
 ---
 
 # CodeRef 资产链 · L3 资产沉淀编排
