@@ -4,6 +4,14 @@
 
 ---
 
+### v5.12.9 — 外部用户反馈驱动的可用性修复
+
+> 承接外部用户试用反馈（《CodeRef-缺陷反馈稿》试用轮）：innovation_review/interpret 无 LLM Key 时卡 pending 空转 / _refactor_backup 备份目录污染 adopters 列表与 wiki，2 项修复：
+> - **无有效 LLM Key 快速阻断（卡 pending 空转）**：`LLMIntegration.is_available()` 不再把占位符/示例 Key（ollama、sk-xxx、your-api-key 等）误判为可用——此前只要 client 初始化成功（OpenAI SDK 构造不校验 Key 有效性）即返回 True，导致依赖 LLM 的入口（innovation_review / interpret / wiki / business_report）在无有效凭据时仍发起真实请求，网络不通时空转 120s。修复：`_is_placeholder_key` 识别占位符/示例 Key；`chat_completion` 对占位符 Key 直接返回结构化错误、不发起请求；客户端超时从 120s 收紧为 `httpx.Timeout(60.0, connect=10.0)`（连接 10s 快速失败 + 总 60s 给足生成），网络不通时快速返回确定性摘要并明确告知"需配置有效 API Key"。
+> - **whitelist dir 排除覆盖全校工具（备份目录污染产物）**：此前 whitelist 的 `dir` 排除只在 arch_* 系列生效，gov_*、innovation、wiki 生成仍用硬编码 EXCLUDE_DIRS，`_refactor_backup` 备份目录噪声进入 adopters 列表与 wiki 文档。修复：`_is_excluded_path` 增强为「目录名任意层级匹配」（排除 `_refactor_backup` 时，`core/_refactor_backup` 同样命中，向后兼容原路径前缀语义）；`innovation_propagation_detector._collect_signatures`、`wiki_generator._discover_modules/_collect_py_files`、`governance_audit` 三处扫描统一接入 `_whitelist_exclude_dirs` + `_is_wl_excluded`，与 arch_* 共享同一排除口径。
+> - **回归测试**：`tests/test_feedback_fixes.py` 新增 8 用例（`LLMPlaceholderKeyTest` 占位符判定 / is_available 误判阻断 / chat_completion 不发起请求 / `WhitelistExcludeAllToolsTest` 目录名任意层级匹配 + wiki/gov/innovation 三工具同口径），全量 127 用例通过。
+> - **版本号**：5.12.8 → 5.12.9（patch，反馈驱动修复，不改工具暴露面）。
+
 ### v5.12.8 — 外部用户试用反馈驱动的治理精度修复
 
 > 承接外部用户试用反馈（《CodeRef-缺陷反馈稿》试用轮）：gov_start 不吃 whitelist 目录排除（备份噪声在治理工作项重出现）/ flow_verify 对 self.method() 调用边覆盖不全，2 项修复：

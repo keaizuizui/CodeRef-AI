@@ -1569,11 +1569,36 @@ def _check_quality(cf) -> List[GovernanceViolation]:
     return violations
 
 
+def _whitelist_exclude_dirs(project_path: str) -> List[str]:
+    """读取 whitelist 中的 dir 条目（目录级排除，备份/镜像目录不污染治理审计）。
+
+    与 arch_gap_analyzer._whitelist_exclude_dirs 同源；延迟 import pipeline_runner
+    避免模块级循环依赖。
+    """
+    try:
+        from core.pipeline_runner import whitelist_list
+        return [e["dir"] for e in whitelist_list(project_path) if e.get("dir")]
+    except Exception:  # pragma: no cover
+        return []
+
+
+def _is_wl_excluded(path: str, project_path: str, exclude_dirs: List[str]) -> bool:
+    """判断 path（目录/文件）是否位于 whitelist 排除目录下（复用图谱排除口径）。"""
+    if not exclude_dirs:
+        return False
+    from core.code_knowledge_graph import _is_excluded_path
+    return _is_excluded_path(path, project_path, exclude_dirs)
+
+
 def _scan_non_py_secrets(project_path: str) -> List[GovernanceViolation]:
     """扫描非 Python 文件中的机密（.env/.yaml/.json/.toml）"""
     violations = []
+    wl_exclude = _whitelist_exclude_dirs(project_path)
     for root, dirs, files in os.walk(project_path):
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
+        dirs[:] = [d for d in dirs
+                   if not d.startswith(".")
+                   and not _is_wl_excluded(os.path.join(root, d), project_path, wl_exclude)
+                   and d not in (
             "__pycache__", "node_modules", ".git", "venv", ".venv", "data",
             "third_party", ".gitnexus", "docs", "reports",
         )]
@@ -1617,8 +1642,12 @@ def _scan_doc_secrets(project_path: str) -> List[GovernanceViolation]:
     3. 审查绕过类表述（忽略清单/白名单/直接放行/一律不输出）
     """
     violations = []
+    wl_exclude = _whitelist_exclude_dirs(project_path)
     for root, dirs, files in os.walk(project_path):
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
+        dirs[:] = [d for d in dirs
+                   if not d.startswith(".")
+                   and not _is_wl_excluded(os.path.join(root, d), project_path, wl_exclude)
+                   and d not in (
             "__pycache__", "node_modules", ".git", "venv", ".venv", "data",
             "third_party", ".gitnexus", "docs", "reports",
         )]
@@ -1666,8 +1695,12 @@ def _scan_crossregion_conflicts(project_path: str) -> List[GovernanceViolation]:
     """
     violations = []
     doc_files = []
+    wl_exclude = _whitelist_exclude_dirs(project_path)
     for root, dirs, files in os.walk(project_path):
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
+        dirs[:] = [d for d in dirs
+                   if not d.startswith(".")
+                   and not _is_wl_excluded(os.path.join(root, d), project_path, wl_exclude)
+                   and d not in (
             "__pycache__", "node_modules", ".git", "venv", ".venv", "data",
             "third_party", ".gitnexus", "reports",
         )]

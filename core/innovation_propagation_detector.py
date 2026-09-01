@@ -37,6 +37,27 @@ from loguru import logger
 from core.shared_filter import SharedFilter
 
 
+def _whitelist_exclude_dirs(project_path: str) -> List[str]:
+    """读取 whitelist 中的 dir 条目（目录级排除，备份/镜像目录不污染创新签名）。
+
+    与 arch_gap_analyzer._whitelist_exclude_dirs 同源；延迟 import pipeline_runner
+    避免模块级循环依赖。
+    """
+    try:
+        from core.pipeline_runner import whitelist_list
+        return [e["dir"] for e in whitelist_list(project_path) if e.get("dir")]
+    except Exception:  # pragma: no cover
+        return []
+
+
+def _is_wl_excluded(path: str, project_path: str, exclude_dirs: List[str]) -> bool:
+    """判断 path（目录/文件）是否位于 whitelist 排除目录下（复用图谱排除口径）。"""
+    if not exclude_dirs:
+        return False
+    from core.code_knowledge_graph import _is_excluded_path
+    return _is_excluded_path(path, project_path, exclude_dirs)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 数据结构
 # ═══════════════════════════════════════════════════════════════════
@@ -989,6 +1010,11 @@ class InnovationPropagationDetector:
         scope = ProjectScope(project_path)
         scope.analyze()
 
+        # whitelist dir 实时排除：备份/镜像目录（如 _refactor_backup）登记在 whitelist
+        # 后，创新签名收集与 arch_* 同步排除，避免其进入 adopters / 创新缺口
+        # （外部反馈：whitelist dir 只在 arch_* 生效，innovation 未吃到）。
+        self._wl_exclude = _whitelist_exclude_dirs(project_path)
+
         signatures = []
         for root, dirs, files in os.walk(project_path):
             # 过滤排除的目录：叠加 ProjectScope 的 vendored/虚拟环境判定
@@ -996,6 +1022,7 @@ class InnovationPropagationDetector:
                 d for d in dirs
                 if d not in self.EXCLUDED_DIRS
                 and not d.startswith(self.EXCLUDED_DIR_PREFIXES)
+                and not _is_wl_excluded(os.path.join(root, d), project_path, self._wl_exclude)
                 and scope.should_scan(os.path.join(root, d))
                 and self._is_code_dir(os.path.join(root, d))
             ]

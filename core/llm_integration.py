@@ -14,6 +14,7 @@ from enum import Enum
 
 from loguru import logger
 from openai import OpenAI
+import httpx
 
 from config import settings
 
@@ -377,25 +378,25 @@ class LLMIntegration:
                 self.client = OpenAI(
                     base_url=self.config.base_url or "http://localhost:11434/v1",
                     api_key=api_key,
-                    timeout=120, max_retries=1,
+                    timeout=httpx.Timeout(60.0, connect=10.0), max_retries=1,
                 )
             elif self.config.provider == LLMProvider.OPENAI:
                 self.client = OpenAI(
                     api_key=api_key,
                     base_url=self.config.base_url or "https://api.openai.com/v1",
-                    timeout=120, max_retries=1,
+                    timeout=httpx.Timeout(60.0, connect=10.0), max_retries=1,
                 )
             elif self.config.provider == LLMProvider.DEEPSEEK:
                 self.client = OpenAI(
                     api_key=api_key,
                     base_url=self.config.base_url or "https://api.deepseek.com",
-                    timeout=120, max_retries=1,
+                    timeout=httpx.Timeout(60.0, connect=10.0), max_retries=1,
                 )
             else:
                 self.client = OpenAI(
                     api_key=api_key,
                     base_url=self.config.base_url,
-                    timeout=120, max_retries=1,
+                    timeout=httpx.Timeout(60.0, connect=10.0), max_retries=1,
                 )
             
             logger.info(f"LLM客户端初始化完成: {self.config.provider.value}")
@@ -619,16 +620,39 @@ class LLMIntegration:
                 return False
         return True
 
+    # 占位符/示例 Key：配置里常见但并非真实凭据。若误判为可用，会在无有效
+    # Key 时仍发起真实 LLM 请求而空转（外部反馈：无 Key 时卡 pending 1 分多钟）。
+    PLACEHOLDER_KEYS = frozenset({
+        "ollama", "sk-xxx", "sk-xxxx", "your-api-key", "your_api_key",
+        "none", "null", "changeme", "change-me", "api-key", "apikey",
+        "placeholder", "example", "test", "sk-test", "sk-test-key",
+    })
+
+    @classmethod
+    def _is_placeholder_key(cls, api_key: str) -> bool:
+        """判断 API Key 是否为占位符/示例值（非真实凭据）。"""
+        if not api_key:
+            return True
+        low = api_key.strip().lower()
+        if low in cls.PLACEHOLDER_KEYS:
+            return True
+        if low.startswith("sk-") and any(
+                marker in low for marker in ("xxx", "your", "example", "placeholder", "changeme")):
+            return True
+        return False
+
     def is_available(self) -> bool:
         """判断 LLM 是否真正可用（客户端已初始化且存在有效 API Key）。
 
         供各"依赖 LLM 才能产出人话内容"的入口做硬阻断判断：LLM 不可用时，
         应明确告知调用方"需要 LLM 请先配置 API Key"，而不是降级产出占位/机械内容。
+        占位符/示例 Key（如 ollama、sk-xxx）不算有效凭据，避免无 Key 时仍发起
+        真实 LLM 请求而空转。
         """
         if self.client is None:
             return False
         api_key = getattr(self.config, "api_key", "") if self.config is not None else ""
-        return bool(api_key)
+        return not self._is_placeholder_key(api_key)
 
     # ── 成本/输出封顶（R10）──
 
@@ -681,8 +705,13 @@ class LLMIntegration:
             logger.error("LLM客户端未初始化")
             return "LLM调用错误: 客户端初始化失败"
 
-        # 显式传入超时参数
-        timeout = kwargs.get('timeout', 120)
+        # 兜底：占位符/示例 Key 不发起真实请求，避免无有效凭据时连接空转
+        if self._is_placeholder_key(self.config.api_key):
+            logger.warning("LLM不可用：API Key 为占位符/示例值，未配置有效凭据。")
+            return "LLM调用错误: 未配置有效的API Key，请在配置面板中填写"
+
+        # 显式传入超时参数（连接超时 10s 快速失败，总超时 60s 给足生成时间）
+        timeout = kwargs.get('timeout', httpx.Timeout(60.0, connect=10.0))
         max_retries = 2  # 原始请求之外最多重试 2 次（含指数退避 1s/2s）
         delay = 1
         last_error = None

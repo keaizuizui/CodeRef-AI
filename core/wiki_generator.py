@@ -259,6 +259,27 @@ CITE_IGNORE = {
 }
 
 
+def _whitelist_exclude_dirs(project_path: str) -> List[str]:
+    """读取 whitelist 中的 dir 条目（目录级排除，备份/镜像目录不污染 wiki 生成）。
+
+    与 arch_gap_analyzer._whitelist_exclude_dirs 同源；延迟 import pipeline_runner
+    避免模块级循环依赖。
+    """
+    try:
+        from core.pipeline_runner import whitelist_list
+        return [e["dir"] for e in whitelist_list(project_path) if e.get("dir")]
+    except Exception:  # pragma: no cover
+        return []
+
+
+def _is_wl_excluded(path: str, project_path: str, exclude_dirs: List[str]) -> bool:
+    """判断 path（目录/文件）是否位于 whitelist 排除目录下（复用图谱排除口径）。"""
+    if not exclude_dirs:
+        return False
+    from core.code_knowledge_graph import _is_excluded_path
+    return _is_excluded_path(path, project_path, exclude_dirs)
+
+
 class WikiGenerator:
     """项目 Wiki 生成器"""
 
@@ -288,6 +309,11 @@ class WikiGenerator:
             llm_client: LLMIntegration 实例，如果为 None 则延迟创建
         """
         self._llm = llm_client
+        # whitelist dir 实时排除：备份/镜像目录（如 _refactor_backup）登记在 whitelist
+        # 后，wiki 生成与 arch_* 同步排除，避免其进入 wiki 文档（外部反馈：whitelist
+        # dir 只在 arch_* 生效，wiki 未吃到）。惰性加载，避免构造时读盘。
+        self._wl_exclude_dirs: List[str] = []
+        self._wl_exclude_loaded = False
         # 记录本次生成失败明细，供 generate() 末尾汇总进 result.errors，
         # 让外层能感知"部分文档生成失败"，避免失败被静默吞掉却标记任务 completed。
         self._failed_docs: List[str] = []
@@ -1220,6 +1246,9 @@ def _discover_modules(self, project_path: str) -> List[WikiModule]:
         ))
 
     # 再检查子目录
+    if not self._wl_exclude_loaded:
+        self._wl_exclude_dirs = _whitelist_exclude_dirs(project_path)
+        self._wl_exclude_loaded = True
     for entry in os.scandir(project_path):
         if not entry.is_dir():
             continue
@@ -1227,10 +1256,12 @@ def _discover_modules(self, project_path: str) -> List[WikiModule]:
             continue
         if entry.name in self.EXCLUDE_DIRS:
             continue
+        if _is_wl_excluded(entry.path, project_path, self._wl_exclude_dirs):
+            continue
         if entry.name.startswith(("Python3.", "Python2.", "pypy", ".git")):
             continue
 
-        py_files = self._collect_py_files(entry.path)
+        py_files = self._collect_py_files(entry.path, project_path)
         if py_files:
             # 加载可配置的核心模块判定规则
             core_rules = self._load_core_rules(project_path)
@@ -1258,11 +1289,19 @@ def _discover_modules(self, project_path: str) -> List[WikiModule]:
     return modules
 
 
-def _collect_py_files(self, dir_path: str) -> List[str]:
+def _collect_py_files(self, dir_path: str, project_path: str = None) -> List[str]:
     """收集目录下的 Python 文件"""
+    if not self._wl_exclude_loaded:
+        self._wl_exclude_dirs = _whitelist_exclude_dirs(project_path or os.path.dirname(dir_path))
+        self._wl_exclude_loaded = True
     py_files = []
     for root, dirs, files in os.walk(dir_path):
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in self.EXCLUDE_DIRS]
+        dirs[:] = [d for d in dirs
+                   if not d.startswith(".")
+                   and d not in self.EXCLUDE_DIRS
+                   and not _is_wl_excluded(os.path.join(root, d),
+                                           project_path or os.path.dirname(dir_path),
+                                           self._wl_exclude_dirs)]
         for f in files:
             if f.endswith(".py") and not f.startswith("_"):
                 py_files.append(os.path.join(root, f))
