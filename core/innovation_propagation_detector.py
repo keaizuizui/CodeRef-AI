@@ -486,8 +486,9 @@ class InnovationPropagationDetector:
         """
         self._llm_client = llm_client
         self._llm_available = False
-        # 实例级签名缓存（按 project_path），避免同实例内重复收集（innovation_engine 复用）
-        self._sig_cache_path = None
+        # 实例级签名缓存（按 project_path + whitelist 排除指纹），避免同实例内
+        # 重复扫描（innovation_engine 的 detect/_find_adopters 复用）
+        self._sig_cache_key = None
         self._sig_cache = None
         # LLM 总预算兜底（跨 Step 3/4）
         self._llm_budget = 0
@@ -1000,20 +1001,20 @@ class InnovationPropagationDetector:
         虚拟环境、资源目录，避免把 site-packages 里的数千个第三方 .py 当项目代码，
         导致签名爆炸（实测 16395 个模块）与聚类失真。
         """
-        # 实例级签名缓存：同实例内重复调用（innovation_engine 的 detect/_find_adopters）
-        # 只收集一次，消除重复扫描。
-        if self._sig_cache_path == project_path and self._sig_cache is not None:
+        # whitelist dir 实时排除：备份/镜像目录（如 _refactor_backup）登记在 whitelist
+        # 后，创新签名收集与 arch_* 同步排除，避免其进入 adopters / 创新缺口
+        # （外部反馈：whitelist dir 只在 arch_* 生效，innovation 未吃到）。
+        # 先加载排除列表再查缓存，并把排除指纹纳入缓存 key——whitelist 新增排除后
+        # 缓存自动失效重建（CodeRabbit major）。
+        self._wl_exclude = _whitelist_exclude_dirs(project_path)
+        cache_key = (project_path, tuple(sorted(self._wl_exclude)))
+        if self._sig_cache_key == cache_key and self._sig_cache is not None:
             return self._sig_cache
 
         # 复用 ProjectScope 判定哪些目录应被扫描（懒加载一次 analyze）
         from core.project_scope import ProjectScope
         scope = ProjectScope(project_path)
         scope.analyze()
-
-        # whitelist dir 实时排除：备份/镜像目录（如 _refactor_backup）登记在 whitelist
-        # 后，创新签名收集与 arch_* 同步排除，避免其进入 adopters / 创新缺口
-        # （外部反馈：whitelist dir 只在 arch_* 生效，innovation 未吃到）。
-        self._wl_exclude = _whitelist_exclude_dirs(project_path)
 
         signatures = []
         for root, dirs, files in os.walk(project_path):
@@ -1039,7 +1040,7 @@ class InnovationPropagationDetector:
                 if sig.tags:
                     signatures.append(sig)
 
-        self._sig_cache_path = project_path
+        self._sig_cache_key = cache_key
         self._sig_cache = signatures
         return signatures
 

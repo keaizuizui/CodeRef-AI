@@ -312,8 +312,11 @@ class WikiGenerator:
         # whitelist dir 实时排除：备份/镜像目录（如 _refactor_backup）登记在 whitelist
         # 后，wiki 生成与 arch_* 同步排除，避免其进入 wiki 文档（外部反馈：whitelist
         # dir 只在 arch_* 生效，wiki 未吃到）。惰性加载，避免构造时读盘。
+        # _wl_exclude_path 记录已加载排除的项目路径：切换项目时重新加载，
+        # 不复用上一项目的 whitelist 条目（CodeRabbit major）。
         self._wl_exclude_dirs: List[str] = []
         self._wl_exclude_loaded = False
+        self._wl_exclude_path: Optional[str] = None
         # 记录本次生成失败明细，供 generate() 末尾汇总进 result.errors，
         # 让外层能感知"部分文档生成失败"，避免失败被静默吞掉却标记任务 completed。
         self._failed_docs: List[str] = []
@@ -1226,6 +1229,15 @@ def _prune_stale_module_docs(self, output_dir: str,
 
 # ─── 模块发现 ───
 
+def _ensure_wl_exclude(self, project_path: str) -> None:
+    """按项目路径惰性加载 whitelist 排除（切换项目时重新加载，不复用旧排除）。"""
+    if self._wl_exclude_loaded and self._wl_exclude_path == project_path:
+        return
+    self._wl_exclude_dirs = _whitelist_exclude_dirs(project_path)
+    self._wl_exclude_path = project_path
+    self._wl_exclude_loaded = True
+
+
 def _discover_modules(self, project_path: str) -> List[WikiModule]:
     """发现项目中的 Python 模块"""
     modules = []
@@ -1246,9 +1258,7 @@ def _discover_modules(self, project_path: str) -> List[WikiModule]:
         ))
 
     # 再检查子目录
-    if not self._wl_exclude_loaded:
-        self._wl_exclude_dirs = _whitelist_exclude_dirs(project_path)
-        self._wl_exclude_loaded = True
+    self._ensure_wl_exclude(project_path)
     for entry in os.scandir(project_path):
         if not entry.is_dir():
             continue
@@ -1291,16 +1301,14 @@ def _discover_modules(self, project_path: str) -> List[WikiModule]:
 
 def _collect_py_files(self, dir_path: str, project_path: str = None) -> List[str]:
     """收集目录下的 Python 文件"""
-    if not self._wl_exclude_loaded:
-        self._wl_exclude_dirs = _whitelist_exclude_dirs(project_path or os.path.dirname(dir_path))
-        self._wl_exclude_loaded = True
+    base = project_path or os.path.dirname(dir_path)
+    self._ensure_wl_exclude(base)
     py_files = []
     for root, dirs, files in os.walk(dir_path):
         dirs[:] = [d for d in dirs
                    if not d.startswith(".")
                    and d not in self.EXCLUDE_DIRS
-                   and not _is_wl_excluded(os.path.join(root, d),
-                                           project_path or os.path.dirname(dir_path),
+                   and not _is_wl_excluded(os.path.join(root, d), base,
                                            self._wl_exclude_dirs)]
         for f in files:
             if f.endswith(".py") and not f.startswith("_"):
