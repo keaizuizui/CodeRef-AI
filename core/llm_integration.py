@@ -629,11 +629,18 @@ class LLMIntegration:
     })
 
     @classmethod
-    def _is_placeholder_key(cls, api_key: str) -> bool:
-        """判断 API Key 是否为占位符/示例值（非真实凭据）。"""
+    def _is_placeholder_key(cls, api_key: str,
+                            provider: Optional[LLMProvider] = None) -> bool:
+        """判断 API Key 是否为占位符/示例值（非真实凭据）。
+
+        provider 感知：Ollama 本地服务约定用 "ollama" 作占位凭据（无需真实
+        Key），该值在 OLLAMA provider 下不算无效；其余 provider 一律拒绝。
+        """
         if not api_key:
             return True
         low = api_key.strip().lower()
+        if provider == LLMProvider.OLLAMA and low == "ollama":
+            return False
         if low in cls.PLACEHOLDER_KEYS:
             return True
         if low.startswith("sk-") and any(
@@ -652,7 +659,8 @@ class LLMIntegration:
         if self.client is None:
             return False
         api_key = getattr(self.config, "api_key", "") if self.config is not None else ""
-        return not self._is_placeholder_key(api_key)
+        provider = self.config.provider if self.config is not None else None
+        return not self._is_placeholder_key(api_key, provider)
 
     # ── 成本/输出封顶（R10）──
 
@@ -706,7 +714,8 @@ class LLMIntegration:
             return "LLM调用错误: 客户端初始化失败"
 
         # 兜底：占位符/示例 Key 不发起真实请求，避免无有效凭据时连接空转
-        if self._is_placeholder_key(self.config.api_key):
+        # （OLLAMA provider 的 "ollama" 占位凭据除外，本地服务无需真实 Key）
+        if self._is_placeholder_key(self.config.api_key, self.config.provider):
             logger.warning("LLM不可用：API Key 为占位符/示例值，未配置有效凭据。")
             return "LLM调用错误: 未配置有效的API Key，请在配置面板中填写"
 
