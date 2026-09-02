@@ -405,7 +405,7 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 ## 更新日志
 
-> 4.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.13.1）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
+> 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.13.1）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
 ### 当前版本 v5.13.1 — 规则层审计接入 whitelist 目录排除（备份目录不再污染编程规则）
 
