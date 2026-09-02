@@ -85,7 +85,8 @@ def _md_lines_to_html(line: str) -> str:
     if line.startswith("# "):
         return f"<h2>{_inline_md(_esc(line[2:]))}</h2>"
     if re.match(r"^\s*[-*+]\s+", line):
-        return f"<li>{_inline_md(_esc(re.sub(r'^\s*[-*+]\s+', '', line)))}</li>"
+        text = re.sub(r"^\s*[-*+]\s+", "", line)
+        return f"<li>{_inline_md(_esc(text))}</li>"
     if line.strip() in ("---", "***"):
         return "<hr>"
     if line.startswith("> "):
@@ -345,12 +346,13 @@ def render_overview(project_path: str, output_dir: str = "",
             f"<a href='{_wiki_href(os.path.join(wiki_dir, f), out_dir)}' "
             f"target='_blank' style='margin-right:12px;font-size:12px;color:#2563eb'>"
             f"{_esc(f)}</a>" for f in wiki.get("files", []))
+        index_fallback = '<p style="color:#94a3b8;font-size:12px">（无索引）</p>'
         wiki_html = (
             f"<div style='display:flex;gap:16px;flex-wrap:wrap'>"
             f"<div style='flex:1;min-width:280px'>{wiki['overview_html']}</div>"
             f"<div style='flex:1;min-width:220px'>"
             f"<div style='font-size:13px;font-weight:600;color:#334155'>索引</div>"
-            f"{wiki['index_html'] or '<p style=\"color:#94a3b8;font-size:12px\">（无索引）</p>'}"
+            f"{wiki['index_html'] or index_fallback}"
             f"</div></div>"
             f"<div style='margin-top:10px'>{file_links}</div>")
     else:
