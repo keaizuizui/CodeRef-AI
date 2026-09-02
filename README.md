@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.13.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.13.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -405,18 +405,15 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 ## 更新日志
 
-> 4.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.13.0）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
+> 4.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.13.1）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.13.0 — 新增项目总览报告（架构图/Wiki/人话解读/治理工作项一屏收拢）
+### 当前版本 v5.13.1 — 规则层审计接入 whitelist 目录排除（备份目录不再污染编程规则）
 
-> 承接外部测试反馈：治理看板 gov_board.html「什么有价值的信息都没有」，确认架构图、项目 wiki、人话解读三大高价值产物均为旁立岛屿、从未聚入综合报告。新增 `gov_report(action=overview)` 项目总览，五区块一屏收拢：
-> - **① 一句话体检结论（顶栏大字）**：健康分 + 高危/中危/低危 + 在途/已豁免 + 治理周期结论（对齐度/管线合规/差距收敛）——此前压在 cycle description 里从不见面，现直出到 KPI。
-> - **② 项目架构图**：`<iframe>` 引用 `arch_canvas_*.html`；未生成则诚实占位「需先运行 coderef_arch_canvas」。
-> - **③ 项目 Wiki 介绍**：内联 WIKI_INDEX/OVERVIEW 核心文档 + 全库链接；轻量 Markdown→HTML（front matter 跳过/表格/加粗/链接），file:// 可开可点。
-> - **④ 人话解读摘要**：高危清单 + 分项计数 + 确定性总结（无审计则诚实显示「未审计 ≠ 无风险」）。
-> - **⑤ 治理工作项**：完整标题列；差距快照 + 活动日志直接内联 `__DATA__`、展开不 fetch——根治 gov_board 静态打开详情必失败的缺陷；无服务环境流转降级为只读。
-> - **聚合形态**：健康结论/Wiki/人话解读/治理工作项均内联单文件、file:// 直接可开；架构图区块以 `<iframe>` 引用同目录 `arch_canvas_*.html`（画布为独立交互产物，非单文件内联）；缺省落盘 `<project>/.coderef/project_overview.html`。
-> - **版本号**：5.12.9 → 5.13.0（minor，新增项目总览 feature；不改既有工具暴露面）。
+> 承接外部测试/用户反馈：单独跑 gov 治理维度扫描，`_refactor_backup` 备份目录仍占 PITFALL-01 空异常、IRON-ARCH-01 层级穿透、XSS/命令注入/明文密钥等违规的大头。根因：whitelist 的 dir 目录排除此前只作用于知识图谱符号级分析与 governance 的 secret/doc 扫描，而 `audit()` 用的 `analysis.files`（`CodeAnalyzer.analyze_project` 返回）不读该排除，编程规则全部落到备份目录——「图谱干净 ≠ 审计干净」。
+> - **fix**：`governance_audit.audit()` 边界统一接入 `_apply_whitelist_exclude`（复用 `_whitelist_exclude_dirs` + 图谱 `_is_excluded_path` 同一排除口径），备份/镜像目录的代码文件不再进入任何编程规则检测；同步重算 `total_files`/`total_lines`，报告「扫描范围」与结果口径一致。
+> - **fix（兼容性）**：`core/project_overview.py` 两处 f-string 表达式内含反斜杠/转义引号（Python 3.12+ 才合法），在 Python 3.10/3.11 下 `gov_report(action=overview)` 整模块 import 失败；改为表达式外部计算，恢复 3.10–3.14 兼容。
+> - **回归测试**：`tests/test_feedback_fixes.py` 新增 `RuleAuditWhitelistExcludeTest` 4 用例（helper 过滤 + total 重算 + 默认读 whitelist + audit() 端到端备份目录零违规），全量 143 用例通过。
+> - **版本号**：5.13.0 → 5.13.1（patch，缺陷修复；不改工具暴露面）。
 
 ---
 

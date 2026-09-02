@@ -646,6 +646,11 @@ class GovernanceAuditor:
         analyzer = CodeAnalyzer()
         analysis = analyzer.analyze_project(project_path)
 
+        # 1.5 统一 whitelist 目录排除：备份/镜像目录不进入规则层审计，
+        #     避免污染 PITFALL/security/quality/architecture 等编程规则结果
+        #     （与 _scan_non_py_secrets 同一排除口径，根治图谱干净≠审计干净）
+        analysis = _apply_whitelist_exclude(analysis, project_path)
+
         violations = []
 
         # 2. 逐文件检测
@@ -1588,6 +1593,33 @@ def _is_wl_excluded(path: str, project_path: str, exclude_dirs: List[str]) -> bo
         return False
     from core.code_knowledge_graph import _is_excluded_path
     return _is_excluded_path(path, project_path, exclude_dirs)
+
+
+def _apply_whitelist_exclude(analysis, project_path, wl_exclude=None):
+    """把 whitelist 的 dir 目录排除作用于规则层审计的代码文件集。
+
+    与 _scan_non_py_secrets / _scan_doc_secrets 复用同一 _whitelist_exclude_dirs
+    排除口径；备份/镜像目录不参与 PITFALL/security/quality/architecture 等
+    编程规则审计，根治「图谱干净 ≠ 审计干净」的机制割裂。同步重算
+    total_files / total_lines，保证报告「扫描范围」与审计结果口径一致。
+
+    wl_exclude 为可选的排除目录列表注入（测试用）；缺省为 None 时自行读取。
+    """
+    if wl_exclude is None:
+        wl_exclude = _whitelist_exclude_dirs(project_path)
+    if not wl_exclude:
+        return analysis
+    kept = []
+    for cf in analysis.files:
+        if not _is_wl_excluded(cf.file_path, project_path, wl_exclude):
+            kept.append(cf)
+    analysis.files = kept
+    analysis.total_files = len(kept)
+    analysis.total_lines = sum(
+        (cf.raw_content.count("\n") + 1) if cf.raw_content else 0
+        for cf in kept
+    )
+    return analysis
 
 
 def _scan_non_py_secrets(project_path: str) -> List[GovernanceViolation]:

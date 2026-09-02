@@ -4,6 +4,14 @@
 
 ---
 
+### v5.13.1 — 规则层审计接入 whitelist 目录排除（备份目录不再污染编程规则）
+
+> 承接外部测试/用户反馈（未解决残留）：单独跑 gov 治理维度扫描，`_refactor_backup` 备份目录仍占 PITFALL-01 空异常（51 处约一半）、IRON-ARCH-01 层级穿透（20 处 10 处）、XSS/命令注入/明文密钥等 HIGH 项的大头。根因：whitelist 的 dir 目录排除此前只作用于**知识图谱符号级分析**（真身/循环/重复匹配）与 governance 的 secret/doc 扫描，而 `audit()` 使用的 `analysis.files`（`CodeAnalyzer.analyze_project` 返回）不读该排除，PITFALL/security/quality/architecture 编程规则全部落到备份目录——「图谱干净 ≠ 审计干净」，两套机制分离。
+> - **fix（规则层接入排除）**：`governance_audit.audit()` 在基础分析后统一接入 `_apply_whitelist_exclude(analysis, project_path)`——复用 `_whitelist_exclude_dirs`（读 whitelist 的 `dir` 条目）+ 图谱 `_is_excluded_path`（目录名任意层级匹配）同一排除口径，备份/镜像目录的代码文件不再进入任何编程规则检测；同步重算 `analysis.files` / `total_files` / `total_lines`，报告「扫描范围」与审计结果口径一致，避免健康分惩罚与文件数自相矛盾。一处过滤即覆盖 security/pitfall/quality/architecture 全部规则（逐文件与跨文件分析均遍历 `analysis.files`）。
+> - **fix（Python 3.10/3.11 兼容性，顺带）**：`core/project_overview.py` 两处 f-string 表达式含反斜杠（`re.sub(r'^\s*[-*+]\s+', ...)` 中的 `\s`）与转义引号（`'<p style=\"...\">'`），Python 3.12+ 才合法——在 3.10/3.11 下 `gov_report(action=overview)` 整模块 import 即 SyntaxError、功能不可用，与 README「Python 3.10+」承诺冲突；改为表达式外部计算（先 `re.sub` 再入 f-string），恢复 3.10–3.14 兼容。
+> - **回归测试**：`tests/test_feedback_fixes.py` 新增 `RuleAuditWhitelistExcludeTest` 4 用例——helper 无排除原样保留 / 备份文件剔除 + total 重算 / 缺省注入读 whitelist / `audit()` 端到端（临时项目含 `_refactor_backup` 违规文件、whitelist 登记排除后报告零备份路径），全量 143 用例通过（Python 3.10）。
+> - **版本号**：5.13.0 → 5.13.1（patch，缺陷修复；不改工具暴露面）。
+
 ### v5.13.0 — 新增项目总览报告（架构图/Wiki/人话解读/治理工作项一屏收拢）
 
 > 承接外部测试反馈：治理看板 gov_board.html「什么有价值的信息都没有」，追问确认三大高价值产物（架构图、项目 wiki、人话解读）均为旁立岛屿、从未聚入任何综合报告。新增 `gov_report(action=overview)` 项目总览，五区块一屏收拢：
