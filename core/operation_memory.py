@@ -544,7 +544,7 @@ class ResourceScanner:
             elif ext in _DOC_EXTENSIONS and (
                     "docs" in rel.lower() or "wiki" in rel.lower() or
                     "readme" in os.path.basename(fp).lower() or
-                    os.path.basename(fp).lower() in ("coderef.md", "agents.md")):
+                    rel.lower() in ("coderef.md", "agents.md")):
                 result["doc"].append({
                     "name": os.path.basename(fp),
                     "path": fp,
