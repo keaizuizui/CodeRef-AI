@@ -381,8 +381,11 @@ class WorkflowGraph:
             from core.pipeline_runner import whitelist_list
             exclude_dirs = [e["dir"] for e in whitelist_list(project_path)
                             if e.get("dir")]
-        except Exception:  # pragma: no cover
-            exclude_dirs = []
+        except Exception as exc:
+            # U-40 / CodeRabbit major：白名单加载失败不静默转空排除（fail-open
+            # 会让备份目录无过滤入图），传播配置错误，由生成方决定是否降级。
+            logger.exception("[WorkflowGraph] 加载白名单排除目录失败")
+            raise RuntimeError("无法加载白名单排除目录") from exc
         if not exclude_dirs:
             return nodes, edges
         from core.code_knowledge_graph import _is_excluded_path
