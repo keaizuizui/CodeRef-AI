@@ -383,8 +383,11 @@ class MemoryLayer:
             exclude_dirs = []
             try:
                 from core.pipeline_runner import whitelist_list
+                # U-39：只判 dir 字段、不看 rule。真实白名单 dir 排除条目的
+                # rule 字段缺失（以 dir 标志）；v5.13.5 误加 rule=="dir" 让
+                # exclude_dirs 恒空（登记册 U-39 实证），与 _build_kg 口径同源。
                 exclude_dirs = [e["dir"] for e in whitelist_list(project_path)
-                                if e.get("rule") == "dir" and e.get("dir")]
+                                if e.get("dir")]
             except Exception:  # pragma: no cover
                 pass
             kg_stats = kg.build(analysis=analysis, ast_results=ast_results,

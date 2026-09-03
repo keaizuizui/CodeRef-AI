@@ -4,7 +4,16 @@
 
 ---
 
-### v5.13.5 — U-38 观察项双修复（coderef_version 探针返回空 + memory_layer 图谱重建漏排除）
+### v5.13.6 — U-39/U-40 双课题修复（图谱层排除口径 + workflow_graph 接入白名单 dir 排除）
+
+> 承接登记册 U-39、U-40（2026-09-03 测试方开立）。v5.13.5 的 memory_layer 排除因过滤条件错误未真正生效（假修复被复测识破），本轮修正口径并补齐 workflow_graph 链路。
+
+- **U-39 · 图谱层同步目录排除失效**：v5.13.5 在 `MemoryLayer._update_knowledge_graph` 的排除过滤里误加 `rule=="dir"`，而真实白名单 dir 排除条目的 `rule` 字段缺失（以 `dir` 字段标志），导致 `exclude_dirs` 恒空、备份目录仍入图（`cache\kg` 中 `_refactor_backup` 节点 265 / 边 1095）。修复：过滤改为仅判 `dir` 字段，与 `pipeline_runner._build_kg` 口径一致。回归测试改用**真实形态条目**（`{"dir": ...}`，无 rule），杜绝假绿。
+- **U-40 · architecture 产物备份排除口径割裂**：`workflow_graph` 的 GitNexus 索引链路与 CodeAnalyzer 降级链路收集节点时未应用白名单 `dir` 排除，备份目录（`_refactor_backup`）节点进 `workflow_graph_*.html`，并经 `project_overview` 降级内嵌传导到总览架构图。修复：`generate()` 统一套用 `_apply_whitelist_exclude`，复用图谱层 `_is_excluded_path`，与图谱/画布/洞察口径一致。
+- **回归测试**：新增 `WorkflowGraphExcludeTest`×2（备份节点/边过滤 + 无白名单不排除）+ 修订 `MemoryLayerKgExcludeTest` 为真实形态条目；全量 **163 用例通过**（Python 3.10）。
+- **版本号**：5.13.5 → 5.13.6（patch，缺陷修复；不改工具暴露面）。
+
+---
 
 > 承接登记册 U-38 真实现场终验后留下的 2 条观察项（不阻塞闭环，但须修复以防止后续版本再触发同类问题）。
 
