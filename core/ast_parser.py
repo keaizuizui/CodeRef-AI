@@ -103,10 +103,14 @@ class AstFileResult:
     file_path: str
     language: str = "python"
     imports: List[AstCodeImport] = field(default_factory=list)
+    # 方法体/类体内局部 import（供实例化调用建边推导变量宿主类；模块级 import 在 imports）
+    local_imports: List[AstCodeImport] = field(default_factory=list)
     functions: List[AstCodeFunction] = field(default_factory=list)
     classes: List[AstCodeClass] = field(default_factory=list)
     calls: List[AstCodeCall] = field(default_factory=list)
     assignments: List[AstCodeAssignment] = field(default_factory=list)
+    # 方法体/类体内局部赋值（供实例化调用建边推导变量宿主类；模块级赋值在 assignments）
+    local_assignments: List[AstCodeAssignment] = field(default_factory=list)
     total_lines: int = 0
     module_docstring: Optional[str] = None
 
@@ -234,10 +238,38 @@ class AstParser:
         # 提取所有函数调用（AST 遍历）
         self._extract_all_calls(tree, result, content)
 
+        # 提取方法体/类体内的局部 import 与赋值（供实例化调用建边推导变量宿主类）
+        self._collect_body_imports_assigns(tree, result, content)
+
         return result
 
-    def _handle_import(self, node: ast.Import, result: AstFileResult):
-        """处理 import X 语句"""
+    def _collect_body_imports_assigns(self, node: ast.AST, result: AstFileResult,
+                                      content: str, top: bool = True):
+        """递归收集非顶层（方法体/类体内）的 import 与赋值到 local_* 字段。
+
+        top=True 表示当前在模块顶层：其直接子节点的 import/assign 已由
+        parse_content 主循环处理，这里跳过避免重复；进入函数/类/控制块后
+        top=False，其内部 import/assign 属于局部作用域，记录到 local_*。
+        """
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.Import, ast.ImportFrom)):
+                if not top:
+                    if isinstance(child, ast.Import):
+                        self._handle_import(child, result, local=True)
+                    else:
+                        self._handle_import_from(child, result, local=True)
+            elif isinstance(child, ast.Assign):
+                if not top:
+                    self._handle_assignment(child, result, content, local=True)
+            elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                    ast.ClassDef, ast.If, ast.For, ast.While,
+                                    ast.With, ast.AsyncWith, ast.Try,
+                                    ast.AsyncFor)):
+                self._collect_body_imports_assigns(child, result, content,
+                                                   top=False)
+
+    def _handle_import(self, node: ast.Import, result: AstFileResult, local: bool = False):
+        """处理 import X 语句（local=True 时记录到 local_imports）"""
         for alias in node.names:
             imp = AstCodeImport(
                 module=alias.name,
@@ -246,10 +278,11 @@ class AstParser:
                 line=node.lineno,
                 category=self._classify_import(alias.name),
             )
-            result.imports.append(imp)
+            (result.local_imports if local else result.imports).append(imp)
 
-    def _handle_import_from(self, node: ast.ImportFrom, result: AstFileResult):
-        """处理 from X import Y 语句"""
+    def _handle_import_from(self, node: ast.ImportFrom, result: AstFileResult,
+                            local: bool = False):
+        """处理 from X import Y 语句（local=True 时记录到 local_imports）"""
         module = node.module or ""
         level = node.level  # 相对导入层级（0=绝对导入, >0=相对导入）
 
@@ -268,7 +301,7 @@ class AstParser:
             line=node.lineno,
             category=category,
         )
-        result.imports.append(imp)
+        (result.local_imports if local else result.imports).append(imp)
 
     def _classify_import(self, module: str) -> str:
         """分类导入：stdlib / third_party / project"""
@@ -379,8 +412,8 @@ class AstParser:
         return cls
 
     def _handle_assignment(self, node: ast.Assign, result: AstFileResult,
-                           content: str):
-        """处理赋值语句，区分常量/配置/硬编码"""
+                           content: str, local: bool = False):
+        """处理赋值语句，区分常量/配置/硬编码（local=True 时记录到 local_assignments）"""
         for target in node.targets:
             if isinstance(target, ast.Name):
                 var_name = target.id
@@ -392,12 +425,13 @@ class AstParser:
                 # 分类
                 category = self._classify_assignment(var_name, value_node)
 
-                result.assignments.append(AstCodeAssignment(
-                    target=var_name,
-                    value_repr=value_repr,
-                    line=node.lineno,
-                    category=category,
-                ))
+                (result.local_assignments if local else result.assignments).append(
+                    AstCodeAssignment(
+                        target=var_name,
+                        value_repr=value_repr,
+                        line=node.lineno,
+                        category=category,
+                    ))
 
     def _classify_assignment(self, var_name: str, value_node: ast.AST) -> str:
         """

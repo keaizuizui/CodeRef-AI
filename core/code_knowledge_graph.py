@@ -71,6 +71,11 @@ class KGQueryResult:
 # 节点构造与 id 预收集逻辑（不依赖 self 状态）
 # ═══════════════════════════════════════════════════════════════════
 
+# 实例化赋值识别：`svc = ResearchTool()` / `tool = ResearchTool(cfg)` /
+# `x = mod.ResearchTool(...)` —— 取 `(` 前的类名（含模块前缀时取最后一段）
+_INST_RE = re.compile(r'^\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*\(')
+
+
 def _module_key(project_path: str, rel: str) -> str:
     """模块 id 前缀：相对 project_path 的路径去扩展名（正斜杠）。
 
@@ -518,10 +523,16 @@ class CodeKnowledgeGraph:
             module_key = _module_key(self.project_path, file_path)
             rel = file_path
 
+            # 变量宿主类推导：从 import（模块级 + 方法体内局部）+ 实例化赋值
+            # 建立「变量名 → (宿主类, 模块)」映射，供 obj.method() 调用解析目标类
+            var_host = self._collect_var_host_classes(ar)
+
             # 调用关系 → CALLS 边
             for call in getattr(ar, "calls", []):
-                # 尝试找到调用所在的函数
+                # 尝试找到调用所在的函数（nodes 表行号优先，AST 结构兜底）
                 caller_id = self._find_containing_node(rel, call.line)
+                if not caller_id:
+                    caller_id = self._ast_containing_method_id(ar, module_key, call.line)
                 if not caller_id:
                     caller_id = f"mod:{module_key}"
 
@@ -530,7 +541,11 @@ class CodeKnowledgeGraph:
                 #   2) self/cls 调用 → 按调用者所在模块+类构造完整方法 id 精确匹配
                 #      （self.run_bot → method:<调用者mod>:<调用者类>.run_bot），避免与
                 #      其他模块同名类方法或顶层同名函数撞 CALLS 边；
-                #   3) 回退短名模糊匹配（漏建则 callers 查询返空）。
+                #   3) 实例化对象方法调用 → 从 import + 实例化推导变量宿主类，
+                #      构造 method:<宿主类模块>:<宿主类>.<方法> 精确匹配
+                #      （svc=ResearchTool() → svc.run → ResearchTool.run），
+                #      避免短名 LIKE 回退把构造调用误匹配成方法调用（伪 CALLS 边）；
+                #   4) 回退短名模糊匹配（漏建则 callers 查询返空）。
                 callee_id = self._find_node_by_name(call.func_name)
                 if not callee_id:
                     first, _, rest = call.func_name.partition(".")
@@ -538,6 +553,8 @@ class CodeKnowledgeGraph:
                         mid = self._caller_method_id(caller_id, rest)
                         if mid and self._node_exists(mid):
                             callee_id = mid
+                if not callee_id:
+                    callee_id = self._resolve_instance_call(call, var_host)
                 if not callee_id:
                     callee_name = call.func_name.split(".")[-1]
                     callee_id = self._find_node_by_name(callee_name)
@@ -835,6 +852,95 @@ class CodeKnowledgeGraph:
                         (end_line - start_line) ASC LIMIT 1""",
             (file_path, line, line)).fetchone()
         return row["id"] if row else None
+
+    def _collect_var_host_classes(self, ar) -> Dict[str, Tuple[str, str]]:
+        """从 import + 实例化赋值推导「变量名 → (宿主类, 模块)」映射。
+
+        覆盖两档 import：
+          - 模块级（ar.imports）：`from tool_research import ResearchTool`
+          - 方法体内局部（ar.local_imports）：`def f: from tool_research import ResearchTool`
+        实例化赋值（ar.assignments + ar.local_assignments）：
+          - `svc = ResearchTool()` / `tool = ResearchTool(cfg)`
+        仅当实例化类名来自本项目 import 才记录，避免把 os.environ.get 等
+        第三方/内置调用误当实例化。返回 {"svc": ("ResearchTool", "tool_research")}。
+        """
+        class_to_module: Dict[str, str] = {}
+        for imp in (list(getattr(ar, "imports", []))
+                    + list(getattr(ar, "local_imports", []))):
+            if imp.is_from_import:
+                for nm in imp.names:
+                    class_to_module.setdefault(nm, imp.module)
+            else:
+                # import X → 类 X.Y 的模块前缀即 X（实例化 value 形如 X.Y(...)）
+                for nm in imp.names:
+                    class_to_module.setdefault(nm, nm)
+        var_host: Dict[str, Tuple[str, str]] = {}
+        for a in (list(getattr(ar, "assignments", []))
+                  + list(getattr(ar, "local_assignments", []))):
+            m = _INST_RE.match(a.value_repr)
+            if not m:
+                continue
+            cls_name = m.group(1).split(".")[-1]
+            mod = class_to_module.get(cls_name)
+            if mod:
+                var_host[a.target] = (cls_name, mod)
+        return var_host
+
+    def _ast_containing_method_id(self, ar, module_key: str,
+                                  line: int) -> Optional[str]:
+        """从 AstFileResult 的函数/类行号定位调用所在方法节点 id。
+
+        nodes 表行号缺失/不准时（如测试夹具手动建节点未覆盖调用行）兜底：
+        AstFileResult 的 classes/functions 行号来自真实 AST，区间准确。
+        """
+        for cls in getattr(ar, "classes", []):
+            for m in getattr(cls, "methods", []):
+                if m.start_line <= line <= m.end_line:
+                    return f"method:{module_key}:{cls.name}.{m.name}"
+        for f in getattr(ar, "functions", []):
+            if f.start_line <= line <= f.end_line:
+                return f"func:{module_key}:{f.name}"
+        return None
+
+    def _module_key_for_import(self, mod: str, cls_name: str) -> Optional[str]:
+        """把 import 模块名解析为图谱中该类方法节点所在模块的 key。
+
+        查询 nodes 中该类名的方法节点，取其 file_path 的模块 key；若多个文件
+        定义同名类，用 import 模块名最后一段过滤（tool_research → tool_research.py）。
+        """
+        mod_tail = mod.split(".")[-1]
+        rows = self._conn.execute(
+            "SELECT DISTINCT file_path FROM nodes "
+            "WHERE type='method' AND name LIKE ?",
+            (f"{cls_name}.%",)).fetchall()
+        for row in rows:
+            fp = row["file_path"]
+            base = os.path.splitext(os.path.basename(fp))[0]
+            if base == mod_tail:
+                return _module_key(self.project_path, fp)
+        return None
+
+    def _resolve_instance_call(self, call, var_host) -> Optional[str]:
+        """实例化对象方法调用解析：obj.method() → 宿主类方法节点 id。
+
+        从变量宿主类映射（svc→ResearchTool）推导目标类，再结合 import 模块名
+        定位类所在模块，构造 method:<mod>:<类>.<方法> 精确匹配节点。仅当
+        目标方法节点已注册才返回，避免跨类同名方法误绑（DissectTool.run）。
+        """
+        if not call.is_method_call:
+            return None
+        obj, _, method = call.func_name.partition(".")
+        if not obj or not method:
+            return None
+        host = var_host.get(obj)
+        if not host:
+            return None
+        cls_name, mod = host
+        mod_key = self._module_key_for_import(mod, cls_name)
+        if not mod_key:
+            return None
+        mid = f"method:{mod_key}:{cls_name}.{method}"
+        return mid if self._node_exists(mid) else None
 
     def _ref_is_excluded(self, name: str) -> bool:
         """判断 GitNexus 引用名是否指向被排除目录下的符号。

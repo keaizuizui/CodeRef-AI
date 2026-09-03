@@ -136,6 +136,12 @@ def _ast_to_dict(ar) -> dict:
              "category": i.category}
             for i in ar.imports
         ],
+        "local_imports": [
+            {"module": i.module, "names": list(i.names),
+             "is_from_import": i.is_from_import, "line": i.line,
+             "category": i.category}
+            for i in getattr(ar, "local_imports", [])
+        ],
         "functions": [_ast_func_to_dict(f) for f in ar.functions],
         "classes": [_ast_class_to_dict(c) for c in ar.classes],
         "calls": [
@@ -148,6 +154,11 @@ def _ast_to_dict(ar) -> dict:
             {"target": a.target, "value_repr": a.value_repr,
              "line": a.line, "category": a.category}
             for a in ar.assignments
+        ],
+        "local_assignments": [
+            {"target": a.target, "value_repr": a.value_repr,
+             "line": a.line, "category": a.category}
+            for a in getattr(ar, "local_assignments", [])
         ],
         "total_lines": ar.total_lines,
         "module_docstring": ar.module_docstring,
@@ -209,6 +220,12 @@ def _ast_from_dict(d: dict):
                       line=i.get("line", 0), category=i.get("category", "unknown"))
         for i in d.get("imports", [])
     ]
+    result.local_imports = [
+        AstCodeImport(module=i["module"], names=list(i.get("names", [])),
+                      is_from_import=i.get("is_from_import", False),
+                      line=i.get("line", 0), category=i.get("category", "unknown"))
+        for i in d.get("local_imports", [])
+    ]
     result.calls = [
         AstCodeCall(func_name=c["func_name"], line=c.get("line", 0),
                     is_method_call=c.get("is_method_call", False),
@@ -220,6 +237,11 @@ def _ast_from_dict(d: dict):
         AstCodeAssignment(target=a["target"], value_repr=a.get("value_repr", ""),
                           line=a.get("line", 0), category=a.get("category", "expression"))
         for a in d.get("assignments", [])
+    ]
+    result.local_assignments = [
+        AstCodeAssignment(target=a["target"], value_repr=a.get("value_repr", ""),
+                          line=a.get("line", 0), category=a.get("category", "expression"))
+        for a in d.get("local_assignments", [])
     ]
     result.functions = [_func(f) for f in d.get("functions", [])]
     result.classes = [_class(c) for c in d.get("classes", [])]

@@ -420,6 +420,19 @@ def _detect_business_gaps(flows: List[dict],
     return gaps
 
 
+def _whitelist_duplicate_exemptions(project_path: str) -> List[dict]:
+    """读取 whitelist 中 rule=duplicate 条目（符号级豁免）。
+
+    真实 schema：file + rule + category（category 前缀为符号名）。已人工豁免的
+    "设计并存"符号不再产出 duplicate gap；未豁免的真重复不受影响。
+    """
+    try:
+        from core.pipeline_runner import whitelist_list
+        return [e for e in whitelist_list(project_path) if e.get("rule") == "duplicate"]
+    except Exception:  # pragma: no cover
+        return []
+
+
 def _detect_duplicates(project_path: str, db_path: str,
                        parts: Dict[str, bool],
                        ds: Optional[dict] = None) -> List[dict]:
@@ -440,6 +453,10 @@ def _detect_duplicates(project_path: str, db_path: str,
     if not ds.get("ok"):
         return []
 
+    # 白名单 rule=duplicate 豁免：已人工豁免的"设计并存"符号不再报 duplicate gap
+    exempt_files = {e.get("file") for e in _whitelist_duplicate_exemptions(project_path)
+                    if e.get("file")}
+
     gaps: List[dict] = []
     # 1) 同构重复簇（跨模块同名高相似度实现）
     if parts.get("duplicate", True):
@@ -447,6 +464,8 @@ def _detect_duplicates(project_path: str, db_path: str,
             if c.get("kind") != "duplicate":
                 continue
             copies = c.get("copies") or []
+            if any(cp.get("file") in exempt_files for cp in copies):
+                continue
             mods = ",".join(sorted({cp.get("mod", "?") for cp in copies}))
             locs = [f"{cp.get('mod','?')}:{cp.get('file','')}:{cp.get('line',0)}"
                     for cp in copies]
