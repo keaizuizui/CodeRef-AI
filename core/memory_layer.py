@@ -377,7 +377,18 @@ class MemoryLayer:
         try:
             from core.code_knowledge_graph import CodeKnowledgeGraph
             kg = CodeKnowledgeGraph(project_path)
-            kg_stats = kg.build(analysis=analysis, ast_results=ast_results)
+            # 图谱构建接入 whitelist dir 排除，避免备份目录（如 _refactor_backup）
+            # 污染符号级真身判定、循环与重复匹配（登记册 U-38 观察项：
+            # 图谱重建时备份目录仍入图）。与 pipeline_runner._build_kg 口径一致。
+            exclude_dirs = []
+            try:
+                from core.pipeline_runner import whitelist_list
+                exclude_dirs = [e["dir"] for e in whitelist_list(project_path)
+                                if e.get("rule") == "dir" and e.get("dir")]
+            except Exception:  # pragma: no cover
+                pass
+            kg_stats = kg.build(analysis=analysis, ast_results=ast_results,
+                                 exclude_dirs=exclude_dirs)
             kg.close()
             return kg_stats
         except Exception as e:

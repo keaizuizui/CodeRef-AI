@@ -4,6 +4,17 @@
 
 ---
 
+### v5.13.5 — U-38 观察项双修复（coderef_version 探针返回空 + memory_layer 图谱重建漏排除）
+
+> 承接登记册 U-38 真实现场终验后留下的 2 条观察项（不阻塞闭环，但须修复以防止后续版本再触发同类问题）。
+
+- **① coderef_version 版本探针返回空**（登记册 U-38 §观察项①）：`_run` 层 `project_path` 校验豁免名单只列了 `coderef_scan_list` / `coderef_gov_workspace`，**漏了 `coderef_version`**。schema 声明无需 project_path，但调用时 `p=""` 走到 `_validate_project_path` 抛 ValueError → 客户端看到"返回空"。这也是 v5.12.7 登记册 §1 就提过的"schema 标无需参数与实际封装不一致"的根因。修复：把 `coderef_version` 加入豁免名单，使其与 `coderef_scan_list` 一致——schema 与运行时行为对齐。
+- **② 图谱重建时 _refactor_backup 备份目录仍入图**（登记册 U-38 §观察项② / U-37③ 关联方向）：`MemoryLayer._update_knowledge_graph` 调用 `kg.build()` **没传 `exclude_dirs`**，导致 `coderef_memory(action=sync, mode=full)` 路径下备份目录文件全入图，污染符号级真身/循环/重复判定。`pipeline_runner._build_kg` 是接了 whitelist dir 的，但 memory_layer 这条独立路径漏了。修复：`_update_knowledge_graph` 读取 whitelist `rule=dir` 条目并传入 `exclude_dirs`，与 `_build_kg` 口径一致。
+- **回归测试**：新增 `VersionProbeTest.test_via_run_skips_path_validation`（走 `_run` 层空参数返回版本）+ `MemoryLayerKgExcludeTest.test_update_kg_passes_whitelist_dirs`（memory 层 whitelist dir 传入 kg.build）×2；全量 **161 通过**（Python 3.10）。
+- **版本号**：5.13.4 → 5.13.5（patch，缺陷修复；不改工具暴露面）。
+
+---
+
 ### v5.13.4 — 架构图产物收敛（architecture 附带生成画布 + 总览降级内嵌）
 
 > 承接外部反馈「AI 连续两次指出没看到做架构图」：根因是 `coderef_architecture` 的产物分离——它产出的 workflow_graph（原始调用图，落 `.gitnexus/`）与架构洞察 md，并不产出带角色归属的可视化画布；而画布 `arch_canvas` 由独立入口 `coderef_arch_canvas` 生成。总览报告只认 `.coderef/arch_canvas_*.html`，没有就显示"尚未生成架构画布"，于是编程 AI 只跑 architecture 却在总览看不到架构图。

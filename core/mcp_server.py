@@ -2754,10 +2754,10 @@ class Server:
         from core.pipeline_runner import Pipe
         # 部分工具（如 coderef_scan_list）不依赖 project_path，用容错读取避免误抛 KeyError
         p, o = a.get("project_path", ""), a.get("output_dir")
-        # P1高-3：project_path 校验与规范化（coderef_scan_list 不依赖路径，跳过；
-        # coderef_gov_workspace 用 projects 数组而非 project_path，也跳过）。
+        # P1高-3：project_path 校验与规范化（coderef_scan_list / coderef_version
+        # 不依赖路径，跳过；coderef_gov_workspace 用 projects 数组而非 project_path，也跳过）。
         # 无效路径返回结构化错误而非空成功；相对路径（../空串）拒绝，禁止越权扫描。
-        if n not in ("coderef_scan_list", "coderef_gov_workspace"):
+        if n not in ("coderef_scan_list", "coderef_gov_workspace", "coderef_version"):
             p = self._validate_project_path(n, p)
             a["project_path"] = p
         logger.info(f"[{n}] {p}")
