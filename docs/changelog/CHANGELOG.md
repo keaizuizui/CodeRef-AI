@@ -4,6 +4,17 @@
 
 ---
 
+### v5.13.7 — operation_memory 提炼来源纳入仓库根规程文件（CODEREF.md/AGENTS.md）
+
+> 测试方诉求「tests 测试副本归属约定」落 operation memory 时发现：`ResourceScanner._detect_docs_reports` 只把路径含 `docs`/`wiki` 或文件名含 `readme` 的 md 收为 doc 来源，仓库根的 `CODEREF.md`/`AGENTS.md`（操作红线/规程全文）从未被纳入 sync 提炼来源，导致其内容无法被 LLM 提炼为隐性知识（decision/convention/pitfall）。
+
+- **修复**：`core/operation_memory.py` 的 `_detect_docs_reports` 分类条件追加仓库根 `coderef.md`/`agents.md` 文件名匹配，使操作红线/规程可被 `coderef_operation_memory(action=sync)` 提炼。
+- **落库**：`tests/` 测试副本归属约定（测试方唯一 owner、开发方只回报用例清单、验收以用例数一致为校验、留证用例不得覆盖/删除）已确定性写入 `data/operation_memory/<hash>/ledger.json` + `BRAIN.md`（source=CODEREF.md 第 8 节），`coderef_operation_memory(action=query, query_type=convention, keyword=tests)` 可检索命中。
+- **回归**：全量 **164 用例通过**（Python 3.10）。
+- **版本号**：5.13.6 → 5.13.7（patch，功能修订；不改工具暴露面）。
+
+---
+
 ### v5.13.6 — U-39/U-40 双课题修复（图谱层排除口径 + workflow_graph 接入白名单 dir 排除）
 
 > 承接登记册 U-39、U-40（2026-09-03 测试方开立）。v5.13.5 的 memory_layer 排除因过滤条件错误未真正生效（假修复被复测识破），本轮修正口径并补齐 workflow_graph 链路。
