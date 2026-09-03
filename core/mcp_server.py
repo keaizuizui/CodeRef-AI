@@ -2242,6 +2242,7 @@ def _arch(a) -> str:
         "project_path": a["project_path"],
         "report": r.report,
         "report_path": r.report_path or "",
+        "arch_canvas": getattr(r, "arch_canvas", ""),
         "summary": {
             "total_files": getattr(r, "total_files", 0),
             "total_lines": getattr(r, "total_lines", 0),

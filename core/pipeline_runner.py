@@ -114,6 +114,7 @@ class PipeResult:
     kg_built_at: str = ""          # 本次审计构建的知识图谱时间（若为历史图谱则为旧时间）
     wiki_result: Optional[object] = None  # coderef_docs 的 WikiResult，供 MCP 层返回结构化文档统计
     html_report: dict = field(default_factory=dict)  # HTML 报告渲染结果（见 report_renderer.render 返回值）
+    arch_canvas: str = ""  # coderef_architecture 追加生成的架构画布绝对路径（无则空）
     # 功能②：审计策略判定 + LLM 功能审查增强结果
     review_strategy: dict = field(default_factory=dict)     # ReviewAdvisor.advise() 返回值
     functional_review: dict = field(default_factory=dict)   # FunctionalReviewer.review() 返回值
@@ -1926,6 +1927,22 @@ class Pipe:
             except Exception as e:
                 r.errors.append(f"insight: {e}")
                 r.report += f"\n\n## 🧭 架构洞察（）\n\n> 洞察生成失败：{e}\n"
+            # 追加生成可视化画布：coderef_architecture 承诺"交互式模块画布(HTML)"，
+            # 不再让 arch_canvas 成为孤儿入口——同一次调用一并产出，并把画布路径
+            # 写进 md 报告尾部，编程 AI 读完就知道架构图在哪儿（外部反馈：AI 连续两次
+            # "没看到架构图"，根因即 architecture 产物与 arch_canvas 分离）。
+            try:
+                from core.canvas_generator import ArchCanvas
+                canvas = ArchCanvas().generate(project_path=project_path, output_dir=None)
+                if canvas:
+                    r.arch_canvas = canvas
+                    r.report += (
+                        f"\n\n## 🖼 架构画布\n\n"
+                        f"> 可视化架构画布（带角色归属，三层布局，可拖拽）：\n\n"
+                        f"- 文件：`{canvas}`\n"
+                        f"- 浏览器本地打开即可交互编辑、导出目标架构 JSON。\n")
+            except Exception as e:
+                r.errors.append(f"canvas: {e}")
             os.makedirs(out, exist_ok=True)
             fn = f"coderef_arch_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
             r.report_path = os.path.join(out, fn)

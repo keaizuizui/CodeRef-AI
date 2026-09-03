@@ -4,6 +4,14 @@
 
 ---
 
+### v5.13.4 — 架构图产物收敛（architecture 附带生成画布 + 总览降级内嵌）
+
+> 承接外部反馈「AI 连续两次指出没看到做架构图」：根因是 `coderef_architecture` 的产物分离——它产出的 workflow_graph（原始调用图，落 `.gitnexus/`）与架构洞察 md，并不产出带角色归属的可视化画布；而画布 `arch_canvas` 由独立入口 `coderef_arch_canvas` 生成。总览报告只认 `.coderef/arch_canvas_*.html`，没有就显示"尚未生成架构画布"，于是编程 AI 只跑 architecture 却在总览看不到架构图。
+> - **A. `coderef_architecture` 一次调用即产出画布**：`Pipe.architecture()` 追加调用 `ArchCanvas().generate()`，画布落 `<proj>/.coderef/arch_canvas_*.html`，路径写入 md 报告尾部「🖼 架构画布」段落，并通过新增 `PipeResult.arch_canvas` 字段回传供 MCP 返回。名字与产物对齐——"架构分析图谱"名副其实包含可视化画布。画布生成失败不阻断报告（记入 errors 继续出 md）。
+> - **B. 总览报告降级内嵌 workflow_graph**：`project_overview` 新增 `_find_workflow_graph()` 兜底——无 `arch_canvas` 时在 `.gitnexus/`（兼容 `coderef-report/`）找最新 `workflow_graph_*.html` 内嵌，保证总览至少有一张架构图；都无才提示运行。`arch_canvas` 优先、workflow_graph 兜底的等级顺序，`payload[arch_fallback]` + `sections[workflow_graph]` 透出状态。
+> - **回归测试**：新增 `ArchitectureCanvasProbeTest`（architecture 产出画布 + 画布失败不阻断）×2 + `RenderOverviewTest.test_fallback_to_workflow_graph_when_no_canvas`×1；全量 **159 用例通过**（Python 3.10）。
+> - **版本号**：5.13.3 → 5.13.4（patch，缺陷修复；不改工具暴露面）。
+
 ### v5.13.3 — U-37① 再次修复（arch_gap 豁免尾段匹配，目录前缀形态生效）
 
 > 承接测试方复核（登记册「U-37 开发方回报 v5.13.2 后 · 测试方复核」）：U-37① 在 v5.13.2 用精确集合命中实现豁免消费，但真实重复簇 `copies[].file` 是**带目录前缀的相对路径**（`技能库/smart_data_hub.py`），而豁免条目 `file` 是裸文件名（`smart_data_hub.py`）→ 精确 `in` 比较永不相等 → 豁免失效，`search_products` 仍报 `true_duplicate`。上一轮迷你测试 copies 用裸名故假绿（覆盖缺口恰在"copies.file 带目录前缀"真实形态）。U-37② 经真实形态建图复核**修复成立**（CALLS 边齐全、verify ordered，疑用户实测连旧进程所致）。
