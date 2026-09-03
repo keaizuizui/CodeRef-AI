@@ -4,6 +4,14 @@
 
 ---
 
+### v5.13.2 — U-37 外部反馈三工具问题修复（arch_gap 白名单豁免 + flow_verify 实例化调用建边）
+
+> 承接测试方交接清单（`测试归档\20260903-v5.13.1-U37-外部反馈三工具问题交接\交接清单.md`）：U-37① `arch_gap` 不消费白名单 `rule=duplicate` 豁免、U-37② `flow_verify` 对「import（模块级/方法体内）+ 实例化对象方法调用」建边缺口，2 项真实缺陷（测试 7 RED 留证）修复；U-37③ 规则层排除已修复仅防回归。
+> - **fix（U-37① arch_gap 消费白名单 rule=duplicate 豁免）**：`arch_gap_analyzer._detect_duplicates` 此前仅按 `semantic_kind`（true/designed_parallel）过滤，不读取 whitelist 的 `rule=duplicate` 条目 → 已人工豁免的"设计并存"符号被重新点名收敛。修复：新增 `_whitelist_duplicate_exemptions` 读取真实 schema（`file`+`rule`+`category`），簇的任一副本文件命中豁免条目即不再产出 duplicate gap；未豁免真重复 / `designed_parallel` 语义保留不受影响。
+> - **fix（U-37② flow_verify 实例化对象方法调用建边）**：`code_knowledge_graph._build_from_ast` 对 `svc.run()` 仅做「全名精确 / self-cls / 短名 LIKE 回退」三档解析，无法回推变量宿主类 → 边漏建 → verify 把真连通步骤判 `outside`/`missing`；且构造调用 `Res()` 被 LIKE 碰巧匹配到 `Res.run` 掩盖缺边。修复：① `ast_parser` 新增 `local_imports`/`local_assignments` 字段，递归提取方法体/类体内局部 import 与赋值（模块级 import 仍在 `imports`），`memory_layer` 序列化同步；② `_build_from_ast` 新增 `_collect_var_host_classes` 从两档 import + 实例化赋值推导「变量名 → (宿主类, 模块)」映射；③ 调用解析新增实例化档 `_resolve_instance_call`（`tool=ResearchTool(cfg)` → `tool.run` → `method:<宿主类模块>:ResearchTool.run`，精确主键匹配防跨类同名误绑），置于短名 LIKE 回退之前，杜绝伪 CALLS 边冒充真边；④ caller 定位新增 `_ast_containing_method_id` AST 结构兜底（nodes 表行号缺失时用 AstFileResult 真实行号定位调用所在方法）。
+> - **回归测试**：`tests/test_feedback_fixes.py` 新增 `ArchGapDuplicateExemptionTest`（豁免符号不报 / 未豁免真重复仍报 / designed_parallel 保留）×3、`InstanceCallResolveTest`（局部 import 实例化建边 / verify 不判 outside-missing / 不误绑跨类同名）×3、`SelfSiblingCallResolveTest`（self 兄弟调用建边保护）×1、`ModuleLevelImportInstanceCallTest`（模块级 import 实例化建边 / 兄弟+实例化双边 / 不误绑 / verify 闭环）×4；宿主 suite 58 用例 7 RED 全转绿，全量 154 用例通过（Python 3.10）。
+> - **版本号**：5.13.1 → 5.13.2（patch，缺陷修复；不改工具暴露面）。
+
 ### v5.13.1 — 规则层审计接入 whitelist 目录排除（备份目录不再污染编程规则）
 
 > 承接外部测试/用户反馈（未解决残留）：单独跑 gov 治理维度扫描，`_refactor_backup` 备份目录仍占 PITFALL-01 空异常（51 处约一半）、IRON-ARCH-01 层级穿透（20 处 10 处）、XSS/命令注入/明文密钥等 HIGH 项的大头。根因：whitelist 的 dir 目录排除此前只作用于**知识图谱符号级分析**（真身/循环/重复匹配）与 governance 的 secret/doc 扫描，而 `audit()` 使用的 `analysis.files`（`CodeAnalyzer.analyze_project` 返回）不读该排除，PITFALL/security/quality/architecture 编程规则全部落到备份目录——「图谱干净 ≠ 审计干净」，两套机制分离。
