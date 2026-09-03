@@ -108,6 +108,10 @@ class WorkflowGraph:
             logger.warning("[WorkflowGraph] GitNexus 无数据，尝试降级为 CodeAnalyzer 模式")
             nodes, edges = self._fallback_code_analyzer(project_path)
 
+        # U-40：按白名单 dir 排除备份目录（如 _refactor_backup）节点/边，
+        # 与图谱/画布/洞察口径一致，防备份污染 workflow_graph 与总览降级图。
+        nodes, edges = self._apply_whitelist_exclude(project_path, nodes, edges)
+
         logger.info(f"[WorkflowGraph] 节点: {len(nodes)}, 边: {len(edges)}")
 
         # 3. 叠加精简审计结果
@@ -361,6 +365,33 @@ class WorkflowGraph:
         except Exception as e:
             logger.warning(f"[WorkflowGraph] CodeAnalyzer 降级失败: {e}")
 
+        return nodes, edges
+
+    def _apply_whitelist_exclude(self, project_path: str, nodes: List[Dict],
+                                 edges: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
+        """按白名单 dir 排除宿主备份目录节点/边（U-40）。
+
+        GitNexus 索引链路与 CodeAnalyzer 降级链路收集的节点可能含备份目录
+        （如 _refactor_backup，目录下常有真身副本），若不入图会污染
+        workflow_graph 拓扑，并经 project_overview 降级内嵌传导到总览架构图。
+        判定复用图谱层 _is_excluded_path，与 _build_kg / memory_layer 共享同一
+        条目录排除口径，避免备份排除在产物链路上继续分层。
+        """
+        try:
+            from core.pipeline_runner import whitelist_list
+            exclude_dirs = [e["dir"] for e in whitelist_list(project_path)
+                            if e.get("dir")]
+        except Exception:  # pragma: no cover
+            exclude_dirs = []
+        if not exclude_dirs:
+            return nodes, edges
+        from core.code_knowledge_graph import _is_excluded_path
+        keep = {n["id"] for n in nodes
+                if not _is_excluded_path(n.get("filePath", "") or "",
+                                         project_path, exclude_dirs)}
+        nodes = [n for n in nodes if n["id"] in keep]
+        edges = [e for e in edges
+                 if e.get("from") in keep and e.get("to") in keep]
         return nodes, edges
 
     def _build_issue_map(self, items: Optional[List[Dict]]) -> Dict[str, Dict]:
