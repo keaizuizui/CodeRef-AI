@@ -234,6 +234,28 @@ def _find_arch_canvas(project_path: str) -> Optional[str]:
     return os.path.join(cfg, cands[0])
 
 
+def _find_workflow_graph(project_path: str) -> Optional[str]:
+    """降级兜底：找到 .gitnexus/ 下最新 workflow_graph HTML；无则 None。
+
+    coderef_architecture 的历史产物 workflow_graph 落在 <proj>/.gitnexus/，
+    总览报告在没有 arch_canvas 时用它兜底，保证"总览至少有一张架构图"
+    （外部反馈：AI 连续两次"没看到架构图"，根因是 architecture 产物分离）。
+    """
+    cfg = os.path.join(project_path, ".gitnexus")
+    if not os.path.isdir(cfg):
+        # 兼容旧产物：部分版本把 workflow_graph 落在 coderef-report/ 下
+        cfg = os.path.join(project_path, "coderef-report")
+    if not os.path.isdir(cfg):
+        return None
+    cands = [f for f in os.listdir(cfg)
+             if f.startswith("workflow_graph_") and f.endswith(".html")]
+    if not cands:
+        return None
+    cands.sort(key=lambda f: os.path.getmtime(os.path.join(cfg, f)),
+               reverse=True)
+    return os.path.join(cfg, cands[0])
+
+
 def _wiki_href(wiki_abs: str, out_dir: str) -> str:
     """wiki 文件相对产物的 href；跨盘符时回退为 file:// 绝对路径。"""
     try:
@@ -286,9 +308,11 @@ def render_overview(project_path: str, output_dir: str = "",
     health = _health_verdict(project_path)
     wiki = _wiki_sections(project_path)
     arch = _find_arch_canvas(project_path)
+    wf_graph = _find_workflow_graph(project_path) if not arch else None
     payload["health"] = health
     payload["wiki"] = wiki
     payload["arch_canvas"] = os.path.basename(arch) if arch else None
+    payload["arch_fallback"] = os.path.basename(wf_graph) if wf_graph else None
     payload["interactive"] = interactive
     payload["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -327,6 +351,7 @@ def render_overview(project_path: str, output_dir: str = "",
 
     # ── ② 架构图 ──
     if arch:
+        # 优先：带角色归属的自由布局画布（coderef_arch_canvas / coderef_architecture 生成）
         arch_basename = os.path.basename(arch)
         arch_html = (
             f"<iframe src='{_wiki_href(arch, out_dir)}' title='架构画布' "
@@ -334,9 +359,19 @@ def render_overview(project_path: str, output_dir: str = "",
             "border-radius:12px;background:#fff'></iframe>"
             f"<p style='color:#94a3b8;font-size:12px'>画布 {_esc(arch_basename)}；"
             "浏览器打开可拖拽编辑、导出目标架构 JSON。</p>")
+    elif wf_graph:
+        # 兜底降级：workflow_graph 原始调用图（coderef_architecture 历史产物）
+        wf_basename = os.path.basename(wf_graph)
+        arch_html = (
+            f"<iframe src='{_wiki_href(wf_graph, out_dir)}' title='工作流调用图' "
+            "style='width:100%;height:520px;border:1px solid #e2e8f0;"
+            "border-radius:12px;background:#fff'></iframe>"
+            f"<p style='color:#64748b;font-size:12px'>工作流调用图 {_esc(wf_basename)}；"
+            "如需带角色归属的可编辑画布，请运行 <code>coderef_arch_canvas</code>。</p>")
     else:
-        arch_html = ("<p style='color:#64748b'>尚未生成架构画布。"
-                     "运行 <code>coderef_arch_canvas</code> 生成交互式架构图后，"
+        # 都没有：提示生成
+        arch_html = ("<p style='color:#64748b'>尚未生成架构图。"
+                     "运行 <code>coderef_architecture</code> 会自动生成架构画布，"
                      "此区块将自动内嵌。</p>")
 
     # ── ③ wiki ──
@@ -512,6 +547,7 @@ document.addEventListener('DOMContentLoaded',render);
     payload["sections"] = {
         "health": bool(health.get("score") is not None),
         "arch_canvas": bool(arch),
+        "workflow_graph": bool(wf_graph),
         "wiki": wiki.get("available", False),
         "work_items": len(payload.get("issues", [])),
     }
