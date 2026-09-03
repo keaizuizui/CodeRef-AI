@@ -4,6 +4,13 @@
 
 ---
 
+### v5.13.3 — U-37① 再次修复（arch_gap 豁免尾段匹配，目录前缀形态生效）
+
+> 承接测试方复核（登记册「U-37 开发方回报 v5.13.2 后 · 测试方复核」）：U-37① 在 v5.13.2 用精确集合命中实现豁免消费，但真实重复簇 `copies[].file` 是**带目录前缀的相对路径**（`技能库/smart_data_hub.py`），而豁免条目 `file` 是裸文件名（`smart_data_hub.py`）→ 精确 `in` 比较永不相等 → 豁免失效，`search_products` 仍报 `true_duplicate`。上一轮迷你测试 copies 用裸名故假绿（覆盖缺口恰在"copies.file 带目录前缀"真实形态）。U-37② 经真实形态建图复核**修复成立**（CALLS 边齐全、verify ordered，疑用户实测连旧进程所致）。
+> - **fix（U-37① 豁免尾段匹配）**：`arch_gap_analyzer` 新增 `_exempt_match(copy_file, exempt_file)`——统一正斜杠后按「精确相等 或 目录分隔尾段相等」判定（`cf.endswith("/" + ef)`），既容忍 `copies.file` 的目录前缀、又用 `/` 层级边界防不同目录同名文件误豁免；`_detect_duplicates` 的豁免命中由精确 `in` 集合改为对该 helper 的任意匹配。未豁免真重复 / `designed_parallel` 语义保留不受影响。
+> - **回归测试**：`ArchGapDuplicateExemptionTest` 新增 `test_exempt_hits_when_copy_has_dir_prefix`（登记册点名 RED 用例，copies.file 带目录前缀时豁免命中）×1、`test_exempt_hits_with_leading_dir_and_slash_normalize`（backslash 路径 + 豁免带目录前缀）×1；保护用例「未豁免真重复仍报 / designed_parallel 保留 / 豁免裸名直匹配」保持 GREEN。全量 156 用例通过（Python 3.10）。
+> - **版本号**：5.13.2 → 5.13.3（patch，缺陷修复；不改工具暴露面）。
+
 ### v5.13.2 — U-37 外部反馈三工具问题修复（arch_gap 白名单豁免 + flow_verify 实例化调用建边）
 
 > 承接测试方交接清单（`测试归档\20260903-v5.13.1-U37-外部反馈三工具问题交接\交接清单.md`）：U-37① `arch_gap` 不消费白名单 `rule=duplicate` 豁免、U-37② `flow_verify` 对「import（模块级/方法体内）+ 实例化对象方法调用」建边缺口，2 项真实缺陷（测试 7 RED 留证）修复；U-37③ 规则层排除已修复仅防回归。

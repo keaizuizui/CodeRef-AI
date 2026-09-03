@@ -433,6 +433,25 @@ def _whitelist_duplicate_exemptions(project_path: str) -> List[dict]:
         return []
 
 
+def _exempt_match(copy_file: str, exempt_file: str) -> bool:
+    """豁免文件是否命中重复簇副本站点（尾段匹配，容忍目录前缀）。
+
+    真实豁免条目 `file` 为裸文件名（`smart_data_hub.py`），而重复簇
+    `copies[].file` 为带目录前缀的相对路径（`技能库/smart_data_hub.py`）——
+    精确相等永不命中导致豁免失效（登记册 U-37① RED 留证）。统一正斜杠后
+    按「精确相等 或 目录分隔尾段相等」判定，既容忍目录前缀又不误伤不同目录
+    下的同名文件（须带 `/` 层级边界）。
+    """
+    cf = (copy_file or "").replace("\\", "/").lstrip("./")
+    ef = (exempt_file or "").replace("\\", "/").lstrip("./")
+    if not cf or not ef:
+        return False
+    if cf == ef:
+        return True
+    # 豁免为裸文件名：允许副本带任意目录前缀，但用 / 边界防跨目录同名误豁免
+    return cf.endswith("/" + ef)
+
+
 def _detect_duplicates(project_path: str, db_path: str,
                        parts: Dict[str, bool],
                        ds: Optional[dict] = None) -> List[dict]:
@@ -453,9 +472,13 @@ def _detect_duplicates(project_path: str, db_path: str,
     if not ds.get("ok"):
         return []
 
-    # 白名单 rule=duplicate 豁免：已人工豁免的"设计并存"符号不再报 duplicate gap
+    # 白名单 rule=duplicate 豁免：已人工豁免的"设计并存"符号不再报 duplicate gap。
+    # 豁免 file 为裸文件名，而 copies[].file 带目录前缀，用尾段匹配降噪（_exempt_match）
     exempt_files = {e.get("file") for e in _whitelist_duplicate_exemptions(project_path)
                     if e.get("file")}
+
+    def _exempted_copies(copies) -> bool:
+        return any(_exempt_match(cp.get("file"), ef) for cp in copies for ef in exempt_files)
 
     gaps: List[dict] = []
     # 1) 同构重复簇（跨模块同名高相似度实现）
@@ -464,7 +487,7 @@ def _detect_duplicates(project_path: str, db_path: str,
             if c.get("kind") != "duplicate":
                 continue
             copies = c.get("copies") or []
-            if any(cp.get("file") in exempt_files for cp in copies):
+            if _exempted_copies(copies):
                 continue
             mods = ",".join(sorted({cp.get("mod", "?") for cp in copies}))
             locs = [f"{cp.get('mod','?')}:{cp.get('file','')}:{cp.get('line',0)}"
