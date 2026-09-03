@@ -235,25 +235,25 @@ def _find_arch_canvas(project_path: str) -> Optional[str]:
 
 
 def _find_workflow_graph(project_path: str) -> Optional[str]:
-    """降级兜底：找到 .gitnexus/ 下最新 workflow_graph HTML；无则 None。
+    """降级兜底：跨 .gitnexus/ 与 coderef-report/ 找最新 workflow_graph HTML。
 
     coderef_architecture 的历史产物 workflow_graph 落在 <proj>/.gitnexus/，
-    总览报告在没有 arch_canvas 时用它兜底，保证"总览至少有一张架构图"
-    （外部反馈：AI 连续两次"没看到架构图"，根因是 architecture 产物分离）。
+    早期版本曾落 coderef-report/。总览报告在没有 arch_canvas 时用它兜底，
+    保证"总览至少有一张架构图"（外部反馈：AI 连续两次"没看到架构图"）。
+    两个目录都搜、取最新，避免只认 .gitnexus 而漏掉 coderef-report 更新的文件。
     """
-    cfg = os.path.join(project_path, ".gitnexus")
-    if not os.path.isdir(cfg):
-        # 兼容旧产物：部分版本把 workflow_graph 落在 coderef-report/ 下
-        cfg = os.path.join(project_path, "coderef-report")
-    if not os.path.isdir(cfg):
-        return None
-    cands = [f for f in os.listdir(cfg)
-             if f.startswith("workflow_graph_") and f.endswith(".html")]
+    cands = []
+    for cfg in (os.path.join(project_path, ".gitnexus"),
+                os.path.join(project_path, "coderef-report")):
+        if not os.path.isdir(cfg):
+            continue
+        cands += [os.path.join(cfg, f)
+                  for f in os.listdir(cfg)
+                  if f.startswith("workflow_graph_") and f.endswith(".html")]
     if not cands:
         return None
-    cands.sort(key=lambda f: os.path.getmtime(os.path.join(cfg, f)),
-               reverse=True)
-    return os.path.join(cfg, cands[0])
+    cands.sort(key=os.path.getmtime, reverse=True)
+    return cands[0]
 
 
 def _wiki_href(wiki_abs: str, out_dir: str) -> str:
