@@ -524,8 +524,8 @@ class CodeKnowledgeGraph:
             rel = file_path
 
             # 变量宿主类推导：从 import（模块级 + 方法体内局部）+ 实例化赋值
-            # 建立「变量名 → (宿主类, 模块)」映射，供 obj.method() 调用解析目标类
-            var_host = self._collect_var_host_classes(ar)
+            # 建立「(变量名, 作用域) → (宿主类, 模块)」映射，供 obj.method() 调用解析目标类
+            var_host = self._collect_var_host_classes(ar, module_key)
 
             # 调用关系 → CALLS 边
             for call in getattr(ar, "calls", []):
@@ -554,7 +554,7 @@ class CodeKnowledgeGraph:
                         if mid and self._node_exists(mid):
                             callee_id = mid
                 if not callee_id:
-                    callee_id = self._resolve_instance_call(call, var_host)
+                    callee_id = self._resolve_instance_call(call, var_host, caller_id)
                 if not callee_id:
                     callee_name = call.func_name.split(".")[-1]
                     callee_id = self._find_node_by_name(callee_name)
@@ -853,16 +853,19 @@ class CodeKnowledgeGraph:
             (file_path, line, line)).fetchone()
         return row["id"] if row else None
 
-    def _collect_var_host_classes(self, ar) -> Dict[str, Tuple[str, str]]:
-        """从 import + 实例化赋值推导「变量名 → (宿主类, 模块)」映射。
+    def _collect_var_host_classes(self, ar, module_key: str) -> Dict[Tuple[str, str], Tuple[str, str]]:
+        """从 import + 实例化赋值推导「(变量名, 作用域) → (宿主类, 模块)」映射。
 
         覆盖两档 import：
           - 模块级（ar.imports）：`from tool_research import ResearchTool`
           - 方法体内局部（ar.local_imports）：`def f: from tool_research import ResearchTool`
         实例化赋值（ar.assignments + ar.local_assignments）：
           - `svc = ResearchTool()` / `tool = ResearchTool(cfg)`
-        仅当实例化类名来自本项目 import 才记录，避免把 os.environ.get 等
-        第三方/内置调用误当实例化。返回 {"svc": ("ResearchTool", "tool_research")}。
+          - `x = pkg.tool_research.ResearchTool(...)`（import pkg.tool_research 场景）
+        键含词法作用域（模块级 mod:<mod> / 方法体内所在方法 id），避免不同方法
+        同名局部变量相互覆盖（CodeRabbit major）。仅当实例化类名来自本项目
+        import 才记录，避免把 os.environ.get 等第三方/内置调用误当实例化。
+        返回 {(var, scope): (cls_name, mod)}。
         """
         class_to_module: Dict[str, str] = {}
         for imp in (list(getattr(ar, "imports", []))
@@ -871,20 +874,41 @@ class CodeKnowledgeGraph:
                 for nm in imp.names:
                     class_to_module.setdefault(nm, imp.module)
             else:
-                # import X → 类 X.Y 的模块前缀即 X（实例化 value 形如 X.Y(...)）
+                # import X.Y.Z → 顶层名 X → 完整模块路径 X.Y.Z
+                # （实例化 value 形如 X.Y.Z.Class(...)，需完整路径定位模块）
                 for nm in imp.names:
-                    class_to_module.setdefault(nm, nm)
-        var_host: Dict[str, Tuple[str, str]] = {}
-        for a in (list(getattr(ar, "assignments", []))
-                  + list(getattr(ar, "local_assignments", []))):
-            m = _INST_RE.match(a.value_repr)
-            if not m:
-                continue
-            cls_name = m.group(1).split(".")[-1]
-            mod = class_to_module.get(cls_name)
-            if mod:
-                var_host[a.target] = (cls_name, mod)
+                    class_to_module.setdefault(nm, imp.module)
+        var_host: Dict[Tuple[str, str], Tuple[str, str]] = {}
+        mod_scope = f"mod:{module_key}"
+        for a in getattr(ar, "assignments", []):
+            self._record_var_host(var_host, class_to_module, a, mod_scope)
+        for a in getattr(ar, "local_assignments", []):
+            scope = self._ast_containing_method_id(ar, module_key, a.line) or mod_scope
+            self._record_var_host(var_host, class_to_module, a, scope)
         return var_host
+
+    def _record_var_host(self, var_host, class_to_module: Dict[str, str],
+                         a, scope: str) -> None:
+        """把单条实例化赋值解析进 var_host（若类名来自本项目 import）。
+
+        类名解析保留全称：`from X import Cls` 用 Cls 精确查；`import X.Y.Z`
+        场景实例化 X.Y.Z.Cls() 时按前缀逐级回退到顶层名映射的完整模块。
+        """
+        m = _INST_RE.match(a.value_repr)
+        if not m:
+            return
+        full = m.group(1)
+        cls_name = full.split(".")[-1]
+        mod = class_to_module.get(cls_name)
+        if not mod:
+            parts = full.split(".")
+            for i in range(len(parts) - 1, 0, -1):
+                prefix = ".".join(parts[:i])
+                if prefix in class_to_module:
+                    mod = class_to_module[prefix]
+                    break
+        if mod:
+            var_host[(a.target, scope)] = (cls_name, mod)
 
     def _ast_containing_method_id(self, ar, module_key: str,
                                   line: int) -> Optional[str]:
@@ -905,14 +929,22 @@ class CodeKnowledgeGraph:
     def _module_key_for_import(self, mod: str, cls_name: str) -> Optional[str]:
         """把 import 模块名解析为图谱中该类方法节点所在模块的 key。
 
-        查询 nodes 中该类名的方法节点，取其 file_path 的模块 key；若多个文件
-        定义同名类，用 import 模块名最后一段过滤（tool_research → tool_research.py）。
+        优先完整模块路径匹配（import pkg.tool_research → pkg/tool_research），
+        避免跨包同名文件模糊匹配（CodeRabbit major）；再回退文件名最后一段
+        匹配（兼容相对导入/模块名与文件名不一致）。
         """
-        mod_tail = mod.split(".")[-1]
         rows = self._conn.execute(
             "SELECT DISTINCT file_path FROM nodes "
             "WHERE type='method' AND name LIKE ?",
             (f"{cls_name}.%",)).fetchall()
+        if not rows:
+            return None
+        mod_rel = mod.replace(".", "/")
+        for row in rows:
+            mk = _module_key(self.project_path, row["file_path"])
+            if mk == mod_rel:
+                return mk
+        mod_tail = mod.split(".")[-1]
         for row in rows:
             fp = row["file_path"]
             base = os.path.splitext(os.path.basename(fp))[0]
@@ -920,19 +952,23 @@ class CodeKnowledgeGraph:
                 return _module_key(self.project_path, fp)
         return None
 
-    def _resolve_instance_call(self, call, var_host) -> Optional[str]:
+    def _resolve_instance_call(self, call, var_host, caller_id) -> Optional[str]:
         """实例化对象方法调用解析：obj.method() → 宿主类方法节点 id。
 
         从变量宿主类映射（svc→ResearchTool）推导目标类，再结合 import 模块名
         定位类所在模块，构造 method:<mod>:<类>.<方法> 精确匹配节点。仅当
         目标方法节点已注册才返回，避免跨类同名方法误绑（DissectTool.run）。
+        先按调用者词法作用域查（方法内局部变量），再回退模块级变量。
         """
         if not call.is_method_call:
             return None
         obj, _, method = call.func_name.partition(".")
         if not obj or not method:
             return None
-        host = var_host.get(obj)
+        host = var_host.get((obj, caller_id))
+        if not host and caller_id.startswith("method:"):
+            mod_key = caller_id[len("method:"):].rpartition(":")[0]
+            host = var_host.get((obj, f"mod:{mod_key}"))
         if not host:
             return None
         cls_name, mod = host
