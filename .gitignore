@@ -69,6 +69,7 @@ docs/U34-*.md
 docs/治理体系定位与编排层设计研究_*.md
 docs/工具收敛评估_*.md
 docs/skill编排诊断_*.md
+docs/总览报告_信息架构设计.md
 
 # --- npm 误初始化残留（Python 项目不需要）---
 package.json
