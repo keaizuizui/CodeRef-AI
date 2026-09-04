@@ -4,6 +4,18 @@
 
 ---
 
+### v5.13.8 — U-41 arch_verify 健康维度接入 arch_audit 真实健康分
+
+> 承接登记册 U-41（2026-09-04 测试方）：`coderef_arch_verify` 四维评分中 health 维度对三个项目全部恒 `score=0.5 / arch_health_raw=null` 占位，与 `arch_audit` 真实健康分严重不符（Coderef-Ai-master audit=2.0、kuajingdianshang=5.0 却 verify.health 恒 0.5），健康权重 10% 计入总分时失真、可能掩盖重构后真实腐化。
+
+- **根因**：`arch_alignment_verifier._score_health` 读 `r.get("health_score")`，但 `arch_audit.audit` 的健康分实际在 `r["summary"]["health"]`（0-10），该字段名不存在 → 恒 None → 走默认 `0.5`；且结果字典里 `arch_health_raw` 硬编码为 `None`。
+- **修复**：`_score_health` 改为读 `r["summary"]["health"]` 并返回 `(归一score, 原始health)`；health 维度 `arch_health_raw` 透传真实 0-10 健康分。no_code 时 health=None，raw 显式透出 None、score 保留保守默认（有代码项目 raw 恒真实值）。
+- **验证**：mock 自测 `2.0→(0.2,2.0)`、`5.0→(0.5,5.0)`、`10.0→(1.0,10.0)`、no_code→`(0.5,None)`；真实现场 Coderef-Ai-master `audit 2.0` → verify.health `{score:0.2, arch_health_raw:2.0}`（此前恒 0.5/None）。
+- **回归**：全量 **164 用例通过**（Python 3.10）。
+- **版本号**：5.13.7 → 5.13.8（patch，缺陷修复；不改工具暴露面）。
+
+---
+
 ### v5.13.7 — operation_memory 提炼来源纳入仓库根规程文件（CODEREF.md/AGENTS.md）
 
 > 测试方诉求「tests 测试副本归属约定」落 operation memory 时发现：`ResourceScanner._detect_docs_reports` 只把路径含 `docs`/`wiki` 或文件名含 `readme` 的 md 收为 doc 来源，仓库根的 `CODEREF.md`/`AGENTS.md`（操作红线/规程全文）从未被纳入 sync 提炼来源，导致其内容无法被 LLM 提炼为隐性知识（decision/convention/pitfall）。
