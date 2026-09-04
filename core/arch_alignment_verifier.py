@@ -15,7 +15,7 @@ ArchAlignmentVerifier — 架构对齐验证器（5.0 Phase 2）
 """
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from core.arch_gap_analyzer import analyze_gap, _is_test_module, _match_module_ids
 from core.arch_audit import locate_kg_db, module_of
 from core.graph_closure import load_graph, file_base
@@ -146,7 +146,7 @@ class ArchAlignmentVerifier:
 
         business = self._score_business(target_arch, nodes, project_path)
 
-        health = self._score_health(project_path, db)
+        health_norm, health_raw = self._score_health(project_path, db)
 
         return {
             "responsibility": {
@@ -168,9 +168,9 @@ class ArchAlignmentVerifier:
                 "total_roles": business["total"],
             },
             "health": {
-                "score": round(health, 2),
+                "score": round(health_norm, 2),
                 "weight": WEIGHTS["health"],
-                "arch_health_raw": None,
+                "arch_health_raw": health_raw,
             },
         }
 
@@ -204,16 +204,24 @@ class ArchAlignmentVerifier:
         from core.arch_gap_analyzer import _module_exists
         return _module_exists(project_path, spec, nodes)
 
-    def _score_health(self, project_path: str, db: str) -> float:
+    def _score_health(self, project_path: str, db: str
+                      ) -> Tuple[float, Optional[float]]:
+        """复用 arch_audit 健康度归一化为 0-1，返回 (归一分数, 原始0-10健康分)。
+
+        U-41（测试方 2026-09-04）：此前读 `r.get("health_score")` 该字段不存在，
+        health 维度恒落默认 0.5（arch_health_raw 恒 null），与 arch_audit 真实健康严重
+        不符。audit 的健康分实际在 `r["summary"]["health"]`（0-10）。改为读该字段；
+        no_code 时 health=None（原始缺失），raw 显式透出 None，score 保留保守默认。
+        """
         try:
             from core.arch_audit import audit as arch_audit
             r = arch_audit(project_path, db_path=db)
-            health_score = r.get("health_score")
-            if isinstance(health_score, (int, float)):
-                return min(1.0, health_score / 10.0)
+            health = (r.get("summary") or {}).get("health")
+            if isinstance(health, (int, float)):
+                return min(1.0, health / 10.0), float(health)
         except Exception:
             pass
-        return 0.5  # 保守默认（未计入健康维度）
+        return 0.5, None  # 保守默认（无法取得真实健康分）
 
     def _focus_set(self, changed_files: List[str], nodes: dict) -> set:
         """扩展本次改动文件为"受影响文件闭包"（文件级）。"""
