@@ -4,6 +4,19 @@
 
 ---
 
+### v5.13.9 — U-43 design 登记 description 拦截未核验的采用数声明（防「登记假设当事实」）
+
+> 承接登记册「多 Skill 成效与调度审查」#5（开发方欠账）：registry「设计登记」可写入未经核验的采用数声明（如 `multi_source_route` 声称「≥2 workflow 采用」而 callers 实际仅 1），把登记假设当事实。
+
+- **根因**：`DesignRegistry.manage(action="add")` 直接把 description 落库，designs 区不承载 adopters/callers 核验证据，description 里可写死未经核验的「被 N workflow 采用」声明。
+- **修复**：
+  - 新增 `_ADOPTION_DECL_RE` 正则，`manage(add)` 登记时若 description 命中采用数声明（`被 N workflow 采用` / `N 个 workflow 采用` / `≥N workflow 采用`）即 `ValueError`，引导改用 `coderef_asset(action=commit)` 依 adopters 数据固化后再声明。
+  - 修订现有 `data/design_registry.json` 的 `multi_source_route` 描述，去除夸大 claim，改为事实性表述并标注「采用数未经核验（观察项记录用）」。
+- **验证**：临时自测——正则命中「≥2 workflow 采用」「2 个 workflow 采用」变体；`add` 拒绝夸大声明并报错含命中片段；事实性描述正常放行落库；现有条目已无禁用声明。全量 **164 用例通过**。
+- **版本号**：5.13.8 → 5.13.9（patch，功能修订；`data/design_registry.json` 在 `.gitignore` 仅本地生效）。
+
+---
+
 ### v5.13.8 — U-41 arch_verify 健康维度接入 arch_audit 真实健康分
 
 > 承接登记册 U-41（2026-09-04 测试方）：`coderef_arch_verify` 四维评分中 health 维度对三个项目全部恒 `score=0.5 / arch_health_raw=null` 占位，与 `arch_audit` 真实健康分严重不符（Coderef-Ai-master audit=2.0、kuajingdianshang=5.0 却 verify.health 恒 0.5），健康权重 10% 计入总分时失真、可能掩盖重构后真实腐化。
