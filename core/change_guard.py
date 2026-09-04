@@ -79,6 +79,12 @@ HEALTH_COMMIT_MSG = "coderef: 锚定健康基线"
 # 健康基线提交的最小本地身份（仅写入该项目 git 配置，不污染全局）
 HEALTH_GIT_NAME = "CodeRef-AI"
 HEALTH_GIT_EMAIL = "coderef@local"
+# 健康基线 commit/tag 的临时身份参数（-c 覆盖，不写 git config）。
+# 已存在仓库可能未配置 user.name/email（如 Coderef-Ai-master 用临时身份提交），
+# 直接 `git tag -a` 会报 Committer identity unknown（登记册 #3 实证），
+# 统一带临时身份即可在任意仓库锚定，且不违反「NEVER update git config」铁律。
+_HEALTH_IDENTITY = ["-c", f"user.name={HEALTH_GIT_NAME}",
+                    "-c", f"user.email={HEALTH_GIT_EMAIL}"]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -470,11 +476,13 @@ class ChangeGuard:
                     "baselines": existing}
         if dirty and allow_autocommit:
             self._git(project_path, ["add", "-A"], timeout=git_timeout, git_bin=git_bin)
-            rc, _, _ = self._git(project_path, ["commit", "-m", HEALTH_COMMIT_MSG],
+            rc, _, _ = self._git(project_path, _HEALTH_IDENTITY
+                                 + ["commit", "-m", HEALTH_COMMIT_MSG],
                                  timeout=git_timeout, git_bin=git_bin)
             if rc == 0:
                 committed = len([l for l in status_out.splitlines() if l.strip()])
-        rc, _, err = self._git(project_path, ["tag", "-a", tag, "-m", HEALTH_COMMIT_MSG],
+        rc, _, err = self._git(project_path, _HEALTH_IDENTITY
+                               + ["tag", "-a", tag, "-m", HEALTH_COMMIT_MSG],
                                timeout=git_timeout, git_bin=git_bin)
         if rc != 0:
             return {"ok": False, "tag": "", "committed": committed,

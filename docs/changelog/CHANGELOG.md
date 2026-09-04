@@ -4,6 +4,17 @@
 
 ---
 
+### v5.13.10 — change_guard 健康基线锚定在无持久化 git 身份仓库可成功（登记册 #3）
+
+> 承接登记册「多 Skill 成效与调度审查」#3（测试方执行项阻塞）：`coderef_change_guard action=anchor` 对 Coderef-Ai-master 失败 `Committer identity unknown`——该仓库无持久化 `user.name/email`（一切提交带临时身份），`git tag -a` 需要 committer 身份即报错。
+
+- **根因**：`ChangeGuard.ensure_git_repo` 只在**新建** git 仓库时写最小本地身份；已存在仓库（如 Coderef-Ai-master）不写，`anchor_health_baseline` 的 `git tag -a`（及 `allow_autocommit` 时的 `git commit`）因缺 committer 身份失败。
+- **修复**：新增模块级 `_HEALTH_IDENTITY`（`-c user.name=CodeRef-AI -c user.email=coderef@local`），`anchor_health_baseline` 的 commit/tag 命令统一带临时身份执行。不写 git config（不违反「NEVER update git config」铁律），与项目「一切提交带临时身份」约定一致，任意已存在仓库均可锚定。
+- **验证**：临时自测——`git init` 后仅用临时身份提交（无持久化身份）的仓库上 `anchor_health_baseline` 成功打 `coderef-health-2026-09-05`，二次锚定自动追加序号 `-2` 不覆盖。
+- **版本号**：5.13.9 → 5.13.10（patch，缺陷修复；不改工具暴露面）。
+
+---
+
 ### v5.13.9 — U-43 design 登记 description 拦截未核验的采用数声明（防「登记假设当事实」）
 
 > 承接登记册「多 Skill 成效与调度审查」#5（开发方欠账）：registry「设计登记」可写入未经核验的采用数声明（如 `multi_source_route` 声称「≥2 workflow 采用」而 callers 实际仅 1），把登记假设当事实。
