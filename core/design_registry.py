@@ -25,6 +25,7 @@
 import functools
 import os
 import json
+import re
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -130,6 +131,16 @@ def _default_registry_path() -> str:
     """默认注册表文件路径：项目根目录下 data/design_registry.json"""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(root, "data", "design_registry.json")
+
+
+# U-43（测试方 2026-09-04）：design 登记的 description 若含「采用数声明」，须经
+# coderef_asset(action=commit) 固化并由 adopters/callers 数据支撑；designs 区不承载
+# 核验证据，禁止在 add 登记里写入未经核验的采用数 claim（防「登记假设当事实」）。
+_ADOPTION_DECL_RE = re.compile(
+    r"被\s*([0-9一二三四五六七八九十百]+)\s*(个\s*)?(workflow|工作流)\s*采用"
+    r"|([0-9一-九]+)\s*(个\s*)?(workflow|工作流)\s*采用"
+    r"|≥\s*[0-9]+\s*(个\s*)?(workflow|工作流)?\s*采用"
+)
 
 
 def _synchronized(method):
@@ -346,6 +357,14 @@ class DesignRegistry:
                 "source_project": project_path,
             })
             entry["canonical"] = canonical
+            if description and _ADOPTION_DECL_RE.search(description):
+                raise ValueError(
+                    f"设计「{canonical}」的 description 含未经核验的采用数声明（"
+                    f"『{_ADOPTION_DECL_RE.search(description).group(0)}』）。design 登记"
+                    "不承载 adopters/callers 核验证据，请改用 coderef_asset(action=commit)"
+                    "依 adopters 数据固化后，再在资产描述中声明采用情况；或删除该声明改用"
+                    "事实性描述。"
+                )
             if description:
                 entry["description"] = description
             entry.setdefault("aliases", [])
