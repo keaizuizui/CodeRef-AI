@@ -326,6 +326,11 @@ def render_overview(project_path: str, output_dir: str = "",
 
     score = health.get("score")
     tally = health.get("tally") or {}
+    scan_ts = health.get("scan_ts") or ""
+    ts_note = (f"审计缓存时间：{_esc(scan_ts)}"
+               + (f" · 数据来源：{_esc(health.get('data_source') or '')}"
+                  if health.get("data_source") else "")
+               if scan_ts else "尚未运行审计（健康分为空，见人话解读说明）")
     cycle = payload.get("active_cycle") or {}
     cycle_label = f"{_esc(cycle.get('name',''))} ({_esc(cycle.get('id',''))})" \
         if cycle.get("id") else "（无活动周期）"
@@ -456,6 +461,7 @@ ul{{margin:6pt 0;padding-left:20px}} li{{font-size:13px;margin:3px 0}}
 </div>
 <div class="verdict">{_esc(verdict)}</div>
 <p class="note" style="margin-top:10px">{_esc(health_summary)}</p>
+<p class="note" style="margin-top:4px">{ts_note}</p>
 </div>
 
 <div class="card"><h2>② 项目架构图</h2>{arch_html}</div>

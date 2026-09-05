@@ -1026,11 +1026,13 @@ def _fmt(r: PipeResult, title: str, t0: float = 0.0) -> str:
     ns = getattr(r, 'noise_suppressed', 0)
     nd = getattr(r, 'noise_downgraded', 0)
     wl = getattr(r, 'wl_suppressed', 0)
-    if ns or nd or wl:
+    dx = getattr(r, 'dir_excluded', 0)
+    if ns or nd or wl or dx:
         parts = []
         if ns: parts.append(f"抑制 {ns} 条已知误报")
         if nd: parts.append(f"降级 {nd} 条低置信度")
         if wl: parts.append(f"白名单过滤 {wl} 条")
+        if dx: parts.append(f"白名单目录排除 {dx} 条")
         lines.append(f"> 🤖 自动降噪: {'; '.join(parts)}")
         lines.append("")
     if r.errors:
@@ -1531,17 +1533,30 @@ def _wiki(p: str, r: PipeResult, done: set, output_dir: str = None,
         r.errors.append(f"wiki: {e}")
 
 def _denoise(r: PipeResult):
-    """自动降噪：AI白名单 + 规则去重 + 抑制 + 降级"""
+    """自动降噪：AI白名单（file/rule/category 匹配 + dir 级排除）+ 规则去重 + 抑制 + 降级"""
     if not r.findings:
         return
 
     suppressed = 0
     downgraded = 0
     wl_suppressed = 0
+    dir_excluded = 0
     kept = []
 
     # 加载 AI 白名单
     wl = _load_whitelist(r.project_path)
+
+    # ── 第〇轮：白名单 dir 级排除（所有审计维度一致生效）──
+    # 以条目携带 dir 字段为准（对齐 U-39 教训：dir 排除不是 rule=="dir" 假条件），
+    # 复用图谱层 _is_excluded_path 判定语义，保证与图谱符号级排除口径一致。
+    exclude_dirs = [e["dir"] for e in wl if e.get("dir")]
+    if exclude_dirs:
+        from core.code_knowledge_graph import _is_excluded_path
+        pre = r.findings
+        r.findings = [f for f in pre
+                      if not _is_excluded_path(f.file_path, r.project_path,
+                                               exclude_dirs)]
+        dir_excluded = len(pre) - len(r.findings)
 
     # ── 第一轮：AI 白名单 + 规则匹配 ──
     for f in r.findings:
@@ -1568,10 +1583,11 @@ def _denoise(r: PipeResult):
     r.findings = _burst_merge(r.findings)
 
     # 记录降噪统计
-    if suppressed or downgraded or wl_suppressed:
+    if suppressed or downgraded or wl_suppressed or dir_excluded:
         setattr(r, 'noise_suppressed', suppressed)
         setattr(r, 'noise_downgraded', downgraded)
         setattr(r, 'wl_suppressed', wl_suppressed)
+        setattr(r, 'dir_excluded', dir_excluded)
 class Pipe:
 
     def __init__(self):

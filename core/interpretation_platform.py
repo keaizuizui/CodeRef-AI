@@ -188,14 +188,30 @@ def _stale_audit_note(data: Dict) -> str:
     return ""
 
 
+def _scan_ts_key(data: Dict) -> str:
+    """审计缓存排序键：scan_ts 字典序（同格式可比较）；缺失时用文件 mtime 兜底。"""
+    ts = str(data.get("scan_ts") or "").strip()
+    if ts:
+        return ts
+    fp = str(data.get("_source_path") or "")
+    try:
+        from datetime import datetime
+        return datetime.fromtimestamp(os.path.getmtime(fp)).strftime(
+            "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return ""
+
+
 def _load_audit_findings(project_path: str) -> Optional[Dict]:
     """读取已落盘的审计 findings（确定性；无则返回 None，由调用方诚实提示）。
 
     优先且仅用按项目哈希隔离的文件名（v4.8.7+），避免共享 coderef-report 下
-    跨项目串扰；旧版全局单文件 audit_findings.json 仅作向后兼容兜底，且必须
-    通过有效性校验——空扫描空壳（total_files=0 且 findings=[]）不算"已审计"，
-    防止陈旧缓存被当成满分健康。命中时在返回 dict 中附 _source_path /
-    _source_kind 供调用方输出 data_source。
+    跨项目串扰；多个哈希候选（项目内 coderef-report / 共享根 coderef-report）
+    并存时按 scan_ts 取**最近一次**审计（U-45：图谱重建或新审计后健康读数
+    自动联动刷新，避免固定路径命中旧缓存）。旧版全局单文件
+    audit_findings.json 仅作向后兼容兜底，且必须通过有效性校验——空扫描空壳
+    （total_files=0 且 findings=[]）不算"已审计"，防止陈旧缓存被当成满分健康。
+    命中时在返回 dict 中附 _source_path / _source_kind 供调用方输出 data_source。
     """
     import hashlib
     phash = hashlib.md5(project_path.encode()).hexdigest()[:12]
@@ -205,14 +221,9 @@ def _load_audit_findings(project_path: str) -> Optional[Dict]:
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                      "coderef-report", f"audit_findings_{phash}.json"),
     ]
-    # 向后兼容：旧版全局单文件（无项目标识），仅作历史兜底
-    fallback_candidates = [
-        os.path.join(project_path, "coderef-report", AUDIT_FINDINGS_FILE),
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                     "coderef-report", AUDIT_FINDINGS_FILE),
-    ]
-    # 1) 哈希文件存在时优先且仅用哈希文件（同样须过空壳校验：
+    # 1) 哈希文件：全部有效候选中按 scan_ts 取最新（同样须过空壳校验：
     #    零文件扫描产物被当成有效审计结果返回，会虚增健康分）
+    valid: List[Dict] = []
     for fp in hashed_candidates:
         data = _read_audit_json(fp)
         if data is None:
@@ -223,8 +234,15 @@ def _load_audit_findings(project_path: str) -> Optional[Dict]:
             continue
         data["_source_path"] = fp
         data["_source_kind"] = "hashed"
-        return data
+        valid.append(data)
+    if valid:
+        return max(valid, key=_scan_ts_key)
     # 2) 兜底全局文件必须校验：空扫描空壳视为"未审计"
+    fallback_candidates = [
+        os.path.join(project_path, "coderef-report", AUDIT_FINDINGS_FILE),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "coderef-report", AUDIT_FINDINGS_FILE),
+    ]
     for fp in fallback_candidates:
         data = _read_audit_json(fp)
         if data is None:
