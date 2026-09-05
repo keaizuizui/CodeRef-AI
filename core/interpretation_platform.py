@@ -188,18 +188,21 @@ def _stale_audit_note(data: Dict) -> str:
     return ""
 
 
-def _scan_ts_key(data: Dict) -> str:
-    """审计缓存排序键：scan_ts 字典序（同格式可比较）；缺失时用文件 mtime 兜底。"""
+def _scan_ts_key(data: Dict) -> float:
+    """审计缓存排序键：scan_ts 解析为数值时间戳；缺失/不可解析回退文件 mtime。"""
     ts = str(data.get("scan_ts") or "").strip()
     if ts:
-        return ts
+        from datetime import datetime
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(ts, fmt).timestamp()
+            except (ValueError, OverflowError, OSError):
+                continue
     fp = str(data.get("_source_path") or "")
     try:
-        from datetime import datetime
-        return datetime.fromtimestamp(os.path.getmtime(fp)).strftime(
-            "%Y-%m-%d %H:%M:%S")
+        return os.path.getmtime(fp)
     except Exception:
-        return ""
+        return float("-inf")
 
 
 def _load_audit_findings(project_path: str) -> Optional[Dict]:
