@@ -4,6 +4,19 @@
 
 ---
 
+### v5.13.11 — U-44 审计全维度消费白名单 dir 排除 + U-45 overview 健康分联动最新审计缓存
+
+> 承接登记册 U-44（全量审计 agent/td 高危维度不消费白名单 dir 排除）/ U-45（overview 健康分引用旧审计缓存，与图谱重建不同步）。
+
+- **U-44 根因**：审计各维度有独立目录排除逻辑，但**不消费白名单 `dir` 条目**；`_match_whitelist` 仅处理 file/rule/category。白名单 dir 排除此前只在图谱层（`_build_kg`）/memory 层消费 → 备份目录扫进 agent/td HIGH。
+- **U-44 修复**：`_denoise` 新增第〇轮 dir 级排除——以条目**携带 `dir` 字段为准**（`e.get("dir")`，对齐 U-39 教训，非 `rule=="dir"` 假条件），复用图谱层 `_is_excluded_path` 判定语义（任意层级目录名精确匹配），在 `_xval`/规则降噪前统一过滤；全量与单维度（`run_single` 同走 `_denoise`）所有维度一致生效。`_fmt` 报告新增「白名单目录排除 N 条」披露。
+- **U-45 根因**：`_load_audit_findings` 按固定候选顺序优先命中项目内 `{proj}/coderef-report/audit_findings_{phash}.json`（旧缓存），不比较新旧；图谱重建与审计缓存两条独立链路未联动，overview 健康分滞后。
+- **U-45 修复**：`_load_audit_findings` 改为收集全部有效哈希候选、按 `scan_ts` 取最近一次（新增 `_scan_ts_key`，scan_ts 缺失按文件 mtime 兜底）；空壳校验保留，全局单文件仅作无哈希候选时的兜底。`project_overview` 健康区块新增「审计缓存时间：{scan_ts} · 数据来源：{path}」时间戳行，未审计时诚实提示。
+- **验证**：kuajingdianshang 复跑 `coderef_audit full`（2026-09-05 23:36）HIGH/MEDIUM 中 `_refactor_backup` 计数 = 0（`dir_excluded=603`）；重建图谱后跑 overview，`scan_ts=2026-09-05 23:36:56`、图谱 `built_at=23:37:43`、健康分基于最新审计（203 条）联动刷新。master 全量 **164 通过**。
+- **版本号**：5.13.10 → 5.13.11（patch，缺陷修复；不改工具暴露面）。
+
+---
+
 ### v5.13.10 — change_guard 健康基线锚定在无持久化 git 身份仓库可成功（登记册 #3）
 
 > 承接登记册「多 Skill 成效与调度审查」#3（测试方执行项阻塞）：`coderef_change_guard action=anchor` 对 Coderef-Ai-master 失败 `Committer identity unknown`——该仓库无持久化 `user.name/email`（一切提交带临时身份），`git tag -a` 需要 committer 身份即报错。
