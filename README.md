@@ -1,4 +1,4 @@
-<!-- AI Summary: CodeRef-AI exposes 50 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. It covers audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, and prompt compliance — all pure static analysis that is reproducible with no LLM. LLM is only used for synthesis tasks (wiki, report, code review) and hard-blocks honestly without an API key. It ships three orchestration Skills (L1 probe / L2 governance / L3 asset) that turn the 50 tools into a compact chain. It builds a closed loop: deterministically verify LLM/CodeRabbit claims, govern legacy structure along a map→target→refactor→verify→health mainline, and solidify/replicate reusable design assets. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams that want AI that augments rather than hallucinates. -->
+<!-- AI Summary: CodeRef-AI exposes 51 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. It covers audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, and prompt compliance — all pure static analysis that is reproducible with no LLM. LLM is only used for synthesis tasks (wiki, report, code review) and hard-blocks honestly without an API key. It ships three orchestration Skills (L1 probe / L2 governance / L3 asset) that turn the 51 tools into a compact chain. It builds a closed loop: deterministically verify LLM/CodeRabbit claims, govern legacy structure along a map→target→refactor→verify→health mainline, and solidify/replicate reusable design assets. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams that want AI that augments rather than hallucinates. -->
 [![MCP Badge](https://lobehub.com/badge/mcp/keaizuizui-coderef-ai?style=flat)](https://lobehub.com/mcp/keaizuizui-coderef-ai)
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
@@ -11,7 +11,7 @@
 
 ## 它是什么
 
-CodeRef-AI 通过 MCP 协议暴露 **50 个工具**，同时服务两类人：
+CodeRef-AI 通过 MCP 协议暴露 **51 个工具**，同时服务两类人：
 
 - **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险；编程 AI（或 CodeRabbit）给出论断时，还能用静态图谱做确定性核验，再决定采不采信。
 - **非编程人员的技术助理**：把代码变成通俗的健康仪表盘、Wiki 与流程确证。你只需定义「入口 A 应该依次经过步骤 B→C→D」，`coderef_flow_verify` 就会在调用链里给出确证 / 在管线 / 存疑 / 缺失四种状态——不用读代码，也能确认项目有没有按你的设想运转。
@@ -20,9 +20,9 @@ CodeRef-AI 通过 MCP 协议暴露 **50 个工具**，同时服务两类人：
 
 ---
 
-## 三条编排主线：50 个工具不是散件，而是一条主链
+## 三条编排主线：51 个工具不是散件，而是一条主链
 
-50 个工具虽多，但 CodeRef 把它们整理成**三条互补的编排主线（Skill）**，编程 AI 只需知道自己该在哪条链上；L1/L2/L3 之间用**编排 gate 强制转场**（命中条件才转，简单任务不被反复切链拖累），并由 `coderef-mcp` 的「顶层入口判定」在动身前先选对链：
+51 个工具虽多，但 CodeRef 把它们整理成**三条互补的编排主线（Skill）**，编程 AI 只需知道自己该在哪条链上；L1/L2/L3 之间用**编排 gate 强制转场**（命中条件才转，简单任务不被反复切链拖累），并由 `coderef-mcp` 的「顶层入口判定」在动身前先选对链：
 
 ```
 L1  coderef-probe      · 小阶段 · 变更驱动的轻量探查与防护（类 CodeRabbit）
@@ -204,7 +204,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 
 ---
 
-## 50 个 MCP 工具速查
+## 51 个 MCP 工具速查
 
 > 完整功能、参数与「意图 → 工具」路由见 `skills/` 各 Skill 与 `MCP_SETUP.md`。这里按引擎列出。
 
@@ -249,6 +249,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 | `coderef_whitelist` | 白名单管理 + 核心模块规则配置 | 否 |
 | `coderef_task_status` | 后台任务状态查询 | 否 |
 | `coderef_task_cancel` | 后台任务取消（协作式收尾） | 否 |
+| `coderef_version` | 轻量版本探针（只读、零副作用）：秒级返回当前加载的版本号，无需 project_path，用于断言「进程加载版本 == 目标版本」，杜绝进程未重启导致的结果误判 | 否 |
 
 ### 记忆引擎
 
@@ -312,7 +313,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 ```
 coderef-ai/
 ├── core/                             # 核心引擎
-│   ├── mcp_server.py                 # MCP Server 入口（50 个工具）
+│   ├── mcp_server.py                 # MCP Server 入口（51 个工具）
 │   ├── pipeline_runner.py            # 管线引擎（audit/architecture/docs + 知识图谱）
 │   ├── tool_registry.py              # 工具注册中心
 │   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
@@ -405,9 +406,28 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 ## 更新日志
 
-> 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.13.2）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
+> 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.13.11）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.13.2 — U-37 外部反馈三工具问题修复（arch_gap 白名单豁免 + flow_verify 实例化调用建边）
+### 当前版本 v5.13.11 — U-44 审计全维度消费白名单 dir 排除 + U-45 overview 健康分联动最新审计缓存
+
+> 承接缺陷跟踪 U-44（全量审计 agent/td 高危维度不消费白名单 `dir` 排除）/ U-45（overview 健康分引用旧审计缓存，与图谱重建不同步），2 项真实缺陷修复。
+> - **fix（U-44）**：`_denoise` 新增第〇轮 dir 级排除——白名单 dir 条目（条目携带 `dir` 字段，非 `rule=="dir"` 假条件）复用图谱层 `_is_excluded_path` 判定语义，在 `_xval`/规则降噪前统一过滤，全量与单维度所有维度一致生效；`_fmt` 报告新增「白名单目录排除 N 条」披露。
+> - **fix（U-45）**：`_load_audit_findings` 改为收集全部有效哈希候选、按 `scan_ts` 取最近一次（`_scan_ts_key` 数值化比较，scan_ts 缺失按文件 mtime 兜底）；空壳校验保留，全局单文件仅作兜底。`project_overview` 健康区块新增「审计缓存时间：{scan_ts} · 数据来源：{path}」时间戳行，未审计时诚实提示。
+> - **回归测试**：kuajingdianshang 复跑 `coderef_audit full`（2026-09-05 23:36）HIGH/MEDIUM 中 `_refactor_backup` 计数 = 0（`dir_excluded=603`）；重建图谱后跑 overview，`scan_ts` 为最新审计时间、健康分基于最新审计联动刷新。master 全量 **164 用例通过**。
+> - **版本号**：5.13.10 → 5.13.11（patch，缺陷修复；不改工具暴露面）。
+
+**中间补丁链概要（v5.13.3 → v5.13.10，逐条明细见 CHANGELOG）：**
+
+- **v5.13.10**：change_guard 健康基线锚定在无持久化 git 身份仓库可成功（缺陷跟踪 #3；`_HEALTH_IDENTITY` 临时身份，不写 git config）。
+- **v5.13.9**：U-43 design 登记 description 拦截未核验的采用数声明（防「登记假设当事实」）。
+- **v5.13.8**：U-41 arch_verify 健康维度接入 arch_audit 真实健康分（读 `summary.health`，修复 health 恒 0.5 占位）。
+- **v5.13.7**：operation_memory 提炼来源纳入仓库根规程文件（CODEREF.md/AGENTS.md）。
+- **v5.13.6**：U-39/U-40 图谱层同步目录排除失效（过滤口径修正）+ workflow_graph 接入白名单 dir 排除。
+- **v5.13.5**：U-38 观察项双修复——coderef_version 探针路径校验豁免 + memory_layer 图谱重建接入 whitelist dir。
+- **v5.13.4**：架构图产物收敛（`coderef_architecture` 一次调用即产出画布 + 总览降级内嵌 workflow_graph）。
+- **v5.13.3**：U-37① 再修（arch_gap 豁免尾段匹配，`copies.file` 带目录前缀形态生效）。
+
+### 上一版本 v5.13.2 — U-37 外部反馈三工具问题修复（arch_gap 白名单豁免 + flow_verify 实例化调用建边）
 
 > 承接独立回归交接清单（U-37）：`arch_gap` 不消费白名单 `rule=duplicate` 豁免（已豁免符号仍报 true_duplicate）/ `flow_verify` 对「import（模块级/方法体内）+ 实例化对象方法调用」建边缺口（svc.run() 漏建边致真连通步骤判 outside/missing），2 项真实缺陷修复。
 > - **fix（U-37①）**：`arch_gap_analyzer._detect_duplicates` 新增 `_whitelist_duplicate_exemptions` 读取 whitelist `rule=duplicate` 条目（file+rule+category），簇的任一副本文件命中豁免即不再产出 duplicate gap；未豁免真重复 / `designed_parallel` 语义保留。
