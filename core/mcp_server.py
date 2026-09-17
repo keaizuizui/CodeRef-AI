@@ -1149,10 +1149,11 @@ BUILTIN_TOOLS: List[Dict] = [
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径（评估上下文/报告落盘用）"},
                             "action": {"type": "string", "enum": ["assert", "score"], "default": "assert", "description": "assert=单条评估+阈值断言；score=批量评估→报告"},
-                            "metric": {"type": "string", "enum": ["answer_relevancy", "faithfulness", "hallucination", "coherence"], "description": "评估指标（见工具描述中的软硬分级）"},
+                            "metric": {"type": ["string", "array"], "items": {"type": "string", "enum": ["answer_relevancy", "faithfulness", "hallucination", "coherence"]}, "description": "评估指标（见工具描述中的软硬分级）：单指标传字符串；多指标聚合传数组（含硬指标时按软硬判定一票否决，防致命错误被平均分稀释）"},
                             "text": {"type": ["string", "array"], "items": {"type": "string"}, "description": "待评估产出物（LLM 生成的文本）；action=score 时也可传字符串数组批量评估"},
                             "context": {"type": "string", "description": "参考上下文/源材料（answer_relevancy/faithfulness/hallucination 必填）"},
                             "threshold": {"type": "number", "description": "断言阈值 0–1", "default": 0.7},
+                            "background": {"type": "boolean", "description": "是否后台执行；coderef_eval 默认后台（返回 task_id 用 coderef_task_status 轮询），background=false 强制同步拿结果"},
                         }, "required": ["project_path", "metric", "text"]},
                     }
 ]
@@ -2523,6 +2524,10 @@ class Server:
             # 真实案例 目标项目 跑 131.5s 撞 rpc 层单次调用超时）。加入重工具集使其
             # 默认后台执行，单次 tools/call 立即返回 task_id，避免同步撞超时。
             "coderef_scan",
+            # coderef_eval 是 LLM-as-judge 调用（单次评估多次 LLM 往返：多指标聚合
+            # 逐指标打分，DeepSeek 单次可达数十秒）。入重工具集使其默认后台执行 +
+            # 自动暴露 wait 参数（阻塞等待直接返回结果），避免同步撞 MCP 宿主超时。
+            "coderef_eval",
         }
 
         # ─── 合并工具内保持同步的轻量 action ───────────────────────────

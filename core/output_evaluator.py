@@ -13,13 +13,15 @@
   4. 零新依赖：纯 Python 标准库 + 复用 core/llm_integration.py。
 
 判定设计（防"致命错误被平均分稀释"）：
-  - 硬指标（faithfulness / hallucination）：挂（score < threshold）→ 整条 FAIL（hard_failed=true），一票否决；
-  - 软指标（answer_relevancy / coherence）：失分只降平均分，不单独否决；
-  - verdict = PASS 当且仅当 硬指标全过 且 得分 ≥ threshold。
+  - metric 支持单个（string）或多个（数组）指标；多指标时按产出物聚合所有指标后再判定。
+  - 硬指标（faithfulness / hallucination）：任一挂（score < threshold）→ 整条 FAIL（hard_failed=true），一票否决；
+  - 软指标（answer_relevancy / coherence）：失分只降平均分，不单独否决（可由其他指标高分拉回平均分）；
+  - 整体判定：verdict = PASS 当且仅当 硬指标全过 且 平均分 ≥ threshold。
 
 失败护栏（沿用 code_review 教训）：
   - JSON 解析失败 → 一次"强制仅 JSON 输出"重试 → 仍失败走降级结果（status=degraded + 散文理由），不裸崩；
-  - text / context 超长截断（防成本失控）。
+  - text / context 超长截断（防成本失控），并在结果中披露 truncated（原始/评估字符数），不静默；
+  - action 非法 / assert 传多条 → 结构化错误，不静默丢弃。
 
 作者: CodeRef-AI Team
 """
@@ -177,6 +179,26 @@ def _safe_threshold(raw: Any) -> float:
     return t
 
 
+def _normalize_metrics(metric: Any) -> List[str]:
+    """把 metric 归一为字符串列表：str → 单指标；list/tuple → 逐指标（过滤空串）。
+
+    多指标（数组）用于"软硬聚合判定"：按产出物聚合所有指标分 → 平均分，
+    硬指标全过 且 平均分 ≥ threshold 才 PASS（软指标失分可由其他指标高分拉回）。
+    """
+    if metric is None:
+        return []
+    if isinstance(metric, str):
+        return [metric] if metric.strip() else []
+    if isinstance(metric, (list, tuple)):
+        out = []
+        for m in metric:
+            if isinstance(m, str) and m.strip():
+                out.append(m)
+        return out
+    s = str(metric)
+    return [s] if s.strip() else []
+
+
 def _normalize_items(text: Any) -> List[str]:
     """把 text 归一为字符串列表：str → 单条；list/tuple → 逐条（过滤空串）；其余转 str。
 
@@ -217,88 +239,162 @@ def _compact_text(text: str, limit: int = 300) -> str:
 # ═══════════════════════════════════════════════════════════════════════
 
 class OutputEvaluator:
-    """产出物语义评估器：单条/批量评估 + 软硬判定 + JSON 重试→降级护栏。
+    """产出物语义评估器：单条/批量评估 + 单/多指标软硬判定 + JSON 重试→降级护栏。
 
     用法:
         from core.output_evaluator import OutputEvaluator
         r = OutputEvaluator().evaluate(
             text="...", metric="faithfulness", context="...", threshold=0.7)
+        # 多指标聚合（软硬判定防"致命错误被平均分稀释"）：
+        r = OutputEvaluator().evaluate(
+            text="...", metric=["faithfulness", "coherence"], context="...")
     """
 
     def __init__(self) -> None:
         self.llm = LLMIntegration()
 
     # ── 对外入口 ──────────────────────────────────────────────────────
-    def evaluate(self, text: Any, metric: str = "",
+    def evaluate(self, text: Any, metric: Any = "",
                  context: Optional[str] = None,
                  threshold: Any = None,
                  action: str = "assert") -> Dict[str, Any]:
         """评估一条或多条产出物。
 
-        action=assert（默认）：单条评估 → verdict PASS/FAIL；
+        action=assert（默认）：单条评估 → verdict PASS/FAIL（text 必须是单个字符串）；
         action=score：批量评估（text 可为字符串数组）→ 逐条明细 + 汇总报告。
+        metric 传数组时按产出物聚合多指标分 → 平均分 + 软硬判定（忠实表达软硬契约）。
         """
-        if metric not in VALID_METRICS:
+        threshold = _safe_threshold(threshold)
+
+        if action not in ("assert", "score"):
             return {
                 "status": "error",
-                "error": f"未知指标 '{metric}'，支持: {', '.join(VALID_METRICS)}",
+                "error": f"未知 action '{action}'，支持: assert / score",
             }
-        threshold = _safe_threshold(threshold)
+
+        metrics = _normalize_metrics(metric)
+        for m in metrics:
+            if m not in VALID_METRICS:
+                return {
+                    "status": "error",
+                    "error": f"未知指标 '{m}'，支持: {', '.join(VALID_METRICS)}",
+                }
+        if not metrics:
+            return {
+                "status": "error",
+                "error": f"metric 不能为空，支持: {', '.join(VALID_METRICS)}",
+            }
 
         items = _normalize_items(text)
         if not items:
             return {"status": "error", "error": "text 不能为空，请传入待评估的产出物"}
+        if action == "assert" and len(items) != 1:
+            return {
+                "status": "error",
+                "error": "action=assert 时 text 必须是单个字符串；批量评估请用 action=score",
+            }
 
         # 缺 key 硬阻断（不降级编造）
         if not self.llm.is_available():
             return {
                 "status": "SKIP",
                 "verdict": "SKIP",
-                "metric": metric,
+                "metric": metrics[0] if len(metrics) == 1 else metrics,
                 "threshold": threshold,
                 "reason": "LLM API key 未配置（硬阻断，不降级编造）",
                 "note": NOTE_AI_JUDGEMENT,
             }
 
         # 需要 context 的指标缺 context → 结构化错误（调用方契约问题，非 LLM 问题）
-        if metric in NEED_CONTEXT_METRICS and not (context or "").strip():
+        need_ctx = [m for m in metrics if m in NEED_CONTEXT_METRICS]
+        if need_ctx and not (context or "").strip():
             return {
                 "status": "error",
-                "error": f"指标 {metric} 需要提供 context（源材料/主题），请传入后再评估",
+                "error": f"指标 {', '.join(need_ctx)} 需要提供 context（源材料/主题），请传入后再评估",
             }
 
         results = [
-            self._evaluate_one(item, metric, context or "", threshold)
+            self._evaluate_item(item, metrics, context or "", threshold)
             for item in items
         ]
 
         if action == "score":
-            return self._build_score_report(results, metric, threshold)
+            return self._build_score_report(results, metrics, threshold)
         return results[0]
 
-    # ── 单条评估 ──────────────────────────────────────────────────────
-    def _evaluate_one(self, text: str, metric: str,
-                      context: str, threshold: float) -> Dict[str, Any]:
-        """评估单条产出物：构造 prompt → 调用 LLM → 解析（失败重试一次→降级）。"""
-        text_cut = text[:MAX_EVAL_TEXT_CHARS]
-        context_cut = context[:MAX_EVAL_CONTEXT_CHARS]
-        messages = self._build_messages(metric, text_cut, context_cut)
+    # ── 单条评估（单/多指标分派） ─────────────────────────────────────
+    def _evaluate_item(self, text: str, metrics: List[str],
+                       context: str, threshold: float) -> Dict[str, Any]:
+        """评估单条产出物：单指标 → 扁平单条结果；多指标 → 聚合平均分 + 软硬判定。"""
+        if len(metrics) == 1:
+            return self._evaluate_single_metric(text, metrics[0], context, threshold)
 
+        per: Dict[str, Dict[str, Any]] = {}
+        for m in metrics:
+            per[m] = self._evaluate_single_metric(text, m, context, threshold)
+
+        # 全部指标均降级（LLM 失败）→ 整体降级，不谎报 PASS
+        if all(per[m].get("status") == "degraded" for m in metrics):
+            return {
+                "status": "degraded",
+                "metric": list(metrics),
+                "threshold": threshold,
+                "verdict": "SKIP",
+                "hard_failed": False,
+                "reason": "所有指标均未得到合法 JSON 评估结果（重试后仍失败）",
+                "metrics": per,
+                "note": NOTE_AI_JUDGEMENT,
+            }
+
+        scores = [per[m].get(_SCORE_KEY) for m in metrics
+                  if isinstance(per[m].get(_SCORE_KEY), (int, float))]
+        avg = round(sum(scores) / len(scores), 3) if scores else 0.0
+        # 硬指标任一挂 → 一票否决；软指标失分只降平均分，不单独否决
+        hard_failed = any(per[m].get("hard_failed") for m in metrics if m in HARD_METRICS)
+        verdict = "PASS" if (not hard_failed and avg >= threshold) else "FAIL"
+        return {
+            "status": "completed",
+            "metric": list(metrics),
+            "score": avg,
+            "avg_score": avg,
+            "threshold": threshold,
+            "verdict": verdict,
+            "hard_failed": hard_failed,
+            "metrics": per,
+            "note": NOTE_AI_JUDGEMENT,
+        }
+
+    def _evaluate_single_metric(self, text: str, metric: str,
+                                context: str, threshold: float) -> Dict[str, Any]:
+        """评估单条产出物 + 单个指标：构造 prompt → 调用 LLM → 解析（失败重试一次→降级）。"""
+        truncated: Dict[str, Any] = {}
+        text_cut = text[:MAX_EVAL_TEXT_CHARS]
+        if len(text) > MAX_EVAL_TEXT_CHARS:
+            truncated["text"] = {"original_chars": len(text), "evaluated_chars": len(text_cut)}
+        context_cut = context[:MAX_EVAL_CONTEXT_CHARS]
+        if len(context) > MAX_EVAL_CONTEXT_CHARS:
+            truncated["context"] = {"original_chars": len(context),
+                                    "evaluated_chars": len(context_cut)}
+
+        messages = self._build_messages(metric, text_cut, context_cut)
         response = self._call_llm(messages)
         data = self._parse_eval_json(response)
-        if data is not None:
-            return self._compose_result(metric, threshold, data)
-
-        # 首次解析失败：强制仅 JSON 输出重试一次（控制成本，最多 1 次）
-        logger.warning(
-            f"coderef_eval 首次解析未得到 JSON 评估结果，强制重试；响应片段: {response[:200]}")
-        retry_response = self._call_llm_retry(messages, response)
-        data = self._parse_eval_json(retry_response)
-        if data is not None:
-            return self._compose_result(metric, threshold, data)
-
-        # 重试仍失败：降级结果（带散文线索），不裸崩
-        return self._degraded_result(metric, threshold, retry_response or response)
+        if data is None:
+            # 首次解析失败：强制仅 JSON 输出重试一次（控制成本，最多 1 次）
+            logger.warning(
+                f"coderef_eval 首次解析未得到 JSON 评估结果，强制重试；响应片段: {response[:200]}")
+            retry_response = self._call_llm_retry(messages, response)
+            data = self._parse_eval_json(retry_response)
+            if data is None:
+                # 重试仍失败：降级结果（带散文线索），不裸崩
+                result = self._degraded_result(metric, threshold, retry_response or response)
+                if truncated:
+                    result["truncated"] = truncated
+                return result
+        result = self._compose_result(metric, threshold, data)
+        if truncated:
+            result["truncated"] = truncated
+        return result
 
     # ── prompt 构造 ───────────────────────────────────────────────────
     def _build_messages(self, metric: str, text: str, context: str) -> List[Dict[str, str]]:
@@ -354,7 +450,7 @@ class OutputEvaluator:
 
     def _compose_result(self, metric: str, threshold: float,
                         data: Dict[str, Any]) -> Dict[str, Any]:
-        """组装单条评估结果（软硬判定）。"""
+        """组装单条单指标评估结果（软硬判定）。"""
         score = _extract_score(data)
         # 硬指标挂 → 一票否决；软指标失分 → 只降平均分，不否决
         hard_failed = metric in HARD_METRICS and score < threshold
@@ -393,7 +489,7 @@ class OutputEvaluator:
 
     # ── score 批量报告 ────────────────────────────────────────────────
     def _build_score_report(self, results: List[Dict[str, Any]],
-                            metric: str, threshold: float) -> Dict[str, Any]:
+                            metrics: List[str], threshold: float) -> Dict[str, Any]:
         """把多条评估结果聚合成批量报告（逐条明细 + 平均分 + 达标/硬失败计数）。"""
         n = len(results)
         scores = [r.get(_SCORE_KEY) for r in results
@@ -404,7 +500,7 @@ class OutputEvaluator:
         return {
             "status": "completed",
             "action": "score",
-            "metric": metric,
+            "metric": metrics[0] if len(metrics) == 1 else metrics,
             "threshold": threshold,
             "n": n,
             "avg_score": avg,
