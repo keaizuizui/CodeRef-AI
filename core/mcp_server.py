@@ -17,6 +17,10 @@ from contextlib import contextmanager
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 指标清单同源引用：coderef_eval 的 schema enum 与 core.output_evaluator.VALID_METRICS
+# 保持唯一真源（新增指标只改 output_evaluator 一处，schema 自动同步，防双处漂移）
+from core.output_evaluator import VALID_METRICS as _EVAL_METRICS
+
 # 统一取包版本号，避免 serverInfo 与 __init__.py / README 版本漂移
 def _pkg_version() -> str:
     try:
@@ -1149,7 +1153,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径（评估上下文/报告落盘用）"},
                             "action": {"type": "string", "enum": ["assert", "score"], "default": "assert", "description": "assert=单条评估+阈值断言；score=批量评估→报告"},
-                            "metric": {"type": ["string", "array"], "items": {"type": "string", "enum": ["answer_relevancy", "faithfulness", "hallucination", "coherence"]}, "description": "评估指标（见工具描述中的软硬分级）：单指标传字符串；多指标聚合传数组（含硬指标时按软硬判定一票否决，防致命错误被平均分稀释）"},
+                            "metric": {"type": ["string", "array"], "items": {"type": "string", "enum": list(_EVAL_METRICS)}, "description": "评估指标（见工具描述中的软硬分级）：单指标传字符串；多指标聚合传数组（含硬指标时按软硬判定一票否决，防致命错误被平均分稀释）"},
                             "text": {"type": ["string", "array"], "items": {"type": "string"}, "description": "待评估产出物（LLM 生成的文本）；action=score 时也可传字符串数组批量评估"},
                             "context": {"type": "string", "description": "参考上下文/源材料（answer_relevancy/faithfulness/hallucination 必填）"},
                             "threshold": {"type": "number", "description": "断言阈值 0–1", "default": 0.7},

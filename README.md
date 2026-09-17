@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.14.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.14.2** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -407,9 +407,17 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 ## 更新日志
 
-> 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.14.1）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
+> 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.14.2）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.14.1 — 新增 coderef_eval 产出物语义评估（第 52 个工具）
+### 当前版本 v5.14.2 — coderef_eval 契约加固（Brooks-Lint 审查修订）
+
+> 承接 2026-09-17 Brooks-Lint 审查：修复 coderef_eval 多指标聚合的诚实性缺口 + 3 个可维护性改进。
+> - **修复（硬指标部分降级误 PASS）**：多指标聚合时，任一硬指标（faithfulness/hallucination）评估失败（degraded）→ 整体降级 SKIP（不误 PASS），并在结果披露 `degraded_metrics` 清单；软指标降级仅排除出平均分且披露，不否决。防「硬指标评估失败被静默排除 → 硬伤被掩盖」。
+> - **改进**：模型返回越界 score 时在 breakdown 披露 `score_clamped`（原值 + 夹取值）；`LLMIntegration.parse_json_response` 公开解析入口（code_review/output_evaluator 复用，不再直调私有 `_try_parse_json`）；`coderef_eval` schema 的 metric enum 与 `output_evaluator.VALID_METRICS` 同源（新增指标只改一处）。
+> - **DeepSeek 模型名更新**：默认模型 `deepseek-v4-flash` → `deepseek-flash`（旧名已下线，实测旧名 + json_object 约束输出跑偏为散文致 LLM 工具降级；官方文档确认）。
+> - **测试**：全量 164 用例通过；测试方回归用例已补齐（coderef-src\tests）。
+
+### 历史版本 v5.14.1 — 新增 coderef_eval 产出物语义评估（第 52 个工具）
 
 > 承接用户 2026-09-17 立项（参考 DeepEval 思路：给 LLM 输出写「语义级单测」，可进 CI）：新增独立工具 `coderef_eval`，给 CodeRef 自身的 LLM 产出物加语义质量门禁。
 > - **新增（coderef_eval）**：`core/output_evaluator.py` + `mcp_server.py` 注册（tools 51→52，Server 实例 wrapper 同步）。4 个语义指标 + 软硬判定——硬指标（faithfulness/hallucination）挂 → 整条 FAIL 一票否决，软指标（answer_relevancy/coherence）失分只降平均分；verdict=PASS 当且仅当硬指标全过 且 得分 ≥ threshold，防「致命错误被平均分稀释」。action=assert 单条断言 / score 批量报告（逐条明细 + 平均分 + 达标/硬失败计数）。

@@ -4,6 +4,24 @@
 
 ---
 
+### v5.14.2 — coderef_eval 契约加固（Brooks-Lint 审查修订）
+
+> 承接 2026-09-17 Brooks-Lint PR Review（Health 92/100）修复：1 个 Warning（诚实性契约缺口）+ 3 个可维护性改进。工具/模型名无变更，版本按 SOP 升末位 patch（5.14.1 → 5.14.2）。
+
+- **修复（硬指标部分降级误 PASS，Warning 核心）**：`core/output_evaluator.py` 多指标聚合 `_evaluate_item` 原仅在「全部指标 degraded」时整体降级——若仅**部分**指标 degraded（如硬指标 faithfulness LLM 调用失败返回 `status=degraded` 无 score），旧逻辑把无分指标静默排除出 `scores`、`hard_failed` 不触发（degraded 结果 hard_failed=False），avg 只用成功指标计算 → 可能 `verdict=PASS`，硬伤被掩盖。修复：任一**硬指标**（faithfulness/hallucination）degraded → 整体 `status=degraded` + `verdict=SKIP`（不误 PASS），结果披露 `degraded_metrics` 清单；**软指标** degraded → 排除出平均分且披露 `degraded_metrics`，不否决（保软硬契约）。全软指标降级仍整体 degraded。
+- **改进（越界 score 披露）**：`_extract_score` 改为返回 `(夹取值, 是否越界)`；模型返回 score <0 或 >1 时在 `breakdown.score_clamped` 披露原值 + 夹取值，不静默吞掉异常信号。
+- **改进（公开解析接口）**：`core/llm_integration.py` 新增公开 `parse_json_response`（转发 `_try_parse_json` 同一套健壮解析：Markdown 剥离/非标 JSON 规范化/平衡片段提取/截断修复），`output_evaluator._parse_eval_json` 改用公开接口，不再直调跨模块私有方法。
+- **改进（指标清单同源）**：`mcp_server.py` `coderef_eval` schema 的 metric enum 引用 `core.output_evaluator.VALID_METRICS`（唯一真源），新增指标只改 output_evaluator 一处、schema 自动同步，防双处漂移。
+- **自测**：master 全量 **164 用例通过**；冒烟 13 项新增断言全绿（硬指标部分降级不 PASS / 软指标降级披露不否决 / 越界披露 / 公开接口 / schema 同源）。
+- **建议测试方落位用例（新增，依约定开发方不落测试文件）**：
+  - `OutputEvalJudgeTest.test_hard_metric_partial_degraded_not_pass` — 多指标含硬指标 degraded → 整体 degraded/SKIP 且 `degraded_metrics` 披露；
+  - `OutputEvalJudgeTest.test_soft_metric_degraded_disclosed` — 软指标 degraded → 仍可 PASS 且披露 `degraded_metrics`；
+  - `OutputEvalJudgeTest.test_score_out_of_range_disclosed` — 模型 score 越界 → 夹取且 breakdown 披露 `score_clamped`（含原值）；
+  - `OutputEvalSchemaTest.test_metric_enum_matches_valid_metrics` — tools/list 的 metric enum == `VALID_METRICS`（同源断言）。
+- **版本号**：5.14.1 → 5.14.2（Brooks-Lint 审查修订，patch 升位；按 SOP 不打 release 包，push master + tag）。
+
+---
+
 ### v5.14.1 — 新增 coderef_eval 产出物语义评估（第 52 个工具）
 
 > 承接用户 2026-09-17 立项（参考 DeepEval 思路：给 LLM 输出写「语义级单测」，可进 CI）：新增独立工具 `coderef_eval`，给 CodeRef 自身的 LLM 产出物加语义质量门禁。边界（与用户确认）：只评 CodeRef 自产的 LLM 文本，不评用户项目运行时的 LLM/RAG/Agent 产出（静态审计禁区）。
