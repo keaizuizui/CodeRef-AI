@@ -21,7 +21,7 @@
 
 import os
 import re
-from typing import Dict, List, Set, Optional
+from typing import Dict, Set, Optional
 from collections import deque, defaultdict
 
 from loguru import logger
@@ -562,7 +562,6 @@ class ProjectScope:
 
 if __name__ == "__main__":
     import sys
-    import json
 
     target = os.path.abspath(".")
     if len(sys.argv) > 1:

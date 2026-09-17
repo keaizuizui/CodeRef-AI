@@ -23,10 +23,9 @@
 
 import os
 import json
-import re
 import html
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 
 from loguru import logger
@@ -93,7 +92,6 @@ class WorkflowGraph:
         Returns:
             HTML 文件路径
         """
-        import subprocess
 
         # 1. 确定输出目录
         if not output_dir:

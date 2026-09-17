@@ -7,8 +7,7 @@ V1: 动态架构图生成器 —— 从子图数据生成Mermaid/Structurizr图�
 - 自动按层级分组、高亮入口点
 """
 
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
+from typing import Dict, List
 
 from config.settings import WIKI_MERMAID_MIN_NODES
 

@@ -10,7 +10,6 @@ GovWorkspace v1.0 —— CodeRef 5.2 多代码库聚合治理
 
 from typing import Any, Dict, List
 
-from loguru import logger
 
 SEV_ORDER = {"high": 0, "medium": 1, "low": 2}
 

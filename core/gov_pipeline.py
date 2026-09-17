@@ -13,7 +13,6 @@ GovPipeline v1.0 —— CodeRef 5.2 治理自动化连接线
 import json
 from typing import Dict, List, Optional, Any
 
-from loguru import logger
 
 from core.governance_store import (
     GovernanceStore, gap_key, STATUS_CONFIRMED, STATUS_DETECTED,

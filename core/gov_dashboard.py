@@ -12,7 +12,6 @@ GovDashboard v1.0 —— CodeRef 5.1 体检报告与跨期趋势
 """
 
 import html
-import json
 from datetime import datetime
 from typing import Dict, Any
 

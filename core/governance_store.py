@@ -14,7 +14,7 @@ GovernanceStore v1.0 —— CodeRef 5.1 架构治理运营库
 与知识图谱（cache/kg/，扫描产物）职责分离，治理库持续累积、图谱每次重建。
 """
 
-import os, json, time, uuid, sqlite3
+import os, json, uuid, sqlite3
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 from contextlib import contextmanager

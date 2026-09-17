@@ -40,9 +40,8 @@ FreeCanvas — 自由布局画布引擎（5.4）
 import json
 import html
 from collections import defaultdict, deque
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from loguru import logger
 
 # 默认画布尺寸（世界坐标）
 DEFAULT_WIDTH = 3200

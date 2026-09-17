@@ -25,10 +25,9 @@ OWASP LLM Top 10 合规检测器 —— 供 MCP 工具 coderef_owasp 调用
 
 import os
 import re
-import json
 import time
 from collections import defaultdict
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 模块级常量（magic number / 配置集中于此，避免散落魔法值）

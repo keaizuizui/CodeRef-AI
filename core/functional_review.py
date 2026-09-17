@@ -29,9 +29,8 @@ v1.1 新增：逐条粗筛（_screen_findings）
 版本: v1.1
 """
 
-import json
 import time
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from loguru import logger
 

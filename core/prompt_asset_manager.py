@@ -47,7 +47,7 @@ import json
 import hashlib
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any, Optional
 
 from loguru import logger
 
