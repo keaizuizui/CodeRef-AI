@@ -11,7 +11,6 @@ import os
 import re
 import sys
 import json
-import hashlib
 import logging
 import threading
 import urllib.request

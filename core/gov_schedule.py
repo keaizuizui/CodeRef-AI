@@ -16,7 +16,7 @@ import os
 import shlex
 import textwrap
 from datetime import date, datetime
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from loguru import logger
 

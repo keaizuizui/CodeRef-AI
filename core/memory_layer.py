@@ -34,7 +34,6 @@ MemoryLayer v1.0 —— AI 代码记忆层（认知记忆层）
 import os
 import sys
 import json
-import time
 import hashlib
 import tempfile
 from datetime import datetime

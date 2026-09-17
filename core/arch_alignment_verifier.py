@@ -15,7 +15,7 @@ ArchAlignmentVerifier — 架构对齐验证器（5.0 Phase 2）
 """
 
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from core.arch_gap_analyzer import analyze_gap, _is_test_module, _match_module_ids
 from core.arch_audit import locate_kg_db, module_of
 from core.graph_closure import load_graph, file_base

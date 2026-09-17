@@ -13,7 +13,7 @@ SQLite 存储：节点（函数/类/模块/配置/常量/路由）+ 边（CALLS/
 存储路径：cache/kg/{project_md5}.db
 """
 
-import os, sys, json, hashlib, sqlite3, csv, time, re
+import os, json, hashlib, sqlite3, csv, time, re
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any

@@ -14,7 +14,7 @@ HealthCycle v1.0 —— CodeRef 5.1 定期体检周期编排
 
 import json
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 
 from loguru import logger
 

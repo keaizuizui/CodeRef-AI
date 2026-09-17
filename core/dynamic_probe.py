@@ -18,7 +18,6 @@ import ast
 import os
 from typing import Any, Dict, List
 
-from loguru import logger
 
 # tomllib 为 Python 3.11+ 标准库；3.10 及以下用 tomli（若已安装），否则降级跳过
 try:

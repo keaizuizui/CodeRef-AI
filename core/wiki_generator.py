@@ -36,9 +36,8 @@ import shutil
 import subprocess
 import hashlib
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 

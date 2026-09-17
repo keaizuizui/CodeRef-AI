@@ -27,7 +27,7 @@ import re
 import sys
 from typing import Dict, List, Optional, Set, Tuple
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from loguru import logger
 from core.shared_filter import SharedFilter
@@ -821,7 +821,6 @@ class BlindSpotDetector:
 # ═══════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    import sys
 
     target = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
     detector = BlindSpotDetector()

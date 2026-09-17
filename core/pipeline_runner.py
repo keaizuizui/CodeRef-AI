@@ -9,7 +9,7 @@ Pipeline Runner v2.0 — 三模式管线
 All modes share: single AST scan + checkpoint resume.
 """
 
-import os, sys, json, time, hashlib, traceback, importlib, threading
+import os, json, time, hashlib, importlib, threading
 from datetime import datetime
 from loguru import logger
 from dataclasses import dataclass, field

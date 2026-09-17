@@ -19,7 +19,7 @@ FlowCanvas — 交互式流程画布生成器（5.4）
 
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from loguru import logger
 

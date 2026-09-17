@@ -22,10 +22,8 @@ prompt_governance — Prompt 治理平台（4.5 平台整合：资产生命周�
 集成方式：作为 MCP 工具 coderef_prompt_governance 暴露。
 """
 
-import os
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any, Optional
 
-from loguru import logger
 
 from core.prompt_asset_manager import PromptAssetManager
 from core.prompt_compliance import PromptComplianceAuditor

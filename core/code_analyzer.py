@@ -11,7 +11,7 @@ import hashlib
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Set
+from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, field
 from collections import defaultdict
 

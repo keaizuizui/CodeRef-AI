@@ -19,7 +19,7 @@ RefactorTaskGenerator — 重构任务卡生成器（5.0 Phase 2）
 """
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 from core.arch_audit import locate_kg_db
 from core.graph_closure import load_graph, file_base
 

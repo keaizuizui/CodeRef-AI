@@ -57,7 +57,7 @@ import tempfile
 import threading
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 
 # ─── 日志（复用 loguru，若缺失则回退到内置 logging） ───
 try:

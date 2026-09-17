@@ -15,11 +15,8 @@ prompt_compliance — Prompt 审计面：确定性注入风险 + 一致性检测
 集成方式：作为 MCP 工具 coderef_prompt_audit 暴露；4.5 并入 Prompt 治理平台。
 """
 
-import hashlib
-import os
 from typing import Dict, List, Any, Optional, Tuple
 
-from loguru import logger
 
 # ═══════════════════════════════════════════════════════════════
 # 模块级常量（魔法数收敛）

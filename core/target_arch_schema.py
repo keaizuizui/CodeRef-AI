@@ -13,7 +13,7 @@ target_arch_schema — 目标架构 JSON Schema 定义与校验（5.0 Phase 0）
 - 结构化错误：返回错误列表而非抛异常，方便 MCP 层直接透传。
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 # 当前支持的约束规则（后续可扩展 allowed_dependency 等）
 SUPPORTED_RULES: tuple = ("no_dependency",)
