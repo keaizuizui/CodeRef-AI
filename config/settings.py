@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 TECH_DEBT_COMPLEXITY_THRESHOLD = 10        # 圈复杂度阈值（if/for/while/except 语句数）
 TECH_DEBT_COGNITIVE_THRESHOLD = 15         # 认知复杂度阈值（SonarQube 默认）
 TECH_DEBT_LONG_FUNCTION_THRESHOLD = 100    # 函数行数阈值
+TECH_DEBT_OVERSIZED_FILE_THRESHOLD = 1000  # 文件行数过大阈值（上帝模块检测）
 TECH_DEBT_NESTING_DEPTH_THRESHOLD = 4      # 嵌套深度阈值（缩进级别）
 TECH_DEBT_COMMENTED_CODE_MIN_LINES = 3     # 注释代码块最少行数
 
