@@ -411,14 +411,16 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 > 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.14.3）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.14.3 — 外部审查 9 项修复（A 级硬缺陷 + B 级静态清理）
+### 当前版本 v5.14.3 — 外部审查 9 项修复 + 结构性债务治理（4 课题）
 
-> 承接外部审查清单（版本漂移 / pyflakes / 上帝模块 / 文档漂移 / shell=True / 声明边界 9 项），核实后按 A+B 级修复；CodeRabbit 复审 0 finding。
+> 承接外部审查清单（版本漂移 / pyflakes / 上帝模块 / 文档漂移 / shell=True / 声明边界 9 项）+ 后续 3 个留档课题治理；CodeRabbit 复审 0 finding。
 > - **A 级**：`pyproject.toml` version 同步 5.14.3（消除 pip 安装与运行时版本漂移）；`MCP_SETUP.md` 工具数 50→52、pandas 依赖修正、版本图更新；README「不修改代码」声明边界澄清（唯一例外 `change_guard ensure_git`）；`ast_parser` 死代码清理；`gitnexus_client` 3 处 shell=True 改列表参数。
 > - **B 级**：pyflakes 未使用 import 清理 ~90→15 处（76 处删除、跨模块隐式加载导入保留），零功能变更。
-> - **留档**：上帝模块（4 个 2900+ 行文件）暴露工具自身盲区——`tech_debt_detector` 缺「文件总行数过大」维度，立项补；f-string 无占位、覆盖率监控留档。
-> - **测试**：全量 164 用例通过 + py_compile 全绿。
-> - **版本号收敛（v5.14.3 起）**：版本号改为**单一真源 `core/version.py`**——`__init__.py` / `pyproject.toml`（`dynamic = ["version"]` 动态读取）/ `mcp_server` 均从此处取版本，**升版本只改一处**；文档快照（README / MCP_SETUP / CHANGELOG）由 `tools/check_version.py` 发布前校验防漂移。
+> - **课题 1 · 版本号收敛**：版本号改为**单一真源 `core/version.py`**——`__init__.py` / `pyproject.toml`（`dynamic = ["version"]` 动态读取）/ `mcp_server` 均从此处取版本，**升版本只改一处**；文档快照由 `tools/check_version.py` 发布前校验防漂移。
+> - **课题 2 · 上帝模块检测维度**：`tech_debt_detector` 新增「文件过大」检测（>1000 行分级），填自身盲区——实测命中 Coderef 自身 20 个上帝模块（含外部审查点名的 4 个）。
+> - **课题 3 · f-string 无占位清理**：清理 111 处冗余 f 前缀，AST 语义等价验证通过。
+> - **课题 4 · 覆盖率监控**：`requirements-dev.txt`（pytest-cov）+ `[tool.coverage]` 配置 + `tools/coverage_report.py`，基线 15% 趋势追踪。
+> - **测试**：全量 164 用例通过 + py_compile 全绿 + 覆盖率脚本达标。
 
 ### 历史版本 v5.14.2 — coderef_eval 契约加固（Brooks-Lint 审查修订）
 
