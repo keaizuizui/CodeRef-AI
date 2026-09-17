@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 chcp 65001 >nul
 title CodeRef-AI - 配置管理
 
@@ -69,8 +69,8 @@ echo.
 set /p CODEREF_BASE_URL="Base URL (默认: https://api.deepseek.com): "
 if "%CODEREF_BASE_URL%"=="" set CODEREF_BASE_URL=https://api.deepseek.com
 
-set /p CODEREF_MODEL="模型名 (默认: deepseek-v4-flash): "
-if "%CODEREF_MODEL%"=="" set CODEREF_MODEL=deepseek-v4-flash
+set /p CODEREF_MODEL="模型名 (默认: deepseek-flash): "
+if "%CODEREF_MODEL%"=="" set CODEREF_MODEL=deepseek-flash
 
 set /p CODEREF_API_KEY="API Key: "
 if "%CODEREF_API_KEY%"=="" (

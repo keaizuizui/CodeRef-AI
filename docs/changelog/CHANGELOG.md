@@ -27,6 +27,7 @@
   - `OutputEvalThresholdTest`：`test_threshold_boundary` — 恰等阈值 / 差 0.01 的 PASS/FAIL 边界；
   - `OutputEvalGuardTest`：`test_no_key_returns_skip` / `test_json_retry_then_degraded` — 缺 key 硬阻断 SKIP；JSON 失败重试后降级不崩；
   - `OutputEvalServerTest`：`test_tool_registered_and_bound` — 工具在列表 + `Server` 实例方法绑定（防 MCP 启动崩）。
+- **DeepSeek 模型名更新（2026-09-17 测试反馈驱动）**：DeepSeek 官方更新模型名，旧名 `deepseek-v4-flash` 已下线（官方文档：仍可调用但由 DeepSeek-V4.1-Flash 服务；实测旧名 + `json_object` 约束输出跑偏为散文，导致 `coderef_eval` 等 LLM 工具 JSON 解析失败→降级）。默认模型统一改为官方推荐新名 **`deepseek-flash`**：`llm_integration.py` 三处默认值、`config/config.json`、`setup.bat`、`README.md`、`MCP_SETUP.md`（历史 changelog 记录保留原样）；已配旧名环境变量 `CODEREF_MODEL=deepseek-v4-flash` 的客户端需更新为新名。
 - **版本号**：5.13.11 → 5.14.1（新功能新工具，minor 升位，用户 2026-09-17 拍板；按 SOP 不打 release 包，push master + tag）。
 
 ---
