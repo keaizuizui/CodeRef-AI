@@ -1,8 +1,8 @@
 # CodeRef-AI 打包配置（v4.9.2 新增）：支持 `pip install .` 规范化安装与依赖声明。
-# 与 requirements.txt 维护同一份依赖清单；要求 pip>=21.3 / setuptools>=61。
+# 与 requirements.txt 维护同一份依赖清单；要求 pip>=21.3 / setuptools>=77（>=77 才支持 SPDX license 字符串）。
 # 版本号与 __init__.py 保持一致（运行时 _pkg_version 读 __init__.py，此处为打包元数据）。
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
