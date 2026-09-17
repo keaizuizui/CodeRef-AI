@@ -1131,7 +1131,30 @@ BUILTIN_TOOLS: List[Dict] = [
                         "无需 project_path，秒级返回，不触发任何扫描/图谱构建。"
                     ),
                     "inputSchema": {"type": "object", "properties": {}, "required": []},
-                }
+                },
+        {
+                        "name": "coderef_eval",
+                        "description": (
+                            "产出物语义评估（LLM-as-judge）= 给 CodeRef 自身的 LLM 产出物加语义质量门禁。\n"
+                            "像写单测一样断言「LLM 输出过不过阈值」（4 个语义指标 + 软硬判定），可进 CI、可沉淀。\n"
+                            "action=assert（默认）：单条产出物评估 + 阈值断言 → verdict PASS/FAIL；\n"
+                            "action=score：批量评估（text 可传字符串数组）→ 逐条分数 + 明细 + 汇总报告。\n"
+                            "指标：answer_relevancy(软) 相关性 / faithfulness(硬) 忠实度 / hallucination(硬) 幻觉检出 / coherence(软) 连贯性。\n"
+                            "软硬判定（防致命错误被平均分稀释）：硬指标(faithfulness/hallucination) 挂 → 整条 FAIL 一票否决；\n"
+                            "软指标失分只降平均分不单独否决；verdict=PASS 当且仅当硬指标全过 且 得分 ≥ threshold。\n"
+                            "诚实边界：语义评分 = AI 判断，非确定性事实，仅软门禁；\n"
+                            "只评 CodeRef 自产的 LLM 文本，不评用户项目运行时的 LLM/RAG/Agent 产出（静态审计禁区）。\n"
+                            "缺 API key 时硬阻断返回 SKIP（不降级编造）。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径（评估上下文/报告落盘用）"},
+                            "action": {"type": "string", "enum": ["assert", "score"], "default": "assert", "description": "assert=单条评估+阈值断言；score=批量评估→报告"},
+                            "metric": {"type": "string", "enum": ["answer_relevancy", "faithfulness", "hallucination", "coherence"], "description": "评估指标（见工具描述中的软硬分级）"},
+                            "text": {"type": ["string", "array"], "items": {"type": "string"}, "description": "待评估产出物（LLM 生成的文本）；action=score 时也可传字符串数组批量评估"},
+                            "context": {"type": "string", "description": "参考上下文/源材料（answer_relevancy/faithfulness/hallucination 必填）"},
+                            "threshold": {"type": "number", "description": "断言阈值 0–1", "default": 0.7},
+                        }, "required": ["project_path", "metric", "text"]},
+                    }
 ]
 
 
@@ -1240,6 +1263,28 @@ def _version(a: dict) -> str:
         "name": "coderef-ai",
         "version": PKG_VERSION,
     }, ensure_ascii=False)
+
+
+def _eval(a: dict) -> str:
+    """产出物语义评估（coderef_eval）：给 CodeRef 自身的 LLM 产出物加语义质量门禁。
+
+    4 个语义指标 + 软硬判定（硬指标一票否决，防致命错误被平均分稀释）。
+    LLM-as-judge，显式标注"AI 判断"；只做软门禁，不阻断确定性结论。
+    缺 API key 硬阻断返回 SKIP（不降级编造）。
+    """
+    from core.output_evaluator import OutputEvaluator
+    pp = a["project_path"]
+    r = OutputEvaluator().evaluate(
+        a.get("text"),
+        metric=a.get("metric", ""),
+        context=a.get("context"),
+        threshold=a.get("threshold"),
+        action=a.get("action", "assert"),
+    )
+    r["tool"] = "coderef_eval"
+    r["project_path"] = pp
+    r["coderef_version"] = PKG_VERSION
+    return json.dumps(r, ensure_ascii=False)
 
 
 def _change_guard(a: dict) -> str:
@@ -2452,6 +2497,7 @@ class Server:
             "coderef_prompt_governance": self._govern,
             "coderef_interpret": self._interpret,
             "coderef_version": self._version,
+            "coderef_eval": self._eval,
         }
 
         # ─── 重型工具：默认后台执行 ───────────────────────────────────
@@ -2626,6 +2672,9 @@ class Server:
 
     def _version(self, a: dict):
         return _version(a)
+
+    def _eval(self, a: dict):
+        return _eval(a)
 
     def _change_guard(self, a: dict):
         return _change_guard(a)

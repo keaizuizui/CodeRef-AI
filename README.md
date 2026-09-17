@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.13.11** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.14.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -204,7 +204,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 
 ---
 
-## 51 个 MCP 工具速查
+## 52 个 MCP 工具速查
 
 > 完整功能、参数与「意图 → 工具」路由见 `skills/` 各 Skill 与 `MCP_SETUP.md`。这里按引擎列出。
 
@@ -250,6 +250,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 | `coderef_task_status` | 后台任务状态查询 | 否 |
 | `coderef_task_cancel` | 后台任务取消（协作式收尾） | 否 |
 | `coderef_version` | 轻量版本探针（只读、零副作用）：秒级返回当前加载的版本号，无需 project_path，用于断言「进程加载版本 == 目标版本」，杜绝进程未重启导致的结果误判 | 否 |
+| `coderef_eval` | 产出物语义评估（LLM-as-judge）：给 CodeRef 自身的 LLM 产出物加语义质量门禁——4 个指标（answer_relevancy 相关性 / faithfulness 忠实度 / hallucination 幻觉检出 / coherence 连贯性）+ 软硬判定（硬指标一票否决，防致命错误被平均分稀释）；action=assert 单条断言 / score 批量报告；只评自产，不评用户项目运行时产出 | 是 |
 
 ### 记忆引擎
 
@@ -406,17 +407,19 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 ## 更新日志
 
-> 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.13.11）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
+> 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.14.1）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.13.11 — U-44 审计全维度消费白名单 dir 排除 + U-45 overview 健康分联动最新审计缓存
+### 当前版本 v5.14.1 — 新增 coderef_eval 产出物语义评估（第 52 个工具）
 
-> 承接登记册 U-44（全量审计 agent/td 高危维度不消费白名单 `dir` 排除）/ U-45（overview 健康分引用旧审计缓存，与图谱重建不同步），2 项真实缺陷修复。
-> - **fix（U-44）**：`_denoise` 新增第〇轮 dir 级排除——白名单 dir 条目（条目携带 `dir` 字段，非 `rule=="dir"` 假条件）复用图谱层 `_is_excluded_path` 判定语义，在 `_xval`/规则降噪前统一过滤，全量与单维度所有维度一致生效；`_fmt` 报告新增「白名单目录排除 N 条」披露。
-> - **fix（U-45）**：`_load_audit_findings` 改为收集全部有效哈希候选、按 `scan_ts` 取最近一次（`_scan_ts_key` 数值化比较，scan_ts 缺失按文件 mtime 兜底）；空壳校验保留，全局单文件仅作兜底。`project_overview` 健康区块新增「审计缓存时间：{scan_ts} · 数据来源：{path}」时间戳行，未审计时诚实提示。
-> - **回归测试**：kuajingdianshang 复跑 `coderef_audit full`（2026-09-05 23:36）HIGH/MEDIUM 中 `_refactor_backup` 计数 = 0（`dir_excluded=603`）；重建图谱后跑 overview，`scan_ts` 为最新审计时间、健康分基于最新审计联动刷新。master 全量 **164 用例通过**。
-> - **版本号**：5.13.10 → 5.13.11（patch，缺陷修复；不改工具暴露面）。
+> 承接用户 2026-09-17 立项（参考 DeepEval 思路：给 LLM 输出写「语义级单测」，可进 CI）：新增独立工具 `coderef_eval`，给 CodeRef 自身的 LLM 产出物加语义质量门禁。
+> - **新增（coderef_eval）**：`core/output_evaluator.py` + `mcp_server.py` 注册（tools 51→52，Server 实例 wrapper 同步）。4 个语义指标 + 软硬判定——硬指标（faithfulness/hallucination）挂 → 整条 FAIL 一票否决，软指标（answer_relevancy/coherence）失分只降平均分；verdict=PASS 当且仅当硬指标全过 且 得分 ≥ threshold，防「致命错误被平均分稀释」。action=assert 单条断言 / score 批量报告（逐条明细 + 平均分 + 达标/硬失败计数）。
+> - **设计吸收**：软硬维度 + 一票否决（刘胡子大叔《给 Agent 打个分》）；LLM-as-judge 显式标注「AI 判断」、仅软门禁；缺 API key 硬阻断返回 SKIP 不降级编造；JSON 解析失败一次「强制仅 JSON」重试后降级不裸崩；text/context 长度截断防成本失控；零新依赖。
+> - **边界**：只评 CodeRef 自产的 LLM 文本，不评用户项目运行时的 LLM/RAG/Agent 产出（静态审计禁区）。
+> - **版本号**：5.13.11 → 5.14.1（新功能新工具，minor 升位，用户拍板）。
 
-**中间补丁链概要（v5.13.3 → v5.13.10，逐条明细见 CHANGELOG）：**
+**中间补丁链概要（v5.13.3 → v5.13.11，逐条明细见 CHANGELOG）：**
+
+- **v5.13.11**：U-44 审计全维度消费白名单 dir 排除 + U-45 overview 健康分联动最新审计缓存（164 用例通过）。
 
 - **v5.13.10**：change_guard 健康基线锚定在无持久化 git 身份仓库可成功（登记册 #3；`_HEALTH_IDENTITY` 临时身份，不写 git config）。
 - **v5.13.9**：U-43 design 登记 description 拦截未核验的采用数声明（防「登记假设当事实」）。

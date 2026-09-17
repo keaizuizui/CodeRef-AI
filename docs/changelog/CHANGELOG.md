@@ -4,6 +4,33 @@
 
 ---
 
+### v5.14.1 — 新增 coderef_eval 产出物语义评估（第 52 个工具）
+
+> 承接用户 2026-09-17 立项（参考 DeepEval 思路：给 LLM 输出写「语义级单测」，可进 CI）：新增独立工具 `coderef_eval`，给 CodeRef 自身的 LLM 产出物加语义质量门禁。边界（与用户确认）：只评 CodeRef 自产的 LLM 文本，不评用户项目运行时的 LLM/RAG/Agent 产出（静态审计禁区）。
+
+- **新增工具 `coderef_eval`**：`core/output_evaluator.py`（新文件）+ `mcp_server.py` 注册（BUILTIN_TOOLS 51→52 + Server 实例 wrapper，防 `Server()` 构造崩）。
+  - **4 个语义指标**（LLM-as-judge，统一 0–1 分 + `breakdown` 明细）：
+    - `answer_relevancy`（软）：产出物与主题/问题的相关程度（text + context 问题/主题）；
+    - `faithfulness`（硬）：逐 claim 核对是否忠实于源材料（text + context 源材料）；
+    - `hallucination`（硬）：检出虚构/无依据陈述的反向分（text + context 源材料）；
+    - `coherence`（软）：结构/逻辑连贯性（text 即可）。
+  - **软硬判定**（防「致命错误被平均分稀释」，设计源自刘胡子大叔《给 Agent 打个分》四维评测框架）：硬指标（faithfulness/hallucination）挂（score < threshold）→ 整条 `verdict=FAIL` 一票否决（`hard_failed=true`）；软指标（answer_relevancy/coherence）失分只降平均分不单独否决；`verdict=PASS` 当且仅当硬指标全过 且 得分 ≥ threshold。
+  - **action**：`assert`（默认）单条评估 + 阈值断言 → PASS/FAIL；`score` 批量评估（text 可传字符串数组）→ 逐条明细 + `avg_score/pass_count/hard_failed_count` 汇总报告。
+  - **失败护栏**（沿用 code_review 教训）：缺 API key 硬阻断返回 SKIP 不降级编造；JSON 解析失败一次「强制仅 JSON」重试后走降级结果（`status=degraded` + 散文线索），不裸崩、不谎报 PASS；text/context 超长截断（各 6000 字符）防成本失控；`threshold` 非法回退默认 0.7；需要 context 的指标缺 context 返回结构化错误。
+  - **诚实边界**：语义评分显式标注「AI 判断，非确定性事实；语义评分仅软门禁」，只做软门禁，不阻断确定性结论；零新依赖（纯标准库 + 复用 `llm_integration.py`）。
+- **文档同步**：README 工具速查表补 `coderef_eval` 条目（52 工具）；更新日志新增本版本区块。
+- **自测**：master 全量 **164 用例通过**；本地冒烟验证 Server() 实例化、工具注册绑定、4 指标真实 LLM 打分、软硬判定/阈值边界/缺 context/缺 key SKIP/降级路径（确定性断言全绿）。
+- **建议测试方落位用例（新增清单，依约定开发方不落测试文件）**：
+  - `OutputEvalRelevancyTest`：`test_relevancy_scores_and_verdict` — answer_relevancy 打分 + 阈值 PASS/FAIL；
+  - `OutputEvalFaithfulnessTest`：`test_faithfulness_breakdown` / `test_faithfulness_needs_context` — 逐 claim breakdown；缺 context 返回结构化错误；
+  - `OutputEvalHallucinationTest`：`test_hallucination_inverse_score` — 无依据陈述越多分越低；
+  - `OutputEvalThresholdTest`：`test_threshold_boundary` — 恰等阈值 / 差 0.01 的 PASS/FAIL 边界；
+  - `OutputEvalGuardTest`：`test_no_key_returns_skip` / `test_json_retry_then_degraded` — 缺 key 硬阻断 SKIP；JSON 失败重试后降级不崩；
+  - `OutputEvalServerTest`：`test_tool_registered_and_bound` — 工具在列表 + `Server` 实例方法绑定（防 MCP 启动崩）。
+- **版本号**：5.13.11 → 5.14.1（新功能新工具，minor 升位，用户 2026-09-17 拍板；按 SOP 不打 release 包，push master + tag）。
+
+---
+
 ### v5.13.11 — U-44 审计全维度消费白名单 dir 排除 + U-45 overview 健康分联动最新审计缓存
 
 > 承接登记册 U-44（全量审计 agent/td 高危维度不消费白名单 dir 排除）/ U-45（overview 健康分引用旧审计缓存，与图谱重建不同步）。
