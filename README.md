@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.14.2** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.14.3** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -407,9 +407,17 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 ## 更新日志
 
-> 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.14.2）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
+> 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.14.3）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.14.2 — coderef_eval 契约加固（Brooks-Lint 审查修订）
+### 当前版本 v5.14.3 — 外部审查 9 项修复（A 级硬缺陷 + B 级静态清理）
+
+> 承接外部审查清单（版本漂移 / pyflakes / 上帝模块 / 文档漂移 / shell=True / 声明边界 9 项），核实后按 A+B 级修复；CodeRabbit 复审 0 finding。
+> - **A 级**：`pyproject.toml` version 同步 5.14.3（消除 pip 安装与运行时版本漂移）；`MCP_SETUP.md` 工具数 50→52、pandas 依赖修正、版本图更新；README「不修改代码」声明边界澄清（唯一例外 `change_guard ensure_git`）；`ast_parser` 死代码清理；`gitnexus_client` 3 处 shell=True 改列表参数。
+> - **B 级**：pyflakes 未使用 import 清理 ~90→15 处（76 处删除、跨模块隐式加载导入保留），零功能变更。
+> - **留档**：上帝模块（4 个 2900+ 行文件）暴露工具自身盲区——`tech_debt_detector` 缺「文件总行数过大」维度，立项补；f-string 无占位、覆盖率监控留档。
+> - **测试**：全量 164 用例通过 + py_compile 全绿。
+
+### 历史版本 v5.14.2 — coderef_eval 契约加固（Brooks-Lint 审查修订）
 
 > 承接 2026-09-17 Brooks-Lint 审查：修复 coderef_eval 多指标聚合的诚实性缺口 + 3 个可维护性改进。
 > - **修复（硬指标部分降级误 PASS）**：多指标聚合时，任一硬指标（faithfulness/hallucination）评估失败（degraded）→ 整体降级 SKIP（不误 PASS），并在结果披露 `degraded_metrics` 清单；软指标降级仅排除出平均分且披露，不否决。防「硬指标评估失败被静默排除 → 硬伤被掩盖」。
