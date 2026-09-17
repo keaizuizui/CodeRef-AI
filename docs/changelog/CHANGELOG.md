@@ -4,20 +4,24 @@
 
 ---
 
-### v5.14.3 — 外部审查 9 项修复（A 级硬缺陷 + B 级静态清理）
+### v5.14.3 — 外部审查 9 项修复 + 结构性债务治理（4 课题）
 
-> 承接外部审查清单（版本漂移 / pyflakes / 上帝模块 / 文档漂移 / shell=True / 声明边界 9 项），核实后按 A+B 级修复；CodeRabbit 复审 0 finding。版本按 SOP 升末位 patch（5.14.2 → 5.14.3）。
+> 承接外部审查清单（版本漂移 / pyflakes / 上帝模块 / 文档漂移 / shell=True / 声明边界 9 项）+ 后续 3 个留档课题治理；CodeRabbit 复审 0 finding。版本按 SOP 升末位 patch（5.14.2 → 5.14.3）。
 
 - **A 级（正确性/发布一致）**：
-  - `pyproject.toml` version `4.9.6` → `5.14.2`（与 `__init__.py` 同步，消除 `pip install .` 与运行时版本漂移）；
-  - `MCP_SETUP.md` 工具数 `50 → 52`、核心依赖 `pandas` → `numpy/requests/pyyaml/packaging`、架构图版本 `v5.12.5 → v5.14.2`；
+  - `pyproject.toml` version `4.9.6` → `5.14.3`（与 `__init__.py` 同步，消除 `pip install .` 与运行时版本漂移）；
+  - `MCP_SETUP.md` 工具数 `50 → 52`、核心依赖 `pandas` → `numpy/requests/pyyaml/packaging`、架构图版本 `v5.12.5 → v5.14.3`；
   - `README.md`「不修改代码」声明边界澄清：唯一例外 `change_guard ensure_git` 会在无 git 项目 `git init` + 写本地身份配置（守护引擎前提，不写全局）；
   - `core/ast_parser.py` 清理 `_get_stdlib_modules() if False else {...}` 死代码残留（短路保护不崩，重构遗留）；
   - `core/gitnexus_client.py` 3 处 `shell=True` 改列表参数 + `shell=False`（命令硬编码无注入面，消除 shell 冗余）。
 - **B 级（静态清理）**：pyflakes 未使用 import 清理 **~90 → 15 处**（保留 `from core/config` 等跨模块隐式加载导入 15 处，含 `health_dashboard.Tier` 局部重定义模式）；删除 76 处纯 stdlib/第三方未用导入，零功能变更。
-- **C 级（留档不修）**：① 上帝模块（`wiki_generator.py` 3470 行 / `business_analyzer.py` 3325 行 / `mcp_server.py` 3113 行 / `agent_security_auditor.py` 2927 行）——结构性大重构留档，且暴露工具自身盲区：`tech_debt_detector` 仅有「过长函数 >100 行」规则、**无「文件总行数过大」检测维度**，立项补维度；② f-string 无占位 ~100 处（无害冗余）；③ 覆盖率监控（工程基建增强）。
-- **自测**：master 全量 **164 用例通过** + `py_compile` 全绿 + pyflakes 复跑确认收敛。
-- **版本号**：5.14.2 → 5.14.3（外部审查修复，patch 升位；按 SOP 不打 release 包，push master + tag）。
+- **课题 1 · 版本号收敛（用户提问驱动）**：版本号从「多文件写死」收敛为**单一真源 `core/version.py`**——`__init__.py` 导入、`pyproject.toml` 用 `[tool.setuptools.dynamic] version = {attr="core.version.__version__"}` 动态读取、`mcp_server._pkg_version()` 直接 import（弃文本解析）。**升版本只改 `core/version.py` 一处**。文档快照（README/MCP_SETUP/CHANGELOG）由新增 `tools/check_version.py` 发布前校验防漂移（CodeRabbit minor 修订后精确定位版本字段）。**顺修预存缺陷**：pyproject `license = {text=...}` 被新 setuptools 拒绝致 `pip install .` 构建失败 → 改 SPDX 字符串。
+- **课题 2 · 上帝模块检测维度（填自身盲区）**：`tech_debt_detector` 新增「文件过大（上帝模块）」检测维度——`TECH_DEBT_OVERSIZED_FILE_THRESHOLD=1000` 行分级（>1000 medium / >2000 high / >3000 critical），与过长函数（函数级）互补查文件级。实测命中 Coderef 自身 **20 个**上帝模块（含外部审查点名的 4 个 2900+ 行文件全部命中）。
+- **课题 3 · f-string 无占位清理**：清理 **111 处**冗余 f 前缀（`f"..."`→`"..."`），AST 语义等价验证（26 文件全 PASS）+ 164 测试无回归。
+- **课题 4 · 覆盖率监控**：新增 `requirements-dev.txt`（pytest-cov，dev 依赖不污染运行时零依赖红线）+ `pyproject.toml [tool.coverage]` 配置（omit 入口/外部依赖文件，`fail_under=15` 诚实起点随覆盖提升逐步上调）+ `tools/coverage_report.py` 一键脚本。当前基线 **17.7%**（测试方 164 回归用例非全量覆盖，属趋势追踪起点）。
+- **课题 5 · 860s 超时（记录决策，不改码）**：验证现有兜底已可操作——partial 结果含 `progress_text`（阶段进度）+ `suggestion`（明确指引：incr 策略/分维度扫描/产物已落盘可先用）。超大仓资源限制非缺陷，维持不修。
+- **自测**：master 全量 **164 用例通过** + `py_compile` 全绿 + pyflakes 收敛 + 覆盖率脚本 15% 阈值达标。
+- **版本号**：5.14.2 → 5.14.3（4 课题合并，patch 升位；按 SOP 不打 release 包，push master + tag）。
 
 ---
 

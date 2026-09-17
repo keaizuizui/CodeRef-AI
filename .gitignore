@@ -23,6 +23,9 @@ logs/
 
 # ─── 测试缓存 ───
 .pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # ─── 测试实例目录（不入库）───
 demo-app/
