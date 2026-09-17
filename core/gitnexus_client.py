@@ -509,7 +509,8 @@ class GitNexusMCPClient:
             # V2.1: 使用 npx --no-install（本地优先，仅用已安装/缓存的 gitnexus），
             #       避免运行时 npx -y 盲拉远程任意版本代码造成的供应链注入风险。
             #       若未安装会快速失败并给出安装指引，而非静默下载执行。
-            cmd = "npx --no-install gitnexus mcp"
+            # 列表参数 + shell=False：无注入面，缺 npx 时抛 FileNotFoundError 由下方捕获。
+            cmd = ["npx", "--no-install", "gitnexus", "mcp"]
             self._process = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
@@ -518,7 +519,6 @@ class GitNexusMCPClient:
                 text=True,
                 encoding="utf-8",
                 bufsize=1,  # 行缓冲
-                shell=True,
                 cwd=cwd,
             )
         except FileNotFoundError:
@@ -1005,11 +1005,10 @@ class GitNexusMCPClient:
         """检查GitNexus CLI是否可用（本地/缓存已安装，不用 -y 盲拉）"""
         try:
             result = subprocess.run(
-                "npx --no-install gitnexus --version",
+                ["npx", "--no-install", "gitnexus", "--version"],
                 capture_output=True,
                 text=True,
                 timeout=30,
-                shell=True,
                 stdin=subprocess.DEVNULL,
             )
             return result.returncode == 0
@@ -1021,11 +1020,10 @@ class GitNexusMCPClient:
         """获取GitNexus版本号（仅本地已安装版本）"""
         try:
             result = subprocess.run(
-                "npx --no-install gitnexus --version",
+                ["npx", "--no-install", "gitnexus", "--version"],
                 capture_output=True,
                 text=True,
                 timeout=30,
-                shell=True,
                 stdin=subprocess.DEVNULL,
             )
             if result.returncode == 0:

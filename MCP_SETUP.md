@@ -2,7 +2,7 @@
 
 ## 概述
 
-CodeRef-AI 通过 MCP (Model Context Protocol) 协议暴露 50 个工具给 AI 编程助手使用。配置一次后，AI 可以分析**任何项目**——每次调用时传入 `project_path` 参数即可，不需要重复配置。
+CodeRef-AI 通过 MCP (Model Context Protocol) 协议暴露 52 个工具给 AI 编程助手使用。配置一次后，AI 可以分析**任何项目**——每次调用时传入 `project_path` 参数即可，不需要重复配置。
 
 **适用客户端：** Trae / Claude Desktop / Cursor / 任何支持 MCP 的 AI 编程助手
 
@@ -23,7 +23,7 @@ cd /path/to/coderef-ai
 pip install -r requirements.txt
 ```
 
-核心依赖：`openai`（LLM 集成）、`loguru`（日志）、`pandas`（数据处理）。`tree-sitter` 为可选依赖，未安装时自动降级为 Python 标准库 ast.parse，不影响核心功能。
+核心依赖：`openai`（LLM 集成）、`loguru`（日志）、`numpy`（知识图谱向量化）、`requests`（HTTP 调用）、`pyyaml` / `packaging`。`tree-sitter` 为可选依赖，未安装时自动降级为 Python 标准库 ast.parse，不影响核心功能。
 
 ---
 
@@ -361,7 +361,7 @@ print(client.models.list())
 ```
 AI 编程助手 (Trae / Claude Desktop / Cursor)
    │
-   └── coderef-ai MCP Server (v5.12.5, 50 个工具)
+   └── coderef-ai MCP Server (v5.14.2, 52 个工具)
           │
           ├── coderef_audit ─── 11 检测器管线
           │      ├── 治理审计 (governance_audit)
@@ -408,7 +408,7 @@ AI 编程助手 (Trae / Claude Desktop / Cursor)
 
 ### 关键设计决策
 
-1. **单 Server 集中管控**：50 个工具统一暴露，无需为每个检测器单独配置 MCP Server
+1. **单 Server 集中管控**：52 个工具统一暴露，无需为每个检测器单独配置 MCP Server
 2. **审计无需 LLM**：11 个检测器均基于静态分析，离线可用，零 API 成本
 3. **知识图谱持久化**：一次构建，跨会话复用，节省重复分析时间
 4. **交叉验证反幻觉**：多工具独立分析同一项目，相互验证，解决 AI 自查幻觉

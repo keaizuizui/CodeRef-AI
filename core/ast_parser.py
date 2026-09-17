@@ -27,10 +27,8 @@ AST 精确代码解析器 —— 替代正则解析，用 Python ast 模块做�
 import ast
 import os
 import re
-import sys
-from typing import Dict, List, Optional, Set, Tuple, Any
+from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from loguru import logger
 from core.code_models import CodeFile, CodeFunction, CodeClass
@@ -149,7 +147,7 @@ class AstParser:
     """
 
     # 标准库模块名（Python 3.10+）
-    STDLIB_MODULES = _get_stdlib_modules() if False else {
+    STDLIB_MODULES = {
         'abc', 'aifc', 'argparse', 'array', 'ast', 'asynchat', 'asyncio',
         'asyncore', 'atexit', 'audioop', 'base64', 'bdb', 'binascii', 'binhex',
         'bisect', 'builtins', 'bz2', 'calendar', 'cgi', 'cgitb', 'chunk',
