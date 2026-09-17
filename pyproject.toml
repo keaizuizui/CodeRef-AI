@@ -47,3 +47,21 @@ exclude = ["tests*", "samples*", "workspace*", "*.tests"]
 
 [tool.setuptools.package-data]
 config = ["*.json"]
+
+# ─── 覆盖率监控（dev 依赖：pip install -r requirements-dev.txt）───
+[tool.coverage.run]
+source = ["core"]
+# 排除引导/入口/生成类（无业务逻辑，拉低覆盖率读数）
+omit = [
+    "core/mcp_server.py",       # MCP 入口（stdio 交互，测试经 handler 层）
+    "core/cli.py",
+    "core/gitnexus_client.py",  # 外部 npx 依赖，未装时降级
+]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# 阈值：低于此值 CI 失败。起点 15%（当前基线约 18%，留下降空间），
+# 随测试覆盖提升逐步上调——覆盖率监控的目的是趋势追踪，不是一夜达标。
+fail_under = 15
