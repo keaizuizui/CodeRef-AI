@@ -4,6 +4,23 @@
 
 ---
 
+### v5.14.3 — 外部审查 9 项修复（A 级硬缺陷 + B 级静态清理）
+
+> 承接外部审查清单（版本漂移 / pyflakes / 上帝模块 / 文档漂移 / shell=True / 声明边界 9 项），核实后按 A+B 级修复；CodeRabbit 复审 0 finding。版本按 SOP 升末位 patch（5.14.2 → 5.14.3）。
+
+- **A 级（正确性/发布一致）**：
+  - `pyproject.toml` version `4.9.6` → `5.14.2`（与 `__init__.py` 同步，消除 `pip install .` 与运行时版本漂移）；
+  - `MCP_SETUP.md` 工具数 `50 → 52`、核心依赖 `pandas` → `numpy/requests/pyyaml/packaging`、架构图版本 `v5.12.5 → v5.14.2`；
+  - `README.md`「不修改代码」声明边界澄清：唯一例外 `change_guard ensure_git` 会在无 git 项目 `git init` + 写本地身份配置（守护引擎前提，不写全局）；
+  - `core/ast_parser.py` 清理 `_get_stdlib_modules() if False else {...}` 死代码残留（短路保护不崩，重构遗留）；
+  - `core/gitnexus_client.py` 3 处 `shell=True` 改列表参数 + `shell=False`（命令硬编码无注入面，消除 shell 冗余）。
+- **B 级（静态清理）**：pyflakes 未使用 import 清理 **~90 → 15 处**（保留 `from core/config` 等跨模块隐式加载导入 15 处，含 `health_dashboard.Tier` 局部重定义模式）；删除 76 处纯 stdlib/第三方未用导入，零功能变更。
+- **C 级（留档不修）**：① 上帝模块（`wiki_generator.py` 3470 行 / `business_analyzer.py` 3325 行 / `mcp_server.py` 3113 行 / `agent_security_auditor.py` 2927 行）——结构性大重构留档，且暴露工具自身盲区：`tech_debt_detector` 仅有「过长函数 >100 行」规则、**无「文件总行数过大」检测维度**，立项补维度；② f-string 无占位 ~100 处（无害冗余）；③ 覆盖率监控（工程基建增强）。
+- **自测**：master 全量 **164 用例通过** + `py_compile` 全绿 + pyflakes 复跑确认收敛。
+- **版本号**：5.14.2 → 5.14.3（外部审查修复，patch 升位；按 SOP 不打 release 包，push master + tag）。
+
+---
+
 ### v5.14.2 — coderef_eval 契约加固（Brooks-Lint 审查修订）
 
 > 承接 2026-09-17 Brooks-Lint PR Review（Health 92/100）修复：1 个 Warning（诚实性契约缺口）+ 3 个可维护性改进。工具/模型名无变更，版本按 SOP 升末位 patch（5.14.1 → 5.14.2）。
