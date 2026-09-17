@@ -97,7 +97,7 @@ def _load_llm_config_from_settings() -> LLMConfig:
             provider=provider_map.get(provider_str, LLMProvider.DEEPSEEK),
             api_key=env_key,
             base_url=os.environ.get("CODEREF_BASE_URL", "https://api.deepseek.com"),
-            model=os.environ.get("CODEREF_MODEL", "deepseek-v4-flash"),
+            model=os.environ.get("CODEREF_MODEL", "deepseek-flash"),
             temperature=_safe_float(os.environ.get("CODEREF_TEMPERATURE"), 0.7),
             max_tokens=_safe_int(os.environ.get("CODEREF_MAX_TOKENS"), 4096),
         )
@@ -126,7 +126,7 @@ def _load_llm_config_from_settings() -> LLMConfig:
                         provider=provider_map.get(provider_str, LLMProvider.DEEPSEEK),
                         api_key=api_key,
                         base_url=data.get("llm_base_url", data.get("base_url", "https://api.deepseek.com")),
-                        model=data.get("llm_model", data.get("model_name", "deepseek-v4-flash")),
+                        model=data.get("llm_model", data.get("model_name", "deepseek-flash")),
                         temperature=float(data.get("llm_temperature", data.get("temperature", 0.7))),
                         max_tokens=int(data.get("llm_max_tokens", data.get("max_tokens", 4096))),
                     )
@@ -140,7 +140,7 @@ def _load_llm_config_from_settings() -> LLMConfig:
     return LLMConfig(
         provider=LLMProvider.DEEPSEEK,
         base_url="https://api.deepseek.com",
-        model="deepseek-v4-flash",
+        model="deepseek-flash",
         api_key=""
     )
 

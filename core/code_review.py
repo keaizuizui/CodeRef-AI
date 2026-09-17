@@ -601,7 +601,7 @@ class CodeReviewer:
         # 空数组 [] 是合法"无 findings"结果，不触发重试（CodeRabbit 复审 4541664 major）
         if not isinstance(data, list) or any(not isinstance(x, dict) for x in data):
             # 首次解析失败：强制重试一次，要求仅返回 JSON 数组
-            # （deepseek-v4-flash 倾向输出自由文本而非严格 JSON，重试可显著提升命中率；
+            # （DeepSeek 推理模型倾向输出自由文本而非严格 JSON，重试可显著提升命中率；
             #   控制成本，最多重试 1 次）
             logger.warning(
                 f"首次解析未得到 JSON 评论数组，散文当思考二次抽取重试；"

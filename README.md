@@ -78,7 +78,7 @@ pip install -r requirements.txt
 export CODEREF_API_KEY="your-api-key"
 export CODEREF_PROVIDER="deepseek"        # deepseek / openai / ollama
 export CODEREF_BASE_URL="https://api.deepseek.com"
-export CODEREF_MODEL="deepseek-v4-flash"  # 官方推荐: deepseek-v4-flash / deepseek-v4-pro
+export CODEREF_MODEL="deepseek-flash"      # 官方推荐: deepseek-flash / deepseek-v4-pro
 ```
 
 **本地 Ollama（免费，无需 API Key）：**

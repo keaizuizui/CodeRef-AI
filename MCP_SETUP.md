@@ -39,7 +39,7 @@ pip install -r requirements.txt
 export CODEREF_API_KEY="your-api-key"
 export CODEREF_PROVIDER="deepseek"        # 支持: deepseek / openai / ollama
 export CODEREF_BASE_URL="https://api.deepseek.com"
-export CODEREF_MODEL="deepseek-v4-flash"
+export CODEREF_MODEL="deepseek-flash"
 ```
 
 **Windows PowerShell：**
@@ -48,7 +48,7 @@ export CODEREF_MODEL="deepseek-v4-flash"
 $env:CODEREF_API_KEY="your-api-key"
 $env:CODEREF_PROVIDER="deepseek"
 $env:CODEREF_BASE_URL="https://api.deepseek.com"
-$env:CODEREF_MODEL="deepseek-v4-flash"
+$env:CODEREF_MODEL="deepseek-flash"
 ```
 
 ### 方式二：交互式配置（Windows）
@@ -74,7 +74,7 @@ export CODEREF_API_KEY="ollama"
 
 | 提供商 | 推荐模型 | 说明 |
 |--------|---------|------|
-| DeepSeek | `deepseek-v4-flash` / `deepseek-v4-pro` | 官方当前推荐，性价比高，中文友好 |
+| DeepSeek | `deepseek-flash` / `deepseek-v4-pro` | 官方当前推荐，性价比高，中文友好 |
 | OpenAI | `gpt-4o` / `gpt-4o-mini` | 质量最高 |
 | Ollama | `qwen2.5:7b` / `llama3.1:8b` | 免费，本地运行 |
 
