@@ -31,11 +31,13 @@ def main() -> int:
         if not re.search(pattern, text):
             issues.append(f"{label} 未同步到 {truth}（{rel}）")
 
-    # CHANGELOG 最新区块标题必须含当前版本
+    # CHANGELOG 最新区块标题必须含当前版本（取首个 "### v..." 标题直接比对）
     changelog = os.path.join(ROOT, "docs", "changelog", "CHANGELOG.md")
-    head = open(changelog, encoding="utf-8").read()[:2000]
-    if not re.search(rf"### v{re.escape(truth)}", head):
-        issues.append(f"CHANGELOG 最新区块标题未同步到 v{truth}")
+    head = open(changelog, encoding="utf-8").read()
+    latest = re.search(r"^### v(?P<version>\S+)", head, re.MULTILINE)
+    if latest is None or latest.group("version") != truth:
+        found = latest.group("version") if latest else "（无标题）"
+        issues.append(f"CHANGELOG 最新区块标题版本 {found} ≠ 真源 {truth}")
 
     if issues:
         print("版本漂移检测失败：")
