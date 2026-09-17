@@ -334,8 +334,10 @@ coderef-ai/
 │   ├── innovation_engine.py / design_registry.py / replicate_engine.py  # 创新与资产
 │   ├── verify_findings.py / interpretation_platform.py / owasp_compliance.py  # 核验/人话/合规
 │   ├── change_guard.py / change_report.py              # 变更守护
+│   ├── version.py                   # 版本号唯一真源（__init__ / pyproject / mcp_server 均从此读取）
 │   └── llm_integration.py / cache_manager.py / project_scope.py / shared_filter.py  # 基础设施
 ├── skills/                          # 三层编排 Skill（probe/governance/asset/mcp）
+├── tools/check_version.py           # 发布前版本一致性校验（README/MCP_SETUP/CHANGELOG 与真源比对）
 ├── config/                           # 配置（settings.py + 本地 config.json，含密钥，已 gitignore）
 ├── docs/                             # 文档 + changelog 更新日志归档
 ├── cache/                            # 运行时缓存（已 gitignore）
@@ -416,6 +418,7 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 > - **B 级**：pyflakes 未使用 import 清理 ~90→15 处（76 处删除、跨模块隐式加载导入保留），零功能变更。
 > - **留档**：上帝模块（4 个 2900+ 行文件）暴露工具自身盲区——`tech_debt_detector` 缺「文件总行数过大」维度，立项补；f-string 无占位、覆盖率监控留档。
 > - **测试**：全量 164 用例通过 + py_compile 全绿。
+> - **版本号收敛（v5.14.3 起）**：版本号改为**单一真源 `core/version.py`**——`__init__.py` / `pyproject.toml`（`dynamic = ["version"]` 动态读取）/ `mcp_server` 均从此处取版本，**升版本只改一处**；文档快照（README / MCP_SETUP / CHANGELOG）由 `tools/check_version.py` 发布前校验防漂移。
 
 ### 历史版本 v5.14.2 — coderef_eval 契约加固（Brooks-Lint 审查修订）
 

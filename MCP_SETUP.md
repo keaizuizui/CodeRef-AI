@@ -414,6 +414,7 @@ AI 编程助手 (Trae / Claude Desktop / Cursor)
 4. **交叉验证反幻觉**：多工具独立分析同一项目，相互验证，解决 AI 自查幻觉
 5. **后台任务模式**：重型工具默认后台异步执行，避免任意 MCP 客户端（Trae / Claude Desktop / Cursor 等）的超时限制；轻量工具同步快速返回
 6. **项目隔离**：每个项目独立缓存，切换项目不互相干扰
+7. **版本管理（v5.14.3 起）**：版本号单一真源在 `core/version.py`——`__init__.py` / `pyproject.toml`（动态读取）/ `mcp_server` 均自动跟随，**升版本只改一处**；文档快照由 `tools/check_version.py` 发布前校验防漂移
 
 ---
 
