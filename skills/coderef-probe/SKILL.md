@@ -40,16 +40,16 @@ description: L1 小阶段治理编排 Skill（类 CodeRabbit，变更驱动）�
 
 1. `coderef_memory(action=sync)` → 建立/刷新基线（首次或图谱较旧时）。
 2. `coderef_audit_advisor` → 判增量/全量。
-3. 增量 → `coderef_scan`(tool=gov/td/...) → 单维快速探查本次改动 + 影响闭包；**全量 → `coderef_audit` → 全维探查（全量范围而非增量闭包）**。
+3. 增量 → `coderef_scan`(tool=gov/td/...) → 单维快速探查本次改动 + 影响闭包；**全量 → `coderef_audit` → 全维探查（全量范围而非增量闭包）**。静态盲区（动态导入/装饰器注册/工厂登记/entry_points）→ `coderef_dynamic_probe` 补全动态信号（零执行）。
 4. `coderef_change_guard` → 变更前后能力签名对比，拦截回归；`coderef_change_report` → 人话变更说明。
 5. `coderef_flow_verify`(entry=改动相关入口, steps=[期望链路]) → 确认无 `outside` 新增（回归不变量，闭环判定的组成）。
-6. 有疑问的论断 → `coderef_verify_findings` → 确定性核验后再采信。
+6. 有疑问的论断 → `coderef_verify_findings` → 确定性核验后再采信。若论断是 LLM 产出物（review 评论/报告摘要），可另用 `coderef_eval` 做语义质量打分（AI 判断，仅软门禁，不替代确定性核验）。
 7. 确认误报 → `coderef_whitelist`(action=add) → 收敛。
 8. 本次改动引入的小问题 → `coderef_gov_start` 建档（差距自动导入为工作项）→ `coderef_gov_issues`(view=open) 确认登记 → `coderef_gov_transition` 流转即时闭环。
 
 ### 场景 B · 论断核验（LLM / CodeRabbit / 探查结论）
 
-`coderef_verify_findings`(findings=[...]) → verdict（确证/证伪/部分确证/无法核验）+ 证据链 + 影响面；`entry` 可指定入口核验符号是否在关键管线内。
+`coderef_verify_findings`(findings=[...]) → verdict（确证/证伪/部分确证/无法核验）+ 证据链 + 影响面；`entry` 可指定入口核验符号是否在关键管线内。LLM 产出物（review 评论/报告摘要）另可 `coderef_eval` 做语义质量打分（4 指标 + 软硬判定；AI 判断，仅软门禁，不替代确定性核验）。
 > 边界：`verify_findings` 是**核验**不是评审——它确证"引用目标真实存在"，不代表语义结论正确。语义评审交 CodeRabbit 本体或 LLM，Coderef 只做确定性核验（Coderef 自建完整探查链）。
 
 ### 场景 C · 定时体检（周期触发）
