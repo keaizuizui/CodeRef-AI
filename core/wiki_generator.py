@@ -1702,7 +1702,7 @@ def _module_metadata_to_text(self, mod: ModuleCodeMetadata) -> str:
         if f.docstring:
             parts.append(f"  doc: {f.docstring[:200]}")
         if f.is_entry_point:
-            parts.append(f"  [入口文件]")
+            parts.append("  [入口文件]")
         if f.classes:
             for c in f.classes:
                 bases = f"({', '.join(c['bases'])})" if c["bases"] else ""
@@ -2156,9 +2156,9 @@ def _build_project_summary(self, project_name: str, modules: List[WikiModule],
     """构建项目摘要文本"""
     lines = [
         f"# 项目: {project_name}",
-        f"",
-        f"## 模块列表",
-        f"",
+        "",
+        "## 模块列表",
+        "",
     ]
     for mod in modules:
         core_tag = " [核心]" if mod.is_core else ""
@@ -2652,18 +2652,18 @@ def _build_module_index(self, modules: List[WikiModule],
     cross_badges = cross_badges or {}
     has_badges = any(b.get("status") for b in cross_badges.values())
     lines = [
-        f"# 模块索引",
-        f"",
+        "# 模块索引",
+        "",
     ]
     if has_badges:
         lines.append("> 每行带「静态交叉验证」徽章：确证 ✅ / 部分确证 🔵 / 存疑 🟡 / 缺失 🔴。"
                      "徽章来自知识图谱调用闭包，用于核验该模块描述是否真的被调用。")
         lines.append("")
-        lines.append(f"| 模块 | 文件数 | 类型 | 文档 | 交叉验证 |")
-        lines.append(f"|------|--------|------|------|----------|")
+        lines.append("| 模块 | 文件数 | 类型 | 文档 | 交叉验证 |")
+        lines.append("|------|--------|------|------|----------|")
     else:
-        lines.append(f"| 模块 | 文件数 | 类型 | 文档 |")
-        lines.append(f"|------|--------|------|------|")
+        lines.append("| 模块 | 文件数 | 类型 | 文档 |")
+        lines.append("|------|--------|------|------|")
     for mod in modules:
         core_tag = "核心" if mod.is_core else "辅助"
         doc_link = f"[查看]({mod.name}.md)" if mod.is_core else "-"
@@ -3066,24 +3066,24 @@ def _build_wiki_index(self, project_name: str, modules: List[WikiModule],
 
     lines = [
         f"# {project_name} — 项目 Wiki",
-        f"",
+        "",
         f"> 自动生成于 {now}{large_tag}{style_tag}",
-        f"> 由 CodeRef Wiki Generator 驱动",
-        f"",
-        f"## 导航",
-        f"",
-        f"| 文档 | 内容 | 适合谁 |",
-        f"|------|------|--------|",
-        f"| [💡 业务概览](OVERVIEW.md) | 项目是什么、核心价值、适合谁、怎么用 | 非技术读者 |",
-        f"| [📖 README](README.md) | 项目概述、快速开始 | 所有人 |",
-        f"| [🏗️ 架构设计](ARCHITECTURE.md) | 系统架构、模块关系 | 开发者 |",
-        f"| [📦 安装指南](INSTALLATION.md) | 手把手安装教程 | 新用户 |",
-        f"| [📘 使用指南](USAGE.md) | 功能使用说明 | 用户 |",
-        f"| [📂 模块索引](MODULES/_index.md) | 模块列表和文档 | 开发者 |",
+        "> 由 CodeRef Wiki Generator 驱动",
+        "",
+        "## 导航",
+        "",
+        "| 文档 | 内容 | 适合谁 |",
+        "|------|------|--------|",
+        "| [💡 业务概览](OVERVIEW.md) | 项目是什么、核心价值、适合谁、怎么用 | 非技术读者 |",
+        "| [📖 README](README.md) | 项目概述、快速开始 | 所有人 |",
+        "| [🏗️ 架构设计](ARCHITECTURE.md) | 系统架构、模块关系 | 开发者 |",
+        "| [📦 安装指南](INSTALLATION.md) | 手把手安装教程 | 新用户 |",
+        "| [📘 使用指南](USAGE.md) | 功能使用说明 | 用户 |",
+        "| [📂 模块索引](MODULES/_index.md) | 模块列表和文档 | 开发者 |",
     ]
 
     if any("API.md" in d for d in docs):
-        lines.append(f"| [🔌 API 文档](API.md) | API 端点说明 | 开发者 |")
+        lines.append("| [🔌 API 文档](API.md) | API 端点说明 | 开发者 |")
 
     # 分层人话版导航：入口流程(L1) + 数据流(L2)
     # 归一化路径分隔符，避免 Windows 上 os.path.join 产生混合分隔符导致匹配失败
@@ -3096,7 +3096,7 @@ def _build_wiki_index(self, project_name: str, modules: List[WikiModule],
         lines.append(f"| [🔗 数据流]({flow_docs[0]}) | 模块之间如何传递数据（人话版） | 非技术读者 |")
 
     lines.append("")
-    lines.append(f"## 模块概览")
+    lines.append("## 模块概览")
     lines.append("")
     for mod in modules:
         core_tag = " 🔑" if mod.is_core else ""
@@ -3412,8 +3412,8 @@ def to_report(self, result: WikiResult) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     lines = [
-        f"# Wiki 生成报告",
-        f"",
+        "# Wiki 生成报告",
+        "",
         f"> 项目: `{result.project_path}`",
         f"> 项目名称: **{result.project_name}**",
         f"> 生成时间: {now}",
@@ -3444,10 +3444,10 @@ def to_report(self, result: WikiResult) -> str:
             lines.append(f"- **{sp_name}**: {sp_files} 个文件 → {sp_count} 个文档 (在 `subprojects/{sp_name}/`)")
 
     lines.append("")
-    lines.append(f"## 统计")
+    lines.append("## 统计")
     lines.append("")
-    lines.append(f"| 指标 | 数值 |")
-    lines.append(f"|------|------|")
+    lines.append("| 指标 | 数值 |")
+    lines.append("|------|------|")
     lines.append(f"| 文档总数 | {len(result.documents)} |")
     lines.append(f"| 模块文档 | {result.module_count} |")
     lines.append(f"| 总文件数 | {result.total_files} |")
@@ -3463,7 +3463,7 @@ def to_report(self, result: WikiResult) -> str:
 
     lines.append("")
     lines.append("---")
-    lines.append(f"*由 CodeRef Wiki Generator v2.0 生成*")
+    lines.append("*由 CodeRef Wiki Generator v2.0 生成*")
 
     return "\n".join(lines)
 

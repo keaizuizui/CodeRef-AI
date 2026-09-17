@@ -120,7 +120,7 @@ def generate_mermaid(
             display_name = name if len(name) <= 30 else name[:27] + "..."
             lines.append(f'        {node_id}["{display_name}"]')
         
-        lines.append(f'    end')
+        lines.append('    end')
     
     # 生成边
     for edge in edges:

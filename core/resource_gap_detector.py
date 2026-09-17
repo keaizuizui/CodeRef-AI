@@ -266,7 +266,7 @@ def _render_report_priority(lines: List[str], sev_counts: Dict[str, int]):
     lines.append("")
     lines.append("---")
     lines.append("")
-    lines.append(f"*报告由 CodeRef-AI ResourceGapDetector v1.0 生成*")
+    lines.append("*报告由 CodeRef-AI ResourceGapDetector v1.0 生成*")
 
 
 def _render_resource_gap_report(gaps: List[ResourceGap], project_path: str) -> str:

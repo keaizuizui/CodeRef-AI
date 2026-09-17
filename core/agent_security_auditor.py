@@ -2818,8 +2818,8 @@ def _render_report_header(risks: List[AgentSecurityRisk], project_path: str, sta
         "",
         "## 安全评分",
         "",
-        f"| 评分 | 等级 | 阻断 | 严重 | 高危 | 中危 | 低危 |",
-        f"|------|------|------|------|------|------|------|",
+        "| 评分 | 等级 | 阻断 | 严重 | 高危 | 中危 | 低危 |",
+        "|------|------|------|------|------|------|------|",
         f"| {stats['score']:.0f}/100 | **{stats['grade']}** | {stats['blocker']} | {stats['critical']} | {stats['high']} | {stats['medium']} | {stats['low']} |",
         "",
     ]

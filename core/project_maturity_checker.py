@@ -98,8 +98,8 @@ def _render_score_section(lines: List[str], report: MaturityReport) -> None:
 
     lines.append("## 成熟度评分")
     lines.append("")
-    lines.append(f"| 评分 | 等级 | 通过 | 警告 | 缺失 | 总计 |")
-    lines.append(f"|------|------|------|------|------|------|")
+    lines.append("| 评分 | 等级 | 通过 | 警告 | 缺失 | 总计 |")
+    lines.append("|------|------|------|------|------|------|")
     lines.append(f"| **{report.score}/100** | {grade_icon} **{report.grade}** | {passed} | {warn} | {failed} | {total} |")
     lines.append("")
 
@@ -374,7 +374,7 @@ class ProjectMaturityChecker:
             checks.append(MaturityCheck(
                 check_id="MAT-TEST-01", category="testing", name="测试框架",
                 status="pass", detail=f"检测到测试框架：{'pytest' if has_pytest else 'unittest'}",
-                suggestion="", evidence=f"pytest" if has_pytest else "unittest",
+                suggestion="", evidence="pytest" if has_pytest else "unittest",
             ))
         else:
             checks.append(MaturityCheck(
@@ -803,8 +803,8 @@ class ProjectMaturityChecker:
         各段逻辑提取为模块级 _render_* 纯函数，本方法仅做编排。
         """
         lines = [
-            f"# 项目成熟度审计",
-            f"",
+            "# 项目成熟度审计",
+            "",
             f"> 项目: `{report.project_path}`",
             f"> 项目名称: **{report.project_name}**",
         ]

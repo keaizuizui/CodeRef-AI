@@ -1015,8 +1015,8 @@ def _fmt(r: PipeResult, title: str, t0: float = 0.0) -> str:
         f"- **统计范围**: 下表仅覆盖本次扫描的 {r.total_files} 个文件（详见 `file_snapshot`），均为**审计发现**，不代表任何修复状态；修复状态需对照 git 提交单独核实。",
         "",
         "## 置信度",
-        f"| 🔴 HIGH | 🟡 MEDIUM | ⚪ LOW | 💡 建议 |",
-        f"|----------|------------|---------|---------|",
+        "| 🔴 HIGH | 🟡 MEDIUM | ⚪ LOW | 💡 建议 |",
+        "|----------|------------|---------|---------|",
         f"| {_weighted(h)} | {_weighted(m)} | {_weighted(l)} | {_weighted(adv)} |",
         "",
     ]
@@ -2165,7 +2165,7 @@ class Pipe:
             self._render_html(project_path, r, kg_stats=stats,
                               output_dir=os.path.join(out, "html"))
             _prog("复用既有结论", 1, 1)
-            logger.info(f"[audit] 策略=no_change，复用既有结论，未重扫")
+            logger.info("[audit] 策略=no_change，复用既有结论，未重扫")
             return True
         except Exception as e:
             r.errors.append(f"reuse_no_change: {e}")

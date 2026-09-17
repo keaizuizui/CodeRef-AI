@@ -533,11 +533,11 @@ class BlindSpotDetector:
                         continue
                     spots.append(BlindSpot(
                         category="dynamic_path",
-                        item=f"sys.path 动态修改",
+                        item="sys.path 动态修改",
                         detail=f"第 {i} 行: {stripped[:100]}",
                         file_path=fp,
                         risk_level="medium",
-                        user_should_know=f"代码在运行时动态修改了 Python 的模块搜索路径。这意味着有些模块的存放位置不在标准位置，可能导致 AI 分析时遗漏这些模块，或者在不同环境下运行报错。",
+                        user_should_know="代码在运行时动态修改了 Python 的模块搜索路径。这意味着有些模块的存放位置不在标准位置，可能导致 AI 分析时遗漏这些模块，或者在不同环境下运行报错。",
                     ))
 
         logger.info(f"[BlindSpotDetector] 动态路径注入: {len(spots)} 个")
@@ -662,7 +662,7 @@ class BlindSpotDetector:
                     detail=f"文件只有 import 和注释，没有实际代码逻辑（{len(lines)} 行）",
                     file_path=fp,
                     risk_level="low",
-                    user_should_know=f"文件只包含 import 导入语句，没有实际的功能代码。这可能是一个空的占位文件，或者代码被删除了但文件忘了删除。你可以忽略它，但如果它被其他文件引用，可能会出问题。",
+                    user_should_know="文件只包含 import 导入语句，没有实际的功能代码。这可能是一个空的占位文件，或者代码被删除了但文件忘了删除。你可以忽略它，但如果它被其他文件引用，可能会出问题。",
                 ))
 
         logger.info(f"[BlindSpotDetector] 空文件: {len(spots)} 个")

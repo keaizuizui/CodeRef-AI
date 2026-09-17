@@ -791,8 +791,8 @@ class JunkDetector:
         # 总览
         lines.append("## 垃圾总览")
         lines.append("")
-        lines.append(f"| 指标 | 数值 |")
-        lines.append(f"|------|------|")
+        lines.append("| 指标 | 数值 |")
+        lines.append("|------|------|")
         lines.append(f"| 发现垃圾文件数 | **{len(self._items)}** |")
         lines.append(f"| 可释放空间 | **{fmt_size(total_size)}** |")
         lines.append(f"| 可安全删除 | {safe_count} 项 |")
@@ -903,7 +903,7 @@ class JunkDetector:
 
         lines.append("---")
         lines.append("")
-        lines.append(f"*报告由 CodeRef-AI JunkDetector v1.0 生成*")
+        lines.append("*报告由 CodeRef-AI JunkDetector v1.0 生成*")
 
         return "\n".join(lines)
 

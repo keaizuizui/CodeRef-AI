@@ -1324,7 +1324,7 @@ class OperationMemory:
             f"- 项目：`{project_path}`",
             f"- 最近同步：{ledger.get('last_sync', '-')}",
             f"- LLM 提炼：{'可用' if ledger.get('llm_available') else '未启用/降级'}",
-            f"- 生成：本导出文件供 attach 到不支持 MCP 的 LLM 界面复用。",
+            "- 生成：本导出文件供 attach 到不支持 MCP 的 LLM 界面复用。",
             "",
             "> 用法：把本文件 attach 到 Claude Project / CustomGPT 等；或人工阅读核对约定。",
             "",
