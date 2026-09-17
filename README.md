@@ -414,7 +414,6 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 > 承接 2026-09-17 Brooks-Lint 审查：修复 coderef_eval 多指标聚合的诚实性缺口 + 3 个可维护性改进。
 > - **修复（硬指标部分降级误 PASS）**：多指标聚合时，任一硬指标（faithfulness/hallucination）评估失败（degraded）→ 整体降级 SKIP（不误 PASS），并在结果披露 `degraded_metrics` 清单；软指标降级仅排除出平均分且披露，不否决。防「硬指标评估失败被静默排除 → 硬伤被掩盖」。
 > - **改进**：模型返回越界 score 时在 breakdown 披露 `score_clamped`（原值 + 夹取值）；`LLMIntegration.parse_json_response` 公开解析入口（code_review/output_evaluator 复用，不再直调私有 `_try_parse_json`）；`coderef_eval` schema 的 metric enum 与 `output_evaluator.VALID_METRICS` 同源（新增指标只改一处）。
-> - **DeepSeek 模型名更新**：默认模型 `deepseek-v4-flash` → `deepseek-flash`（旧名已下线，实测旧名 + json_object 约束输出跑偏为散文致 LLM 工具降级；官方文档确认）。
 > - **测试**：全量 164 用例通过；测试方回归用例已补齐（coderef-src\tests）。
 
 ### 历史版本 v5.14.1 — 新增 coderef_eval 产出物语义评估（第 52 个工具）
@@ -423,6 +422,8 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 > - **新增（coderef_eval）**：`core/output_evaluator.py` + `mcp_server.py` 注册（tools 51→52，Server 实例 wrapper 同步）。4 个语义指标 + 软硬判定——硬指标（faithfulness/hallucination）挂 → 整条 FAIL 一票否决，软指标（answer_relevancy/coherence）失分只降平均分；verdict=PASS 当且仅当硬指标全过 且 得分 ≥ threshold，防「致命错误被平均分稀释」。action=assert 单条断言 / score 批量报告（逐条明细 + 平均分 + 达标/硬失败计数）。
 > - **设计吸收**：软硬维度 + 一票否决（刘胡子大叔《给 Agent 打个分》）；LLM-as-judge 显式标注「AI 判断」、仅软门禁；缺 API key 硬阻断返回 SKIP 不降级编造；JSON 解析失败一次「强制仅 JSON」重试后降级不裸崩；text/context 长度截断防成本失控；零新依赖。
 > - **边界**：只评 CodeRef 自产的 LLM 文本，不评用户项目运行时的 LLM/RAG/Agent 产出（静态审计禁区）。
+> - **skill 编排补齐**：盘点 52 工具在 `skills/` 覆盖，补编 6 个此前未入 skill 的工具——`coderef_eval`（coderef-mcp 速查/路由 + coderef-probe 场景 B）、`coderef_arch_canvas`（coderef-mcp 审计引擎 + governance 场景②）、`coderef_dynamic_probe`（coderef-mcp 审计引擎 + probe 场景 A）、`coderef_gov_workspace`（governance 路由表 + 场景⑤）、`coderef_target_arch_get`（governance 场景②）、`coderef_task_cancel`（coderef-mcp 核心原则）；`coderef_version` 为探针不编。编排口径：`coderef_eval` 独立工具保持手动调用，不自动接入 review（第 2 期）。
+> - **DeepSeek 模型名更新（测试反馈驱动）**：默认模型 `deepseek-v4-flash` → `deepseek-flash`（旧名已下线，实测旧名 + json_object 约束输出跑偏为散文致 LLM 工具 JSON 解析失败→降级；官方文档确认）。
 > - **版本号**：5.13.11 → 5.14.1（新功能新工具，minor 升位，用户拍板）。
 
 **中间补丁链概要（v5.13.3 → v5.13.11，逐条明细见 CHANGELOG）：**
