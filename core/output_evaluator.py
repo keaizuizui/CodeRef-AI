@@ -27,6 +27,7 @@
 """
 
 import json
+import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -346,6 +347,8 @@ class OutputEvaluator:
         degraded_hard = [m for m in metrics
                          if m in HARD_METRICS and per[m].get("status") == "degraded"]
         if degraded_hard:
+            # 披露全部降级指标（含同期降级的软指标），不只看硬指标首个失败
+            degraded_all = [m for m in metrics if per[m].get("status") == "degraded"]
             return {
                 "status": "degraded",
                 "metric": list(metrics),
@@ -356,7 +359,7 @@ class OutputEvaluator:
                     f"硬指标评估失败（{', '.join(degraded_hard)}），"
                     "无法给出可信的软硬判定，已整体降级"
                 ),
-                "degraded_metrics": degraded_hard,
+                "degraded_metrics": degraded_all,
                 "metrics": per,
                 "note": NOTE_AI_JUDGEMENT,
             }
@@ -470,15 +473,25 @@ class OutputEvaluator:
 
     # ── 解析与组装 ────────────────────────────────────────────────────
     def _parse_eval_json(self, text: str) -> Optional[Dict[str, Any]]:
-        """解析 LLM 返回文本：必须为含合法 score 的 JSON 对象，否则返回 None。"""
+        """解析 LLM 返回文本：必须为含合法 score 的 JSON 对象，否则返回 None。
+
+        合法性含：score 可转有限 float 且非 bool（bool 是 int 子类会被 float()
+        静默转 0.0/1.0）；NaN/Infinity 恒不在 [0,1] 内且比较异常，一并拒绝，
+        让这类「模型输出异常值」走既有重试→降级路径，而非产出 PASS/夹取结果。
+        """
         if not text or text.startswith(_LLM_ERROR_PREFIX):
             return None
         data = self.llm.parse_json_response(text)
         if not isinstance(data, dict):
             return None
+        raw = data.get(_SCORE_KEY)
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return None
         try:
-            float(data.get(_SCORE_KEY))
+            s = float(raw)
         except (TypeError, ValueError):
+            return None
+        if not math.isfinite(s):
             return None
         return data
 
