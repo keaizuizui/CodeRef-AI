@@ -1619,9 +1619,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         test_path = sys.argv[1]
 
-    print(f"TechDebtDetector 测试运行")
+    print("TechDebtDetector 测试运行")
     print(f"扫描路径: {test_path}")
-    print(f"=" * 60)
+    print("=" * 60)
 
     detector = TechDebtDetector()
     report = detector.detect(test_path)

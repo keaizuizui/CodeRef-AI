@@ -335,7 +335,7 @@ def _architecture_summary_text(analysis: ProjectAnalysis) -> str:
     summary_parts = []
     
     # 基本信息
-    summary_parts.append(f"## 项目概览")
+    summary_parts.append("## 项目概览")
     summary_parts.append(f"- 总文件数: {analysis.total_files}")
     summary_parts.append(f"- 总代码行数: {analysis.total_lines:,}")
     lang_str = ', '.join([f'{k}({v}个文件)' for k, v in sorted(analysis.languages.items(), key=lambda x: -x[1])])
@@ -346,24 +346,24 @@ def _architecture_summary_text(analysis: ProjectAnalysis) -> str:
     
     # 技术栈
     if analysis.tech_stack:
-        summary_parts.append(f"\n## 技术栈")
+        summary_parts.append("\n## 技术栈")
         for tech in analysis.tech_stack:
             summary_parts.append(f"- {tech}")
     
     # 核心功能
     if analysis.core_features:
-        summary_parts.append(f"\n## 核心功能")
+        summary_parts.append("\n## 核心功能")
         for feature in analysis.core_features:
             summary_parts.append(f"- {feature}")
     
     # 模块结构
-    summary_parts.append(f"\n## 模块结构")
+    summary_parts.append("\n## 模块结构")
     for module, files in sorted(analysis.modules.items()):
         summary_parts.append(f"- **{module}**: {len(files)} 个文件")
     
     # 依赖概览
     if analysis.dependencies:
-        summary_parts.append(f"\n## 外部依赖")
+        summary_parts.append("\n## 外部依赖")
         for dep in sorted(analysis.dependencies)[:20]:
             summary_parts.append(f"- {dep}")
         if len(analysis.dependencies) > 20:
@@ -511,7 +511,7 @@ def _render_rich_header(analysis: ProjectAnalysis, totals: Dict[str, int]) -> Li
     
     # ==================== 头部 ====================
     report.append("# 📊 项目深度分析报告")
-    report.append(f"\n> 生成时间: 即时分析")
+    report.append("\n> 生成时间: 即时分析")
     report.append(f"> 项目路径: `{analysis.project_path}`")
     report.append("")
     report.append("---")
@@ -525,8 +525,8 @@ def _render_rich_header(analysis: ProjectAnalysis, totals: Dict[str, int]) -> Li
     total_functions = totals["functions"]
     total_imports = totals["imports"]
     
-    report.append(f"| 指标 | 数值 |")
-    report.append(f"|------|------|")
+    report.append("| 指标 | 数值 |")
+    report.append("|------|------|")
     report.append(f"| 📄 代码文件数 | {total_files} |")
     report.append(f"| 📝 总代码行数 | {total_lines:,} |")
     report.append(f"| 🏗️ 模块/目录数 | {len(analysis.modules)} |")
@@ -802,8 +802,8 @@ def _render_ai_summary(audit_results: Dict[str, List[Dict]]) -> List[str]:
     medium = sum(1 for cat in audit_results.values() for item in cat if item.get('severity') == 'medium')
     low = sum(1 for cat in audit_results.values() for item in cat if item.get('severity') == 'low')
     
-    lines.append(f"| 维度 | 问题数 | 严重 | 高 | 中 | 低 |")
-    lines.append(f"|------|--------|------|----|----|----|")
+    lines.append("| 维度 | 问题数 | 严重 | 高 | 中 | 低 |")
+    lines.append("|------|--------|------|----|----|----|")
     for category, items in audit_results.items():
         c = sum(1 for i in items if i.get('severity') == 'critical')
         h = sum(1 for i in items if i.get('severity') == 'high')

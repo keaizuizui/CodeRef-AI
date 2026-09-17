@@ -568,13 +568,13 @@ class PromptAnalyzer:
     def to_summary(self, result: PromptAnalysisResult) -> str:
         """生成可读摘要"""
         lines = []
-        lines.append(f"# Prompt 分析摘要")
+        lines.append("# Prompt 分析摘要")
         lines.append(f"\n- 总 Prompt: {result.total_prompts}")
         lines.append(f"- 识别角色: {result.total_roles}")
         lines.append(f"- 识别工作流: {result.total_workflows}")
         
         if result.roles:
-            lines.append(f"\n## 角色列表")
+            lines.append("\n## 角色列表")
             for r in result.roles:
                 nickname_str = f"（昵称：{r.nickname}）" if r.nickname else ""
                 lines.append(f"\n### {r.name}{nickname_str}")
@@ -589,14 +589,14 @@ class PromptAnalyzer:
                 lines.append(f"- 来源：{r.source_module}/{r.source_file} ({r.prompt_variable})")
         
         if result.workflows:
-            lines.append(f"\n## 工作流列表")
+            lines.append("\n## 工作流列表")
             for w in result.workflows:
                 lines.append(f"\n### {w.name}")
                 lines.append(f"- 触发：{w.trigger}")
                 lines.append(f"- 产出：{w.output}")
                 lines.append(f"- 角色序列：{' → '.join(w.roles_sequence)}")
                 if w.steps:
-                    lines.append(f"- 步骤：")
+                    lines.append("- 步骤：")
                     for step in w.steps:
                         lines.append(f"  {step.get('order', '?')}. {step.get('role', '?')}：{step.get('action', '')[:80]}")
         

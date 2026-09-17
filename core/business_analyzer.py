@@ -618,7 +618,8 @@ def _ba_llm_entity_discovery(analysis, enrichment, llm, prompt_memory) -> List[B
     gn_section = ""
     if enrichment and enrichment.available and enrichment.entry_points:
         gn_section = (
-            f"\n【GitNexus 代码索引发现的入口点】\n"
+            "\n【GitNexus 代码索引发现的入口点】\n"
+            f"以下函数是代码库中被调用最多的核心入口：\n"
             f"以下函数是代码库中被调用最多的核心入口：\n"
         )
         for ep in enrichment.entry_points[:10]:
@@ -2319,7 +2320,7 @@ def _render_ba_header(lines: List[str], result: BusinessAnalysisResult) -> None:
     lines.append(f'# {project_display} — 业务架构全景报告')
     lines.append('')
     lines.append(f'> **报告日期**：{datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}')
-    lines.append(f'> **分析引擎**：CodeRef-AI BusinessAnalyzer V2.1 + GitNexus Code Intelligence')
+    lines.append('> **分析引擎**：CodeRef-AI BusinessAnalyzer V2.1 + GitNexus Code Intelligence')
     lines.append(f'> **代码规模**：{result.file_count} 文件 / {result.line_count:,} 行 / {result.total_classes} 类 / {result.total_functions} 函数')
     if result.enrichment and result.enrichment.available:
         lines.append(f'> **GitNexus 索引**：{len(result.enrichment.all_symbols)} 符号 / {len(result.enrichment.call_pairs)} 调用关系 / {len(result.enrichment.entry_points)} 入口点')
@@ -2626,7 +2627,7 @@ def _render_ba_differences(lines: List[str], result: BusinessAnalysisResult) -> 
         for d in result.differences:
             _ba_append_h3(lines, f'{d.dimension} — {d.aspect}')
             lines.append(f'| | {d.side_a} | {d.side_b} |')
-            lines.append(f'|------|------|------|')
+            lines.append('|------|------|------|')
             lines.append(f'| **差异** | {d.difference[:50]} | - |')
             lines.append(f'| **影响** | {d.impact[:50] if d.impact else "-"} | - |')
             lines.append('')

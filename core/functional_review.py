@@ -256,7 +256,7 @@ class FunctionalReviewer:
             data = self.llm._try_parse_json(response)
             if isinstance(data, dict):
                 return data
-            logger.warning(f"[FunctionalReview] LLM 返回非 JSON 对象，尝试修复后仍失败")
+            logger.warning("[FunctionalReview] LLM 返回非 JSON 对象，尝试修复后仍失败")
             return None
         logger.error(f"[FunctionalReview] LLM 调用最终失败: {last_err}")
         return None

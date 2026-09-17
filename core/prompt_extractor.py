@@ -622,16 +622,16 @@ class PromptExtractor:
     def to_summary(self, result: PromptExtractionResult) -> str:
         """生成可读摘要"""
         lines = []
-        lines.append(f"# Prompt 抽取摘要")
+        lines.append("# Prompt 抽取摘要")
         lines.append(f"\n- 扫描文件: {result.total_files_scanned}")
         lines.append(f"- 发现 Prompt: {result.total_prompts_found}")
-        lines.append(f"\n## 角色模式分布")
+        lines.append("\n## 角色模式分布")
         for pattern, count in sorted(result.role_patterns.items(), key=lambda x: -x[1]):
             lines.append(f"- {pattern}: {count}")
-        lines.append(f"\n## 模块分布")
+        lines.append("\n## 模块分布")
         for module, count in sorted(result.modules.items(), key=lambda x: -x[1]):
             lines.append(f"- {module}: {count}")
-        lines.append(f"\n## 角色列表")
+        lines.append("\n## 角色列表")
         for p in result.prompts:
             if p.role_name:
                 lines.append(f"- **{p.role_name}** ({p.role_pattern}) — {p.role_description[:80]}  [{p.source_module}/{os.path.basename(p.file_path)}:{p.line_start}]")

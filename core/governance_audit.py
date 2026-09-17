@@ -1967,35 +1967,35 @@ def _generate_report(report: GovernanceReport) -> str:
         score_text = "⚪ **N/A**（未发现可分析代码文件）"
 
     lines = []
-    lines.append(f"# 🔍 代码治理审计报告")
-    lines.append(f"")
+    lines.append("# 🔍 代码治理审计报告")
+    lines.append("")
     lines.append(f"**项目路径**: `{report.project_path}`  ")
     lines.append(f"**扫描范围**: {report.total_files} 个文件, {report.total_lines} 行  ")
     lines.append(f"**治理健康分**: {score_text}  ")
-    lines.append(f"")
+    lines.append("")
 
     # 总览
-    lines.append(f"## 📊 违规总览")
-    lines.append(f"")
-    lines.append(f"| 严重程度 | 数量 |")
-    lines.append(f"|---------|------|")
+    lines.append("## 📊 违规总览")
+    lines.append("")
+    lines.append("| 严重程度 | 数量 |")
+    lines.append("|---------|------|")
     lines.append(f"| 🔴 Critical | {report.critical_count} |")
     lines.append(f"| 🟠 High | {report.high_count} |")
     lines.append(f"| 🟡 Medium | {report.medium_count} |")
     lines.append(f"| ⚪ Low | {report.low_count} |")
     lines.append(f"| **总计** | **{report.total_violations}** |")
-    lines.append(f"")
+    lines.append("")
 
-    lines.append(f"| 分类 | 数量 |")
-    lines.append(f"|------|------|")
+    lines.append("| 分类 | 数量 |")
+    lines.append("|------|------|")
     for cat in ["security", "architecture", "pitfall", "quality"]:
         if cat_counts.get(cat, 0) > 0:
             cat_names = {"security": "安全铁律", "architecture": "架构铁律", "pitfall": "错题本模式", "quality": "质量铁律"}
             lines.append(f"| {cat_names.get(cat, cat)} | {cat_counts[cat]} |")
-    lines.append(f"")
+    lines.append("")
 
     if not violations:
-        lines.append(f"✅ **未发现违规项，项目治理状况良好。**")
+        lines.append("✅ **未发现违规项，项目治理状况良好。**")
         return "\n".join(lines)
 
     # 分类明细
@@ -2012,14 +2012,14 @@ def _generate_report(report: GovernanceReport) -> str:
         }
 
         lines.append(f"## {cat_names.get(cat, cat)}（{len(cat_violations)} 项）")
-        lines.append(f"")
+        lines.append("")
 
         # 每类最多展示 100 条，避免报告过大
         display_count = min(len(cat_violations), 100)
         for v in cat_violations[:display_count]:
             sev_icon = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "⚪"}.get(v.severity, "⚪")
             lines.append(f"### {sev_icon} [{v.rule_id}] {v.rule_name}")
-            lines.append(f"")
+            lines.append("")
             lines.append(f"- **文件**: `{v.file_path}`")
             if v.line_number > 0:
                 lines.append(f"- **行号**: L{v.line_number}")
@@ -2028,17 +2028,17 @@ def _generate_report(report: GovernanceReport) -> str:
             lines.append(f"- **建议**: {v.suggestion}")
             if v.pattern:
                 lines.append(f"- **错题本模式**: {v.pattern}")
-            lines.append(f"")
+            lines.append("")
 
         if len(cat_violations) > display_count:
             lines.append(f"*... 还有 {len(cat_violations) - display_count} 条未展示，请优化匹配规则后重新扫描*")
-            lines.append(f"")
+            lines.append("")
 
     # 修复优先级建议
-    lines.append(f"---")
-    lines.append(f"")
-    lines.append(f"## 🎯 修复优先级建议")
-    lines.append(f"")
+    lines.append("---")
+    lines.append("")
+    lines.append("## 🎯 修复优先级建议")
+    lines.append("")
     if report.critical_count > 0:
         lines.append(f"1. **立即修复** ({report.critical_count} 项 critical): 硬编码凭据、SQL注入等安全漏洞必须立即处理")
     if report.high_count > 0:
@@ -2048,10 +2048,10 @@ def _generate_report(report: GovernanceReport) -> str:
     if report.low_count > 0:
         lines.append(f"4. **技术债务** ({report.low_count} 项 low): 嵌套过深、裸线程等可逐步优化")
 
-    lines.append(f"")
-    lines.append(f"---")
-    lines.append(f"*报告由 CodeRef-AI GovernanceAuditor v1.0 生成*")
-    lines.append(f"")
+    lines.append("")
+    lines.append("---")
+    lines.append("*报告由 CodeRef-AI GovernanceAuditor v1.0 生成*")
+    lines.append("")
     lines.append("> **LLM 复查提示**：此报告可能包含误报。审查每条结果后，调用 `coderef_cache_whitelist` 工具将误报自动加入白名单，然后重新扫描。")
 
     return "\n".join(lines)

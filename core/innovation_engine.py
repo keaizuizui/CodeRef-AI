@@ -85,7 +85,7 @@ def _enrich_gap_suggestions(detector, signatures, gaps) -> None:
     for g in gaps:
         if detector.get_llm_budget() <= 0:
             logger.warning(
-                f"[InnovationEngine] LLM 预算耗尽，剩余缺口使用结构建议"
+                "[InnovationEngine] LLM 预算耗尽，剩余缺口使用结构建议"
             )
             break
         target_sig = sig_by_module.get(g.target_module)

@@ -479,8 +479,8 @@ class HtmlReportRenderer:
                 secs.append(f'<section><h2>审计发现 <span class="badge badge-ok">已执行</span></h2>'
                             f'<p>共 <strong>{len(findings)}</strong> 条发现，详见 <a href="audit.html">审计发现</a>。</p></section>')
             else:
-                secs.append(f'<section><h2>审计发现 <span class="badge badge-ok">已执行</span></h2>'
-                            f'<p>审计已执行，未发现任何问题。详见 <a href="audit.html">审计发现</a>。</p></section>')
+                secs.append('<section><h2>审计发现 <span class="badge badge-ok">已执行</span></h2>'
+                            '<p>审计已执行，未发现任何问题。详见 <a href="audit.html">审计发现</a>。</p></section>')
         else:
             hint = _esc(audit_d.get("hint", "尚未执行审计，请先运行 coderef_audit"))
             secs.append(f'<section><h2>审计发现 <span class="badge badge-missing">未执行</span></h2>'
@@ -549,8 +549,8 @@ class HtmlReportRenderer:
 
         findings = getattr(pr, "findings", []) or []
         if not findings:
-            body = (f'<section><h2>审计发现 <span class="badge badge-ok">已执行</span></h2>'
-                    f'<p>审计已执行，未发现任何问题。</p></section>')
+            body = ('<section><h2>审计发现 <span class="badge badge-ok">已执行</span></h2>'
+                    '<p>审计已执行，未发现任何问题。</p></section>')
         else:
             ordered = sorted(findings, key=lambda f: (
                 {"high": 0, "medium": 1, "low": 2}.get(

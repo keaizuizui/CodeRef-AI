@@ -1244,8 +1244,8 @@ class SCAChecker:
 
         lines.append("## 安全评分")
         lines.append("")
-        lines.append(f"| 评分 | 等级 | 扫描依赖 | 存在漏洞 | 高危以上 |")
-        lines.append(f"|------|------|----------|----------|----------|")
+        lines.append("| 评分 | 等级 | 扫描依赖 | 存在漏洞 | 高危以上 |")
+        lines.append("|------|------|----------|----------|----------|")
         lines.append(f"| {score:.0f}/100 | **{grade}** | {report.scanned_deps} | {report.vulnerable_deps} | {report.critical_count + report.high_count} |")
         lines.append("")
 

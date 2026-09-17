@@ -567,7 +567,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         target = sys.argv[1]
 
-    print(f"ProjectScope 测试运行")
+    print("ProjectScope 测试运行")
     print(f"扫描路径: {target}")
     print(f"{'=' * 60}")
 
@@ -575,19 +575,19 @@ if __name__ == "__main__":
     scope.analyze()
 
     stats = scope.get_stats()
-    print(f"\n## 统计信息")
+    print("\n## 统计信息")
     print(f"项目目录数: {stats['project_dir_count']}")
     print(f"跳过目录数: {stats['skip_dir_count']}")
-    print(f"\n## 跳过原因分布")
+    print("\n## 跳过原因分布")
     for reason, count in sorted(stats['skip_reasons'].items(), key=lambda x: -x[1]):
         print(f"  {reason}: {count}")
 
-    print(f"\n## 项目目录（前 20 个）")
+    print("\n## 项目目录（前 20 个）")
     for d in sorted(scope.get_project_dirs())[:20]:
         rel = os.path.relpath(d, target)
         print(f"  [SCAN] {rel}")
 
-    print(f"\n## 跳过目录（前 20 个）")
+    print("\n## 跳过目录（前 20 个）")
     for d in sorted(scope.get_skip_dirs())[:20]:
         rel = os.path.relpath(d, target)
         reason = scope._skip_reasons.get(d, "未知")
