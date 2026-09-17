@@ -1274,8 +1274,8 @@ class TechDebtDetector:
         for cf in analysis.files:
             if cf.language not in ("Python", "python"):
                 continue
-            raw_lines = (cf.raw_content or "").split("\n")
-            file_lines = len(raw_lines)
+            # splitlines：结尾换行不会多计一个空行，行数即真实物理行数
+            file_lines = len((cf.raw_content or "").splitlines())
             if file_lines > self.OVERSIZED_FILE_THRESHOLD:
                 if file_lines > 3000:
                     severity = "critical"

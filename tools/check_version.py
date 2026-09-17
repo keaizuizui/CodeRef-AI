@@ -21,15 +21,20 @@ def main() -> int:
     from core.version import __version__ as truth
 
     issues = []
-    checks = [
-        ("README.md", rf"Version\s+{re.escape(truth)}", "README 版本行"),
-        ("MCP_SETUP.md", rf"v{re.escape(truth)}", "MCP_SETUP 架构图版本"),
-    ]
-    for rel, pattern, label in checks:
-        path = os.path.join(ROOT, rel)
-        text = open(path, encoding="utf-8").read()
-        if not re.search(pattern, text):
-            issues.append(f"{label} 未同步到 {truth}（{rel}）")
+    # 精确定位权威版本字段并比较，避免匹配到历史区块/其它出现处
+    # README：首行 "**Version X.Y.Z**"
+    readme = open(os.path.join(ROOT, "README.md"), encoding="utf-8").read()
+    m_readme = re.search(r"\*\*Version\s+(\d+\.\d+\.\d+)\*\*", readme)
+    if m_readme is None or m_readme.group(1) != truth:
+        found = m_readme.group(1) if m_readme else "（未找到）"
+        issues.append(f"README 版本行 {found} ≠ 真源 {truth}")
+
+    # MCP_SETUP：架构图 "MCP Server (vX.Y.Z, N 个工具)"
+    mcp = open(os.path.join(ROOT, "MCP_SETUP.md"), encoding="utf-8").read()
+    m_mcp = re.search(r"MCP Server \(v(\d+\.\d+\.\d+),", mcp)
+    if m_mcp is None or m_mcp.group(1) != truth:
+        found = m_mcp.group(1) if m_mcp else "（未找到）"
+        issues.append(f"MCP_SETUP 架构图版本 {found} ≠ 真源 {truth}")
 
     # CHANGELOG 最新区块标题必须含当前版本（取首个 "### v..." 标题直接比对）
     changelog = os.path.join(ROOT, "docs", "changelog", "CHANGELOG.md")
