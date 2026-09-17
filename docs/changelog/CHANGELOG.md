@@ -13,10 +13,12 @@
 - **改进（公开解析接口）**：`core/llm_integration.py` 新增公开 `parse_json_response`（转发 `_try_parse_json` 同一套健壮解析：Markdown 剥离/非标 JSON 规范化/平衡片段提取/截断修复），`output_evaluator._parse_eval_json` 改用公开接口，不再直调跨模块私有方法。
 - **改进（指标清单同源）**：`mcp_server.py` `coderef_eval` schema 的 metric enum 引用 `core.output_evaluator.VALID_METRICS`（唯一真源），新增指标只改 output_evaluator 一处、schema 自动同步，防双处漂移。
 - **自测**：master 全量 **164 用例通过**；冒烟 13 项新增断言全绿（硬指标部分降级不 PASS / 软指标降级披露不否决 / 越界披露 / 公开接口 / schema 同源）。
+- **CodeRabbit 复审修订（提交 `e4e48c1`）**：① score 合法性收紧——`_parse_eval_json` 拒绝 bool（float(True)=1.0 静默放行）与 NaN/±Infinity（恒不在 [0,1] 且比较异常），此类模型输出异常值走既有重试→降级路径，不产出 PASS/夹取结果；② 硬指标降级分支 `degraded_metrics` 披露全部降级指标（含同期降级的软指标），不只列硬指标首个失败。
 - **建议测试方落位用例（新增，依约定开发方不落测试文件）**：
   - `OutputEvalJudgeTest.test_hard_metric_partial_degraded_not_pass` — 多指标含硬指标 degraded → 整体 degraded/SKIP 且 `degraded_metrics` 披露；
   - `OutputEvalJudgeTest.test_soft_metric_degraded_disclosed` — 软指标 degraded → 仍可 PASS 且披露 `degraded_metrics`；
   - `OutputEvalJudgeTest.test_score_out_of_range_disclosed` — 模型 score 越界 → 夹取且 breakdown 披露 `score_clamped`（含原值）；
+  - `OutputEvalJudgeTest.test_score_bool_nan_rejected` — score 为 bool/NaN/Inf → 走重试→降级不产出 PASS；
   - `OutputEvalSchemaTest.test_metric_enum_matches_valid_metrics` — tools/list 的 metric enum == `VALID_METRICS`（同源断言）。
 - **版本号**：5.14.1 → 5.14.2（Brooks-Lint 审查修订，patch 升位；按 SOP 不打 release 包，push master + tag）。
 
