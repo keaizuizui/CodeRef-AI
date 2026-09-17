@@ -20,16 +20,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # 保持唯一真源（新增指标只改 output_evaluator 一处，schema 自动同步，防双处漂移）
 from core.output_evaluator import VALID_METRICS as _EVAL_METRICS
 
-# 统一取包版本号，避免 serverInfo 与 __init__.py / README 版本漂移
+# 统一取包版本号，避免 serverInfo 与 __init__.py / README 版本漂移。
+# 版本号唯一真源在 core/version.py，直接 import 而非文本解析（解析易受格式漂移影响）。
 def _pkg_version() -> str:
     try:
-        ver_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "__init__.py")
-        with open(ver_file, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip().startswith("__version__"):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+        from core.version import __version__
+        return __version__
     except Exception:
-        # 版本文件不可读时回退默认版本号
+        # 版本模块不可导入时回退默认版本号
         pass
     return "4.0.0"
 
