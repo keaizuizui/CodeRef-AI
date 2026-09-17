@@ -1,12 +1,13 @@
 # CodeRef-AI 打包配置（v4.9.2 新增）：支持 `pip install .` 规范化安装与依赖声明。
 # 与 requirements.txt 维护同一份依赖清单；要求 pip>=21.3 / setuptools>=61。
+# 版本号与 __init__.py 保持一致（运行时 _pkg_version 读 __init__.py，此处为打包元数据）。
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "coderef-ai"
-version = "4.9.6"
+version = "5.14.2"
 description = "静态图驱动的 LLM 代码审计工具 —— 非编程人员也可验证 AI 项目是否按期望执行、架构是否健康、文档是否可信"
 readme = "README.md"
 license = { text = "PolyForm-Noncommercial-1.0.0" }

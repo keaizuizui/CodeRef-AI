@@ -298,7 +298,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 
 | 特性 | 说明 |
 |------|------|
-| 不修改代码 | 所有建议只输出不执行，原代码保持不变 |
+| 不修改代码 | 审计、图谱、诊断等分析**只输出不执行**；唯一例外：`coderef_change_guard ensure_git` 会在被测项目无 git 时 `git init` 并写本地身份配置（守护引擎运转前提，仅该项目本地配置，不写全局） |
 | 本地优先 | 分析完全在本地，审计和知识图谱无需网络，支持离线 |
 | 隐私安全 | LLM 密钥存 `config/config.json`（已 gitignore），不提交 Git |
 | 结构化输出 | 报告 Markdown，仪表盘 HTML，知识图谱 SQLite |
