@@ -507,6 +507,16 @@ class LLMIntegration:
         return text[m.end():end].strip()
 
     @classmethod
+    def parse_json_response(cls, text: str) -> Optional[Any]:
+        """公开解析入口：从 LLM 返回文本中解析 JSON 对象/数组（转发 _try_parse_json）。
+
+        供各消费模块（code_review / output_evaluator 等）复用同一套健壮解析
+        （Markdown 代码块剥离 / 非标准 JSON 规范化 / 平衡片段提取 / 截断修复），
+        避免跨模块直接调用私有方法造成封装耦合。
+        """
+        return cls._try_parse_json(text)
+
+    @classmethod
     def _try_parse_json(cls, text: str) -> Optional[Any]:
         """尝试从 LLM 返回文本中解析出 JSON 对象/数组。
 

@@ -28,7 +28,7 @@
 
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -70,6 +70,8 @@ _LLM_ERROR_PREFIX = "LLM调用错误"
 _SCORE_KEY = "score"
 _REASON_KEY = "reason"
 _BREAKDOWN_KEY = "breakdown"
+# 模型 score 越界被夹取时的披露键（breakdown 内）
+_CLAMPED_KEY = "score_clamped"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -218,13 +220,18 @@ def _normalize_items(text: Any) -> List[str]:
     return [s] if s.strip() else []
 
 
-def _extract_score(data: Dict[str, Any]) -> float:
-    """从已校验的 JSON 中取 score（解析层已保证可转 float，这里只做夹取 0–1）。"""
+def _extract_score(data: Dict[str, Any]) -> Tuple[float, bool]:
+    """从已校验的 JSON 中取 score，夹取 0–1；返回 (夹取后分值, 是否越界被夹取)。
+
+    越界（模型返回 score <0 或 >1）本身是异常信号，须披露而非静默吞掉，
+    供调用方追溯评估失真（Brooks-Lint：surface anomalies）。
+    """
     try:
         s = float(data.get(_SCORE_KEY))
     except (TypeError, ValueError):
-        return 0.0
-    return max(0.0, min(1.0, s))
+        return 0.0, False
+    clamped = s < 0.0 or s > 1.0
+    return max(0.0, min(1.0, s)), clamped
 
 
 def _compact_text(text: str, limit: int = 300) -> str:
@@ -333,7 +340,28 @@ class OutputEvaluator:
         for m in metrics:
             per[m] = self._evaluate_single_metric(text, m, context, threshold)
 
-        # 全部指标均降级（LLM 失败）→ 整体降级，不谎报 PASS
+        # 任一硬指标降级（LLM 调用失败）→ 整体降级，不误 PASS。
+        # 防「硬指标评估失败被静默排除出平均分 → 硬伤被掩盖」：硬指标是
+        # 一票否决的依据，它没得到合法分，整条判定即不可信，须诚实降级。
+        degraded_hard = [m for m in metrics
+                         if m in HARD_METRICS and per[m].get("status") == "degraded"]
+        if degraded_hard:
+            return {
+                "status": "degraded",
+                "metric": list(metrics),
+                "threshold": threshold,
+                "verdict": "SKIP",
+                "hard_failed": False,
+                "reason": (
+                    f"硬指标评估失败（{', '.join(degraded_hard)}），"
+                    "无法给出可信的软硬判定，已整体降级"
+                ),
+                "degraded_metrics": degraded_hard,
+                "metrics": per,
+                "note": NOTE_AI_JUDGEMENT,
+            }
+
+        # 全部指标均降级（无硬指标，如全软指标）→ 整体降级，不谎报 PASS
         if all(per[m].get("status") == "degraded" for m in metrics):
             return {
                 "status": "degraded",
@@ -342,17 +370,20 @@ class OutputEvaluator:
                 "verdict": "SKIP",
                 "hard_failed": False,
                 "reason": "所有指标均未得到合法 JSON 评估结果（重试后仍失败）",
+                "degraded_metrics": list(metrics),
                 "metrics": per,
                 "note": NOTE_AI_JUDGEMENT,
             }
 
+        # 软指标降级：排除出平均分（无分可比），但披露 degraded_metrics 不静默
+        degraded_soft = [m for m in metrics if per[m].get("status") == "degraded"]
         scores = [per[m].get(_SCORE_KEY) for m in metrics
                   if isinstance(per[m].get(_SCORE_KEY), (int, float))]
         avg = round(sum(scores) / len(scores), 3) if scores else 0.0
         # 硬指标任一挂 → 一票否决；软指标失分只降平均分，不单独否决
         hard_failed = any(per[m].get("hard_failed") for m in metrics if m in HARD_METRICS)
         verdict = "PASS" if (not hard_failed and avg >= threshold) else "FAIL"
-        return {
+        result: Dict[str, Any] = {
             "status": "completed",
             "metric": list(metrics),
             "score": avg,
@@ -363,6 +394,9 @@ class OutputEvaluator:
             "metrics": per,
             "note": NOTE_AI_JUDGEMENT,
         }
+        if degraded_soft:
+            result["degraded_metrics"] = degraded_soft
+        return result
 
     def _evaluate_single_metric(self, text: str, metric: str,
                                 context: str, threshold: float) -> Dict[str, Any]:
@@ -439,7 +473,7 @@ class OutputEvaluator:
         """解析 LLM 返回文本：必须为含合法 score 的 JSON 对象，否则返回 None。"""
         if not text or text.startswith(_LLM_ERROR_PREFIX):
             return None
-        data = self.llm._try_parse_json(text)
+        data = self.llm.parse_json_response(text)
         if not isinstance(data, dict):
             return None
         try:
@@ -451,13 +485,19 @@ class OutputEvaluator:
     def _compose_result(self, metric: str, threshold: float,
                         data: Dict[str, Any]) -> Dict[str, Any]:
         """组装单条单指标评估结果（软硬判定）。"""
-        score = _extract_score(data)
+        score, clamped = _extract_score(data)
         # 硬指标挂 → 一票否决；软指标失分 → 只降平均分，不否决
         hard_failed = metric in HARD_METRICS and score < threshold
         verdict = "FAIL" if (hard_failed or score < threshold) else "PASS"
         breakdown = data.get(_BREAKDOWN_KEY)
         if not isinstance(breakdown, dict):
             breakdown = {}
+        if clamped:
+            # 模型返回 score 越界（异常信号）：披露原始值，不静默夹取
+            breakdown[_CLAMPED_KEY] = {
+                "model_score": data.get(_SCORE_KEY),
+                "clamped_to": score,
+            }
         return {
             "status": "completed",
             "metric": metric,
