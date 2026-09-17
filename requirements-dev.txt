@@ -1,0 +1,4 @@
+# 开发/CI 工具依赖（非运行时依赖，不影响 pip install coderef-ai 的零依赖红线）
+# 安装：pip install -r requirements-dev.txt
+pytest>=8.0
+pytest-cov>=5.0
