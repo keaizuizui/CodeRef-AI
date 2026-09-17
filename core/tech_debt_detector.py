@@ -35,6 +35,7 @@ from config.settings import (
     TECH_DEBT_COMPLEXITY_THRESHOLD,
     TECH_DEBT_COGNITIVE_THRESHOLD,
     TECH_DEBT_LONG_FUNCTION_THRESHOLD,
+    TECH_DEBT_OVERSIZED_FILE_THRESHOLD,
     TECH_DEBT_NESTING_DEPTH_THRESHOLD,
     TECH_DEBT_COMMENTED_CODE_MIN_LINES,
 )
@@ -62,6 +63,7 @@ CATEGORY_LABELS = {
     "high_complexity": "圈复杂度过高",
     "cognitive_complexity": "认知复杂度",
     "long_function": "过长函数",
+    "oversized_file": "文件过大（上帝模块）",
     "deep_nesting": "嵌套过深",
     "magic_value": "魔法数字/硬编码",
     "commented_code": "被注释掉的代码",
@@ -135,6 +137,12 @@ EXPLANATION_TEMPLATES = {
         "这个函数太长了，就像一个章节没有分段。"
         "长函数难以阅读和理解，一个新人可能需要花很长时间才能搞明白它做了什么。"
         "建议把长函数拆分成多个短函数，每个函数完成一个明确的子任务。"
+    ),
+    "oversized_file": (
+        "这个文件太大了（超过 1000 行），就像一本没有目录的百科全书。"
+        "超大文件（上帝模块）把许多不同职责塞进一个文件，改动任何一处都可能波及其他功能，"
+        "新人难以定位代码，测试也更难写。"
+        "建议按职责把文件拆分成多个小模块（如按功能/领域拆分），每个模块只做一件事。"
     ),
     "deep_nesting": (
         "代码的缩进层次太深了，意味着「如果...那么...如果...那么...」的嵌套太多。"
@@ -237,12 +245,13 @@ def _render_td_overview(lines: List[str], debts: List[TechDebt], analysis) -> No
         "high_complexity": "复杂代码容易产生 Bug，难以维护",
         "cognitive_complexity": "认知复杂度高意味着代码读起来困难",
         "long_function": "长函数难以理解和测试",
+        "oversized_file": "上帝模块改动波及面大，难以定位与测试",
         "deep_nesting": "深层嵌套降低代码可读性",
         "magic_value": "硬编码值导致配置变更困难",
         "commented_code": "废弃代码让文件混乱，误导开发者",
         "naming_convention": "不规范的命名降低协作效率",
     }
-    for cat in ["todo_comment", "comment_quality", "high_complexity", "cognitive_complexity", "long_function", "deep_nesting", "magic_value", "commented_code", "naming_convention"]:
+    for cat in ["todo_comment", "comment_quality", "high_complexity", "cognitive_complexity", "long_function", "oversized_file", "deep_nesting", "magic_value", "commented_code", "naming_convention"]:
         count = cat_counts.get(cat, 0)
         if count > 0:
             lines.append(f"| {CATEGORY_LABELS[cat]} | {count} | {importance.get(cat, '')} |")
@@ -329,6 +338,27 @@ def _render_td_long_func_list(lines: List[str], long_func_debts: List[TechDebt])
     lines.append("### 对非技术人员的解释")
     lines.append("")
     lines.append(long_func_debts[0].explanation if long_func_debts[0].explanation else EXPLANATION_TEMPLATES["long_function"])
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+
+def _render_td_oversized_file_list(lines: List[str], oversized_debts: List[TechDebt]) -> None:
+    """渲染文件过大（上帝模块）列表"""
+    lines.append("## 文件过大（上帝模块）列表")
+    lines.append("")
+    lines.append("| 严重程度 | 文件 | 行数 | 建议 |")
+    lines.append("|---------|------|------|------|")
+    for d in oversized_debts:
+        file_short = os.path.basename(d.file_path)
+        line_match = re.search(r'共 (\d+) 行', d.description)
+        line_count = line_match.group(1) if line_match else "?"
+        lines.append(f"| {SEVERITY_LABELS.get(d.severity, '')} | `{file_short}` | {line_count} | {d.suggestion[:40]}… |")
+    lines.append("")
+
+    lines.append("### 对非技术人员的解释")
+    lines.append("")
+    lines.append(oversized_debts[0].explanation if oversized_debts[0].explanation else EXPLANATION_TEMPLATES["oversized_file"])
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -489,6 +519,11 @@ def _generate_debt_report(debts: List[TechDebt], analysis) -> str:
     long_func_debts = _debts_of(debts, "long_function")
     if long_func_debts:
         _render_td_long_func_list(lines, long_func_debts)
+
+    # 3.5 文件过大（上帝模块）列表
+    oversized_debts = _debts_of(debts, "oversized_file")
+    if oversized_debts:
+        _render_td_oversized_file_list(lines, oversized_debts)
 
     # 4. 嵌套过深列表
     nesting_debts = _debts_of(debts, "deep_nesting")
@@ -877,6 +912,7 @@ class TechDebtDetector:
     # 阈值配置（统一收敛到 config/settings.py）
     COMPLEXITY_THRESHOLD = TECH_DEBT_COMPLEXITY_THRESHOLD       # 圈复杂度阈值（if/for/while/except 语句数）
     LONG_FUNCTION_THRESHOLD = TECH_DEBT_LONG_FUNCTION_THRESHOLD   # 函数行数阈值
+    OVERSIZED_FILE_THRESHOLD = TECH_DEBT_OVERSIZED_FILE_THRESHOLD  # 文件行数过大阈值（上帝模块）
     NESTING_DEPTH_THRESHOLD = TECH_DEBT_NESTING_DEPTH_THRESHOLD     # 嵌套深度阈值（缩进级别）
     COMMENTED_CODE_MIN_LINES = TECH_DEBT_COMMENTED_CODE_MIN_LINES    # 注释代码块最少行数
 
@@ -952,6 +988,7 @@ class TechDebtDetector:
         debts.extend(self._detect_high_complexity(analysis))
         debts.extend(self._detect_cognitive_complexity(analysis))
         debts.extend(self._detect_long_functions(analysis))
+        debts.extend(self._detect_oversized_files(analysis))
         debts.extend(self._detect_deep_nesting(analysis))
         debts.extend(self._detect_magic_values(analysis))
         debts.extend(self._detect_commented_code(analysis))
@@ -1222,6 +1259,45 @@ class TechDebtDetector:
                         context=f"函数 {func.name}()",
                         explanation=EXPLANATION_TEMPLATES["long_function"],
                     ))
+
+        return debts
+
+    def _detect_oversized_files(self, analysis) -> List[TechDebt]:
+        """检测文件行数过大的「上帝模块」（>1000 行）。
+
+        与 _detect_long_functions（函数级）互补：函数再小，文件把大量职责
+        塞进一个模块也是技术债——改动波及面大、难以定位、测试难写。
+        基于 analysis.files 的 raw_content 统计行数，纯静态、零 LLM。
+        """
+        debts = []
+
+        for cf in analysis.files:
+            if cf.language not in ("Python", "python"):
+                continue
+            raw_lines = (cf.raw_content or "").split("\n")
+            file_lines = len(raw_lines)
+            if file_lines > self.OVERSIZED_FILE_THRESHOLD:
+                if file_lines > 3000:
+                    severity = "critical"
+                elif file_lines > 2000:
+                    severity = "high"
+                else:
+                    severity = "medium"
+
+                debts.append(TechDebt(
+                    category="oversized_file",
+                    severity=severity,
+                    file_path=cf.file_path,
+                    line=1,
+                    description=f"文件共 {file_lines} 行，"
+                                f"超过 {self.OVERSIZED_FILE_THRESHOLD} 行阈值（上帝模块）",
+                    suggestion=(
+                        f"按职责把文件拆分为多个小模块（每模块不超过 "
+                        f"{self.OVERSIZED_FILE_THRESHOLD} 行），每个模块只做一件事"
+                    ),
+                    context=f"文件 {os.path.basename(cf.file_path)}",
+                    explanation=EXPLANATION_TEMPLATES["oversized_file"],
+                ))
 
         return debts
 
