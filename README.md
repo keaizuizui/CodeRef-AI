@@ -1,4 +1,4 @@
-<!-- AI Summary: CodeRef-AI exposes 51 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. It covers audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, and prompt compliance — all pure static analysis that is reproducible with no LLM. LLM is only used for synthesis tasks (wiki, report, code review) and hard-blocks honestly without an API key. It ships three orchestration Skills (L1 probe / L2 governance / L3 asset) that turn the 51 tools into a compact chain. It builds a closed loop: deterministically verify LLM/CodeRabbit claims, govern legacy structure along a map→target→refactor→verify→health mainline, and solidify/replicate reusable design assets. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams that want AI that augments rather than hallucinates. -->
+<!-- AI Summary: CodeRef-AI exposes 52 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. It covers audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, and prompt compliance — all pure static analysis that is reproducible with no LLM. LLM is only used for synthesis tasks (wiki, report, code review) and semantic evaluation (coderef_eval) and hard-blocks honestly without an API key. It ships three orchestration Skills (L1 probe / L2 governance / L3 asset) that turn the 52 tools into a compact chain. It builds a closed loop: deterministically verify LLM/CodeRabbit claims, govern legacy structure along a map→target→refactor→verify→health mainline, and solidify/replicate reusable design assets. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams that want AI that augments rather than hallucinates. -->
 [![MCP Badge](https://lobehub.com/badge/mcp/keaizuizui-coderef-ai?style=flat)](https://lobehub.com/mcp/keaizuizui-coderef-ai)
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
@@ -16,7 +16,7 @@ CodeRef-AI 通过 MCP 协议暴露 **52 个工具**，同时服务两类人：
 - **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险；编程 AI（或 CodeRabbit）给出论断时，还能用静态图谱做确定性核验，再决定采不采信。
 - **非编程人员的技术助理**：把代码变成通俗的健康仪表盘、Wiki 与流程确证。你只需定义「入口 A 应该依次经过步骤 B→C→D」，`coderef_flow_verify` 就会在调用链里给出确证 / 在管线 / 存疑 / 缺失四种状态——不用读代码，也能确认项目有没有按你的设想运转。
 
-多数 AI 审查工具把结论建立在「大模型读代码」上，而模型会幻觉。CodeRef 反过来：**审计、图谱、架构诊断、流程验证、变更守护、OWASP、论断核验等核心能力全部是纯静态分析**，结果确定、可复现——同一个项目每次跑出同样结论。LLM 只用于 Wiki、业务报告、创新排查等「要人话」的场景，未配置 API Key 时会明确硬阻断并提示配置，绝不降级编造。
+多数 AI 审查工具把结论建立在「大模型读代码」上，而模型会幻觉。CodeRef 反过来：**审计、图谱、架构诊断、流程验证、变更守护、OWASP、论断核验等核心能力全部是纯静态分析**，结果确定、可复现——同一个项目每次跑出同样结论。LLM 只用于 Wiki、业务报告、创新排查、产出物语义评估（`coderef_eval`）等「要人话」的场景，未配置 API Key 时会明确硬阻断（`coderef_eval` 返回 status=SKIP）并提示配置，绝不降级编造。
 
 ---
 
@@ -68,7 +68,7 @@ pip install -r requirements.txt
 
 ### 2. 配置 LLM（可选）
 
-> 审计、图谱、架构诊断、流程验证、变更守护、OWASP **不需要 LLM**，纯静态即可运行。仅 Wiki、业务报告、代码审查、Prompt 资产、创新识别需要 LLM；未配置 API Key 时这类「人话报告」被硬阻断并提示配置，不产出降级/占位内容。
+> 审计、图谱、架构诊断、流程验证、变更守护、OWASP **不需要 LLM**，纯静态即可运行。仅 LLM 型工具（Wiki、业务报告、代码审查、Prompt 资产、创新识别、`coderef_eval` 产出物语义评估）需要 LLM；未配置 API Key 时这类工具被硬阻断并提示配置（`coderef_eval` 返回 status=SKIP），不产出降级/占位内容。
 
 **Windows：** 运行 `setup.bat`。
 
