@@ -10,11 +10,12 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 ## 核心原则（必须遵守）
 
 1. **确定性优先**：审计、知识图谱、架构诊断、流程验证、变更守护、OWASP、论断核验这些核心能力全部是纯静态分析，结果确定、可复现，同一个项目每次跑出同样结论。不要怀疑这些工具的确定性结论。
-2. **LLM 只用于「人话总结」**：Wiki 归纳、业务报告、创新复刻排查才用到 LLM。没有 API Key 时这些 LLM 产物会被**硬阻断**并提示配置，绝不降级编造。遇到"需要 LLM 但没 Key"的反馈，就如实告诉用户，不要伪造。
-3. **后台任务**：重型工具默认后台执行，立即返回 `task_id`，用 `coderef_task_status` 轮询取结果。不要等同步返回（大项目会超时）。
+2. **LLM 只用于「人话总结」与「语义打分」**：Wiki 归纳、业务报告、创新复刻排查、`coderef_eval` 产出物语义评估才用到 LLM。没有 API Key 时这些 LLM 产物会被**硬阻断**并提示配置（`coderef_eval` 返回 status=SKIP），绝不降级编造。遇到"需要 LLM 但没 Key"的反馈，就如实告诉用户，不要伪造。
+3. **后台任务**：重型工具默认后台执行，立即返回 `task_id`，用 `coderef_task_status` 轮询取结果，`coderef_task_cancel` 取消跑偏/过久任务。不要等同步返回（大项目会超时）。
 4. **诚实话边界**：
    - 工具返回的 `missing` / `outside` / `未审计` 是**诚实状态**，不是失败。不要把它当成"坏了"。
    - `coderef_verify_findings` 的 verdict 由确定性逻辑打出，你无权改变。确证只代表"引用目标真实存在"，不代表语义结论正确。
+   - `coderef_eval` 的评分是 **AI 判断，非确定性事实，仅软门禁**；不要把它当确定性结论，也不要用它覆盖确定性工具结果。
    - 你持有一条 LLM/CodeRabbit 论断时，先 `coderef_verify_findings` 核验再采信，避免把未核验的语义论断当事实。
 
 ## 工具速查（按引擎）
@@ -33,6 +34,8 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 | `coderef_audit_advisor` | 判断该增量还是全量审查 + 重点维度 | 审计前用 |
 | `coderef_review` | 代码审查（diff 变更审查 / full 新项目全量语义首查） | LLM 语义判断，后台 |
 | `coderef_frontend` | 前端交互审查（静态清单枚举按钮/菜单 + 可选运行时抽查） | mode=static/runtime |
+| `coderef_arch_canvas` | 可视化架构画布（三层拖拽 + 差距高亮 + 导出目标架构） | 纯静态，后台 |
+| `coderef_dynamic_probe` | 动态探针：补全静态盲区（动态导入/装饰器注册/工厂登记/entry_points，零执行） | 纯静态，executed=false |
 
 ### 确定性核验 / 流程验证 — 非编程人员最核心需求
 
@@ -81,6 +84,7 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 | `coderef_prompt_governance` | Prompt 治理平台（资产生命周期×合规审计×跨模块一致性） | 唯一入口 |
 | `coderef_interpret` | 人话解读：健康总览/仪表盘/Wiki/assets | 给非编程人员看 |
 | `coderef_whitelist` | 误报白名单 + 核心模块规则管理 | 审查确认为误报后写入 |
+| `coderef_eval` | 产出物语义评估：4 指标 + 软硬判定 → verdict PASS/FAIL（LLM-as-judge，像写单测一样断言 LLM 输出过不过阈值） | LLM 语义判断，无 Key 返回 SKIP |
 
 ## 先判场景，再选链（顶层入口判定）
 
@@ -111,6 +115,9 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 | AI 改完代码提交前确认没改坏 | `coderef_change_guard` | + `coderef_change_report` |
 | 查调用关系 / 影响面 | `coderef_query` | 替代 grep，省 token |
 | 安全合规（OWASP） | `coderef_owasp` | + `coderef_prompt_governance` |
+| LLM 产出物质量过不过关 / 语义断言 | `coderef_eval` | + `coderef_verify_findings`（确定性论断核验互补） |
+| 架构差距可视化 / 画布工作台 | `coderef_arch_canvas` | + `coderef_flow_canvas`（流程画布） |
+| 静态盲区补全 / 动态信号 | `coderef_dynamic_probe` | 零执行，纯静态 |
 | 上下文丢了，东西在哪儿 | `coderef_operation_memory`（action=recover） | 强制 gate（见工作流 E） |
 
 **结构性锈蚀场景**：治理「存量结构」（重复/孪生/真身）时，重点看 `coderef_architecture` 的 P0-B/P0-C（真身判定/重复簇）与 `coderef_arch_gap` 的 duplicate/directory_duplicate 差距，勿只依赖 `coderef_audit` 的 diff 焦点。`strategy=incr` 仅用于回归复核新增改动，治理存量用 `strategy=full`。
@@ -168,6 +175,6 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 - **不要同步等重型工具**：audit/docs/review/coderef_memory（action=sync/status/quality）都默认后台，必须轮询 `coderef_task_status`。
 - **不要把诚实状态当失败**：`coderef_flow_verify` 返回 `missing`、`coderef_interpret` 提示"未审计"，都是如实反馈，要原样转述给用户。
 - **不要自己改 verify_findings 的 verdict**：它由确定性逻辑打出，你无权改变。
-- **没有 API Key 时的 LLM 工具**：`coderef_docs`(LLM 归纳部分)、`coderef_change_report`、`coderef_innovation_review`、`coderef_interpret action=wiki` 会诚实提示需配置 Key。如实告诉用户，不要伪造产物。
+- **没有 API Key 时的 LLM 工具**：`coderef_docs`(LLM 归纳部分)、`coderef_change_report`、`coderef_innovation_review`、`coderef_interpret action=wiki`、`coderef_eval` 会诚实提示需配置 Key（`coderef_eval` 返回 status=SKIP）。如实告诉用户，不要伪造产物。
 - **工具定位/约定类操作必须先查操作记忆（强制）**：需要 git/python/coderabbit 等工具位置，或涉及 push/CodeRabbit/Release 等约定时，先 `coderef_operation_memory (action=recover)`（一次拿全），再按需 `coderef_operation_memory (action=find)` / `coderef_operation_memory (action=query, query_type=tool)` 取定位，别满 PATH 找、也别直接抓外部连接器。coderabbit 等 CLI 常装在 WSL 的 `~/.local/bin`，不在 Windows PATH——`where` / `Get-Command` 找不到**不代表不存在**，不代表没装。
 - **所有工具都要传 `project_path`**：这是必填参数，指向被测项目路径。

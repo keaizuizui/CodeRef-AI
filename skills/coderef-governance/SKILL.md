@@ -57,6 +57,7 @@ description: 治理主链场景化 Skill。把 CodeRef-AI 的 MCP 工具收敛�
 | 符号越界 / 职责归属错位 | `coderef_role_boundary` | + `coderef_arch_gap`（模块级缺失互补） |
 | 治理工作项怎么流转 / 豁免 | `coderef_gov_transition` | 参数速查见下 |
 | 定期体检 / 建档 / 闭环 | `coderef_gov_start` / `coderef_gov_close` | + `coderef_gov_report`（action=report/board） |
+| 多仓治理聚合 / 跨仓风险 | `coderef_gov_workspace` | projects 列表跨仓汇总（open/high/复发/归档 + TOP 风险） |
 | 治理出成果想沉淀 / 创新识别 / 资产复刻 | `coderef_asset` / `coderef_innovation` / `coderef_replicate` | 详见 `coderef-asset` SKILL（L3） |
 | AI 改完代码提交前确认没改坏 | `coderef_change_guard` | + `coderef_change_report` |
 | 查调用关系 / 影响面 | `coderef_query` | 替代 grep，省 token |
@@ -86,12 +87,14 @@ description: 治理主链场景化 Skill。把 CodeRef-AI 的 MCP 工具收敛�
 
 **目标**：把已确认的管线落成目标架构 + 差距清单（优先级队列）。
 
-**工具（3 个）**：`coderef_target_arch_set`、`coderef_arch_gap`、`coderef_role_boundary`
+**工具（5 个）**：`coderef_target_arch_set`、`coderef_target_arch_get`、`coderef_arch_gap`、`coderef_role_boundary`、`coderef_arch_canvas`
 
 **编排**：
 1. `coderef_target_arch_set` → 落 target_arch.json（business_flows/constraints 顶层字段必须完整，否则 arch_verify/arch_gap 基于残缺架构假达标）。
-2. `coderef_arch_gap` → 差距清单（含 duplicate/directory_duplicate 差距类型；游离区分真游离 vs 未建模）。
-3. `coderef_role_boundary` → 符号级职责越界检测（模块归属正确但符号逾越所属角色边界：命名语义/调用边界/复用信号），与 arch_gap 模块级差距互补——同一目标架构下查「模块缺失 + 符号越界」两层问题。
+2. `coderef_target_arch_get` → 读回已存目标架构核对（改前确认基线、verify/gap 前复核，纯确定性）。
+3. `coderef_arch_gap` → 差距清单（含 duplicate/directory_duplicate 差距类型；游离区分真游离 vs 未建模）。
+4. `coderef_role_boundary` → 符号级职责越界检测（模块归属正确但符号逾越所属角色边界：命名语义/调用边界/复用信号），与 arch_gap 模块级差距互补——同一目标架构下查「模块缺失 + 符号越界」两层问题。
+5. `coderef_arch_canvas` → 差距高亮画布（游离灰底/依赖违例红连线/缺失红虚线/循环黄框），治理前把差距可视化、治理中作工作台。
 
 **产出**：目标架构 vN + 差距清单（优先级队列）。**常见坑**：target_modules 需覆盖全部核心模块，否则游离清单失真（未建模被误报为真游离）。
 
@@ -142,7 +145,7 @@ description: 治理主链场景化 Skill。把 CodeRef-AI 的 MCP 工具收敛�
 3. `coderef_gov_report`(action=board) → 交互看板（自动落盘 <project>/.coderef/gov_board.html，）；`coderef_gov_report`(action=report) → 单期报告。
 4. `coderef_gov_close` → 收尾闭环（cid 缺省时自动定位当前 open 周期）。
 
-**产出**：体检周期 + 跨期趋势报告。**定时化**：`coderef_gov_schedule` 生成 run_cycle.py 可纳入 cron/CI。**gate G2**：本次体检若发现**高价值设计**（多 workflow 采用、值得复用），关期前转 `coderef-asset`（L3）评估沉淀（见「编排 gate」）。
+**产出**：体检周期 + 跨期趋势报告。**定时化**：`coderef_gov_schedule` 生成 run_cycle.py 可纳入 cron/CI。**多仓团队**：`coderef_gov_workspace` 跨仓聚合治理状态（open/high/复发/归档统计 + 跨仓 TOP 风险，对应 plane Workspace）。**gate G2**：本次体检若发现**高价值设计**（多 workflow 采用、值得复用），关期前转 `coderef-asset`（L3）评估沉淀（见「编排 gate」）。
 
 ## 编排 gate（条件触发式强制转场）
 
