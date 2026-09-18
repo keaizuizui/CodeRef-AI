@@ -4,6 +4,23 @@
 
 ---
 
+### v5.14.4 — 上帝模块拆解治理（7 主文件瘦身）+ 覆盖率补写
+
+> 承接 v5.14.3 上帝模块检测维度落地后的拆解治理；7 个上帝模块主文件瘦身 + 19 个子模块落地；CodeRabbit 复审 0 major/critical、Brooks-Lint 整仓复核 Health 97 无 A/B 级。版本按 SOP 升末位 patch（5.14.3 → 5.14.4）。
+
+- **上帝模块拆解（7 主文件 + 19 子模块）**：
+  - `governance_audit.py` 2059 → 321 行：拆 `governance_base`（常量/模型）+ `governance_checks`（检测/报告）；`pipeline_runner._gov` 热更新链补子模块先子后父 reload（Brooks-Lint B1）+ 自豁免扩展三件套（B2）；
+  - `business_analyzer.py` 3325 → 681 行：拆 `ba_models`/`ba_discovery`/`ba_eval`/`ba_report`；
+  - `agent_security_auditor.py` 2928 → 494 行：拆 `asa_patterns`（常量）/`asa_scan`（扫描/报告）；
+  - `wiki_generator.py` 3469 → 3172 行：常量外置 `wiki_constants` + 类内 4 mixin（`_WikiGit/Meta/Doc/Emit`）重组（渐进式，待续拆）；
+  - `code_analyzer.py` 2131 → 776 行：拆 `ca_parse`/`ca_render`/`ca_audit`/`ca_gitnexus`；
+  - `pipeline_runner.py` 2224 → 1096 行：拆 `pr_models`/`pr_kg`/`pr_whitelist`/`pr_render`/`pr_stages`/`pr_ckpt`；
+  - `mcp_server.py` 3110 → 978 行：BUILTIN_TOOLS 外置 `tools_manifest` + handler 分组 `handlers_arch`/`handlers_engine`/`handlers_misc`；Server 构造冒烟 52 工具全注册 + MCP stdio 端到端验证通过。
+- **CodeRabbit 复审修复**：asa_scan 移除 4 处模块级 `@staticmethod`（跨版本可调用）；`_finding_to_dict` 补 `count`/`locations` 序列化（防 round-trip 丢聚合）；handlers_misc 两处 error `json.dumps` 补 `ensure_ascii=False`（中文不转义）。
+- **覆盖率补写（第 1 批）**：新增 `test_coverage_gap_1.py`（95 用例，output_evaluator/verify_findings/governance_store/llm_integration）；整仓总覆盖率 17.70% → 20.76%；fail_under=15 仍达标（提升路径待后续批次）。
+- **测试归属约定变更**：测试方用例迁至 `Coderef-Test\独立测试\tests`；开发方测试自持（本地 + coderef-src 同步，**不入 git、严禁推送 GitHub**）；验收口径改为三方绿（开发自测 + 测试方独立仓回归 + 运行态）。
+- **验证**：开发自测 **259 全绿**；pyflakes 本轮改动文件 0 告警；CodeRabbit 全链复审通过；Brooks-Lint 整仓 Health 97 无 A/B 级；MCP 起服 52 工具 + stdio 端到端通过。
+
 ### v5.14.3 — 外部审查 9 项修复 + 结构性债务治理（4 课题）
 
 > 承接外部审查清单（版本漂移 / pyflakes / 上帝模块 / 文档漂移 / shell=True / 声明边界 9 项）+ 后续 3 个留档课题治理；CodeRabbit 复审 0 finding。版本按 SOP 升末位 patch（5.14.2 → 5.14.3）。
