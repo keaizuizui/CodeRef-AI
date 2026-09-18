@@ -212,7 +212,13 @@ export default function CanvasView({ data, highlight, onBack }) {
                  onMouseEnter={() => setHover(mod.name)}
                  onMouseLeave={() => setHover((h) => (h === mod.name ? null : h))}
                  onClick={() => setSelected((s) => (s === mod.name ? null : mod.name))}
-                 role="button"
+                 onKeyDown={(e) => {
+                   if (e.key === 'Enter' || e.key === ' ') {
+                     e.preventDefault();
+                     setSelected((s) => (s === mod.name ? null : mod.name));
+                   }
+                 }}
+                 role="button" tabIndex={0}
                  aria-label={`模块 ${mod.name}，循环依赖 ${mod.in_cycles ? '是' : '否'}`}
                  aria-pressed={isSel}
                  className="cv-node">

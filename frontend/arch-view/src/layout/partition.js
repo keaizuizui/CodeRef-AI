@@ -6,6 +6,7 @@ export const NODE_W = 118;
 export const NODE_H = 32;
 export const GAP = 6;
 export const PAD = 14;
+export const ORIGIN_X = 20; // 分区与节点/边共用的水平起点（防错位）
 export const SECTION_GAP = 72; // 分区之间的主干流箭头区
 const TITLE_H = 34;
 
@@ -15,7 +16,7 @@ function perRow() {
 }
 
 // 计算一个分区内模块网格
-function grid(items, y0) {
+function grid(items, y0, originX) {
   const cols = perRow();
   const rows = Math.ceil(items.length / cols) || 1;
   let y = y0 + TITLE_H;
@@ -25,7 +26,7 @@ function grid(items, y0) {
     const row = Math.floor(i / cols);
     placed.push({
       name,
-      x: PAD + col * (NODE_W + GAP),
+      x: originX + PAD + col * (NODE_W + GAP),
       y: y + row * (NODE_H + GAP),
       w: NODE_W,
       h: NODE_H,
@@ -46,8 +47,8 @@ export function computeLayout(roles, freeModules) {
   const roleRects = [];
 
   for (const role of roles) {
-    const { placed, h } = grid(role.modules || [], y);
-    const rect = { id: role.id, name: role.name, x: 20, y, w: BOX_W, h };
+    const { placed, h } = grid(role.modules || [], y, ORIGIN_X);
+    const rect = { id: role.id, name: role.name, x: ORIGIN_X, y, w: BOX_W, h };
     roleBoxes.push({ ...rect, modules: placed, missing: role.missing });
     roleRects.push(rect);
     for (const p of placed) modulePos[p.name] = p;
@@ -57,8 +58,8 @@ export function computeLayout(roles, freeModules) {
   // 未建模区（游离/未归属）
   let freeBox = null;
   if (freeModules && freeModules.length) {
-    const { placed, h } = grid(freeModules, y);
-    freeBox = { id: '__free', name: '未建模区', x: 20, y, w: BOX_W, h, modules: placed };
+    const { placed, h } = grid(freeModules, y, ORIGIN_X);
+    freeBox = { id: '__free', name: '未建模区', x: ORIGIN_X, y, w: BOX_W, h, modules: placed };
     for (const p of placed) modulePos[p.name] = p;
     y += h + 30;
   }

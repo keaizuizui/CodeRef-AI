@@ -50,6 +50,11 @@
 
 .cv-node { cursor: pointer; }
 .cv-node:hover rect { filter: drop-shadow(0 0 3px rgba(31, 36, 48, 0.35)); }
+.cv-node:focus { outline: none; }
+.cv-node:focus-visible rect {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
 
 .cv-node-text {
   pointer-events: none;
