@@ -17,7 +17,8 @@
 - **编辑画布可读性修复**（保留全部自由布局编辑能力）：模块标签短名化（basename，全路径入 `props.full_label` 悬停可见）；节点字号 11px→13px / 副文本 9px→11px；连线加粗 2→2.5px；**悬停节点高亮全部相邻连线**（回答"这个模块连到哪"）；toolbar 增「决策者报告」按钮双向切换。
 - **前端推送（5.X 构想落地）**：`coderef_arch_canvas` 新增 `open_server/host/port` 参数——本地回环静态服务（`ThreadingHTTPServer` + `SimpleHTTPRequestHandler`），服务句柄入模块级 `_ARCH_SERVE` 注册表，回环强制与 gov_webdash 同约定。
 - **口径修复**：角色模块清单过滤测试模块（与代码层节点/对齐度统计对齐，防"角色卡 114 个 vs KPI 83 个"口径漂移，实测 vimax 114→82）。
-- **验证**：canvas 相关测试 3/3 通过；pyflakes 改动文件 0 告警；真实浏览器实测（报告首屏/差距清单/双向切换/编辑画布短名渲染）全部通过；flow 流程画布不受影响（报告首屏仅 `canvas.type==='arch'` 启用）。
+- **三层审查复审修复**：① CodeRabbit 3 finding——模块高亮比对改用 `props.full_label` 全路径（label 短名化曾致游离/循环/孪生高亮失配回归，修复后 vimax 29 个循环模块正确标黄）；`projectName` 整体 `esc()` 防注入；`importJSON` 同步 merge `canvas/meta` 保证报告视图与导入数据同源。② Brooks-Lint（Health 77，4W/3S）——version.py 去 UTF-8 BOM；`_ARCH_SERVE` 同目录重复调用先 `shutdown()` 旧句柄防泄漏；结构性留痕（`_serve_arch_static` 与 gov_webdash.serve 抽共享 helper、`buildReport()` 拆分、巨型模板分段）待下个画布版本。
+- **验证**：开发自测全量 **259 全绿**；pyflakes 改动文件 0 告警；CodeRabbit 二轮复审 **0 finding**；真实浏览器实测（报告首屏/差距清单/双向切换/编辑画布短名渲染）全部通过；flow 流程画布不受影响（报告首屏仅 `canvas.type==='arch'` 启用）。
 
 ### v5.14.4 — 上帝模块拆解治理（7 主文件瘦身）+ 覆盖率补写
 
