@@ -401,7 +401,8 @@ body { font-family:"Segoe UI","Noto Sans CJK SC",sans-serif; background:#0F172A;
 #edgeLayer { position:absolute; top:0; left:0; width:0; height:0; overflow:visible; pointer-events:none; }
 #edgeLayer path { pointer-events:stroke; cursor:pointer; }
 #edgeLayer path:hover { stroke-width:4 !important; }
-#edgeLayer .edge-label { font-size:10px; fill:#94A3B8; pointer-events:none; }
+#edgeLayer path.hl { stroke:#FBBF24 !important; stroke-width:4 !important; }
+#edgeLayer .edge-label { font-size:11px; fill:#94A3B8; pointer-events:none; }
 #nodeLayer { position:absolute; top:0; left:0; width:0; height:0; }
 #laneLayer { position:absolute; top:0; left:0; width:0; height:0; pointer-events:none; }
 #laneLayer svg { overflow:visible; }
@@ -414,8 +415,8 @@ body { font-family:"Segoe UI","Noto Sans CJK SC",sans-serif; background:#0F172A;
 .node:hover { box-shadow:0 0 0 1px rgba(59,130,246,.4); }
 .node.selected { box-shadow:0 0 0 2px #3B82F6; }
 .node .node-icon { font-size:18px; line-height:1; }
-.node .node-label { font-size:11px; color:#E2E8F0; text-align:center; padding:2px 6px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:help; }
-.node .node-sub { font-size:9px; color:#64748B; max-width:90%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.node .node-label { font-size:13px; color:#E2E8F0; text-align:center; padding:2px 6px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:help; }
+.node .node-sub { font-size:11px; color:#94A3B8; max-width:90%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .node .port { position:absolute; width:10px; height:10px; border-radius:50%; background:#0F172A; border:2px solid #64748B; opacity:0; transition:opacity .15s; cursor:crosshair; }
 .node:hover .port { opacity:1; }
 .node .port:hover { background:#3B82F6; border-color:#3B82F6; }
@@ -448,13 +449,62 @@ body { font-family:"Segoe UI","Noto Sans CJK SC",sans-serif; background:#0F172A;
 #toast.show { opacity:1; }
 #tempEdge { position:absolute; pointer-events:none; }
 .hint { position:fixed; bottom:14px; left:14px; z-index:150; font-size:10px; color:#475569; background:rgba(15,23,42,.8); padding:6px 10px; border-radius:6px; border:1px solid #1E293B; }
+/* ═══ 决策者报告视图（arch 画布默认首屏，浅色）═══ */
+#reportView { position:fixed; inset:0; background:#F8FAFC; color:#0F172A; overflow-y:auto; z-index:500; display:none; }
+#reportView.show { display:block; }
+.rp-wrap { max-width:1080px; margin:0 auto; padding:30px 24px 60px; font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+.rp-head { display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px; }
+.rp-title h1 { font-size:26px; font-weight:700; }
+.rp-title .sub { font-size:13px; color:#64748B; margin-top:4px; }
+.rp-btn { background:#1E293B; color:#fff; border:none; padding:10px 18px; border-radius:8px; cursor:pointer; font-size:14px; white-space:nowrap; }
+.rp-btn:hover { background:#334155; }
+.rp-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; margin:22px 0 26px; }
+.rp-kpi { background:#fff; border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px; box-shadow:0 1px 3px rgba(15,23,42,.06); }
+.rp-kpi .lbl { font-size:13px; color:#64748B; }
+.rp-kpi .val { font-size:30px; font-weight:700; margin-top:2px; }
+.rp-kpi .val.ok { color:#059669; }
+.rp-kpi .val.warn { color:#D97706; }
+.rp-kpi .val.bad { color:#DC2626; }
+.rp-kpi .sub { font-size:12px; color:#94A3B8; margin-top:2px; }
+.rp-sec { background:#fff; border:1px solid #E2E8F0; border-radius:14px; padding:22px 24px; margin-bottom:20px; box-shadow:0 1px 3px rgba(15,23,42,.06); }
+.rp-sec > h2 { font-size:18px; font-weight:700; margin-bottom:6px; }
+.rp-sec > .desc { font-size:13px; color:#64748B; margin-bottom:16px; }
+.rp-flow { margin-bottom:16px; }
+.rp-flow h3 { font-size:15px; color:#1E293B; margin-bottom:10px; }
+.rp-steps { display:flex; flex-wrap:wrap; align-items:center; gap:6px; row-gap:10px; }
+.rp-step { background:#ECFDF5; border:1px solid #A7F3D0; color:#065F46; border-radius:8px; padding:8px 12px; font-size:14px; font-weight:500; }
+.rp-step.phase { background:#DCFCE7; border-color:#86EFAC; font-weight:700; }
+.rp-arrow { color:#94A3B8; font-size:16px; }
+.rp-role { border-left:4px solid #8B5CF6; border-radius:8px; padding:12px 16px; margin-bottom:12px; background:#FAFAFC; }
+.rp-role h3 { font-size:15px; margin-bottom:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.rp-role .cnt { background:#EEF2FF; color:#4338CA; border-radius:999px; padding:1px 10px; font-size:12px; font-weight:600; }
+.rp-role .miss { background:#FEF2F2; color:#B91C1C; border-radius:999px; padding:1px 10px; font-size:12px; font-weight:600; }
+.rp-mods { display:flex; flex-wrap:wrap; gap:6px; }
+.rp-mod { background:#EFF6FF; border:1px solid #BFDBFE; color:#1D4ED8; border-radius:6px; padding:4px 10px; font-size:13px; }
+.rp-mod.free { background:#F1F5F9; border-color:#CBD5E1; color:#475569; }
+.rp-gapgrp { margin-bottom:18px; }
+.rp-gapgrp > h3 { font-size:15px; margin-bottom:10px; }
+.rp-gap { border:1px solid #E2E8F0; border-radius:10px; padding:12px 14px; margin-bottom:10px; display:flex; gap:10px; align-items:flex-start; background:#fff; }
+.rp-gap .sev { flex-shrink:0; border-radius:6px; padding:3px 10px; font-size:12px; font-weight:700; color:#fff; margin-top:2px; }
+.rp-gap .sev.high { background:#DC2626; }
+.rp-gap .sev.medium { background:#D97706; }
+.rp-gap .sev.low { background:#2563EB; }
+.rp-gap .txt { font-size:14px; line-height:1.6; color:#1E293B; }
+.rp-ok { background:#ECFDF5; border:1px solid #A7F3D0; color:#065F46; border-radius:10px; padding:16px; font-size:15px; }
+.rp-empty { color:#64748B; font-style:italic; font-size:14px; }
+.rp-foot { text-align:center; color:#94A3B8; font-size:12px; padding:18px 0; }
 </style>
 </head>
 <body>
+<div id="reportView"></div>
 <div id="toolbar">
   <h1>🗺 __TITLE__</h1>
   <span class="stats" id="stats"></span>
   <span class="spacer"></span>
+  <span id="reportGroup" style="display:none">
+    <button onclick="showReport()" title="返回决策者报告总览（默认首屏）">📋 决策者报告</button>
+  </span>
+  <span class="sep" id="reportSep" style="display:none"></span>
   <button onclick="zoomBy(1.2)" title="放大 (Ctrl++)">➕ 放大</button>
   <button onclick="zoomBy(1/1.2)" title="缩小 (Ctrl+-)">➖ 缩小</button>
   <button onclick="fitView()" title="适应画布">📐 适应</button>
@@ -617,6 +667,9 @@ function renderNodes(){
       if (navLevel === 'L2') drillFocus(n.id);
       else if (navLevel === 'L1') setLayer(n.layer);
     });
+    // 悬停高亮相邻连线（含上下游路径），回答"这个模块连到哪"
+    el.addEventListener('mouseenter', () => highlightEdges(n.id, true));
+    el.addEventListener('mouseleave', () => highlightEdges(n.id, false));
     const p = n.props || {};
     const sub = p.twin_verdict || p.file || p.desc || '';
     el.innerHTML = `<div class="node-icon">${esc(n.icon||'')}</div>
@@ -662,7 +715,7 @@ function renderEdges(){
     else if (e.rel==='flow'){ stroke = '#3B82F6'; }
     else if (e.rel==='depends'){ stroke = '#94A3B8'; }
     path.setAttribute('stroke', stroke);
-    path.setAttribute('stroke-width', e.selected ? 3 : 2);
+    path.setAttribute('stroke-width', e.selected ? 3.5 : 2.5);
     path.setAttribute('fill','none');
     if (dash) path.setAttribute('stroke-dasharray', e.rel==='align'?'4 4':(e.rel==='land'?'2 4':'6 4'));
     path.setAttribute('marker-end','url(#arrow)');
@@ -685,6 +738,13 @@ function tierOrder(){
   const uniq = [];
   nodes.forEach(n => { const t = n.tier||''; if (t && !uniq.includes(t)) uniq.push(t); });
   return fixed.filter(t => uniq.includes(t)).concat(uniq.filter(t => !fixed.includes(t)));
+}
+// 悬停节点时高亮其全部相邻连线（决策者/编辑者都能看清"谁连谁"）
+function highlightEdges(nodeId, on){
+  edgeLayer.querySelectorAll('path[data-id]').forEach(p => {
+    const e = edges.find(x => x.id === p.getAttribute('data-id'));
+    if (e && (e.from === nodeId || e.to === nodeId)) p.classList.toggle('hl', on);
+  });
 }
 function tierTitle(t){
   return ({'business':'业务层 · 业务/用户旅程','service':'技术层 · 服务/技术角色','code':'代码层 · 落地构件'})[t] || t;
@@ -752,6 +812,12 @@ function initNav(){
   ['navSep','navGroup','gapSep','gapToggle'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = on ? '' : 'none';
+  });
+  // arch 画布提供"决策者报告"入口（报告视图为默认首屏，可来回切换）
+  const isArch = (CANVAS.type === 'arch');
+  ['reportSep','reportGroup'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = isArch ? '' : 'none';
   });
   ['navL0','navL1','navL2','navL3','navAll'].forEach(id => {
     const el = document.getElementById(id);
@@ -1410,10 +1476,156 @@ function toast(msg){
   toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
 }
 
+// ═══════════ 决策者报告视图（arch 画布默认首屏）═══════════
+// 一页讲清：这是什么系统 → 分几层 → 差距在哪。数据全部来自内嵌 DATA（与画布同源）。
+function shortName(s){ const t = String(s||''); return t.indexOf('/') >= 0 ? t.split('/').pop() : t; }
+function pct(x){ return (x == null) ? '--' : Math.round(x*100) + '%'; }
+function kpiColor(x){ return x >= 0.8 ? 'ok' : (x >= 0.5 ? 'warn' : 'bad'); }
+
+function buildReport(){
+  const meta = DATA.meta || {};
+  const s = meta.summary || {};
+  const al = meta.alignment || {};
+  const gaps = meta.gaps || [];
+  const ta = meta.target_arch || {};
+  const projectName = ta.project || esc(CANVAS.title || '');
+  const steps = nodes.filter(n => n.type === 'step');
+  const roles = nodes.filter(n => n.type === 'role');
+  const mods  = nodes.filter(n => n.type === 'module');
+
+  // ── 头部 ──
+  let h = `<div class="rp-wrap">`;
+  h += `<div class="rp-head"><div class="rp-title">
+      <h1>📋 ${projectName} · 架构总览</h1>
+      <div class="sub">给决策者的一页架构报告：这是什么系统 · 分几层 · 差距在哪（由 CodeRef-AI 静态分析生成）</div>
+    </div><button class="rp-btn" onclick="showCanvas()">🔧 编辑画布 / 查看全图</button></div>`;
+
+  // ── KPI 结论卡 ──
+  const noKg = (meta.has_kg === false);
+  h += `<div class="rp-kpis">
+    <div class="rp-kpi"><div class="lbl">架构对齐度</div><div class="val ${kpiColor(al.module_assigned)}">${noKg ? '--' : pct(al.module_assigned)}</div><div class="sub">已归属模块 / 总模块</div></div>
+    <div class="rp-kpi"><div class="lbl">角色覆盖</div><div class="val ${kpiColor(al.role_coverage)}">${noKg ? '--' : pct(al.role_coverage)}</div><div class="sub">已实现角色 / 总角色</div></div>
+    <div class="rp-kpi"><div class="lbl">差距</div><div class="val ${s.total ? 'bad' : 'ok'}">${noKg ? '--' : (s.total || 0)}</div><div class="sub">高${s.high||0} · 中${s.medium||0} · 低${s.low||0}</div></div>
+    <div class="rp-kpi"><div class="lbl">代码模块</div><div class="val">${mods.length}</div><div class="sub">${roles.length} 个技术角色</div></div>
+    <div class="rp-kpi"><div class="lbl">游离模块</div><div class="val ${s.unassigned_free ? 'warn' : 'ok'}">${noKg ? '--' : (s.unassigned_free || 0)}</div><div class="sub">另 ${s.unassigned_unmodeled||0} 个未建模</div></div>
+  </div>`;
+  if (noKg){
+    h += `<div class="rp-sec"><h2>⚠ 知识图谱未构建</h2><p class="rp-empty">本项目尚未构建知识图谱，架构差距与对齐度暂不可用。请先运行 coderef_audit 构建图谱后再生成画布。</p></div>`;
+  }
+
+  // ── §1 这系统做什么：业务流程 ──
+  h += `<div class="rp-sec"><h2>① 这系统做什么</h2><div class="desc">目标架构定义的业务流程（用户旅程），绿色为阶段分组，普通为业务步骤。</div>`;
+  const flowNames = [];
+  const flowSteps = {};
+  steps.forEach(n => {
+    const f = (n.props && n.props.flow) || '未命名流程';
+    if (!flowSteps[f]) { flowSteps[f] = []; flowNames.push(f); }
+    flowSteps[f].push(n);
+  });
+  if (!flowNames.length){
+    h += `<p class="rp-empty">目标架构未定义业务流程（business_flows）。</p>`;
+  } else {
+    flowNames.forEach(f => {
+      h += `<div class="rp-flow"><h3>🎯 ${esc(f)}</h3><div class="rp-steps">`;
+      flowSteps[f].forEach((n, i) => {
+        if (i > 0) h += `<span class="rp-arrow">→</span>`;
+        const isPhase = n.props && n.props.kind === 'phase';
+        h += `<span class="rp-step${isPhase ? ' phase' : ''}" title="${esc(n.label)}">${esc(n.label)}</span>`;
+      });
+      h += `</div></div>`;
+    });
+  }
+  h += `</div>`;
+
+  // ── §2 系统怎么搭：三层结构 ──
+  h += `<div class="rp-sec"><h2>② 系统怎么搭</h2><div class="desc">业务层（流程）→ 技术层（角色）→ 代码层（模块）。角色卡列出其管辖的代码模块；灰色为未归属模块。</div>`;
+  // 技术层：角色卡
+  if (!roles.length){
+    h += `<p class="rp-empty">目标架构未定义技术角色（tech_roles）。</p>`;
+  } else {
+    roles.forEach(r => {
+      const p = r.props || {};
+      const ms = p.modules || [];
+      const missing = p.missing;
+      h += `<div class="rp-role"><h3>🏷 ${esc(r.label)}
+        <span class="cnt">${ms.length} 个模块</span>
+        ${missing ? '<span class="miss">⚠ 未落地</span>' : ''}</h3>`;
+      if (ms.length){
+        h += `<div class="rp-mods">` + ms.map(m =>
+          `<span class="rp-mod" title="${esc(m)}">${esc(shortName(m))}</span>`).join('') + `</div>`;
+      } else {
+        h += `<p class="rp-empty">（目标角色声明的模块在代码中不存在，或尚未归属）</p>`;
+      }
+      h += `</div>`;
+    });
+  }
+  // 代码层：未归属模块灰区
+  const assigned = new Set();
+  roles.forEach(r => ((r.props||{}).modules || []).forEach(m => assigned.add(m)));
+  edges.forEach(e => { if (e.type === 'belong'){ const to = nodes.find(n => n.id === e.to); if (to) assigned.add((to.props||{}).full_label || to.label); } });
+  const freeMods = mods.filter(m => !assigned.has((m.props||{}).full_label || m.label));
+  h += `<div class="rp-flow"><h3>🧩 代码层 · 未归属模块（${freeMods.length}）</h3>`;
+  if (freeMods.length){
+    h += `<div class="rp-mods">` + freeMods.map(m =>
+      `<span class="rp-mod free" title="${esc((m.props||{}).full_label || m.label)}">${esc(shortName(m.label))}${(m.props||{}).placeholder ? '（占位）' : ''}</span>`).join('') + `</div>`;
+  } else {
+    h += `<p class="rp-empty">全部模块均已归属角色，没有游离代码。</p>`;
+  }
+  h += `</div></div>`;
+
+  // ── §3 哪里要修：差距清单 ──
+  h += `<div class="rp-sec"><h2>③ 哪里要修</h2><div class="desc">现状与目标架构的差距，按严重度排列（红=高 / 橙=中 / 蓝=低）。修复后重新生成画布可复核。</div>`;
+  if (noKg){
+    h += `<p class="rp-empty">（图谱未构建，差距分析不可用）</p>`;
+  } else if (!gaps.length){
+    h += `<div class="rp-ok">✅ 架构与目标全部对齐，没有发现差距。</div>`;
+  } else {
+    const sevName = { high: '高优先级', medium: '中优先级', low: '低优先级' };
+    ['high','medium','low'].forEach(sev => {
+      const grp = gaps.filter(g => (g.severity || 'low') === sev);
+      if (!grp.length) return;
+      h += `<div class="rp-gapgrp"><h3>${sev === 'high' ? '🔴' : sev === 'medium' ? '🟠' : '🔵'} ${sevName[sev]}（${grp.length} 项）</h3>`;
+      grp.forEach(g => {
+        h += `<div class="rp-gap"><span class="sev ${sev}">${sevName[sev].slice(0,1)}</span>
+          <span class="txt">${esc(g.detail || g.type || '未描述的差距')}</span></div>`;
+      });
+      h += `</div>`;
+    });
+  }
+  h += `</div>`;
+  h += `<div class="rp-foot">由 CodeRef-AI 生成 · 点右上「编辑画布」可拖拽调整架构、连线成流并导出目标架构 JSON</div></div>`;
+  document.getElementById('reportView').innerHTML = h;
+}
+
+function showReport(){
+  buildReport();
+  document.getElementById('reportView').classList.add('show');
+  // 画布层隐藏但保持布局（visibility 而非 display，避免 fitView 拿不到尺寸）
+  ['toolbar','canvasWrap','miniMap'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.visibility = 'hidden';
+  });
+  const hint = document.querySelector('.hint');
+  if (hint) hint.style.display = 'none';
+  document.getElementById('reportView').scrollTop = 0;
+}
+function showCanvas(){
+  document.getElementById('reportView').classList.remove('show');
+  ['toolbar','canvasWrap','miniMap'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.visibility = '';
+  });
+  const hint = document.querySelector('.hint');
+  if (hint) hint.style.display = '';
+  fitView();
+}
+
 // ═══════════ 初始化 ═══════════
 initNav();
 render();
 fitView();
+// arch 画布默认打开决策者报告首屏（flow 流程画布保持画布形态）
+if (CANVAS.type === 'arch' && nodes.length){ showReport(); }
 </script>
 </body>
 </html>

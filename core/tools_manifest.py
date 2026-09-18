@@ -424,12 +424,16 @@ BUILTIN_TOOLS: List[Dict] = [
         {
                     "name": "coderef_arch_canvas",
                     "description": (
-                        "生成可视化架构画布 HTML（5.4 自由布局版：架构推回正轨工作台的可视化前端）。\n"
-                        "纯 HTML/CSS/JS + SVG 自包含、零外部依赖、离线可用。三层布局：\n"
-                        "业务层（业务流程步骤）→ 技术层（技术角色容器）→ 代码层（代码模块节点）。\n"
-                        "自由布局交互：节点自由拖拽（对齐吸附）、端口拖出任意连线成流、画布平移/缩放、\n"
-                        "缩略图导航、右键菜单、快捷键（Ctrl+Z 撤销/Delete 删除）、属性面板、分层/力导向自动布局、\n"
-                        "导出/导入画布 JSON。差距高亮（游离灰底/依赖违例红连线/缺失角色红虚线/循环黄框）。\n"
+                        "生成可视化架构画布 HTML（5.14.5 决策者报告首屏版）。\n"
+                        "默认首屏=决策者架构总览报告（浅色，一页讲清：这是什么系统 · 分几层 · 哪里要修：\n"
+                        "对齐度/角色覆盖 KPI、业务流程链、角色→模块三层归属、差距按严重度人话清单）；\n"
+                        "点「编辑画布」切换自由布局画布：三层布局（业务步骤→技术角色→代码模块），\n"
+                        "节点自由拖拽（对齐吸附）、端口拖出任意连线成流、画布平移/缩放、缩略图导航、\n"
+                        "右键菜单、快捷键（Ctrl+Z 撤销/Delete 删除）、属性面板、分层/力导向自动布局、\n"
+                        "导出/导入画布 JSON、悬停高亮相邻连线。差距高亮（游离灰底/依赖违例红连线/\n"
+                        "缺失角色红虚线/循环黄框）。\n"
+                        "纯 HTML/CSS/JS + SVG 自包含、零外部依赖、离线可用。open_server=true 时起本地\n"
+                        "回环静态服务直接把画布 push 给用户浏览器（5.X 前端推送构想）。\n"
                         "数据层完全复用 arch_gap_analyzer + 知识图谱。输出 HTML 文件路径。\n"
                         "纯静态、确定性，不依赖 LLM。超大项目同步可能超时，默认后台执行。"
                     ),
@@ -438,6 +442,9 @@ BUILTIN_TOOLS: List[Dict] = [
                             "target_arch": {"type": "object", "description": "目标架构 JSON（可选，缺省读已存储）"},
                             "output_dir": {"type": "string", "description": "画布输出目录（可选，默认 <project>/.coderef/）"},
                             "background": {"type": "boolean", "description": "后台执行（超大项目同步可能超时，默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
+                            "open_server": {"type": "boolean", "description": "生成后启动本地回环静态服务，把画布 push 给用户浏览器（默认 false）", "default": False},
+                            "host": {"type": "string", "description": "open_server 绑定地址（仅允许回环 127.0.0.1/::1/localhost，默认 127.0.0.1）", "default": "127.0.0.1"},
+                            "port": {"type": "integer", "description": "open_server 端口（默认 0=自动分配）", "default": 0},
                         }, "required": ["project_path"]},
                 },
         {
