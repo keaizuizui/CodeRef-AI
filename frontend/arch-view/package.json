@@ -1,0 +1,21 @@
+{
+  "name": "arch-view",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "CodeRef-AI 架构可视化视图（决策者报告 + 分区画布），单文件构建产物供 Python 注入数据",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11",
+    "vite-plugin-singlefile": "^2.0.3"
+  }
+}
