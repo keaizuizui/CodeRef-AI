@@ -107,6 +107,9 @@ def _finding_to_dict(f: "Finding") -> dict:
         "xval_by": list(f.xval_by or []),
         "line_start": f.line_start, "line_end": f.line_end,
         "kind": f.kind,
+        # 爆发式合并后保留计数与全部位置，避免 round-trip 丢聚合信息
+        "count": int(getattr(f, "count", 1) or 1),
+        "locations": list(getattr(f, "locations", None) or []),
     }
 
 def _count_md(wiki_dir: str) -> int:
