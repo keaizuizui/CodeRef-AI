@@ -243,14 +243,14 @@ def _wl(a) -> str:
     elif act == "core_rules_set":
         rules = a.get("core_rules", {})
         if not rules:
-            return json.dumps({"error": "core_rules 不能为空"})
+            return json.dumps({"error": "core_rules 不能为空"}, ensure_ascii=False)
         return json.dumps(Pipe.core_rules_set(pp, rules), ensure_ascii=False)
     elif act == "core_rules_reset":
         return json.dumps(Pipe.core_rules_reset(pp), ensure_ascii=False)
     else:  # add
         entries = a.get("entries", [])
         if not entries:
-            return json.dumps({"error": "entries 不能为空"})
+            return json.dumps({"error": "entries 不能为空"}, ensure_ascii=False)
         n = Pipe.whitelist_add(pp, entries)
         return json.dumps({"added": n, "total": len(Pipe.whitelist_list(pp))}, ensure_ascii=False)
 
