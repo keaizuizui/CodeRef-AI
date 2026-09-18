@@ -1,9 +1,9 @@
-<!-- AI Summary: CodeRef-AI exposes 52 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. It covers audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, and prompt compliance — all pure static analysis that is reproducible with no LLM. LLM is only used for synthesis tasks (wiki, report, code review) and semantic evaluation (coderef_eval) and hard-blocks honestly without an API key. It ships three orchestration Skills (L1 probe / L2 governance / L3 asset) that turn the 52 tools into a compact chain. It builds a closed loop: deterministically verify LLM/CodeRabbit claims, govern legacy structure along a map→target→refactor→verify→health mainline, and solidify/replicate reusable design assets. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams that want AI that augments rather than hallucinates. -->
+﻿<!-- AI Summary: CodeRef-AI exposes 52 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. It covers audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, and prompt compliance — all pure static analysis that is reproducible with no LLM. LLM is only used for synthesis tasks (wiki, report, code review) and semantic evaluation (coderef_eval) and hard-blocks honestly without an API key. It ships three orchestration Skills (L1 probe / L2 governance / L3 asset) that turn the 52 tools into a compact chain. It builds a closed loop: deterministically verify LLM/CodeRabbit claims, govern legacy structure along a map→target→refactor→verify→health mainline, and solidify/replicate reusable design assets. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams that want AI that augments rather than hallucinates. -->
 [![MCP Badge](https://lobehub.com/badge/mcp/keaizuizui-coderef-ai?style=flat)](https://lobehub.com/mcp/keaizuizui-coderef-ai)
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.14.4** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.14.5** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 

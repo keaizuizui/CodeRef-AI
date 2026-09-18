@@ -10,6 +10,35 @@ arch / target / gov / flow 系工具 handler（handlers_arch）。
 import json
 import os
 
+# arch 画布静态预览服务句柄注册表（防 GC + 可重复调用复用，仿 gov_webdash._SERVERS 约定）
+_ARCH_SERVE = {}
+
+
+def _serve_arch_static(directory: str, host: str = "127.0.0.1",
+                       port: int = 0) -> dict:
+    """启动 arch 画布静态预览服务（前端 push），仅允许回环绑定。
+
+    ThreadingHTTPServer + SimpleHTTPRequestHandler 指向产物目录；服务句柄存
+    模块级注册表，返回值只含可 JSON 序列化元数据（与 gov_webdash.serve 同约定：
+    回环限制 / daemon 线程 / 句柄注册表）。
+    """
+    import threading
+    from functools import partial
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    if host not in ("127.0.0.1", "::1", "localhost"):
+        host = "127.0.0.1"
+    handler = partial(SimpleHTTPRequestHandler, directory=directory)
+    httpd = ThreadingHTTPServer((host, port), handler)
+    actual_port = httpd.server_address[1]
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    url = f"http://{host}:{actual_port}"
+    _ARCH_SERVE[directory] = {"httpd": httpd, "thread": t, "url": url,
+                              "port": actual_port}
+    return {"ok": True, "url": url, "host": host, "port": actual_port,
+            "interactive": False}
+
 def _flow_verify(a: dict) -> str:
     """流程合规验证（coderef_flow_verify）"""
     from core.flow_verify import verify_flow
@@ -305,7 +334,7 @@ def _arch_gap(a: dict) -> str:
 
 
 def _arch_canvas(a: dict) -> str:
-    """可视化架构画布（coderef_arch_canvas）"""
+    """可视化架构画布（coderef_arch_canvas，5.14.5 决策者报告首屏 + open_server 前端推送）"""
     from core.canvas_generator import ArchCanvas
     pp = a["project_path"]
     ta = a.get("target_arch")
@@ -314,13 +343,19 @@ def _arch_canvas(a: dict) -> str:
     output_dir = a.get("output_dir")
     filepath = ArchCanvas().generate(project_path=pp, target_arch=ta,
                                      output_dir=output_dir)
-    return json.dumps({
+    r = {
         "status": "completed",
         "tool": "coderef_arch_canvas",
         "project_path": pp,
         "result_path": filepath,
-        "message": "画布已生成，浏览器打开即可拖拽编辑、导出目标架构 JSON",
-    }, ensure_ascii=False)
+        "message": ("画布已生成：默认打开为决策者架构总览报告（一页讲清 这是什么系统·分几层·哪里要修），"
+                    "点「编辑画布」可拖拽编辑、连线成流、导出目标架构 JSON"),
+    }
+    if a.get("open_server"):
+        r["server"] = _serve_arch_static(
+            os.path.dirname(filepath),
+            host=a.get("host", "127.0.0.1"), port=a.get("port", 0))
+    return json.dumps(r, ensure_ascii=False)
 
 
 def _flow_canvas(a: dict) -> str:

@@ -152,9 +152,12 @@ class ArchCanvas:
         for role in roles:
             rid = role.get("id", "")
             matched = _match_module_ids(nodes, project_path, role.get("target_modules", []))
+            # 口径对齐：过滤测试模块，与代码层节点/对齐度统计一致（防"角色卡 114 个 vs KPI 83 个"）
             mods = sorted(
-                module_of(nodes[nid], project_path) or nodes[nid].get("name", "?")
-                for nid in matched
+                m for m in (
+                    module_of(nodes[nid], project_path) or nodes[nid].get("name", "?")
+                    for nid in matched
+                ) if not _is_test_module(m)
             )
             role_modules[rid] = mods
             canvas_nodes.append({
@@ -165,6 +168,7 @@ class ArchCanvas:
             })
 
         # ── 3. 模块节点（代码层）──
+        # label 用短名（basename）保证画布可读；全路径保留在 props.full_label（悬停/属性面板可见）
         for nid, n in nodes.items():
             if n.get("type") != "module":
                 continue
@@ -172,10 +176,11 @@ class ArchCanvas:
             if _is_test_module(m):
                 continue
             mod_node_id[m] = f"mod:{m}"
+            short = m.split("/")[-1] if "/" in m else m
             canvas_nodes.append({
                 "id": f"mod:{m}", "type": "module",
-                "label": m, "icon": "🧩", "color": "#3B82F6", "layer": "代码层",
-                "props": {"file": n.get("file_path", "")},
+                "label": short, "icon": "🧩", "color": "#3B82F6", "layer": "代码层",
+                "props": {"file": n.get("file_path", ""), "full_label": m},
             })
 
         # ── 3.1 ：阶段成员矩阵强制纳入可视图 + member/branch 边 ──
@@ -306,6 +311,13 @@ class ArchCanvas:
                     e["color"] = "#EF4444"
 
         # ── 6. meta ──
+        # gaps 明细进 meta：决策者报告首屏（§3 哪里要修）直接渲染每条差距的人话 detail。
+        # gap 数量由 analyze_gap 的 max_unassigned（默认 50）兜底，不会撑爆内嵌 JSON。
+        report_gaps = [
+            {"type": g.get("type", ""), "severity": g.get("severity", "low"),
+             "detail": g.get("detail", "")}
+            for g in gaps
+        ]
         legend = [
             {"color": "#10B981", "label": "业务步骤（🎯=阶段分组）"},
             {"color": "#14B8A6", "label": "阶段成员挂载"},
@@ -331,6 +343,7 @@ class ArchCanvas:
             "meta": {
                 "summary": (gap_result or {}).get("summary", {}),
                 "alignment": (gap_result or {}).get("alignment", {}),
+                "gaps": report_gaps,
                 "legend": legend,
                 "has_kg": has_kg,
                 "target_arch": target_arch,
