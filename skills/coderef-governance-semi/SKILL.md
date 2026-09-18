@@ -39,11 +39,12 @@ description: "治理主链「半自动确认版」。在 coderef-governance 五�
 
 ### 场景 ② define-target · 定标（**强制确认门**）
 
-**执行**：`coderef_target_arch_set`（落 target_arch.json）→ `coderef_target_arch_get`（核对）→ `coderef_arch_gap`（差距清单）→ `coderef_role_boundary`（符号越界）→ `coderef_arch_canvas`（差距高亮画布）。
+**执行（先草稿→确认→再落盘，不先写盘）**：
+1. **产出草案（不持久化）**：基于 ① 管线认知 + 模板/现有 target_arch，整理「目标架构草案」（角色/目标模块/业务流），供用户审阅——此步**不调用会写盘的工具**。
+2. **确认门 M2（硬门禁）**：**必须停下** AskUserQuestion：「定标对吗？治理范围圈哪些？」（确认落盘 / 调整后重交 / 跳过定标仅诊断）。**未确认不得落盘**。
+3. **落盘与差距（确认后才执行）**：`coderef_target_arch_set`（写入 target_arch.json）→ `coderef_target_arch_get`（核对）→ `coderef_arch_gap`（差距清单）→ `coderef_role_boundary`（符号越界）→ `coderef_arch_canvas`（差距高亮画布）。
 
 **交付物**：「目标架构草案 vN + 差距清单」——角色/目标模块/业务流摘要、差距按严重度分组、画布文件路径。
-
-**确认门 M2（硬门禁，写操作）**：**必须停下** AskUserQuestion：「定标对吗？治理范围圈哪些？」（确认落盘 / 调整 target_arch 后重交 / 跳过定标仅诊断）。未确认不得进入 ③。
 
 ### 场景 ③ refactor-along · 照管线治理（**强制确认门 ×2**）
 
