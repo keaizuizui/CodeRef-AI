@@ -34,6 +34,12 @@ def _serve_arch_static(directory: str, host: str = "127.0.0.1",
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
     url = f"http://{host}:{actual_port}"
+    old = _ARCH_SERVE.get(directory)
+    if old:
+        try:
+            old["httpd"].shutdown()
+        except Exception:
+            pass
     _ARCH_SERVE[directory] = {"httpd": httpd, "thread": t, "url": url,
                               "port": actual_port}
     return {"ok": True, "url": url, "host": host, "port": actual_port,
