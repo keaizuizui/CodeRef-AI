@@ -546,6 +546,12 @@ class CodeKnowledgeGraph:
                 #      （svc=ResearchTool() → svc.run → ResearchTool.run），
                 #      避免短名 LIKE 回退把构造调用误匹配成方法调用（伪 CALLS 边）；
                 #   4) 回退短名模糊匹配（漏建则 callers 查询返空）。
+                # 悬空防御：caller/callee 定位可能合成「从未 upsert 的私有函数 id」
+                #（如 func:<mod>:_check_xxx，CodeAnalyzer 只注册公开函数节点），
+                # 直接建边会产生指向不存在节点的坏边，导致 flow_verify 下游遍历
+                # 与 cross_module_flows 崩溃。建边前校验节点存在，缺失降级为模块节点。
+                if not self._node_exists(caller_id):
+                    caller_id = f"mod:{module_key}"
                 callee_id = self._find_node_by_name(call.func_name)
                 if not callee_id:
                     first, _, rest = call.func_name.partition(".")
@@ -558,6 +564,8 @@ class CodeKnowledgeGraph:
                 if not callee_id:
                     callee_name = call.func_name.split(".")[-1]
                     callee_id = self._find_node_by_name(callee_name)
+                if callee_id and not self._node_exists(callee_id):
+                    callee_id = None  # 悬空防御：不存在的 callee 不建边
                 if callee_id:
                     self._upsert_edge(KGEdge(
                         source=caller_id, target=callee_id, type="CALLS",
