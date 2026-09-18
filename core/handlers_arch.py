@@ -340,22 +340,22 @@ def _arch_gap(a: dict) -> str:
 
 
 def _arch_canvas(a: dict) -> str:
-    """可视化架构画布（coderef_arch_canvas，5.14.5 决策者报告首屏 + open_server 前端推送）"""
-    from core.canvas_generator import ArchCanvas
+    """可视化架构画布（coderef_arch_canvas，5.15 决策者报告首屏 + 分区画布 + open_server 前端推送）"""
+    from core.arch_view import render_arch_view
     pp = a["project_path"]
     ta = a.get("target_arch")
     if ta is not None:
         ta = _coerce_target_arch("coderef_arch_canvas", ta)
     output_dir = a.get("output_dir")
-    filepath = ArchCanvas().generate(project_path=pp, target_arch=ta,
-                                     output_dir=output_dir)
+    filepath = render_arch_view(project_path=pp, target_arch=ta,
+                                output_dir=output_dir)
     r = {
         "status": "completed",
         "tool": "coderef_arch_canvas",
         "project_path": pp,
         "result_path": filepath,
-        "message": ("画布已生成：默认打开为决策者架构总览报告（一页讲清 这是什么系统·分几层·哪里要修），"
-                    "点「编辑画布」可拖拽编辑、连线成流、导出目标架构 JSON"),
+        "message": ("架构视图已生成：默认打开为决策者架构总览报告（一段话讲清 这是什么系统·怎么搭·怎么跑·哪里要修），"
+                    "点「深看架构画布」进入分区架构图（角色泳道/主干流/违规边，点击模块探查依赖）"),
     }
     if a.get("open_server"):
         r["server"] = _serve_arch_static(
