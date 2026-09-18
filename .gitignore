@@ -41,7 +41,7 @@ generate/
 docs/wiki/
 txt/
 
-# ─── 回归测试（不入库，本地保留即可）───
+# ─── 开发方测试（仅本地保留 + coderef-src 同步；不入 git、严禁推送 GitHub）───
 tests/
 
 # ─── 修改前备份（不入库）───
