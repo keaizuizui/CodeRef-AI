@@ -91,7 +91,7 @@ def build_arch_data(
             "id": rid,
             "name": role.get("name", rid),
             "modules": mods,
-            "missing": False,
+            "missing": len(mods) == 0,
             "desc": "",
         })
 
@@ -153,9 +153,9 @@ def build_arch_data(
         "desc": "",
     } for f in target_arch.get("business_flows") or []]
 
-    # ── summary / gaps 透传 ──
-    s = gap_result.get("summary") or {}
-    a = gap_result.get("alignment") or {}
+    # ── summary / gaps 透传（无图谱时 gap_result 为 None，回退空字典）──
+    s = (gap_result or {}).get("summary") or {}
+    a = (gap_result or {}).get("alignment") or {}
     summary = {
         "alignment": a.get("module_assigned", 0),
         "role_coverage": a.get("role_coverage", 0),

@@ -159,7 +159,8 @@ export default function ReportView({ data, onExplore }) {
                 {SEV[sev].label}优先级 · {sevGroups[sev].length} 项
               </h3>
               {sevGroups[sev].map((g, i) => (
-                <div key={i} className={`rp-gap-item ${SEV[g.severity || 'low'].cls}`}
+                <div key={i}
+                     className={`rp-gap-item ${SEV[g.severity] ? SEV[g.severity].cls : 'sev-low'}`}
                      role="button" tabIndex={0}
                      onClick={() => jumpToCanvas(g)}
                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jumpToCanvas(g); } }}
