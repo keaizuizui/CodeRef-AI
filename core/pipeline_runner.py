@@ -1359,7 +1359,8 @@ def _gov(p: str, r: PipeResult, done: set):
                 if "governance_audit" in f or "shared_filter" in f:
                     os.remove(os.path.join(pc, f))
         from core import governance_audit as g, shared_filter as sf
-        importlib.reload(sf); importlib.reload(g)
+        import core.governance_base as gb
+        importlib.reload(sf); importlib.reload(gb); importlib.reload(g)
         a = g.GovernanceAuditor(); a.audit(p)
         ro = getattr(a, "report", None)
         if ro:
