@@ -323,16 +323,16 @@ class FlowVerifier:
         flows: Dict[Tuple[str, str], dict] = {}
         seen_keys: Set[Tuple[str, str, str]] = set()
         for src, targets in self.adj.items():
-            sfile = self.nodes[src].get("file_path", "")
+            sfile = (self.nodes.get(src) or {}).get("file_path", "")
             smod = _mod(sfile)
             if not smod:
                 continue
             for tgt in targets:
-                tfile = self.nodes[tgt].get("file_path", "")
+                tfile = (self.nodes.get(tgt) or {}).get("file_path", "")
                 tmod = _mod(tfile)
                 if not tmod or tmod == smod:
                     continue
-                callee = self.nodes[tgt].get("name", "")
+                callee = (self.nodes.get(tgt) or {}).get("name", "")
                 # 去重键用完整 (源文件, 目标文件, 被调函数) 而非仅模块名，
                 # 避免同一模块对内的多条边因共享模块名被误判为同一条，导致 count 低估。
                 key = (sfile, tfile, callee)
