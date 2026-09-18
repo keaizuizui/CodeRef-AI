@@ -1453,8 +1453,11 @@ function importJSON(ev){
     try {
       const d = JSON.parse(reader.result);
       recordPre();
+      if (d.canvas) Object.assign(CANVAS, d.canvas);
       if (d.nodes) nodes = d.nodes.map(n => Object.assign({}, n));
       if (d.edges) edges = d.edges.map(e => Object.assign({}, e));
+      // 报告视图与导入数据同源：meta 整体替换（缺失时清空，防旧 meta 混入误导报告）
+      DATA.meta = d.meta || {};
       commitChange();
       selected.clear();
       initNav();   // 画布数据替换后重新配置导航（ 复审）
@@ -1488,7 +1491,7 @@ function buildReport(){
   const al = meta.alignment || {};
   const gaps = meta.gaps || [];
   const ta = meta.target_arch || {};
-  const projectName = ta.project || esc(CANVAS.title || '');
+  const projectName = esc(ta.project || CANVAS.title || '');
   const steps = nodes.filter(n => n.type === 'step');
   const roles = nodes.filter(n => n.type === 'role');
   const mods  = nodes.filter(n => n.type === 'module');

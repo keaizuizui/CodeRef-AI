@@ -281,12 +281,14 @@ class ArchCanvas:
 
         for n in canvas_nodes:
             if n["type"] == "module":
-                if n["label"] in cycle:
+                # label 已短名化，高亮比对用全路径真名（props.full_label，占位节点回退 label）
+                module_name = n["props"].get("full_label") or n["label"]
+                if module_name in cycle:
                     n["color"] = "#F59E0B"
-                elif n["label"] in unassigned:
+                elif module_name in unassigned:
                     n["color"] = "#64748B"
                 # 孪生真身/孤本标注（③）：真身绿、孤本灰、活跃副本橙，独立于差距色不受折叠影响
-                v = twin_verdict.get(n["label"])
+                v = twin_verdict.get(module_name)
                 if v == "真身":
                     n["color"] = "#22C55E"
                     n["props"]["twin_verdict"] = "真身"
