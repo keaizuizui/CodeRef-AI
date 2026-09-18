@@ -48,12 +48,9 @@ export default function ReportView({ data, onExplore }) {
   const orderedRoles = useMemo(() => {
     const order = [];
     for (const f of flows) for (const st of f.steps || []) {
+      // 角色卡顺序跟随业务流步骤顺序（步骤名与角色名一致时优先）
       for (const r of roles) {
-        if (!order.includes(r.id)) {
-          const stepNames = (f.steps || []).map((x) => x);
-          // 简单启发：flow 步骤名与角色名一致时优先
-          if (stepNames.some((n) => n.includes(r.name))) order.push(r.id);
-        }
+        if (!order.includes(r.id) && String(st).includes(r.name)) order.push(r.id);
       }
     }
     for (const r of roles) if (!order.includes(r.id)) order.push(r.id);

@@ -11,6 +11,7 @@ core/web/arch_view.html（React 单文件构建产物，占位符 __ARCH_DATA_PL
 import json
 import os
 from datetime import datetime
+from html import escape
 from typing import Dict, List, Optional
 
 from loguru import logger
@@ -215,12 +216,12 @@ def render_arch_view(
             "arch_view 模板缺少数据占位符 %s，请重新构建 frontend/arch-view 并同步 core/web/arch_view.html"
             % _PLACEHOLDER)
     html = template.replace(_PLACEHOLDER, data_json).replace(
-        "<title>架构总览</title>", f"<title>{title}</title>")
+        "<title>架构总览</title>", f"<title>{escape(title)}</title>")
 
     if not output_dir:
         output_dir = os.path.join(project_path, ".coderef")
     os.makedirs(output_dir, exist_ok=True)
-    filename = f"arch_canvas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+    filename = f"arch_canvas_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.html"
     filepath = os.path.join(output_dir, filename)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(html)
