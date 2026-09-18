@@ -1,6 +1,6 @@
 ---
 name: coderef-governance
-description: 治理主链场景化 Skill。把 CodeRef-AI 的 MCP 工具收敛为「5 阶段 × 每阶段 2–5 个高频工具」的少而精工具链，让编程 AI 不必直面全部工具也能沿主链把存量工程捋顺。当用户要做「架构治理 / 存量结构收敛 / 重复与孪生治理 / 定期体检 / 治理工作项流转」时使用。核心逻辑：人工先捋对管线（map→target），编程 AI 照清单治理（refactor→verify），周期体检维持（health）。L2 大阶段治理编排（本 SKILL）+ L1 小阶段治理编排（`coderef-probe` SKILL，变更驱动探查/防护）+ L3 资产沉淀编排（`coderef-asset` SKILL，治理成果→资产）互补衔接，并按「编排 gate」条件触发强制跨层转场：改码前转 probe（L1），产出可复用设计转 asset（L3）。
+description: 治理主链场景化 Skill。把 CodeRef-AI 的 MCP 工具收敛为「5 阶段 × 每阶段 2–5 个高频工具」的少而精工具链，让编程 AI 不必直面全部工具也能沿主链把存量工程捋顺。当用户要做「架构治理 / 存量结构收敛 / 重复与孪生治理 / 定期体检 / 治理工作项流转」时使用。核心逻辑：人工先捋对管线（map→target），编程 AI 照清单治理（refactor→verify），周期体检维持（health）。L2 大阶段治理编排（本 SKILL）+ L1 小阶段治理编排（`coderef-probe` SKILL，变更驱动探查/防护）+ L3 资产沉淀编排（`coderef-asset` SKILL，治理成果→资产）互补衔接，并按「编排 gate」条件触发强制跨层转场：改码前转 probe（L1），产出可复用设计转 asset（L3）。**版本路由**：用户要「半自动 / 一步步来 / 需要我确认 / 首次治理 / 架构方向拍板」→ 转 `coderef-governance-semi`（软确认门版，每阶段交付+确认）；「重新扫 / 体检 / 复扫」→ 本 SKILL（全自动连续执行）。
 ---
 
 # CodeRef 治理主链 · 少而精工具链（L2 大阶段治理编排）
