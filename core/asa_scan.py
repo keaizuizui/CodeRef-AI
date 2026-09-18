@@ -472,7 +472,6 @@ def _refine_sec08(lines: List[str], cur_idx: int, stripped: str,
     return ()
 
 
-@staticmethod
 def _extract_string_literals(blob: str, max_span: int = 120) -> str:
     """配对扫描提取 blob 中的字符串字面量内容（跨双/单引号交替）。
 
@@ -1257,7 +1256,6 @@ def _match_param_shadow(param: str, value):
     return _match_config_shadow(value, param)
 
 
-@staticmethod
 def _iter_body_assigns(body) -> List[ast.AST]:
     """深度遍历函数体，收集赋值语句，跳过嵌套函数/类定义子树（避免作用域混淆）。"""
     assigns: List[ast.AST] = []
@@ -1279,7 +1277,6 @@ def _iter_body_assigns(body) -> List[ast.AST]:
     return assigns
 
 
-@staticmethod
 def _contains_name(value, name: str) -> bool:
     """判断 AST 子树中是否引用了指定变量名。"""
     if value is None:
@@ -1359,7 +1356,6 @@ def _match_config_shadow(value, param: str):
     return None
 
 
-@staticmethod
 def _container_leaf_name(base) -> str:
     """从 Name 或 Attribute 链中提取容器叶子名。
     config → config; os.environ → environ; self.config → config; cfg.sub → sub
