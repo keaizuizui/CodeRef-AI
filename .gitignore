@@ -65,9 +65,7 @@ HANDOFF_编程AI.md
 CODEREF.md
 AGENTS.md
 docs/operation-memory-design/
-docs/5.0-plan.md
-docs/5.1-plan.md
-docs/5.2-plan.md
+docs/5.*-plan.md
 docs/U34-*.md
 docs/治理体系定位与编排层设计研究_*.md
 docs/工具收敛评估_*.md
@@ -75,7 +73,7 @@ docs/skill编排诊断_*.md
 docs/总览报告_信息架构设计.md
 docs/*_详细设计_*.md
 
-# --- npm 误初始化残留（Python 项目不需要）---
-package.json
-package-lock.json
+# --- npm 误初始化残留（仅根目录，不误伤 frontend/ 子项目）---
+/package.json
+/package-lock.json
 

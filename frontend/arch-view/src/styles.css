@@ -1,0 +1,47 @@
+/* CodeRef 架构视图 · 全局基础样式（浅色报告风，决策者向） */
+:root {
+  --bg: #f6f7fb;
+  --card: #ffffff;
+  --ink: #1f2430;
+  --ink-2: #5b6472;
+  --line: #e6e8ef;
+  --brand: #4f6ef7;
+  --ok: #16a34a;
+  --warn: #f59e0b;
+  --bad: #dc2626;
+  --violet: #8b5cf6;
+  --blue: #3b82f6;
+  --radius: 12px;
+  --shadow: 0 1px 3px rgba(31, 36, 48, 0.08), 0 4px 16px rgba(31, 36, 48, 0.06);
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.app { height: 100%; display: flex; flex-direction: column; }
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 6px 12px;
+  transition: background 0.15s, border-color 0.15s;
+}
+button:hover { border-color: var(--brand); color: var(--brand); }
+button.primary { background: var(--brand); color: #fff; border-color: var(--brand); }
+button.primary:hover { background: #3d5ae6; color: #fff; }
+
+.muted { color: var(--ink-2); }
+.mono { font-family: "JetBrains Mono", Consolas, monospace; font-size: 12px; }

@@ -1,0 +1,1142 @@
+{
+  "project": "vimax",
+  "summary": {
+    "alignment": 0.99,
+    "role_coverage": 0.33,
+    "module_total": 83,
+    "gap_total": 13,
+    "cycle_total": 33,
+    "high": 4,
+    "medium": 4,
+    "low": 5
+  },
+  "roles": [
+    {
+      "id": "entry_point",
+      "name": "入口层",
+      "modules": [],
+      "missing": false,
+      "desc": ""
+    },
+    {
+      "id": "business_modules",
+      "name": "业务模块",
+      "modules": [
+        "vimax/agent_runtime/__init__",
+        "vimax/agent_runtime/config",
+        "vimax/agent_runtime/context_compactor",
+        "vimax/agent_runtime/image_tools",
+        "vimax/agent_runtime/llm",
+        "vimax/agent_runtime/loop",
+        "vimax/agent_runtime/models",
+        "vimax/agent_runtime/prompts",
+        "vimax/agent_runtime/session_index",
+        "vimax/agent_runtime/tool_executor",
+        "vimax/agent_runtime/tools",
+        "vimax/agent_runtime/vimax_adapters",
+        "vimax/agents/__init__",
+        "vimax/agents/best_image_selector",
+        "vimax/agents/camera_image_generator",
+        "vimax/agents/character_extractor",
+        "vimax/agents/character_portraits_generator",
+        "vimax/agents/event_extractor",
+        "vimax/agents/global_information_planner",
+        "vimax/agents/novel_compressor",
+        "vimax/agents/reference_image_selector",
+        "vimax/agents/scene_extractor",
+        "vimax/agents/screenwriter",
+        "vimax/agents/script_enhancer",
+        "vimax/agents/script_planner",
+        "vimax/agents/storyboard_artist",
+        "vimax/interfaces/__init__",
+        "vimax/interfaces/camera",
+        "vimax/interfaces/character",
+        "vimax/interfaces/environment",
+        "vimax/interfaces/event",
+        "vimax/interfaces/frame",
+        "vimax/interfaces/image_output",
+        "vimax/interfaces/scene",
+        "vimax/interfaces/shot_description",
+        "vimax/interfaces/video_output",
+        "vimax/main_agent",
+        "vimax/main_idea2video",
+        "vimax/main_script2video",
+        "vimax/pipelines/__init__",
+        "vimax/pipelines/idea2video_pipeline",
+        "vimax/pipelines/novel2movie_pipeline",
+        "vimax/pipelines/script2video_pipeline",
+        "vimax/tools/__init__",
+        "vimax/tools/image_generator_doubao_seedream_yunwu_api",
+        "vimax/tools/image_generator_nanobanana_google_api",
+        "vimax/tools/image_generator_nanobanana_yunwu_api",
+        "vimax/tools/image_generator_openrouter_api",
+        "vimax/tools/image_orientation",
+        "vimax/tools/image_response",
+        "vimax/tools/protocols",
+        "vimax/tools/render_backend",
+        "vimax/tools/reranker_bge_silicon_api",
+        "vimax/tools/video_generator_doubao_seedance_yunwu_api",
+        "vimax/tools/video_generator_omni_yunwu_api",
+        "vimax/tools/video_generator_openrouter_api",
+        "vimax/tools/video_generator_veo_google_api",
+        "vimax/tools/video_generator_veo_yunwu_api",
+        "vimax/ui/src/cli",
+        "vimax/ui/src/lineMapping",
+        "vimax/ui/src/slashCommands",
+        "vimax/ui/src/types",
+        "vimax/ui/src/workspaceMeta",
+        "vimax/utils/__init__",
+        "vimax/utils/image",
+        "vimax/utils/provider_presets",
+        "vimax/utils/rate_limiter",
+        "vimax/utils/retry",
+        "vimax/utils/robust_json_parser",
+        "vimax/utils/text",
+        "vimax/utils/timer",
+        "vimax/utils/video",
+        "vimax/web/src/App",
+        "vimax/web/src/ArtifactViews",
+        "vimax/web/src/api",
+        "vimax/web/src/artifactPresentation",
+        "vimax/web/src/events",
+        "vimax/web/src/main",
+        "vimax/web/src/slashCommands",
+        "vimax/web/src/theme",
+        "vimax/web/src/types",
+        "vimax/web/vite.config"
+      ],
+      "missing": false,
+      "desc": ""
+    },
+    {
+      "id": "shared_base",
+      "name": "共享底座",
+      "modules": [],
+      "missing": false,
+      "desc": ""
+    }
+  ],
+  "flows": [
+    {
+      "name": "跨模块主干",
+      "steps": [
+        "入口层",
+        "业务模块",
+        "共享底座"
+      ],
+      "desc": ""
+    }
+  ],
+  "modules": [
+    {
+      "name": ".coderef/run_cycle",
+      "short": "run_cycle",
+      "role": null,
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": true,
+      "twin": null,
+      "call_out": [],
+      "call_in": [
+        "vimax/main_agent",
+        "vimax/main_idea2video",
+        "vimax/main_script2video"
+      ]
+    },
+    {
+      "name": "vimax/main_agent",
+      "short": "main_agent",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [
+        ".coderef/run_cycle"
+      ],
+      "call_in": []
+    },
+    {
+      "name": "vimax/main_idea2video",
+      "short": "main_idea2video",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [
+        ".coderef/run_cycle"
+      ],
+      "call_in": []
+    },
+    {
+      "name": "vimax/main_script2video",
+      "short": "main_script2video",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [
+        ".coderef/run_cycle"
+      ],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agents/best_image_selector",
+      "short": "best_image_selector",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agents/camera_image_generator",
+      "short": "camera_image_generator",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agents/character_extractor",
+      "short": "character_extractor",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agents/character_portraits_generator",
+      "short": "character_portraits_generator",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agents/event_extractor",
+      "short": "event_extractor",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agents/global_information_planner",
+      "short": "global_information_planner",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agents/novel_compressor",
+      "short": "novel_compressor",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agents/reference_image_selector",
+      "short": "reference_image_selector",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agents/scene_extractor",
+      "short": "scene_extractor",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agents/screenwriter",
+      "short": "screenwriter",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agents/script_enhancer",
+      "short": "script_enhancer",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agents/script_planner",
+      "short": "script_planner",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agents/storyboard_artist",
+      "short": "storyboard_artist",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agents/__init__",
+      "short": "__init__",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agent_runtime/config",
+      "short": "config",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agent_runtime/context_compactor",
+      "short": "context_compactor",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agent_runtime/image_tools",
+      "short": "image_tools",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agent_runtime/llm",
+      "short": "llm",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agent_runtime/loop",
+      "short": "loop",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agent_runtime/models",
+      "short": "models",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agent_runtime/prompts",
+      "short": "prompts",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agent_runtime/session_index",
+      "short": "session_index",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agent_runtime/tools",
+      "short": "tools",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agent_runtime/tool_executor",
+      "short": "tool_executor",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agent_runtime/vimax_adapters",
+      "short": "vimax_adapters",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/agent_runtime/__init__",
+      "short": "__init__",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/interfaces/camera",
+      "short": "camera",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/interfaces/character",
+      "short": "character",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/interfaces/environment",
+      "short": "environment",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/interfaces/event",
+      "short": "event",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/interfaces/frame",
+      "short": "frame",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/interfaces/image_output",
+      "short": "image_output",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/interfaces/scene",
+      "short": "scene",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/interfaces/shot_description",
+      "short": "shot_description",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/interfaces/video_output",
+      "short": "video_output",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/interfaces/__init__",
+      "short": "__init__",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/pipelines/idea2video_pipeline",
+      "short": "idea2video_pipeline",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/pipelines/novel2movie_pipeline",
+      "short": "novel2movie_pipeline",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/pipelines/script2video_pipeline",
+      "short": "script2video_pipeline",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/pipelines/__init__",
+      "short": "__init__",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/tools/image_generator_doubao_seedream_yunwu_api",
+      "short": "image_generator_doubao_seedream_yunwu_api",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/tools/image_generator_nanobanana_google_api",
+      "short": "image_generator_nanobanana_google_api",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/tools/image_generator_nanobanana_yunwu_api",
+      "short": "image_generator_nanobanana_yunwu_api",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/tools/image_generator_openrouter_api",
+      "short": "image_generator_openrouter_api",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/tools/image_orientation",
+      "short": "image_orientation",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/tools/image_response",
+      "short": "image_response",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/tools/protocols",
+      "short": "protocols",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/tools/render_backend",
+      "short": "render_backend",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/tools/reranker_bge_silicon_api",
+      "short": "reranker_bge_silicon_api",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/tools/video_generator_doubao_seedance_yunwu_api",
+      "short": "video_generator_doubao_seedance_yunwu_api",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/tools/video_generator_omni_yunwu_api",
+      "short": "video_generator_omni_yunwu_api",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/tools/video_generator_openrouter_api",
+      "short": "video_generator_openrouter_api",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/tools/video_generator_veo_google_api",
+      "short": "video_generator_veo_google_api",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/tools/video_generator_veo_yunwu_api",
+      "short": "video_generator_veo_yunwu_api",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/tools/__init__",
+      "short": "__init__",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/ui/src/cli",
+      "short": "cli",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/ui/src/lineMapping",
+      "short": "lineMapping",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/ui/src/slashCommands",
+      "short": "slashCommands",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/ui/src/types",
+      "short": "types",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/ui/src/workspaceMeta",
+      "short": "workspaceMeta",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/utils/image",
+      "short": "image",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/utils/provider_presets",
+      "short": "provider_presets",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/utils/rate_limiter",
+      "short": "rate_limiter",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/utils/retry",
+      "short": "retry",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/utils/robust_json_parser",
+      "short": "robust_json_parser",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/utils/text",
+      "short": "text",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/utils/timer",
+      "short": "timer",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/utils/video",
+      "short": "video",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": true,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/utils/__init__",
+      "short": "__init__",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/web/vite.config",
+      "short": "vite.config",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/web/src/api",
+      "short": "api",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/web/src/App",
+      "short": "App",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/web/src/artifactPresentation",
+      "short": "artifactPresentation",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/web/src/ArtifactViews",
+      "short": "ArtifactViews",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/web/src/events",
+      "short": "events",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/web/src/main",
+      "short": "main",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/web/src/slashCommands",
+      "short": "slashCommands",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/web/src/theme",
+      "short": "theme",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    },
+    {
+      "name": "vimax/web/src/types",
+      "short": "types",
+      "role": "business_modules",
+      "is_test": false,
+      "in_cycles": false,
+      "unassigned": false,
+      "twin": null,
+      "call_out": [],
+      "call_in": []
+    }
+  ],
+  "violations": [
+    {
+      "from": "vimax/main_agent",
+      "to": ".coderef/run_cycle",
+      "kind": "cycle",
+      "detail": "循环依赖成员"
+    }
+  ],
+  "gaps": [
+    {
+      "type": "unassigned",
+      "severity": "medium",
+      "detail": "代码模块 .coderef/run_cycle 被调用（fan_in=4）但 target_modules 未覆盖——属「未建模」而非真游离，请在 define-target 补 target_modules",
+      "module": ".coderef/run_cycle"
+    },
+    {
+      "type": "duplicate",
+      "severity": "medium",
+      "detail": "同构重复（孪生）: 符号 generate_single_image 在 tools 跨目录重复实现，相似度 80%（真重复，建议收敛/抽公共工具）"
+    },
+    {
+      "type": "duplicate",
+      "severity": "medium",
+      "detail": "同构重复（孪生）: 符号 generate_single_video 在 tools 跨目录重复实现，相似度 60%（真重复，建议收敛/抽公共工具）"
+    },
+    {
+      "type": "cycle",
+      "severity": "high",
+      "detail": "循环依赖: vimax/tests/test_hang_guards → vimax/tools/video_generator_omni_yunwu_api → vimax/tools/video_generator_doubao_seedance_yunwu_api；最小真环: vimax/tools/video_generator_doubao_seedance_yunwu_api → vimax/tests/test_hang_guards → vimax/tools/video_generator_doubao_seedance_yunwu_api"
+    },
+    {
+      "type": "cycle",
+      "severity": "high",
+      "detail": "循环依赖: vimax/utils/image → vimax/interfaces/image_output → vimax/agents/camera_image_generator → vimax/pipelines/script2video_pipeline → vimax/pipelines/novel2movie_pipeline → vimax/tests/test_novel2video_adapter → vimax/agents/storyboard_artist → vimax/agents/screenwriter → vimax/agents/scene_extractor → vimax/agents/novel_compressor → vimax/agent_runtime/context_compactor → vimax/agent_runtime/loop → vimax/main_agent → vimax/tests/test_main_agent_cli → .coderef/run_cycle → vimax/agents/global_information_planner → vimax/agents/character_extractor → vimax/pipelines/idea2video_pipeline → vimax/agent_runtime/vimax_adapters → vimax/utils/video → vimax/agent_runtime/session_index → vimax/utils/provider_presets → vimax/agent_runtime/tool_executor → vimax/agent_runtime/tools → vimax/agent_runtime/prompts → vimax/agent_runtime/llm → vimax/agent_runtime/image_tools → vimax/agent_runtime/config → vimax/agents/character_portraits_generator → vimax/agents/reference_image_selector；最小真环: vimax/agent_runtime/session_index → vimax/agent_runtime/vimax_adapters → vimax/agent_runtime/session_index；该环节点数较多，可能是整个子图被圈为强连通分量而非局部循环，请核对是否真需重构"
+    },
+    {
+      "type": "god_module",
+      "severity": "medium",
+      "detail": "上帝模块 ?: 扇出 25, 扇入 0",
+      "module": "?"
+    },
+    {
+      "type": "large_module",
+      "severity": "low",
+      "detail": "异常规模模块 vimax/agent_runtime/session_index: 44 个符号",
+      "module": "vimax/agent_runtime/session_index"
+    },
+    {
+      "type": "large_module",
+      "severity": "low",
+      "detail": "异常规模模块 vimax/agent_runtime/tools: 32 个符号",
+      "module": "vimax/agent_runtime/tools"
+    },
+    {
+      "type": "large_module",
+      "severity": "low",
+      "detail": "异常规模模块 vimax/pipelines/script2video_pipeline: 27 个符号",
+      "module": "vimax/pipelines/script2video_pipeline"
+    },
+    {
+      "type": "large_module",
+      "severity": "low",
+      "detail": "异常规模模块 vimax/agent_runtime/vimax_adapters: 25 个符号",
+      "module": "vimax/agent_runtime/vimax_adapters"
+    },
+    {
+      "type": "large_module",
+      "severity": "low",
+      "detail": "异常规模模块 vimax/agent_runtime/config: 21 个符号",
+      "module": "vimax/agent_runtime/config"
+    },
+    {
+      "type": "business_gap",
+      "severity": "high",
+      "detail": "业务步骤 '入口层' 关联的角色 ['entry_point'] 均无有效代码实现"
+    },
+    {
+      "type": "business_gap",
+      "severity": "high",
+      "detail": "业务步骤 '共享底座' 关联的角色 ['shared_base'] 均无有效代码实现"
+    }
+  ],
+  "meta": {
+    "generated_at": "",
+    "tool": "arch_view_fixture",
+    "note": "开发期联调数据，生产由 coderef_arch_canvas 注入"
+  }
+}
