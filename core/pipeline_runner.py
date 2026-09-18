@@ -1356,11 +1356,14 @@ def _gov(p: str, r: PipeResult, done: set):
         pc = os.path.join(os.path.dirname(__file__), "__pycache__")
         if os.path.exists(pc):
             for f in os.listdir(pc):
-                if "governance_audit" in f or "shared_filter" in f:
+                if ("governance" in f and ("base" in f or "checks" in f
+                                           or "audit" in f)) or "shared_filter" in f:
                     os.remove(os.path.join(pc, f))
         from core import governance_audit as g, shared_filter as sf
         import core.governance_base as gb
-        importlib.reload(sf); importlib.reload(gb); importlib.reload(g)
+        import core.governance_checks as gc
+        # 热更新先子后父：base → checks → audit 门面壳，保证规则常量/检测逻辑均刷新
+        importlib.reload(sf); importlib.reload(gb); importlib.reload(gc); importlib.reload(g)
         a = g.GovernanceAuditor(); a.audit(p)
         ro = getattr(a, "report", None)
         if ro:

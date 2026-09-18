@@ -188,12 +188,15 @@ class GovernanceAuditor:
 
         violations = []
 
+        # 检测器自身文件集（拆解后三件套）：跳过自身，避免规则描述文本自命中
+        # （如 unserialize 规则的说明字符串 "PHP 的 unserialize() 可被利用..." 命中自身正则），
+        # 参照 resource_gap_detector 的自身文件豁免机制
+        self_files = {"governance_audit.py", "governance_base.py",
+                      "governance_checks.py"}
+
         # 2. 逐文件检测
         for cf in analysis.files:
-            # 跳过检测器自身文件（避免规则描述文本自命中：如 unserialize 规则的
-            # 说明字符串 "PHP 的 unserialize() 可被利用..." 命中自身正则），
-            # 参照 resource_gap_detector 的自身文件豁免机制
-            if os.path.basename(cf.file_path) == "governance_audit.py":
+            if os.path.basename(cf.file_path) in self_files:
                 continue
             # 安全铁律
             violations.extend(self._check_security(cf))
@@ -229,10 +232,10 @@ class GovernanceAuditor:
         ]
 
         # 3.8 集中兜底：跨文件检测（架构/循环依赖）中自身文件作为一端出现的
-        #     条目同样豁免，确保 governance_audit.py 不出现在任何 findings 中
+        #     条目同样豁免，确保 governance 三件套不出现在任何 findings 中
         violations = [
             v for v in violations
-            if os.path.basename(v.file_path) != "governance_audit.py"
+            if os.path.basename(v.file_path) not in self_files
         ]
 
         # 4. 构建报告
