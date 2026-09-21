@@ -9,26 +9,68 @@ arch / target / gov / flow 系工具 handler（handlers_arch）。
 
 import json
 import os
+from http.server import SimpleHTTPRequestHandler
 
 # arch 画布静态预览服务句柄注册表（防 GC + 可重复调用复用，仿 gov_webdash._SERVERS 约定）
 _ARCH_SERVE = {}
+
+
+class _ArchViewHandler(SimpleHTTPRequestHandler):
+    """arch 产物目录静态服务：根路径返回引导页（列出产物 + 直达最新），
+    替代默认目录列表（v5.14.5/v5.15.0 测试方观察点 1）。"""
+
+    def do_GET(self):  # noqa: N802
+        if self.path in ("/", "/index.html"):
+            self._serve_index()
+            return
+        super().do_GET()
+
+    def _serve_index(self) -> None:
+        try:
+            items = sorted(
+                f for f in os.listdir(self.directory)
+                if f.startswith("arch_canvas_") and f.endswith(".html"))
+        except OSError:
+            items = []
+        latest = items[-1] if items else None
+        links = "".join(
+            f'<li><a href="{f}">{f}</a></li>' for f in reversed(items))
+        body = (
+            "<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'>"
+            "<title>CodeRef 架构视图</title>"
+            "<style>body{font-family:system-ui,sans-serif;max-width:720px;"
+            "margin:40px auto;padding:0 20px;color:#1f2430}"
+            "h1{font-size:22px}a{color:#4f6ef7;text-decoration:none}"
+            ".latest{display:inline-block;margin:12px 0;padding:10px 18px;"
+            "background:#4f6ef7;color:#fff;border-radius:8px}"
+            "ul{line-height:2}</style></head><body>"
+            "<h1>CodeRef 架构视图</h1>"
+            + (f'<a class="latest" href="{latest}">打开最新架构视图 →</a>'
+               if latest else "<p>暂无产物</p>")
+            + f"<h3>历史产物（{len(items)}）</h3><ul>{links}</ul></body></html>")
+        data = body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
 
 def _serve_arch_static(directory: str, host: str = "127.0.0.1",
                        port: int = 0) -> dict:
     """启动 arch 画布静态预览服务（前端 push），仅允许回环绑定。
 
-    ThreadingHTTPServer + SimpleHTTPRequestHandler 指向产物目录；服务句柄存
-    模块级注册表，返回值只含可 JSON 序列化元数据（与 gov_webdash.serve 同约定：
-    回环限制 / daemon 线程 / 句柄注册表）。
+    ThreadingHTTPServer + _ArchViewHandler 指向产物目录（根路径引导页）；
+    服务句柄存模块级注册表，返回值只含可 JSON 序列化元数据（与 gov_webdash.serve
+    同约定：回环限制 / daemon 线程 / 句柄注册表）。
     """
     import threading
     from functools import partial
-    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+    from http.server import ThreadingHTTPServer
 
     if host not in ("127.0.0.1", "::1", "localhost"):
         host = "127.0.0.1"
-    handler = partial(SimpleHTTPRequestHandler, directory=directory)
+    handler = partial(_ArchViewHandler, directory=directory)
     httpd = ThreadingHTTPServer((host, port), handler)
     actual_port = httpd.server_address[1]
     t = threading.Thread(target=httpd.serve_forever, daemon=True)

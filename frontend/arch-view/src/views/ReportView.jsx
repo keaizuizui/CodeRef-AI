@@ -21,7 +21,8 @@ const TYPE_LABEL = {
 
 // 从数据生成"一句话总述"（叙事式，不数数）
 function buildNarrative(d) {
-  const roles = d.roles || [];
+  const g = d.modules_graph || d;
+  const roles = g.roles || [];
   const s = d.summary || {};
   const roleNames = roles.map((r) => r.name).join('、');
   const part = roles.length ? `由 ${roles.length} 大块组成（${roleNames}）` : '结构尚未定义';
@@ -39,10 +40,13 @@ function buildNarrative(d) {
 }
 
 export default function ReportView({ data, onExplore }) {
+  // v5.16 契约：roles/flows/gaps/modules 收在 modules_graph；兼容旧版顶层直出
+  const mg = data.modules_graph || data;
+  const roles = mg.roles || [];
+  const flows = mg.flows || [];
+  const gaps = mg.gaps || [];
+  const modules = mg.modules || [];
   const narrative = useMemo(() => buildNarrative(data), [data]);
-  const roles = data.roles || [];
-  const flows = data.flows || [];
-  const gaps = data.gaps || [];
 
   // 角色卡片排序：按 flows 出现顺序优先（入口→业务→底座语义），其余按原序
   const orderedRoles = useMemo(() => {
@@ -54,8 +58,17 @@ export default function ReportView({ data, onExplore }) {
       }
     }
     for (const r of roles) if (!order.includes(r.id)) order.push(r.id);
-    return order.map((id) => roles.find((r) => r.id === id)).filter(Boolean);
+    return order
+      .map((id) => roles.find((r) => r.id === id))
+      .filter(Boolean)
+      .filter((r) => (r.modules || []).length > 0); // 空角色不占卡（v5.16 报告端防御）
   }, [roles, flows]);
+
+  // 空角色（0 归属模块）合并提示
+  const emptyRoles = useMemo(
+    () => (roles || []).filter((r) => !(r.modules || []).length),
+    [roles],
+  );
 
   const sevGroups = useMemo(() => {
     const g = { high: [], medium: [], low: [] };
@@ -87,6 +100,13 @@ export default function ReportView({ data, onExplore }) {
       <section className="rp-sec">
         <h2 className="rp-h2">系统怎么搭</h2>
         {orderedRoles.length === 0 && <p className="muted">尚未定义技术角色。</p>}
+        {emptyRoles.length > 0 && (
+          <p className="rp-role-empty">
+            目标架构仅 {orderedRoles.length} 个角色有归属模块；
+            {emptyRoles.map((r) => r.name).join('、')} 待定义——建议「重新定标」
+            （coderef_target_arch_set detect）。
+          </p>
+        )}
         <div className="rp-role-chain">
           {orderedRoles.map((r, i) => (
             <React.Fragment key={r.id}>
@@ -115,7 +135,7 @@ export default function ReportView({ data, onExplore }) {
           <div className="rp-role-card rp-role-free">
             <div className="rp-role-name">未建模区</div>
             <div className="rp-role-mods">
-              {(data.modules || []).filter((m) => !m.role).map((m) => (
+              {(modules || []).filter((m) => !m.role).map((m) => (
                 <span key={m.name} className="rp-mod-chip rp-mod-free" title={m.name}>
                   {m.short}
                 </span>

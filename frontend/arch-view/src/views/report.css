@@ -122,6 +122,17 @@
 
 .rp-role-free { border-style: dashed; background: #fafbfc; }
 
+/* v5.16：空角色合并提示 */
+.rp-role-empty {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+
 /* ── 业务流（系统怎么跑）── */
 .rp-flow {
   background: var(--card);
