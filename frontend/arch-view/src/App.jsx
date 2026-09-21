@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import ReportView from './views/ReportView.jsx';
-import CanvasView from './views/CanvasView.jsx';
+import FrameworkView from './views/FrameworkView.jsx';
 import devData from './fixtures/vimax.json';
 
 // 数据来源：生产环境由 core/arch_view.py 注入 window.__ARCH_DATA__（单文件模板内联）；
@@ -8,26 +8,16 @@ import devData from './fixtures/vimax.json';
 const data = window.__ARCH_DATA__ || devData;
 
 export default function App() {
-  const [view, setView] = useState('report'); // 'report' | 'canvas'
-  const [highlight, setHighlight] = useState(null); // {type:'gap'|'module', value, severity}
-
-  const goCanvas = (hl) => {
-    if (hl) setHighlight(hl);
-    setView('canvas');
-  };
+  const [view, setView] = useState('report'); // 'report' | 'framework'
 
   return (
     <div className="app">
       {view === 'report' ? (
-        <ReportView data={data} onExplore={(hl) => goCanvas(hl)} />
+        <ReportView data={data} onExplore={() => setView('framework')} />
       ) : (
-        <CanvasView
+        <FrameworkView
           data={data}
-          highlight={highlight}
-          onBack={() => {
-            setHighlight(null);
-            setView('report');
-          }}
+          onBack={() => setView('report')}
         />
       )}
     </div>

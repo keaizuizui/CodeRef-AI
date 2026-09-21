@@ -172,14 +172,21 @@ def build_arch_data(
         for g in gaps
     ]
 
+    # v5.16：业务架构树（自动归纳 + LLM 大白话，缺 key 静态兜底）——画布主数据
+    from core.arch_framework import build_framework_enhanced
+    fw = build_framework_enhanced(project_path, target_arch)
+
     return {
         "project": target_arch.get("project", os.path.basename(project_path)),
         "summary": summary,
-        "roles": roles,
-        "flows": flows,
-        "modules": modules,
-        "violations": violations,
-        "gaps": report_gaps,
+        "framework": fw["framework"],
+        "modules_graph": {
+            "roles": roles,
+            "flows": flows,
+            "modules": modules,
+            "violations": violations,
+            "gaps": report_gaps,
+        },
         "meta": {
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "tool": "coderef_arch_canvas",
