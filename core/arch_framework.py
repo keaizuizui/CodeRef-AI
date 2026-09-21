@@ -149,3 +149,106 @@ def framework_json(project_path: str,
     """业务树 JSON 输出（供画布注入 / 编程 AI 消费）。"""
     return json.dumps(build_framework(project_path, target_arch),
                       ensure_ascii=False, indent=indent)
+
+
+# ---------------------------------------------------------------------------
+# P1：LLM 辅助大白话（缺 key / 失败时静态兜底，不编造）
+# ---------------------------------------------------------------------------
+
+def _static_desc_fallback(framework: dict) -> dict:
+    """静态兜底：节点 desc 用模块名直出，steps 留空（画布渲染兜底）。"""
+    def fill(node: dict) -> dict:
+        mods = node.get("modules", [])
+        names = ", ".join(_readable(m) for m in mods[:6])
+        node["desc"] = node.get("desc") or (
+            f"涵盖 {len(mods)} 个模块：{names}" if names else "暂无归属模块")
+        for ch in node.get("children", []):
+            fill(ch)
+        return node
+    fill(framework["framework"])
+    return framework
+
+
+def _collect_nodes(framework: dict) -> List[tuple]:
+    """收集 (id, title, modules_basename, is_leaf) 列表，供 prompt 与合并。"""
+    out: List[tuple] = []
+
+    def walk(node: dict, path: str = "") -> None:
+        nid = node.get("id", path)
+        is_leaf = not node.get("children")
+        bases = [_readable(m) for m in node.get("modules", [])[:8]]
+        out.append((nid, node.get("title", ""), bases, is_leaf))
+        for ch in node.get("children", []):
+            walk(ch, f"{path}/{ch.get('id','')}")
+
+    walk(framework["framework"], framework["framework"].get("name", "root"))
+    return out
+
+
+def _build_prompt(framework: dict) -> str:
+    nodes = _collect_nodes(framework)
+    skeleton = json.dumps(
+        [{"id": nid, "title": title, "modules": bases, "leaf": is_leaf}
+         for nid, title, bases, is_leaf in nodes],
+        ensure_ascii=False)
+    return (
+        "你是软件架构梳理助手。下面是一个项目自动归纳出的业务骨架（JSON），"
+        "每个节点有 id 和机械的模块名。请用大白话为每个节点补充：\n"
+        "- title：业务语义标题（中文，简短，如\"创意转视频管线\"）\n"
+        "- desc：一句话描述这个功能是干什么的（中文，20-40字）\n"
+        "- steps：仅对 leaf=true 的节点，列出 3-8 条业务步骤的大白话"
+        "（如\"输入产品链接并选择电商平台\"），概括其典型流程\n"
+        "只输出 JSON：{\"节点id\": {\"title\": \"...\", \"desc\": \"...\", "
+        "\"steps\": [\"...\", \"...\"]}}。只包含骨架里出现的 id，不要发明节点。\n"
+        f"骨架：{skeleton}")
+
+
+def _merge_llm_result(framework: dict, result: dict) -> dict:
+    """用 LLM 返回的 {id: {title, desc, steps}} 覆盖骨架节点。"""
+    def walk(node: dict) -> None:
+        r = result.get(node.get("id", "")) or {}
+        if r.get("title"):
+            node["title"] = r["title"]
+        if r.get("desc"):
+            node["desc"] = r["desc"]
+        if r.get("steps") and not node.get("children"):
+            node["steps"] = [s for s in r["steps"] if isinstance(s, str)][:10]
+        for ch in node.get("children", []):
+            walk(ch)
+    walk(framework["framework"])
+    return framework
+
+
+def enhance_framework_with_llm(framework: dict) -> dict:
+    """LLM 辅助生成业务大白话标题/描述/步骤；缺 key / 调用失败返回静态兜底。"""
+    try:
+        from core.llm_integration import LLMIntegration
+        llm = LLMIntegration()
+        if not llm.config.api_key or not llm.client:
+            return _static_desc_fallback(framework)
+        resp = llm.chat_completion(
+            [{"role": "user", "content": _build_prompt(framework)}],
+            response_format={"type": "json_object"},
+            max_tokens=4000,
+        )
+        if LLMIntegration.is_error_response(resp):
+            return _static_desc_fallback(framework)
+        result = json.loads(resp)
+        if not isinstance(result, dict):
+            return _static_desc_fallback(framework)
+        return _merge_llm_result(framework, result)
+    except Exception:
+        # 任何 LLM 路径异常都降级为静态兜底，绝不让大白话增强阻断业务树输出
+        return _static_desc_fallback(framework)
+
+
+def build_framework_enhanced(project_path: str,
+                             target_arch: Optional[dict] = None,
+                             with_llm: bool = True) -> dict:
+    """业务树 + 可选 LLM 大白话（缺 key 自动静态兜底）。"""
+    data = build_framework(project_path, target_arch)
+    if with_llm:
+        data = enhance_framework_with_llm(data)
+    else:
+        data = _static_desc_fallback(data)
+    return data
