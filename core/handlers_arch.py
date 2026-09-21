@@ -9,6 +9,7 @@ arch / target / gov / flow 系工具 handler（handlers_arch）。
 
 import json
 import os
+from html import escape
 from http.server import SimpleHTTPRequestHandler
 
 # arch 画布静态预览服务句柄注册表（防 GC + 可重复调用复用，仿 gov_webdash._SERVERS 约定）
@@ -34,7 +35,7 @@ class _ArchViewHandler(SimpleHTTPRequestHandler):
             items = []
         latest = items[-1] if items else None
         links = "".join(
-            f'<li><a href="{f}">{f}</a></li>' for f in reversed(items))
+            f'<li><a href="{escape(f)}">{escape(f)}</a></li>' for f in reversed(items))
         body = (
             "<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'>"
             "<title>CodeRef 架构视图</title>"
@@ -45,7 +46,7 @@ class _ArchViewHandler(SimpleHTTPRequestHandler):
             "background:#4f6ef7;color:#fff;border-radius:8px}"
             "ul{line-height:2}</style></head><body>"
             "<h1>CodeRef 架构视图</h1>"
-            + (f'<a class="latest" href="{latest}">打开最新架构视图 →</a>'
+            + (f'<a class="latest" href="{escape(latest)}">打开最新架构视图 →</a>'
                if latest else "<p>暂无产物</p>")
             + f"<h3>历史产物（{len(items)}）</h3><ul>{links}</ul></body></html>")
         data = body.encode("utf-8")
