@@ -132,6 +132,7 @@ def build_framework(project_path: str,
         })
 
     framework = {
+        "id": "__root__",  # 稳定根 id，供 LLM 结果 merge 入口层 title/desc
         "name": "入口层",
         "desc": "系统入口（主程序/命令行/服务启动器）",
         "modules": sorted(entry_mods),
@@ -181,7 +182,7 @@ def _collect_nodes(framework: dict) -> List[tuple]:
         for ch in node.get("children", []):
             walk(ch, f"{path}/{ch.get('id','')}")
 
-    walk(framework["framework"], framework["framework"].get("name", "root"))
+    walk(framework["framework"], framework["framework"].get("id", "__root__"))
     return out
 
 
