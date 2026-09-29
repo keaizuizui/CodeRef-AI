@@ -398,7 +398,7 @@ def _arch_canvas(a: dict) -> str:
         "project_path": pp,
         "result_path": filepath,
         "message": ("架构视图已生成：默认打开为决策者架构总览报告（一段话讲清 这是什么系统·怎么搭·怎么跑·哪里要修），"
-                    "点「深看架构画布」进入分区架构图（角色泳道/主干流/违规边，点击模块探查依赖）"),
+                    "点「查看业务架构图」进入业务树画布（入口→主功能→子功能→步骤，AI 归纳大白话）"),
     }
     if a.get("open_server"):
         r["server"] = _serve_arch_static(
