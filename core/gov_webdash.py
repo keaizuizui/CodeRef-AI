@@ -411,13 +411,12 @@ def _make_handler(project_path: str):
                                        "message": "流转回写仅允许本机(127.0.0.1)"}, 403)
                 body = self._read_body()
                 return self._json(_transition(project_path, body))
-            if path in ("/", "/board", "/index.html", "/board.html", "/overview.html"):
-                # U-47：根路径直回看板 HTML（页面与 /api/transition 等接口同源），
-                # 替代旧的"仅提示 JSON"。首次访问动态生成并缓存。
-                if "board_html" not in payload_cache:
-                    payload_cache["board_html"] = (
-                        render_board(project_path).get("board_html_str") or "")
-                return self._html(payload_cache["board_html"])
+            if name == "GET" and path in ("/", "/board", "/index.html",
+                                          "/board.html", "/overview.html"):
+                # U-47：根路径直回看板 HTML（页面与 /api/transition 等接口同源）。
+                # 每次 GET 动态生成（不缓存），保证 transition 流转后刷新即见新数据；
+                # 非 GET 请求走下方 404 JSON 兜底。
+                return self._html(render_board(project_path).get("board_html_str") or "")
             return self._json({"ok": False, "error": f"404 {path}"}, 404)
 
         def log_message(self, *a):

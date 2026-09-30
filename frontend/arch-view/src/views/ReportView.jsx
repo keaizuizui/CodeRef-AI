@@ -174,7 +174,13 @@ export default function ReportView({ data, onExplore }) {
       {/* ④ 哪里有问题：差距清单（人话，可跳画布） */}
       <section className="rp-sec">
         <h2 className="rp-h2">哪里有问题</h2>
-        {gaps.length === 0 && <p className="muted">没有检测到结构问题，系统整体健康。</p>}
+        {gaps.length === 0 && (
+          <p className="muted">
+            {data.summary?.no_code
+              ? '项目暂无可用代码图谱，请先运行 coderef_architecture 建立知识图谱。'
+              : '没有检测到结构问题，系统整体健康。'}
+          </p>
+        )}
         {['high', 'medium', 'low'].map((sev) =>
           sevGroups[sev].length > 0 && (
             <div key={sev} className="rp-gap-group">
