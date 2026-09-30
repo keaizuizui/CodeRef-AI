@@ -157,9 +157,14 @@ def build_arch_data(
     # ── summary / gaps 透传（无图谱时 gap_result 为 None，回退空字典）──
     s = (gap_result or {}).get("summary") or {}
     a = (gap_result or {}).get("alignment") or {}
+    # U-46：空图谱/无代码态走 no_code 口径（对齐 arch_audit no_code 分支）——
+    # 无非测试代码模块时不得按"0 模块 + 对齐度 100% + 整体健康"渲染，
+    # alignment/role_coverage 置 None 表示不适用，前端据此抑制百分比与健康表述。
+    no_code = len(module_names) == 0
     summary = {
-        "alignment": a.get("module_assigned", 0),
-        "role_coverage": a.get("role_coverage", 0),
+        "no_code": no_code,
+        "alignment": None if no_code else a.get("module_assigned", 0),
+        "role_coverage": None if no_code else a.get("role_coverage", 0),
         "module_total": len(modules),
         "gap_total": len(gaps),
         "cycle_total": len(cycle_mods),
