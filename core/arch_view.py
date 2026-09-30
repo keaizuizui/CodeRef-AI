@@ -178,13 +178,21 @@ def build_arch_data(
     ]
 
     # v5.16：业务架构树（自动归纳 + LLM 大白话，缺 key 静态兜底）——画布主数据
-    from core.arch_framework import build_framework_enhanced
-    fw = build_framework_enhanced(project_path, target_arch)
+    # 隔离归纳失败：异常不阻断整个架构视图（CodeRabbit），回退空框架树
+    _EMPTY_FW = {"id": "__root__", "name": "入口层",
+                 "desc": "系统入口", "modules": [], "children": []}
+    try:
+        from core.arch_framework import build_framework_enhanced
+        _fw = build_framework_enhanced(project_path, target_arch)
+        fw = (_fw or {}).get("framework") or _EMPTY_FW
+    except Exception as e:
+        logger.warning(f"[arch_view] 业务树归纳失败，回退空框架: {e}")
+        fw = _EMPTY_FW
 
     return {
         "project": target_arch.get("project", os.path.basename(project_path)),
         "summary": summary,
-        "framework": fw["framework"],
+        "framework": fw,
         "modules_graph": {
             "roles": roles,
             "flows": flows,
