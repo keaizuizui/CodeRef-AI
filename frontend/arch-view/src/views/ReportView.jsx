@@ -192,7 +192,7 @@ export default function ReportView({ data, onExplore }) {
       </section>
 
       <footer className="rp-foot muted">
-        由 CodeRef-AI 静态分析生成 · 点击「深看架构画布」查看分区架构图
+        由 CodeRef-AI 静态分析生成 · 点击「查看业务架构图」查看业务架构图
       </footer>
     </div>
   );
