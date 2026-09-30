@@ -9,15 +9,20 @@ const data = window.__ARCH_DATA__ || devData;
 
 export default function App() {
   const [view, setView] = useState('report'); // 'report' | 'framework'
+  const [highlight, setHighlight] = useState(null); // 差距高亮 {type, module, kind, severity}
 
   return (
     <div className="app">
       {view === 'report' ? (
-        <ReportView data={data} onExplore={() => setView('framework')} />
+        <ReportView
+          data={data}
+          onExplore={(hl) => { setHighlight(hl); setView('framework'); }}
+        />
       ) : (
         <FrameworkView
           data={data}
-          onBack={() => setView('report')}
+          highlight={highlight}
+          onBack={() => { setHighlight(null); setView('report'); }}
         />
       )}
     </div>

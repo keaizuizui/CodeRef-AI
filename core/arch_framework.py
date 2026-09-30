@@ -186,21 +186,21 @@ def _collect_nodes(framework: dict) -> List[tuple]:
     return out
 
 
-def _build_prompt(framework: dict) -> str:
-    nodes = _collect_nodes(framework)
+def _build_prompt(nodes: List[tuple]) -> str:
+    """为给定节点子集构建 prompt（分批用：每批仅一个主功能子树，控制 token 防超限）。"""
     skeleton = json.dumps(
         [{"id": nid, "title": title, "modules": bases, "leaf": is_leaf}
          for nid, title, bases, is_leaf in nodes],
         ensure_ascii=False)
     return (
-        "你是软件架构梳理助手。下面是一个项目自动归纳出的业务骨架（JSON），"
+        "你是软件架构梳理助手。下面是一个项目自动归纳出的业务骨架片段（JSON），"
         "每个节点有 id 和机械的模块名。请用大白话为每个节点补充：\n"
         "- title：业务语义标题（中文，简短，如\"创意转视频管线\"）\n"
         "- desc：一句话描述这个功能是干什么的（中文，20-40字）\n"
-        "- steps：仅对 leaf=true 的节点，列出 3-8 条业务步骤的大白话"
+        "- steps：仅对 leaf=true 的节点，列出 3-5 条业务步骤的大白话"
         "（如\"输入产品链接并选择电商平台\"），概括其典型流程\n"
         "只输出 JSON：{\"节点id\": {\"title\": \"...\", \"desc\": \"...\", "
-        "\"steps\": [\"...\", \"...\"]}}。只包含骨架里出现的 id，不要发明节点。\n"
+        "\"steps\": [\"...\", \"...\"]}}。只包含片段里出现的 id，不要发明节点。\n"
         f"骨架：{skeleton}")
 
 
@@ -220,24 +220,59 @@ def _merge_llm_result(framework: dict, result: dict) -> dict:
     return framework
 
 
+def _split_batches(framework: dict, nodes: List[tuple]) -> List[List[tuple]]:
+    """按主功能分 prompt 批次：每批 = 根节点 + 一个主功能子树（控制 token 防超限）。"""
+    root_id = framework["framework"].get("id", "__root__")
+    root_node = next((n for n in nodes if n[0] == root_id), None)
+    batches: List[List[tuple]] = []
+    for c in framework["framework"].get("children", []):
+        cids = {c.get("id")}
+
+        def walk(n: dict) -> None:
+            cids.add(n.get("id"))
+            for ch in n.get("children", []):
+                walk(ch)
+        for ch in c.get("children", []):
+            walk(ch)
+        batch = [n for n in nodes if n[0] in cids]
+        if root_node and root_node not in batch:
+            batch = [root_node] + batch
+        if batch:
+            batches.append(batch)
+    return batches
+
+
 def enhance_framework_with_llm(framework: dict) -> dict:
-    """LLM 辅助生成业务大白话标题/描述/步骤；缺 key / 调用失败返回静态兜底。"""
+    """LLM 辅助生成业务大白话标题/描述/步骤；缺 key / 调用失败返回静态兜底。
+
+    分批调用（每批一个主功能子树），单批失败只跳过该批，已成功批保留；
+    全部失败才整体兜底，任何异常不阻断业务树输出。
+    """
     try:
         from core.llm_integration import LLMIntegration
         llm = LLMIntegration()
         if not llm.config.api_key or not llm.client:
             return _static_desc_fallback(framework)
-        resp = llm.chat_completion(
-            [{"role": "user", "content": _build_prompt(framework)}],
-            response_format={"type": "json_object"},
-            max_tokens=4000,
-        )
-        if LLMIntegration.is_error_response(resp):
+        nodes = _collect_nodes(framework)
+        batches = _split_batches(framework, nodes)
+        merged: dict = {}
+        for batch in batches:
+            resp = llm.chat_completion(
+                [{"role": "user", "content": _build_prompt(batch)}],
+                response_format={"type": "json_object"},
+                max_tokens=4000,
+            )
+            if LLMIntegration.is_error_response(resp):
+                continue  # 单批失败跳过，不整体阻断
+            try:
+                part = json.loads(resp)
+            except Exception:
+                continue
+            if isinstance(part, dict):
+                merged.update(part)
+        if not merged:
             return _static_desc_fallback(framework)
-        result = json.loads(resp)
-        if not isinstance(result, dict):
-            return _static_desc_fallback(framework)
-        return _merge_llm_result(framework, result)
+        return _merge_llm_result(framework, merged)
     except Exception:
         # 任何 LLM 路径异常都降级为静态兜底，绝不让大白话增强阻断业务树输出
         return _static_desc_fallback(framework)

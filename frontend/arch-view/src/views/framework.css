@@ -142,3 +142,8 @@
 }
 
 .fw-steps li::marker { color: var(--brand); font-weight: 700; }
+
+/* D2：差距点击高亮定位（红脉冲） */
+.fw-card-hl { border-color: #ef4444; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25); }
+
+.fw-sub-hl { border-color: #f59e0b; background: #fff8ec; }
