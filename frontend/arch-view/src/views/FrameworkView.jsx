@@ -75,6 +75,9 @@ export default function FrameworkView({ data, onBack, highlight }) {
 
         {/* 主功能卡 */}
         <div className="fw-cards">
+          {(framework.children || []).length === 0 && (
+            <p className="fw-empty">暂无可用代码图谱（无非测试代码模块；健康度不适用）。请先运行 coderef_architecture 建立知识图谱后重新生成。</p>
+          )}
           {(framework.children || []).map((c) => (
             <div key={c.id}
                  ref={(el) => { cardRefs.current[c.id] = el; }}

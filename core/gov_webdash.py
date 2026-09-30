@@ -336,6 +336,14 @@ def _make_handler(project_path: str):
             self.end_headers()
             self.wfile.write(body)
 
+        def _html(self, text, code=200):
+            body = text.encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self):
             try:
                 self._route("GET")
@@ -403,13 +411,13 @@ def _make_handler(project_path: str):
                                        "message": "流转回写仅允许本机(127.0.0.1)"}, 403)
                 body = self._read_body()
                 return self._json(_transition(project_path, body))
-            if path in ("/", "/board", "/index.html"):
-                return self._json({"ok": True,
-                                   "message": ("看板 HTML 用 render_board(open_browser=True) "
-                                               "生成，或直接用接口取数据"),
-                                   "endpoints": ["/api/report", "/api/issues",
-                                                 "/api/cycles", "/api/issue/<id>",
-                                                 "POST /api/transition"]})
+            if path in ("/", "/board", "/index.html", "/board.html", "/overview.html"):
+                # U-47：根路径直回看板 HTML（页面与 /api/transition 等接口同源），
+                # 替代旧的"仅提示 JSON"。首次访问动态生成并缓存。
+                if "board_html" not in payload_cache:
+                    payload_cache["board_html"] = (
+                        render_board(project_path).get("board_html_str") or "")
+                return self._html(payload_cache["board_html"])
             return self._json({"ok": False, "error": f"404 {path}"}, 404)
 
         def log_message(self, *a):

@@ -24,6 +24,12 @@ function buildNarrative(d) {
   const g = d.modules_graph || d;
   const roles = g.roles || [];
   const s = d.summary || {};
+  // U-46：无代码态（无非测试代码模块）走 no_code 口径——
+  // 抑制"0 模块 + 对齐度 100% + 整体健康"误导，给建图引导
+  if (s.no_code) {
+    return `${d.project} 暂无可用代码图谱（无非测试代码模块；健康度不适用）。` +
+      '请先运行 coderef_architecture 建立知识图谱后重新生成架构视图。';
+  }
   const roleNames = roles.map((r) => r.name).join('、');
   const part = roles.length ? `由 ${roles.length} 大块组成（${roleNames}）` : '结构尚未定义';
   const modTxt = `${s.module_total || 0} 个代码模块`;
