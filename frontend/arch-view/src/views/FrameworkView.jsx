@@ -1,10 +1,37 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import './framework.css';
 
 // 业务架构大白话图（v5.16）：入口层 → 主功能卡 → 子功能（可展开）→ 步骤链
-export default function FrameworkView({ data, onBack }) {
+export default function FrameworkView({ data, onBack, highlight }) {
   const [expanded, setExpanded] = useState(new Set());
+  const [hl, setHl] = useState(null); // 差距高亮 {cardId, subId}
+  const cardRefs = useRef({});
   const framework = data.framework || { name: '入口层', modules: [], children: [] };
+
+  // 差距点击联动（D2 修复）：定位 module 所属主功能/子功能，展开并高亮
+  useEffect(() => {
+    if (!highlight || !highlight.module) { setHl(null); return; }
+    const mod = highlight.module;
+    let target = null;
+    for (const c of framework.children || []) {
+      if ((c.modules || []).includes(mod)) { target = { cardId: c.id }; break; }
+      for (const s of c.children || []) {
+        if ((s.modules || []).includes(mod)) { target = { cardId: c.id, subId: s.id }; break; }
+      }
+      if (target) break;
+    }
+    if (!target) { setHl(null); return; }
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      const card = framework.children.find((x) => x.id === target.cardId);
+      for (const s of (card ? card.children : [])) next.add(s.id);
+      return next;
+    });
+    setHl(target);
+    setTimeout(() => {
+      cardRefs.current[target.cardId]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 120);
+  }, [highlight]);
 
   const toggle = (id) => {
     setExpanded((prev) => {
@@ -49,7 +76,9 @@ export default function FrameworkView({ data, onBack }) {
         {/* 主功能卡 */}
         <div className="fw-cards">
           {(framework.children || []).map((c) => (
-            <div key={c.id} className="fw-card">
+            <div key={c.id}
+                 ref={(el) => { cardRefs.current[c.id] = el; }}
+                 className={`fw-card${hl && hl.cardId === c.id ? ' fw-card-hl' : ''}`}>
               <div className="fw-card-head">
                 <span className="fw-card-no">{c.modules.length}</span>
                 <span className="fw-card-title">{c.title}</span>
@@ -60,7 +89,7 @@ export default function FrameworkView({ data, onBack }) {
                 {(c.children || []).map((s) => {
                   const open = expanded.has(s.id);
                   return (
-                    <div key={s.id} className="fw-sub">
+                    <div key={s.id} className={`fw-sub${hl && hl.subId === s.id ? ' fw-sub-hl' : ''}`}>
                       <button className="fw-sub-head" onClick={() => toggle(s.id)}>
                         <span className="fw-arrow">{open ? '▾' : '▸'}</span>
                         <span className="fw-sub-title">{s.title}</span>

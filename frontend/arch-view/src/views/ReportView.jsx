@@ -91,7 +91,7 @@ export default function ReportView({ data, onExplore }) {
       <header className="rp-head">
         <div className="rp-title-row">
           <h1 className="rp-title">{data.project} · 架构总览</h1>
-          <button className="primary" onClick={() => onExplore(null)}>🔍 深看架构画布</button>
+          <button className="primary" onClick={() => onExplore(null)}>🗺 查看业务架构图</button>
         </div>
         <p className="rp-narrative">{narrative}</p>
       </header>
