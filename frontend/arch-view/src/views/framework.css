@@ -72,17 +72,6 @@
   margin-bottom: 6px;
 }
 
-.fw-card-no {
-  background: #eef2ff;
-  color: var(--brand);
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 700;
-  padding: 1px 8px;
-  min-width: 24px;
-  text-align: center;
-}
-
 .fw-card-title { font-weight: 700; font-size: 15.5px; flex: 1; }
 
 .fw-badge {

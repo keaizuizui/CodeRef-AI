@@ -80,9 +80,8 @@ export default function FrameworkView({ data, onBack, highlight }) {
                  ref={(el) => { cardRefs.current[c.id] = el; }}
                  className={`fw-card${hl && hl.cardId === c.id ? ' fw-card-hl' : ''}`}>
               <div className="fw-card-head">
-                <span className="fw-card-no">{c.modules.length}</span>
                 <span className="fw-card-title">{c.title}</span>
-                <span className="fw-badge">{c.modules.length} 模块</span>
+                <span className="fw-badge">{(c.modules || []).length} 模块</span>
               </div>
               {c.desc && <div className="fw-desc">{c.desc}</div>}
               <div className="fw-subs">
@@ -93,7 +92,7 @@ export default function FrameworkView({ data, onBack, highlight }) {
                       <button className="fw-sub-head" onClick={() => toggle(s.id)}>
                         <span className="fw-arrow">{open ? '▾' : '▸'}</span>
                         <span className="fw-sub-title">{s.title}</span>
-                        {s.modules.length > 0 && <span className="fw-sub-n">{s.modules.length}</span>}
+                        {(s.modules || []).length > 0 && <span className="fw-sub-n">{(s.modules || []).length}</span>}
                       </button>
                       {open && (
                         <div className="fw-sub-body">

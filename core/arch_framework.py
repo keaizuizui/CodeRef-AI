@@ -98,9 +98,9 @@ def build_framework(project_path: str,
     # ── 主功能层：按业务域分组 ──
     domains: Dict[str, List[str]] = {}
     for m in biz_mods:
+        if m.split("/")[0] == ".coderef":
+            continue  # 工具自身产物目录（.coderef/），不是业务域
         d = _domain_of(m)
-        if d in ("run_cycle",):
-            continue  # 工具自身产物目录，不是业务域
         domains.setdefault(d, []).append(m)
 
     children: List[dict] = []
