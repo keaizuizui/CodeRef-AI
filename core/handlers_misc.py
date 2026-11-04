@@ -224,12 +224,19 @@ def _report(a) -> str:
     # 评估台是用户入口：这里显式重算并落盘记分卡快照；渲染层只读快照，
     # 因此审计/docs 等其他渲染路径不会再被拖进一次全量结构扫描。
     # 已有审计产物时才先算分；没有产物时等回退审计产出后再算，避免空算一次。
-    sc_err = _refresh_card() if _has_audit_artifacts(pp) else ""
+    refreshed = _has_audit_artifacts(pp)
+    sc_err = _refresh_card() if refreshed else ""
     r, has_artifacts = Pipe().render_report(pp, output_dir=out)
     if not has_artifacts:
         r = Pipe().audit(pp, output_dir=out)
         # 审计刚产出新 findings：重算快照并只重渲染一次（render_report 不扫描），
         # 避免首页记分卡落后一轮。
+        sc_err = _refresh_card()
+        refreshed = True
+        r, _ = Pipe().render_report(pp, output_dir=out)
+    elif not refreshed:
+        # 只有图谱/Wiki、没有审计 findings 时也属于"有产物"：同样刷新一次，
+        # 页面此前用的是旧/空快照，需要重渲染一次才对得上。
         sc_err = _refresh_card()
         r, _ = Pipe().render_report(pp, output_dir=out)
     hr = getattr(r, "html_report", None) or {}
