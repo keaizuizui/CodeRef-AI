@@ -297,6 +297,88 @@ hr { border:none; border-top:1px solid #2a2d3a; margin:14px 0; }
 .footer { text-align:center; color:#6b7280; font-size:12px; padding:16px 0; }
 """
 
+# ── 评估台（v5.17）专用样式：四 Tab + 记分卡 ──
+_CONSOLE_CSS = """
+.tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
+.tab-btn { cursor:pointer; padding:8px 18px; background:#1a1d2e; border:1px solid #2a2d3a;
+  border-radius:8px; color:#c9cdd4; font-size:13px; font-family:inherit; }
+.tab-btn:hover { border-color:#3b82f6; color:#f1f5f9; }
+.tab-btn.active { border-color:#3b82f6; background:#1e2234; color:#f1f5f9; }
+.tab-panel { display:none; }
+.tab-panel.active { display:block; }
+.sc-hero { display:flex; align-items:center; gap:28px; flex-wrap:wrap; }
+.sc-num { font-size:44px; font-weight:800; color:#f1f5f9; line-height:1; }
+.sc-grade { font-size:22px; font-weight:700; padding:6px 18px; border-radius:10px;
+  background:#1e2234; border:1px solid #2a2d3a; color:#6ee7b7; }
+.sc-meta { font-size:12px; color:#9ca3af; }
+.sc-note { font-size:12px; color:#9ca3af; }
+"""
+
+# ── 评估台交互：Tab 切换 + 记分卡刷新（离线时如实提示，不假装成功） ──
+_CONSOLE_JS = """
+<script>
+(function(){
+  var btns = document.querySelectorAll('.tab-btn[data-tab]');
+  function show(k){
+    btns.forEach(function(b){ b.classList.toggle('active', b.getAttribute('data-tab') === k); });
+    document.querySelectorAll('.tab-panel').forEach(function(p){
+      p.classList.toggle('active', p.id === 'panel-' + k);
+    });
+  }
+  btns.forEach(function(b){
+    b.addEventListener('click', function(){ show(b.getAttribute('data-tab')); });
+  });
+})();
+function scEsc(s){
+  return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+function scApply(j){
+  var ov = document.getElementById('sc-overall');
+  if (ov) ov.innerHTML = (j.overall === null || j.overall === undefined) ? 'N/A'
+    : scEsc(j.overall) + '<span style="font-size:14px;color:#6b7280">/100</span>';
+  var g = document.getElementById('sc-grade');
+  if (g) g.textContent = j.grade || 'N/A';
+  var m = document.getElementById('sc-meta');
+  if (m) m.textContent = '置信度 ' + (j.confidence || '-') + ' · 证据覆盖 '
+    + Math.round((j.coverage || 0) * 100) + '%';
+  var rows = (j.dimensions || []).map(function(d){
+    var s = d.status === 'ok' ? ('<strong>' + scEsc(d.score) + '</strong>')
+      : (d.status === 'not_applicable'
+        ? '<span class="badge badge-missing">不适用</span>'
+        : '<span class="badge badge-missing">证据不足</span>');
+    var raw = Object.keys(d.raw || {}).map(function(k){
+      return scEsc(k) + '=' + scEsc(d.raw[k]);
+    }).join(' · ');
+    var ev = (d.evidence || []).map(scEsc).join('、');
+    return '<tr><td>' + scEsc(d.name) + '</td><td>' + scEsc(d.weight) + '</td><td>' + s
+      + '</td><td>' + raw + '</td><td>' + ev + '</td><td>' + scEsc(d.source_tool || '') + '</td></tr>';
+  }).join('');
+  var rb = document.getElementById('sc-rows');
+  if (rb) rb.innerHTML = rows;
+  var nb = document.getElementById('sc-notes');
+  if (nb) nb.innerHTML = (j.notes || []).map(function(n){
+    return '<p class="sc-note">' + scEsc(n) + '</p>';
+  }).join('');
+  var stamp = document.getElementById('sc-stamp');
+  if (stamp) stamp.textContent = '评估时间 ' + (j.generated_at || '');
+}
+function scRefresh(){
+  var st = document.getElementById('sc-status');
+  fetch('/api/scorecard?refresh=1', {cache:'no-store'}).then(function(r){
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(function(j){
+    scApply(j);
+    if (st) st.textContent = '已重新评估（本地服务）';
+  }).catch(function(){
+    if (st) st.textContent = '离线快照：未连接本地评估服务，无法重新评估（用 coderef_report open_server=true 打开）';
+  });
+}
+</script>
+"""
+
 
 def _page(title: str, body: str, nav_links: str, project_name: str) -> str:
     return f"""<!DOCTYPE html>
@@ -305,7 +387,7 @@ def _page(title: str, body: str, nav_links: str, project_name: str) -> str:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{_esc(title)} - {_esc(project_name)}</title>
-<style>{_BASE_CSS}</style>
+<style>{_BASE_CSS}{_CONSOLE_CSS}</style>
 </head>
 <body>
 <div class="wrap">
@@ -375,7 +457,10 @@ class HtmlReportRenderer:
             results["audit.html"] = self._render_audit(pipe_result, dimension_states)
             results["kg.html"] = self._render_kg(kg_stats, dimension_states)
             results["wiki.html"] = self._render_wiki(wiki_dir, dimension_states)
-            results["index.html"] = self._render_index(pipe_result, kg_stats, wiki_dir, dimension_states)
+            results["index.html"] = self._render_index(
+                pipe_result, kg_stats, wiki_dir, dimension_states,
+                scorecard=self._compute_scorecard(),
+                arch_link=self._latest_arch_link(out))
         except Exception as e:
             return {"ok": False, "error": str(e), "files": []}
 
@@ -391,6 +476,32 @@ class HtmlReportRenderer:
 
         return {"ok": True, "index": os.path.join(out, "index.html"),
                 "files": written}
+
+    # ─── 评估台支撑 ───
+
+    def _compute_scorecard(self) -> dict:
+        """计算记分卡快照（失败不阻塞报告渲染，页面如实展示失败原因）。"""
+        try:
+            from core.scorecard import compute
+            return compute(self.project_path, write=True)
+        except Exception as e:  # noqa: BLE001
+            return {"error": str(e)}
+
+    def _latest_arch_link(self, out_dir: str) -> str:
+        """定位最新一张业务架构画布，返回相对 index.html 的链接（无则空串）。"""
+        d = os.path.join(self.project_path, ".coderef")
+        try:
+            files = sorted(f for f in os.listdir(d)
+                           if f.startswith("arch_canvas_") and f.endswith(".html"))
+        except Exception:  # noqa: BLE001
+            return ""
+        if not files:
+            return ""
+        try:
+            rel = os.path.relpath(os.path.join(d, files[-1]), out_dir)
+            return rel.replace(os.sep, "/")
+        except Exception:  # noqa: BLE001
+            return ""
 
     # ─── 各类渲染 ───
 
@@ -433,7 +544,8 @@ class HtmlReportRenderer:
                     f'<p><a href="wiki.html#{_attr(rel)}">{_esc(name)}</a></p>')
         return links
 
-    def _render_index(self, pr, kg_stats, wiki_dir, dimension_states=None) -> str:
+    def _render_index(self, pr, kg_stats, wiki_dir, dimension_states=None,
+                      scorecard=None, arch_link="") -> str:
         dims = dimension_states or {}
         audit_d = dims.get("audit") or {}
         kg_d = dims.get("kg") or {}
@@ -511,30 +623,131 @@ class HtmlReportRenderer:
             note += f"<p>审计范围：{_esc(scope)}</p>"
         note += "</section>"
 
-        # 业务视角优先：首页先展示业务概览摘要，技术统计降级为支撑信息
-        body = ""
+        # ── 概览面板：记分卡（首位）+ 评估标准 + 既有业务/技术概览 ──
+        overview = self._scorecard_html(scorecard) + self._method_html(scorecard)
         overview_summary = self._read_overview_summary(wiki_dir)
         if overview_summary:
-            body += (f'<section class="biz-hero"><h2>业务视角 <span class="badge badge-ok">优先阅读</span></h2>'
-                     f'<p>{_esc(overview_summary)}…</p>'
-                     f'<p><a href="wiki.html#grp-业务视角">前往业务概览 →</a></p></section>')
+            overview += (f'<section class="biz-hero"><h2>业务视角 <span class="badge badge-ok">优先阅读</span></h2>'
+                         f'<p>{_esc(overview_summary)}…</p>'
+                         f'<p><a href="wiki.html#grp-业务视角">前往业务概览 →</a></p></section>')
 
         # 公共入口 / 数据流清单（分层人话版的入口级 L1、数据流级 L2）
         entry_links = self._list_wiki_group(wiki_dir, "ENTRIES")
         flow_links = self._list_wiki_group(wiki_dir, "FLOWS")
         if entry_links:
-            body += (f'<section><h2>公共入口 <span class="badge badge-ok">{len(entry_links)} 个</span></h2>'
-                     f'<p>每个入口的流程人话版，直接回答"这个入口是做什么、怎么做"。</p>'
-                     f'{"".join(entry_links)}</section>')
+            overview += (f'<section><h2>公共入口 <span class="badge badge-ok">{len(entry_links)} 个</span></h2>'
+                         f'<p>每个入口的流程人话版，直接回答"这个入口是做什么、怎么做"。</p>'
+                         f'{"".join(entry_links)}</section>')
         if flow_links:
-            body += (f'<section><h2>模块数据流 <span class="badge badge-ok">{len(flow_links)} 条</span></h2>'
-                     f'<p>模块之间如何传递数据，直接回答"谁向谁要东西"。</p>'
-                     f'{"".join(flow_links)}</section>')
+            overview += (f'<section><h2>模块数据流 <span class="badge badge-ok">{len(flow_links)} 条</span></h2>'
+                         f'<p>模块之间如何传递数据，直接回答"谁向谁要东西"。</p>'
+                         f'{"".join(flow_links)}</section>')
 
-        body += '<section><h2>报告章节</h2>' + "".join(secs) + "</section>"
-        body += '<section><h2>技术概览</h2><p class="empty">以下为代码级统计，业务理解请以上方业务视角为主。</p>' \
-                + cards + '</section>' + note
-        return _page("CodeRef 审计报告", body, _nav("index.html", self.project_name), self.project_name)
+        overview += '<section><h2>报告章节</h2>' + "".join(secs) + "</section>"
+        overview += '<section><h2>技术概览</h2><p class="empty">以下为代码级统计，业务理解请以上方业务视角为主。</p>' \
+                    + cards + '</section>' + note
+
+        # ── 架构面板：iframe 复用既有业务树画布（未生成则诚实占位） ──
+        if arch_link:
+            arch = ('<section><h2>业务架构视图 <span class="badge badge-ok">已生成</span></h2>'
+                    '<p>业务树大白话图：入口层 → 主功能 → 子功能 → 步骤链；模块依赖只作为编程 AI 的数据。</p>'
+                    f'<iframe src="{_attr(arch_link)}" style="width:100%;height:78vh;'
+                    'border:1px solid #2a2d3a;border-radius:8px;background:#0f1117"></iframe></section>')
+        else:
+            arch = ('<section><h2>业务架构视图 <span class="badge badge-missing">未生成</span></h2>'
+                    '<p class="empty">尚无架构画布产物：请先调用 coderef_arch_canvas（open_server=true 可直接推送），'
+                    '生成后刷新本页即可内嵌。</p></section>')
+
+        product = ('<section><h2>产品评估 <span class="badge badge-missing">下一版</span></h2>'
+                   '<p class="empty">v5.17.1 接入：产品证据包 + 六维评判 + 三档结论（值得做/先验证/不建议）。'
+                   '本版不输出任何产品结论，避免用占位内容误导决策。</p></section>')
+        ux = ('<section><h2>UX 人格走查 <span class="badge badge-missing">下一版</span></h2>'
+              '<p class="empty">v5.18.0 接入：目标人格 + 走查剧本 + 生存分 + 愤怒地图；'
+              '每条发现必须带静态证据锚点，全部标注 simulated=true。</p></section>')
+
+        body = self._console_shell(overview, arch, product, ux)
+        return _page("项目评估台", body, _nav("index.html", self.project_name), self.project_name)
+
+    # ─── 评估台：记分卡 / 评估标准 / Tab 外壳 ───
+
+    def _scorecard_html(self, card: Optional[dict]) -> str:
+        card = card or {}
+        if card.get("error"):
+            return ('<section><h2>健康记分卡 <span class="badge badge-missing">计算失败</span></h2>'
+                    f'<p class="empty">{_esc(card["error"])}</p></section>')
+        if not card.get("dimensions"):
+            return ('<section><h2>健康记分卡 <span class="badge badge-missing">未生成</span></h2>'
+                    '<p class="empty">暂无记分卡数据。</p></section>')
+
+        overall = card.get("overall")
+        num = ('N/A' if overall is None else
+               f'{overall}<span style="font-size:14px;color:#6b7280">/100</span>')
+        rows = []
+        for d in card.get("dimensions") or []:
+            status = d.get("status")
+            if status == "ok":
+                s = f'<strong>{d.get("score")}</strong>'
+            elif status == "not_applicable":
+                s = '<span class="badge badge-missing">不适用</span>'
+            else:
+                s = '<span class="badge badge-missing">证据不足</span>'
+            raw_items = [f'{k}={v}' for k, v in (d.get("raw") or {}).items()
+                         if v not in ("", None)][:6]
+            rows.append(
+                f'<tr><td>{_esc(d.get("name", d.get("id", "")))}</td>'
+                f'<td>{d.get("weight", "")}</td><td>{s}</td>'
+                f'<td>{_esc(" · ".join(raw_items))}</td>'
+                f'<td>{_esc("、".join(d.get("evidence") or []))}</td>'
+                f'<td>{_esc(d.get("source_tool", ""))}</td></tr>')
+        notes = "".join(f'<p class="sc-note">{_esc(n)}</p>' for n in card.get("notes") or [])
+        return (
+            '<section><h2>健康记分卡 <span class="badge badge-ok">确定性聚合</span></h2>'
+            '<div class="sc-hero">'
+            f'<div class="sc-num" id="sc-overall">{num}</div>'
+            f'<div class="sc-grade" id="sc-grade">{_esc(card.get("grade", "N/A"))}</div>'
+            '<div><div class="sc-meta" id="sc-meta">'
+            f'置信度 {_esc(card.get("confidence", "-"))} · 证据覆盖 {int(round((card.get("coverage") or 0) * 100))}%'
+            '</div>'
+            f'<div class="sc-meta" id="sc-stamp">评估时间 {_esc(card.get("generated_at", ""))}</div></div>'
+            '<button class="tab-btn" onclick="scRefresh()">重新评估</button>'
+            '<span class="sc-note" id="sc-status">离线快照（重新评估需经 coderef_report open_server 打开）</span>'
+            '</div>'
+            '<table style="margin-top:18px"><thead><tr>'
+            '<th>维度</th><th>权重</th><th>得分</th><th>原始分项</th><th>证据锚点</th><th>来源工具</th>'
+            '</tr></thead><tbody id="sc-rows">' + "".join(rows) + '</tbody></table>'
+            f'<div id="sc-notes" style="margin-top:12px">{notes}</div></section>')
+
+    def _method_html(self, card: Optional[dict]) -> str:
+        """评估标准面板：把"按什么标准评、权重多少"摊开，避免黑箱打分。"""
+        dims = (card or {}).get("dimensions") or []
+        if not dims:
+            return ""
+        rows = "".join(
+            f'<tr><td>{_esc(d.get("name", ""))}</td><td>{d.get("weight", "")}</td>'
+            f'<td>{_esc(d.get("desc", ""))}</td><td>{_esc(d.get("source_tool", ""))}</td></tr>'
+            for d in dims)
+        gate = (card or {}).get("gate") or {}
+        return (
+            '<section><h2>评估标准 <span class="badge badge-ok">可调</span></h2>'
+            '<p class="sc-note">权重默认写在 core/scorecard_weights.json；项目级覆盖写 '
+            '<code>.coderef/eval_config.json</code>。证据不足的维度标"证据不足"，'
+            '不计入总分，也不会被当作 0 分。</p>'
+            '<table><thead><tr><th>维度</th><th>权重</th><th>口径</th><th>来源工具</th></tr></thead>'
+            f'<tbody>{rows}</tbody></table>'
+            f'<p class="sc-note" style="margin-top:10px">阈值：最低分 '
+            f'{gate.get("min_score", "")}（CI 默认只告警，显式开启才阻断）</p></section>')
+
+    @staticmethod
+    def _console_shell(overview: str, arch: str, product: str, ux: str) -> str:
+        tabs = [("overview", "概览"), ("arch", "架构"), ("product", "产品"), ("ux", "UX")]
+        bar = "".join(
+            f'<button class="tab-btn{" active" if i == 0 else ""}" data-tab="{k}">{label}</button>'
+            for i, (k, label) in enumerate(tabs))
+        panels = (f'<div class="tab-panel active" id="panel-overview">{overview}</div>'
+                  f'<div class="tab-panel" id="panel-arch">{arch}</div>'
+                  f'<div class="tab-panel" id="panel-product">{product}</div>'
+                  f'<div class="tab-panel" id="panel-ux">{ux}</div>')
+        return f'<div class="tabs">{bar}</div>{panels}{_CONSOLE_JS}'
 
     def _render_audit(self, pr, dimension_states=None) -> str:
         aname = self.project_name

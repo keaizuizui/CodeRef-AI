@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.16.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.17.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -244,7 +244,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 | `coderef_query` | 知识图谱结构化查询（9 种查询类型） | 否 |
 | `coderef_review` | 代码审查：diff 变更审查 / 新项目全量语义首查 | 是 |
 | `coderef_frontend` | 前端交互审查（按钮/菜单静态枚举 + 6 维度审查） | 是 |
-| `coderef_report` | 聚合审计/图谱/Wiki 为自包含 HTML 报告目录 | 否 |
+| `coderef_report` | 聚合审计/图谱/Wiki 为自包含 HTML，`index.html` 即「项目评估台」（四 Tab + 健康记分卡；`open_server` 起回环服务） | 否 |
 | `coderef_audit_advisor` | 审计策略判定（增量/全量）+ 重点维度 | 可选 |
 | `coderef_whitelist` | 白名单管理 + 核心模块规则配置 | 否 |
 | `coderef_task_status` | 后台任务状态查询 | 否 |
@@ -411,7 +411,16 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 > 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.14.3）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.16.0 — 架构画布方向调整：业务架构大白话图
+### 当前版本 v5.17.0 — 项目评估台：聚合层 + 健康记分卡 + 回环轻后端
+
+> 承接用户 2026-11-04 反馈（"没必要单独给用户出聚合……skill 也应该内置在网页中"）：不新增第二份聚合报告，把聚合长进既有报告页，`index.html` 升级为**唯一用户入口「项目评估台」**；记分卡以页面 Tab + `.coderef/scorecard.json` 旁路产物呈现；页面自带仅回环的轻后端，点按钮即可评估，不依赖 AI 在旁。
+> - **评估台四 Tab**：概览（健康记分卡 + 评估标准）/ 架构（内嵌业务树画布）/ 产品 / UX（后两者 P0 只占位，不产出假结论）。
+> - **健康记分卡**（`core/scorecard.py`）：结构健康 / 架构对齐 / 审计发现 / 治理闭环 / 文档覆盖，全部确定性聚合、无 LLM；**证据不足标 unknown，不写 0 也不给满分**；无代码项目按 U-46 口径整体 `N/A`。
+> - **权重外置**：`core/scorecard_weights.json` 默认值 + 项目级 `.coderef/eval_config.json` 覆盖，页面「评估标准」面板把口径摊开。
+> - **回环轻后端**（`core/report_console.py`）：`GET /api/scorecard`、`GET /api/health`、`POST /api/config`；`POST /api/evaluate` 本版固定 501。仅回环绑定、项目路径服务端固定、无 CORS、POST 需同源 + JSON + 一次性 token、请求体 64KB 上限。
+> - **CI 门禁**：新增 `coderef-gate.yml`，`python -m core.scorecard --json`，默认 warn，仓库变量显式开启才阻断。
+
+### 历史版本 v5.16.0 — 架构画布方向调整：业务架构大白话图
 
 > 承接用户 2026-09-21 反馈（模块图"没眼看"，给出「选品工作台」业务层级样例）：用户端画布从模块依赖图改为**业务架构大白话图**（入口 → 主功能 → 子功能 → 步骤链）；AI 自动归纳 + LLM 辅助大白话，人工在 skill 确认门确认框架；模块图降级为编程 AI 数据结构。版本按 SOP 升 minor（5.15.0 → 5.16.0）。
 > - **业务架构树自动归纳**（`core/arch_framework.py`）：入口层 + 主功能域 + 子功能 + 关联模块，确定性骨架；**LLM 辅助大白话**缺 key 静态兜底不编造。

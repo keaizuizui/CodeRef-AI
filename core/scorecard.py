@@ -1,0 +1,556 @@
+# -*- coding: utf-8 -*-
+"""scorecard — 项目健康记分卡（v5.17.0，确定性聚合，无 LLM）。
+
+把分散在 arch_audit / arch_gap / audit_findings / governance.db / Wiki 产物里的
+结论聚合成「一句话结论 + 一页分数」，供：
+  - 评估台页面「概览」Tab 直接展示；
+  - `<project>/.coderef/scorecard.json` 作为机器可读旁路，供 CI 与编程 AI 消费。
+
+诚实边界（与 coderef_eval 的 SKIP 硬阻断风格一致）：
+  - 证据不足的维度标 `status="unknown"`、`score=None`，**不写 0、不给满分**；
+  - 无代码项目（U-46 口径）整体 `overall=None`、`grade="N/A"`；
+  - 权重来自 `core/scorecard_weights.json`，项目级 `.coderef/eval_config.json` 可覆盖；
+  - 同输入两次结果一致（`generated_at` 不参与判等）。
+"""
+
+import argparse
+import json
+import os
+import sys
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from loguru import logger
+
+from core.version import __version__
+
+_WEIGHTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "scorecard_weights.json")
+
+_FALLBACK_CONFIG: Dict[str, Any] = {
+    "version": "5.17.0",
+    "dimensions": [
+        {"id": "structure", "name": "结构健康", "weight": 0.25,
+         "desc": "循环依赖、上帝模块、超规模模块、分层违例",
+         "source_tool": "coderef_arch_audit"},
+        {"id": "alignment", "name": "架构对齐", "weight": 0.20,
+         "desc": "目标架构的角色覆盖度与模块归属度",
+         "source_tool": "coderef_arch_gap"},
+        {"id": "findings", "name": "审计发现", "weight": 0.25,
+         "desc": "全维度审计发现按严重度加权扣分",
+         "source_tool": "coderef_audit"},
+        {"id": "governance", "name": "治理闭环", "weight": 0.15,
+         "desc": "治理库未结工作项与逾期项",
+         "source_tool": "coderef_gov_report"},
+        {"id": "docs", "name": "文档覆盖", "weight": 0.15,
+         "desc": "Wiki 文档对代码模块的覆盖率",
+         "source_tool": "coderef_docs"},
+    ],
+    "thresholds": {"min_score": 60, "fail_on_below": False},
+    "grades": {"A": 85, "B": 70, "C": 55},
+}
+
+
+# ────────────────────────────────────────────────────────────────
+# 配置加载与校验
+# ────────────────────────────────────────────────────────────────
+
+def _load_json(path: str) -> Optional[dict]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _normalize_config(raw: dict) -> dict:
+    """校验并归一配置；非法权重/维度直接抛 ValueError（不静默吞掉）。"""
+    dims = raw.get("dimensions")
+    if not isinstance(dims, list) or not dims:
+        raise ValueError("配置缺少 dimensions 列表")
+    out_dims: List[dict] = []
+    total = 0.0
+    for d in dims:
+        if not isinstance(d, dict) or not d.get("id"):
+            raise ValueError("dimension 缺少 id")
+        w = d.get("weight")
+        if not isinstance(w, (int, float)) or isinstance(w, bool) or w < 0:
+            raise ValueError(f"dimension {d.get('id')} 的 weight 非法: {w!r}")
+        total += float(w)
+        out_dims.append({
+            "id": str(d["id"]),
+            "name": str(d.get("name") or d["id"]),
+            "weight": float(w),
+            "desc": str(d.get("desc") or ""),
+            "source_tool": str(d.get("source_tool") or ""),
+        })
+    if total <= 0:
+        raise ValueError("所有维度权重之和为 0，无法计算总分")
+
+    th = raw.get("thresholds") or {}
+    min_score = th.get("min_score", 60)
+    if not isinstance(min_score, (int, float)) or isinstance(min_score, bool):
+        raise ValueError(f"thresholds.min_score 非法: {min_score!r}")
+    grades = raw.get("grades") or {}
+    for k in ("A", "B", "C"):
+        v = grades.get(k)
+        if v is not None and (not isinstance(v, (int, float)) or isinstance(v, bool)):
+            raise ValueError(f"grades.{k} 非法: {v!r}")
+
+    return {
+        "version": str(raw.get("version") or "5.17.0"),
+        "dimensions": out_dims,
+        "thresholds": {
+            "min_score": float(min_score),
+            "fail_on_below": bool(th.get("fail_on_below", False)),
+        },
+        "grades": {k: float(grades.get(k, _FALLBACK_CONFIG["grades"][k]))
+                   for k in ("A", "B", "C")},
+    }
+
+
+def default_config() -> dict:
+    """入库默认配置；文件缺失/损坏时用内置兜底（不阻断）。"""
+    raw = _load_json(_WEIGHTS_FILE)
+    if raw is None:
+        logger.warning("[scorecard] scorecard_weights.json 不可用，使用内置兜底权重")
+        return _normalize_config(_FALLBACK_CONFIG)
+    try:
+        return _normalize_config(raw)
+    except Exception as e:
+        logger.warning(f"[scorecard] 默认权重非法，使用内置兜底: {e}")
+        return _normalize_config(_FALLBACK_CONFIG)
+
+
+def _config_path(project_path: str) -> str:
+    return os.path.join(os.path.abspath(project_path), ".coderef", "eval_config.json")
+
+
+def load_config(project_path: str) -> dict:
+    """项目级覆盖 > 入库默认 > 内置兜底。覆盖只按维度 id 改权重/阈值，不改维度集合。"""
+    cfg = default_config()
+    over = _load_json(_config_path(project_path))
+    if not isinstance(over, dict):
+        return cfg
+    weights = over.get("weights")
+    if isinstance(weights, dict):
+        by_id = {d["id"]: d for d in cfg["dimensions"]}
+        for did, w in weights.items():
+            if did in by_id and isinstance(w, (int, float)) and not isinstance(w, bool) and w >= 0:
+                by_id[did]["weight"] = float(w)
+    th = over.get("thresholds")
+    if isinstance(th, dict):
+        ms = th.get("min_score")
+        if isinstance(ms, (int, float)) and not isinstance(ms, bool):
+            cfg["thresholds"]["min_score"] = float(ms)
+        if isinstance(th.get("fail_on_below"), bool):
+            cfg["thresholds"]["fail_on_below"] = th["fail_on_below"]
+    return cfg
+
+
+def save_config(project_path: str, payload: dict) -> dict:
+    """保存项目级覆盖（只写 weights/thresholds）；非法输入抛 ValueError。"""
+    if not isinstance(payload, dict):
+        raise ValueError("配置必须是 JSON 对象")
+    weights = payload.get("weights") or {}
+    thresholds = payload.get("thresholds") or {}
+    if not isinstance(weights, dict) or not isinstance(thresholds, dict):
+        raise ValueError("weights / thresholds 必须是对象")
+
+    cfg = default_config()
+    known = {d["id"] for d in cfg["dimensions"]}
+    clean_w: Dict[str, float] = {}
+    for did, w in weights.items():
+        if did not in known:
+            raise ValueError(f"未知维度 id: {did!r}（可选: {sorted(known)}）")
+        if not isinstance(w, (int, float)) or isinstance(w, bool) or w < 0:
+            raise ValueError(f"维度 {did} 的 weight 非法: {w!r}")
+        clean_w[did] = float(w)
+    clean_th: Dict[str, Any] = {}
+    if "min_score" in thresholds:
+        ms = thresholds["min_score"]
+        if not isinstance(ms, (int, float)) or isinstance(ms, bool):
+            raise ValueError(f"min_score 非法: {ms!r}")
+        clean_th["min_score"] = float(ms)
+    if "fail_on_below" in thresholds:
+        if not isinstance(thresholds["fail_on_below"], bool):
+            raise ValueError("fail_on_below 必须是布尔值")
+        clean_th["fail_on_below"] = thresholds["fail_on_below"]
+
+    merged = {"weights": clean_w, "thresholds": clean_th}
+    path = _config_path(project_path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(merged, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+    return {"saved": True, "path": path, "config": merged}
+
+
+# ────────────────────────────────────────────────────────────────
+# 维度计算（全部确定性，不依赖 LLM）
+# ────────────────────────────────────────────────────────────────
+
+def _dim(dim_id: str, score: Optional[float], status: str,
+         raw: Optional[dict] = None, evidence: Optional[list] = None,
+         reason: str = "") -> dict:
+    d = {
+        "id": dim_id,
+        "score": None if score is None else int(round(score)),
+        "status": status,
+        "raw": raw or {},
+        "evidence": evidence or [],
+    }
+    if reason:
+        d["reason"] = reason
+    return d
+
+
+def _unknown(dim_id: str, reason: str, raw: Optional[dict] = None,
+             evidence: Optional[list] = None) -> dict:
+    return _dim(dim_id, None, "unknown", raw, evidence, reason)
+
+
+def _not_applicable(dim_id: str, reason: str, raw: Optional[dict] = None) -> dict:
+    return _dim(dim_id, None, "not_applicable", raw, [], reason)
+
+
+def _rel(project_path: str, path: str) -> str:
+    try:
+        return os.path.relpath(path, project_path).replace(os.sep, "/")
+    except Exception:
+        return path
+
+
+def _find_findings_json(project_path: str) -> Optional[str]:
+    """定位落盘的审计 findings JSON（项目侧，优先带项目哈希的版本）。"""
+    try:
+        from core.pr_whitelist import _phash
+        fname = f"audit_findings_{_phash(project_path)}.json"
+    except Exception:
+        fname = "audit_findings.json"
+    candidates = [
+        os.path.join(project_path, "coderef-report", fname),
+        os.path.join(project_path, ".coderef", fname),
+        os.path.join(project_path, "coderef-report", "audit_findings.json"),
+        os.path.join(project_path, ".coderef", "audit_findings.json"),
+    ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _dim_structure(project_path: str) -> dict:
+    from core.arch_audit import audit, locate_kg_db
+
+    try:
+        a = audit(project_path)
+    except Exception as e:
+        return _unknown("structure", f"架构诊断执行失败: {e}")
+    gs = a.get("graph_stats") or {}
+    if not gs.get("has_kg"):
+        return _unknown("structure",
+                        "未找到知识图谱，请先运行 coderef_architecture 或 coderef_memory(action=sync)")
+    s = a.get("summary") or {}
+    raw = {
+        "modules": gs.get("modules", 0),
+        "cycles": s.get("cycles", 0),
+        "god_modules": s.get("god_modules", 0),
+        "layer_violations": s.get("layer_violations", 0),
+        "large_modules": s.get("large_modules", 0),
+        "function_recursions": s.get("function_recursions", 0),
+    }
+    if s.get("health") is None:
+        return _not_applicable("structure",
+                              "无代码可评（无非测试代码模块；健康度不适用）", raw)
+    db = locate_kg_db(project_path)
+    return _dim("structure", float(s["health"]) * 10, "ok", raw,
+                [_rel(project_path, db)] if db else [])
+
+
+def _dim_alignment(project_path: str) -> dict:
+    from core.arch_gap_analyzer import analyze_gap
+
+    ta = _load_json(os.path.join(project_path, ".coderef", "target_arch.json"))
+    if not ta:
+        return _unknown("alignment", "未定义目标架构，请先运行 coderef_target_arch_set")
+    try:
+        r = analyze_gap(project_path, ta)
+    except Exception as e:
+        return _unknown("alignment", f"差距分析执行失败: {e}")
+    al = r.get("alignment")
+    if not isinstance(al, dict) or not al:
+        # 无知识图谱时 analyze_gap 返回空 alignment（不是 0 分），必须标 unknown
+        return _unknown("alignment", str(r.get("summary") or "差距分析未产出对齐度"))
+    ma = float(al.get("module_assigned", 0) or 0)
+    rc = float(al.get("role_coverage", 0) or 0)
+    gaps = r.get("gaps") or []
+    high = sum(1 for g in gaps
+               if str(g.get("severity") or "").lower() == "high")
+    raw = {"module_assigned": round(ma, 2), "role_coverage": round(rc, 2),
+           "gaps": len(gaps), "high_gaps": high}
+    return _dim("alignment", (ma * 0.6 + rc * 0.4) * 100, "ok", raw,
+                [".coderef/target_arch.json"])
+
+
+def _finding_anchor(project_path: str, f: dict) -> str:
+    """把审计发现的 file_path 归一成项目相对锚点（`rel#L行号`），目录级/项目外跳过。"""
+    fp = str(f.get("file_path") or "")
+    if not fp:
+        return ""
+    if os.path.isabs(fp) and os.path.isdir(fp):
+        return ""  # 目录级发现没有行锚点
+    rel = _rel(project_path, fp) if os.path.isabs(fp) else fp.replace("\\", "/")
+    if rel.startswith(".."):
+        return ""
+    ln = f.get("line") or 0
+    return f"{rel}#L{int(ln)}" if ln else rel
+
+
+def _dim_findings(project_path: str) -> dict:
+    fp = _find_findings_json(project_path)
+    if not fp:
+        return _unknown("findings", "未找到 audit_findings 产物，请先运行 coderef_audit")
+    data = _load_json(fp)
+    if not isinstance(data, dict):
+        return _unknown("findings", "audit_findings 产物无法解析")
+    findings = data.get("findings") or []
+    h = m = lo = 0
+    evidence: List[str] = []
+    for f in findings:
+        if not isinstance(f, dict) or str(f.get("kind") or "") == "advice":
+            continue
+        tier = str(f.get("tier") or "low").lower()
+        if tier == "high":
+            h += 1
+        elif tier == "medium":
+            m += 1
+        else:
+            lo += 1
+        if tier in ("high", "medium") and len(evidence) < 3:
+            anchor = _finding_anchor(project_path, f)
+            if anchor:
+                evidence.append(anchor)
+    score = max(0, 100 - h * 8 - m * 3 - lo * 1)
+    raw = {"high": h, "medium": m, "low": lo,
+           "total_files": data.get("total_files", 0),
+           "scan_ts": data.get("scan_ts", "")}
+    return _dim("findings", score, "ok", raw, evidence)
+
+
+def _dim_governance(project_path: str) -> dict:
+    from core.governance_store import GovernanceStore, gov_db_path
+
+    db = gov_db_path(project_path)
+    if not os.path.exists(db):
+        return _unknown("governance", "未建立治理库，请先运行 coderef_gov_start")
+    try:
+        store = GovernanceStore(project_path)
+        issues = store.list_issues(view="open", limit=500)
+        overdue = store.list_issues(view="overdue", limit=500)
+    except Exception as e:
+        return _unknown("governance", f"治理库读取失败: {e}")
+    high = sum(1 for i in issues if str(i.get("severity") or "").lower() == "high")
+    score = max(0, 100 - high * 10 - (len(issues) - high) * 3 - len(overdue) * 2)
+    raw = {"open": len(issues), "high": high, "overdue": len(overdue)}
+    return _dim("governance", score, "ok", raw, [_rel(project_path, db)])
+
+
+def _dim_docs(project_path: str, module_total: int) -> dict:
+    from core.pr_whitelist import _count_md, _detect_wiki_dir
+
+    wiki_dir = _detect_wiki_dir(project_path)
+    if not wiki_dir:
+        return _unknown("docs", "未生成 Wiki 文档，请先运行 coderef_docs")
+    md = _count_md(wiki_dir)
+    if md <= 0:
+        return _unknown("docs", "Wiki 目录存在但没有 Markdown 文档")
+    if module_total <= 0:
+        return _unknown("docs", "缺少代码模块数（需先建知识图谱），无法计算文档覆盖率",
+                        {"md_files": md})
+    score = min(100, md / module_total * 100)
+    raw = {"md_files": md, "modules": module_total}
+    return _dim("docs", score, "ok", raw, [_rel(project_path, wiki_dir)])
+
+
+# ────────────────────────────────────────────────────────────────
+# 聚合
+# ────────────────────────────────────────────────────────────────
+
+def _grade(overall: Optional[float], grades: dict) -> str:
+    if overall is None:
+        return "N/A"
+    if overall >= grades["A"]:
+        return "A"
+    if overall >= grades["B"]:
+        return "B"
+    if overall >= grades["C"]:
+        return "C"
+    return "D"
+
+
+def compute(project_path: str, config: Optional[dict] = None,
+            write: bool = False) -> dict:
+    """计算记分卡（确定性）。write=True 时落盘 `<project>/.coderef/scorecard.json`。"""
+    project_path = os.path.abspath(project_path)
+    cfg = config or load_config(project_path)
+    meta = {d["id"]: d for d in cfg["dimensions"]}
+
+    structure = _dim_structure(project_path)
+    module_total = int((structure.get("raw") or {}).get("modules") or 0)
+    results = {
+        "structure": structure,
+        "alignment": _dim_alignment(project_path),
+        "findings": _dim_findings(project_path),
+        "governance": _dim_governance(project_path),
+        "docs": _dim_docs(project_path, module_total),
+    }
+
+    no_code = structure.get("status") == "not_applicable"
+    dims: List[dict] = []
+    known: List[dict] = []
+    total_w = 0.0
+    for did, m in meta.items():
+        d = results.get(did) or _unknown(did, "维度未实现")
+        d["name"] = m["name"]
+        d["desc"] = m["desc"]
+        d["source_tool"] = m["source_tool"]
+        d["weight"] = m["weight"]
+        dims.append(d)
+        total_w += m["weight"]
+        if d["status"] == "ok" and d["score"] is not None:
+            known.append(d)
+
+    coverage = (sum(d["weight"] for d in known) / total_w) if total_w else 0.0
+    if no_code or not known:
+        overall = None
+    else:
+        wsum = sum(d["weight"] for d in known)
+        overall = round(sum(d["score"] * d["weight"] for d in known) / wsum)
+
+    if overall is None:
+        confidence = "low"
+    elif coverage >= 0.8:
+        confidence = "high"
+    elif coverage >= 0.5:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    notes: List[str] = []
+    if no_code:
+        notes.append("无代码可评：按 U-46 口径不给整体健康分（N/A）")
+    for d in dims:
+        if d["status"] == "unknown":
+            notes.append(f"{d['name']}：{d.get('reason', '证据不足')}")
+    if overall is not None and coverage < 0.8:
+        notes.append(f"证据覆盖率 {coverage:.0%}，总分只代表已知维度")
+
+    th = cfg["thresholds"]
+    gate = {
+        "min_score": th["min_score"],
+        "pass": None if overall is None else overall >= th["min_score"],
+    }
+
+    card = {
+        "version": __version__,
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "project": os.path.basename(project_path.rstrip(os.sep)),
+        "no_code": no_code,
+        "overall": overall,
+        "grade": _grade(overall, cfg["grades"]),
+        "confidence": confidence,
+        "coverage": round(coverage, 2),
+        "dimensions": dims,
+        "gate": gate,
+        "notes": notes,
+        "weights": {d["id"]: d["weight"] for d in dims},
+    }
+    if write:
+        out = os.path.join(project_path, ".coderef", "scorecard.json")
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        tmp = out + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(card, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, out)
+    return card
+
+
+# ────────────────────────────────────────────────────────────────
+# CLI（CI 门禁用）
+# ────────────────────────────────────────────────────────────────
+
+def _summary_text(card: dict) -> str:
+    if card["overall"] is None:
+        head = f"{card['project']}：健康分不适用（{card['grade']}）"
+    else:
+        head = (f"{card['project']}：{card['overall']}/100（{card['grade']} 级，"
+                f"置信度 {card['confidence']}，证据覆盖 {card['coverage']:.0%}）")
+    lines = [head]
+    for d in card["dimensions"]:
+        if d["status"] == "ok":
+            lines.append(f"  - {d['name']}: {d['score']}（权重 {d['weight']}）")
+        else:
+            lines.append(f"  - {d['name']}: {d['status']}"
+                         + (f"（{d.get('reason')}）" if d.get("reason") else ""))
+    if card["notes"]:
+        lines.append("  注意: " + "；".join(card["notes"]))
+    return "\n".join(lines)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="python -m core.scorecard",
+        description="项目健康记分卡（确定性聚合；CI 门禁用）")
+    ap.add_argument("--project", default=".", help="目标项目路径（默认当前目录）")
+    ap.add_argument("--json", action="store_true", help="以 JSON 输出")
+    ap.add_argument("--out", default="", help="scorecard.json 落盘路径（默认 <project>/.coderef/scorecard.json）")
+    ap.add_argument("--min-score", type=float, default=None, help="覆盖配置里的阈值")
+    ap.add_argument("--fail-on-below", action="store_true",
+                    help="低于阈值时退出码 1（默认 warn：只提示不阻断）")
+    args = ap.parse_args(argv)
+
+    pp = os.path.abspath(args.project)
+    if not os.path.isdir(pp):
+        print(f"[scorecard] 项目路径不存在: {pp}", file=sys.stderr)
+        return 2
+    try:
+        card = compute(pp, write=False)
+    except Exception as e:  # noqa: BLE001
+        print(f"[scorecard] 计算失败: {e}", file=sys.stderr)
+        return 2
+
+    if args.out:
+        out = os.path.abspath(args.out)
+    else:
+        out = os.path.join(pp, ".coderef", "scorecard.json")
+    try:
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        tmp = out + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(card, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, out)
+    except Exception as e:  # noqa: BLE001
+        print(f"[scorecard] 落盘失败: {e}", file=sys.stderr)
+
+    if args.json:
+        print(json.dumps(card, ensure_ascii=False, indent=2))
+    else:
+        print(_summary_text(card))
+
+    min_score = args.min_score
+    if min_score is None:
+        min_score = card["gate"]["min_score"]
+    overall = card["overall"]
+    if overall is None:
+        return 0
+    if overall < min_score:
+        msg = f"[scorecard] 低于阈值 {min_score}（当前 {overall}）"
+        print(msg, file=sys.stderr)
+        return 1 if args.fail_on_below else 0
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

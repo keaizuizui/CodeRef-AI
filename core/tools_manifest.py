@@ -254,14 +254,23 @@ BUILTIN_TOOLS: List[Dict] = [
         {
                         "name": "coderef_report",
                         "description": (
-                            "把审计报告 / 知识图谱 / Wiki 聚合成自包含 HTML 报告目录（解决没有有效前端的问题）。\n"
-                            "渲染到 output_dir（默认 coderef-report/html/）：index.html（概览+导航）/ audit.html / kg.html / wiki.html。\n"
+                            "把审计报告 / 知识图谱 / Wiki 聚合成自包含 HTML 报告目录，index.html 即「项目评估台」"
+                            "（唯一用户入口，v5.17 起）：\n"
+                            "四个 Tab——概览（健康记分卡 + 评估标准）/ 架构（内嵌业务树画布）/ 产品 / UX（后续版本）。\n"
+                            "记分卡为确定性聚合（结构健康/架构对齐/审计发现/治理闭环/文档覆盖），"
+                            "证据不足的维度标 unknown 不给 0 分；同时落盘 .coderef/scorecard.json 供 CI 与 AI 读取。\n"
+                            "audit.html / kg.html / wiki.html 仍作为概览 Tab 的详情页保留。\n"
                             "优先重渲染既有产物（图谱+Wiki，不重跑扫描，速度快）；若项目尚无审计/图谱产物，则回退为跑一次全量审计并渲染。\n"
-                            "返回 index.html 绝对路径与生成文件清单。"
+                            "open_server=true 时同时启动仅回环的本地评估台服务（GET /api/scorecard / POST /api/config；"
+                            "产品与 UX 场景的 /api/evaluate 在 v5.17.1/v5.18.0 接入）。\n"
+                            "返回 index.html 绝对路径、生成文件清单与（可选）服务 URL。"
                         ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
                             "output_dir": {"type": "string", "description": "报告输出目录（默认 coderef-report/html/）"},
+                            "open_server": {"type": "boolean", "description": "生成后启动本地回环评估台服务，把页面 push 给浏览器（默认 false）", "default": False},
+                            "host": {"type": "string", "description": "服务绑定地址（仅允许回环 127.0.0.1/::1/localhost）", "default": "127.0.0.1"},
+                            "port": {"type": "integer", "description": "服务端口（0=自动分配）", "default": 0},
                             "background": {"type": "boolean", "description": "后台执行（重型工具默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
                         }, "required": ["project_path"]},
                     },
