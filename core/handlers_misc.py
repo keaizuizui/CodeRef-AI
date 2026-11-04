@@ -11,6 +11,7 @@ scan / version / eval / review / docs / wl / query / verify 系工具 handler（
 """
 
 import json
+import os
 
 from core.tools_manifest import _SINGLE_TOOL_LABELS, WHITELIST_ACTIONS
 
@@ -190,7 +191,8 @@ def _frontend(a) -> str:
 
 def _report(a) -> str:
     """执行 HTML 报告渲染（coderef_report）：
-    优先重渲染既有产物（图谱+Wiki，不重跑扫描）；无既有产物时回退为跑一次全量审计并渲染。"""
+    优先重渲染既有产物（图谱+Wiki，不重跑扫描）；无既有产物时回退为跑一次全量审计并渲染。
+    open_server=true 时额外拉起本地回环评估台（点按钮即评估，不依赖 AI 在旁）。"""
     from core.pipeline_runner import Pipe
     pp = a["project_path"]
     out = a.get("output_dir") or None
@@ -198,6 +200,17 @@ def _report(a) -> str:
     if not has_artifacts:
         r = Pipe().audit(pp, output_dir=out)
     hr = getattr(r, "html_report", None) or {}
+    if a.get("open_server"):
+        try:
+            from core.report_console import serve
+            idx = hr.get("index") or ""
+            srv = serve(pp,
+                        output_dir=os.path.dirname(os.path.abspath(idx)) if idx else None,
+                        host=a.get("host") or "127.0.0.1",
+                        port=int(a.get("port") or 0))
+            hr["serve"] = srv
+        except Exception as e:  # noqa: BLE001
+            hr["serve"] = {"ok": False, "error": str(e)}
     return json.dumps(hr, ensure_ascii=False)
 
 

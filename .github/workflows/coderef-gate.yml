@@ -1,0 +1,42 @@
+name: coderef-gate
+
+# 质量门禁（v5.17.0）：读取/生成记分卡（.coderef/scorecard.json），按阈值判定。
+# 默认 warn（只提示不阻断）；仓库变量 CODEREF_GATE_BLOCKING=true 时才真正阻断。
+# 说明：记分卡只聚合既有产物（图谱/审计 findings/治理库/Wiki），不重复扫描；
+# 证据不足的维度标 unknown、不计分，因此"尚未生成产物"不会误判成 0 分。
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  scorecard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Scorecard gate
+        env:
+          GATE_BLOCKING: ${{ vars.CODEREF_GATE_BLOCKING || 'false' }}
+          GATE_MIN: ${{ vars.CODEREF_GATE_MIN_SCORE || '' }}
+        run: |
+          ARGS=(--project . --json --out .coderef/scorecard.json)
+          if [ -n "$GATE_MIN" ]; then ARGS+=(--min-score "$GATE_MIN"); fi
+          if [ "$GATE_BLOCKING" = "true" ]; then ARGS+=(--fail-on-below); fi
+          python -m core.scorecard "${ARGS[@]}"
+
+      - name: Upload scorecard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard
+          path: .coderef/scorecard.json
+          if-no-files-found: ignore

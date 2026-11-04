@@ -1,0 +1,49 @@
+{
+  "version": "5.17.0",
+  "dimensions": [
+    {
+      "id": "structure",
+      "name": "结构健康",
+      "weight": 0.25,
+      "desc": "循环依赖、上帝模块、超规模模块、分层违例（arch_audit 健康度 0-10 折算 0-100）",
+      "source_tool": "coderef_arch_audit"
+    },
+    {
+      "id": "alignment",
+      "name": "架构对齐",
+      "weight": 0.20,
+      "desc": "目标架构的角色覆盖度(40%) + 模块归属度(60%)",
+      "source_tool": "coderef_arch_gap"
+    },
+    {
+      "id": "findings",
+      "name": "审计发现",
+      "weight": 0.25,
+      "desc": "审计发现按严重度扣分：HIGH×8 / MEDIUM×3 / LOW×1（建议类不计）",
+      "source_tool": "coderef_audit"
+    },
+    {
+      "id": "governance",
+      "name": "治理闭环",
+      "weight": 0.15,
+      "desc": "治理库未结工作项：HIGH×10 / 其余×3 / 逾期×2",
+      "source_tool": "coderef_gov_report"
+    },
+    {
+      "id": "docs",
+      "name": "文档覆盖",
+      "weight": 0.15,
+      "desc": "Wiki Markdown 文档数 / 代码模块数（封顶 100）",
+      "source_tool": "coderef_docs"
+    }
+  ],
+  "thresholds": {
+    "min_score": 60,
+    "fail_on_below": false
+  },
+  "grades": {
+    "A": 85,
+    "B": 70,
+    "C": 55
+  }
+}
