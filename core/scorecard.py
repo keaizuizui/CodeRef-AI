@@ -195,14 +195,32 @@ def save_config(project_path: str, payload: dict) -> dict:
             raise ValueError("fail_on_below 必须是布尔值")
         clean_th["fail_on_below"] = thresholds["fail_on_below"]
 
+    # 与已保存的项目级覆盖合并（只写本次传入的键会把手改的其它项抹掉）
+    path = _config_path(project_path)
+    prev = _load_json(path)
+    prev = prev if isinstance(prev, dict) else {}
+    prev_w = prev.get("weights") if isinstance(prev.get("weights"), dict) else {}
+    prev_th = prev.get("thresholds") if isinstance(prev.get("thresholds"), dict) else {}
+    all_w = {k: float(v) for k, v in prev_w.items()
+             if k in known and isinstance(v, (int, float)) and not isinstance(v, bool)
+             and math.isfinite(v) and v >= 0}
+    all_w.update(clean_w)
+    all_th: Dict[str, Any] = {}
+    prev_ms = prev_th.get("min_score")
+    if (isinstance(prev_ms, (int, float)) and not isinstance(prev_ms, bool)
+            and math.isfinite(prev_ms) and 0 <= prev_ms <= 100):
+        all_th["min_score"] = float(prev_ms)
+    if isinstance(prev_th.get("fail_on_below"), bool):
+        all_th["fail_on_below"] = prev_th["fail_on_below"]
+    all_th.update(clean_th)
+
     # 合并后的权重合计必须为正，否则后续聚合无意义（单维度允许为 0）
     merged_weights = {d["id"]: d["weight"] for d in cfg["dimensions"]}
-    merged_weights.update(clean_w)
+    merged_weights.update(all_w)
     if sum(merged_weights.values()) <= 0:
         raise ValueError("权重合计为 0，至少保留一个正权重")
 
-    merged = {"weights": clean_w, "thresholds": clean_th}
-    path = _config_path(project_path)
+    merged = {"weights": all_w, "thresholds": all_th}
     _atomic_write_json(path, merged)
     return {"saved": True, "path": path, "config": merged}
 
