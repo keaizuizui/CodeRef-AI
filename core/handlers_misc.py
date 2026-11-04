@@ -196,10 +196,27 @@ def _report(a) -> str:
     from core.pipeline_runner import Pipe
     pp = a["project_path"]
     out = a.get("output_dir") or None
+    sc_err = ""
+    # 评估台是用户入口：这里显式重算并落盘记分卡快照；渲染层只读快照，
+    # 因此审计/docs 等其他渲染路径不会再被拖进一次全量结构扫描。
+    try:
+        from core.scorecard import compute, write_card
+        write_card(pp, compute(pp))
+    except Exception as e:  # noqa: BLE001
+        sc_err = str(e)
     r, has_artifacts = Pipe().render_report(pp, output_dir=out)
     if not has_artifacts:
         r = Pipe().audit(pp, output_dir=out)
+        # 审计刚产出新 findings：重算快照并只重渲染一次（render_report 不扫描），
+        # 避免首页记分卡落后一轮。
+        try:
+            write_card(pp, compute(pp))
+        except Exception as e:  # noqa: BLE001
+            sc_err = str(e)
+        r, _ = Pipe().render_report(pp, output_dir=out)
     hr = getattr(r, "html_report", None) or {}
+    if sc_err:
+        hr["scorecard_error"] = sc_err
     if a.get("open_server"):
         try:
             from core.report_console import serve

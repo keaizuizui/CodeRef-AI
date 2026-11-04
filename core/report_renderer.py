@@ -23,6 +23,7 @@ HtmlReportRenderer -- 把审计报告 / 知识图谱 / Wiki 文档统一渲染�
 版本: v1.0
 """
 
+import json
 import os
 import re
 import html as _html
@@ -433,7 +434,8 @@ class HtmlReportRenderer:
     def render(self, pipe_result, kg_stats: Optional[dict] = None,
                wiki_dir: Optional[str] = None,
                output_dir: Optional[str] = None,
-               dimension_states: Optional[dict] = None) -> dict:
+               dimension_states: Optional[dict] = None,
+               scorecard: Optional[dict] = None) -> dict:
         """渲染完整报告目录。
 
         Args:
@@ -457,10 +459,12 @@ class HtmlReportRenderer:
             results["audit.html"] = self._render_audit(pipe_result, dimension_states)
             results["kg.html"] = self._render_kg(kg_stats, dimension_states)
             results["wiki.html"] = self._render_wiki(wiki_dir, dimension_states)
+            # 记分卡：默认只读已落盘快照（不重跑扫描、不写盘）；由 coderef_report
+            # 入口先算好再落盘，其他渲染路径（审计/docs 管线）只消费快照。
+            sc = scorecard if scorecard is not None else self._load_scorecard_snapshot()
             results["index.html"] = self._render_index(
                 pipe_result, kg_stats, wiki_dir, dimension_states,
-                scorecard=self._compute_scorecard(),
-                arch_link=self._latest_arch_link(out))
+                scorecard=sc, arch_link=self._latest_arch_link(out))
         except Exception as e:
             return {"ok": False, "error": str(e), "files": []}
 
@@ -479,15 +483,17 @@ class HtmlReportRenderer:
 
     # ─── 评估台支撑 ───
 
-    def _compute_scorecard(self) -> dict:
-        """计算记分卡快照（失败不阻塞报告渲染，页面如实展示失败原因）。"""
+    def _load_scorecard_snapshot(self) -> dict:
+        """读取已落盘的记分卡快照（不做扫描、不写盘；缺失时回空字典由页面诚实占位）。"""
+        path = os.path.join(self.project_path, ".coderef", "scorecard.json")
         try:
-            from core.scorecard import compute, write_card
-            card = compute(self.project_path)
-            write_card(self.project_path, card)
-            return card
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except FileNotFoundError:
+            return {}
         except Exception as e:  # noqa: BLE001
-            return {"error": str(e)}
+            return {"error": f"记分卡快照读取失败: {e}"}
 
     def _latest_arch_link(self, out_dir: str) -> str:
         """定位最新一张业务架构画布，返回相对 index.html 的链接（无则空串）。"""
@@ -548,6 +554,23 @@ class HtmlReportRenderer:
 
     def _render_index(self, pr, kg_stats, wiki_dir, dimension_states=None,
                       scorecard=None, arch_link="") -> str:
+        """评估台首页：只做面板编排，内容组装见各自面板方法。"""
+        overview = self._overview_panel(pr, kg_stats, wiki_dir, dimension_states, scorecard)
+        arch = self._arch_panel(arch_link)
+        product = self._placeholder_panel(
+            "产品评估",
+            "v5.17.1 接入：产品证据包 + 六维评判 + 三档结论（值得做/先验证/不建议）。"
+            "本版不输出任何产品结论，避免用占位内容误导决策。")
+        ux = self._placeholder_panel(
+            "UX 人格走查",
+            "v5.18.0 接入：目标人格 + 走查剧本 + 生存分 + 愤怒地图；"
+            "每条发现必须带静态证据锚点，全部标注 simulated=true。")
+        body = self._console_shell(overview, arch, product, ux)
+        return _page("项目评估台", body, _nav("index.html", self.project_name), self.project_name)
+
+    def _overview_panel(self, pr, kg_stats, wiki_dir, dimension_states,
+                        scorecard) -> str:
+        """概览面板：记分卡 + 评估标准 + 业务摘要 + 入口/数据流 + 报告章节 + 技术统计。"""
         dims = dimension_states or {}
         audit_d = dims.get("audit") or {}
         kg_d = dims.get("kg") or {}
@@ -649,26 +672,26 @@ class HtmlReportRenderer:
         overview += '<section><h2>技术概览</h2><p class="empty">以下为代码级统计，业务理解请以上方业务视角为主。</p>' \
                     + cards + '</section>' + note
 
-        # ── 架构面板：iframe 复用既有业务树画布（未生成则诚实占位） ──
+        return overview
+
+    @staticmethod
+    def _arch_panel(arch_link: str) -> str:
+        """架构面板：iframe 复用既有业务树画布（未生成则诚实占位）。"""
         if arch_link:
-            arch = ('<section><h2>业务架构视图 <span class="badge badge-ok">已生成</span></h2>'
+            return ('<section><h2>业务架构视图 <span class="badge badge-ok">已生成</span></h2>'
                     '<p>业务树大白话图：入口层 → 主功能 → 子功能 → 步骤链；模块依赖只作为编程 AI 的数据。</p>'
                     f'<iframe src="{_attr(arch_link)}" style="width:100%;height:78vh;'
                     'border:1px solid #2a2d3a;border-radius:8px;background:#0f1117"></iframe></section>')
-        else:
-            arch = ('<section><h2>业务架构视图 <span class="badge badge-missing">未生成</span></h2>'
-                    '<p class="empty">尚无架构画布产物：请先调用 coderef_arch_canvas（open_server=true 可直接推送），'
-                    '生成后刷新本页即可内嵌。</p></section>')
+        return ('<section><h2>业务架构视图 <span class="badge badge-missing">未生成</span></h2>'
+                '<p class="empty">尚无架构画布产物：请先调用 coderef_arch_canvas（open_server=true 可直接推送），'
+                '生成后刷新本页即可内嵌。</p></section>')
 
-        product = ('<section><h2>产品评估 <span class="badge badge-missing">下一版</span></h2>'
-                   '<p class="empty">v5.17.1 接入：产品证据包 + 六维评判 + 三档结论（值得做/先验证/不建议）。'
-                   '本版不输出任何产品结论，避免用占位内容误导决策。</p></section>')
-        ux = ('<section><h2>UX 人格走查 <span class="badge badge-missing">下一版</span></h2>'
-              '<p class="empty">v5.18.0 接入：目标人格 + 走查剧本 + 生存分 + 愤怒地图；'
-              '每条发现必须带静态证据锚点，全部标注 simulated=true。</p></section>')
-
-        body = self._console_shell(overview, arch, product, ux)
-        return _page("项目评估台", body, _nav("index.html", self.project_name), self.project_name)
+    @staticmethod
+    def _placeholder_panel(title: str, desc: str) -> str:
+        """未接入的 Tab：明确标注下一版，不产出任何结论。"""
+        return ('<section><h2>' + _esc(title)
+                + ' <span class="badge badge-missing">下一版</span></h2>'
+                f'<p class="empty">{_esc(desc)}</p></section>')
 
     # ─── 评估台：记分卡 / 评估标准 / Tab 外壳 ───
 

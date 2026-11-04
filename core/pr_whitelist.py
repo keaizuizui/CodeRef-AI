@@ -422,3 +422,10 @@ def _tier_for(severity: str) -> Tier:
     if s in ("medium", "warning", "info"):
         return Tier.MEDIUM
     return Tier.LOW
+
+
+# ── 公开导出（聚合层如 core.scorecard 复用；内部实现保持私有命名）──
+# 放在文件末尾：确保被引用的私有函数均已定义（_phash 定义在本文件后段）。
+project_hash = _phash
+count_md = _count_md
+detect_wiki_dir = _detect_wiki_dir
