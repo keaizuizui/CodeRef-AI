@@ -491,7 +491,18 @@ class HtmlReportRenderer:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            return data if isinstance(data, dict) else {}
+            if not isinstance(data, dict):
+                return {}
+            dims = data.get("dimensions")
+            # 快照可能来自被分析项目（克隆仓库）：非法结构降级为错误占位，
+            # 不能因为一个坏快照让整站四页全部渲染失败。
+            if dims is not None and (
+                    not isinstance(dims, list)
+                    or not all(isinstance(d, dict) and isinstance(d.get("raw") or {}, dict)
+                               for d in dims)
+                    or not isinstance(data.get("coverage") or 0, (int, float))):
+                return {"error": "记分卡快照结构非法"}
+            return data
         except FileNotFoundError:
             return {}
         except Exception as e:  # noqa: BLE001

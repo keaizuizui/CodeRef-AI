@@ -106,6 +106,17 @@ def _make_handler(project_path: str, out_dir: str, token: str,
                 self._json({"ok": False, "error": "内部错误"}, 500)
 
         # ── 安全 ──
+        def _host_ok(self) -> bool:
+            """校验 Host 头，阻断 DNS rebinding（恶意域名解析到 127.0.0.1 后读取数据）。"""
+            host = (self.headers.get("Host") or "").strip().lower()
+            if not host:
+                return False
+            if host.startswith("["):
+                hostname = host[1:].split("]", 1)[0]
+            else:
+                hostname = host.rsplit(":", 1)[0]
+            return hostname in _LOOPBACK_HOSTS
+
         def _same_origin(self) -> bool:
             origin = self.headers.get("Origin")
             if not origin:
@@ -149,6 +160,8 @@ def _make_handler(project_path: str, out_dir: str, token: str,
 
         # ── GET 路由 ──
         def _route_get(self) -> None:
+            if not self._host_ok():
+                return self._json({"ok": False, "error": "非法 Host"}, 403)
             parsed = urlparse(self.path)
             path = parsed.path
             if path in ("/", "/index.html"):
@@ -219,6 +232,8 @@ def _make_handler(project_path: str, out_dir: str, token: str,
 
         # ── POST 路由 ──
         def _route_post(self) -> None:
+            if not self._host_ok():
+                return self._json({"ok": False, "error": "非法 Host"}, 403)
             parsed = urlparse(self.path)
             path = parsed.path
             if path not in ("/api/config", "/api/evaluate"):
