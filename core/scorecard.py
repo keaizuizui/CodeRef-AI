@@ -490,6 +490,7 @@ def _aggregate(project_path: str, cfg: dict, results: Dict[str, dict]) -> dict:
         "coverage": round(coverage, 2),
         "dimensions": dims,
         "gate": {"min_score": th["min_score"],
+                 "fail_on_below": th["fail_on_below"],
                  "pass": None if overall is None else overall >= th["min_score"]},
         "notes": notes,
         "weights": {d["id"]: d["weight"] for d in dims},
@@ -594,7 +595,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if overall < min_score:
         msg = f"[scorecard] 低于阈值 {min_score}（当前 {overall}）"
         print(msg, file=sys.stderr)
-        return 1 if args.fail_on_below else 0
+        blocking = args.fail_on_below or bool((card.get("gate") or {}).get("fail_on_below"))
+        return 1 if blocking else 0
     return 0
 
 
