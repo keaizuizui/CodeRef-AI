@@ -482,8 +482,10 @@ class HtmlReportRenderer:
     def _compute_scorecard(self) -> dict:
         """计算记分卡快照（失败不阻塞报告渲染，页面如实展示失败原因）。"""
         try:
-            from core.scorecard import compute
-            return compute(self.project_path, write=True)
+            from core.scorecard import compute, write_card
+            card = compute(self.project_path)
+            write_card(self.project_path, card)
+            return card
         except Exception as e:  # noqa: BLE001
             return {"error": str(e)}
 

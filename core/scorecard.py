@@ -345,12 +345,16 @@ def _dim_governance(project_path: str) -> dict:
     db = gov_db_path(project_path)
     if not os.path.exists(db):
         return _unknown("governance", "未建立治理库，请先运行 coderef_gov_start")
+    store = None
     try:
         store = GovernanceStore(project_path)
         issues = store.list_issues(view="open", limit=500)
         overdue = store.list_issues(view="overdue", limit=500)
     except Exception as e:
         return _unknown("governance", f"治理库读取失败: {e}")
+    finally:
+        if store is not None:
+            store.close()
     high = sum(1 for i in issues if str(i.get("severity") or "").lower() == "high")
     score = max(0, 100 - high * 10 - (len(issues) - high) * 3 - len(overdue) * 2)
     raw = {"open": len(issues), "high": high, "overdue": len(overdue)}
@@ -390,24 +394,9 @@ def _grade(overall: Optional[float], grades: dict) -> str:
     return "D"
 
 
-def compute(project_path: str, config: Optional[dict] = None,
-            write: bool = False) -> dict:
-    """计算记分卡（确定性）。write=True 时落盘 `<project>/.coderef/scorecard.json`。"""
-    project_path = os.path.abspath(project_path)
-    cfg = config or load_config(project_path)
+def _aggregate(project_path: str, cfg: dict, results: Dict[str, dict]) -> dict:
+    """把各维度结果聚合成总分/等级/置信度/说明（不落盘）。"""
     meta = {d["id"]: d for d in cfg["dimensions"]}
-
-    structure = _dim_structure(project_path)
-    module_total = int((structure.get("raw") or {}).get("modules") or 0)
-    results = {
-        "structure": structure,
-        "alignment": _dim_alignment(project_path),
-        "findings": _dim_findings(project_path),
-        "governance": _dim_governance(project_path),
-        "docs": _dim_docs(project_path, module_total),
-    }
-
-    no_code = structure.get("status") == "not_applicable"
     dims: List[dict] = []
     known: List[dict] = []
     total_w = 0.0
@@ -422,12 +411,13 @@ def compute(project_path: str, config: Optional[dict] = None,
         if d["status"] == "ok" and d["score"] is not None:
             known.append(d)
 
+    no_code = (results.get("structure") or {}).get("status") == "not_applicable"
     coverage = (sum(d["weight"] for d in known) / total_w) if total_w else 0.0
     if no_code or not known:
         overall = None
     else:
-        wsum = sum(d["weight"] for d in known)
-        overall = round(sum(d["score"] * d["weight"] for d in known) / wsum)
+        overall = round(sum(d["score"] * d["weight"] for d in known)
+                        / sum(d["weight"] for d in known))
 
     if overall is None:
         confidence = "low"
@@ -448,12 +438,7 @@ def compute(project_path: str, config: Optional[dict] = None,
         notes.append(f"证据覆盖率 {coverage:.0%}，总分只代表已知维度")
 
     th = cfg["thresholds"]
-    gate = {
-        "min_score": th["min_score"],
-        "pass": None if overall is None else overall >= th["min_score"],
-    }
-
-    card = {
+    return {
         "version": __version__,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "project": os.path.basename(project_path.rstrip(os.sep)),
@@ -463,18 +448,38 @@ def compute(project_path: str, config: Optional[dict] = None,
         "confidence": confidence,
         "coverage": round(coverage, 2),
         "dimensions": dims,
-        "gate": gate,
+        "gate": {"min_score": th["min_score"],
+                 "pass": None if overall is None else overall >= th["min_score"]},
         "notes": notes,
         "weights": {d["id"]: d["weight"] for d in dims},
     }
-    if write:
-        out = os.path.join(project_path, ".coderef", "scorecard.json")
-        os.makedirs(os.path.dirname(out), exist_ok=True)
-        tmp = out + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(card, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, out)
-    return card
+
+
+def compute(project_path: str, config: Optional[dict] = None) -> dict:
+    """计算记分卡（确定性、不落盘）。落盘请显式调用 write_card()。"""
+    project_path = os.path.abspath(project_path)
+    cfg = config or load_config(project_path)
+    structure = _dim_structure(project_path)
+    module_total = int((structure.get("raw") or {}).get("modules") or 0)
+    results = {
+        "structure": structure,
+        "alignment": _dim_alignment(project_path),
+        "findings": _dim_findings(project_path),
+        "governance": _dim_governance(project_path),
+        "docs": _dim_docs(project_path, module_total),
+    }
+    return _aggregate(project_path, cfg, results)
+
+
+def write_card(project_path: str, card: dict) -> str:
+    """把记分卡落盘到 `<project>/.coderef/scorecard.json`（机器可读旁路产物）。"""
+    out = os.path.join(os.path.abspath(project_path), ".coderef", "scorecard.json")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    tmp = out + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(card, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, out)
+    return out
 
 
 # ────────────────────────────────────────────────────────────────
@@ -516,7 +521,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[scorecard] 项目路径不存在: {pp}", file=sys.stderr)
         return 2
     try:
-        card = compute(pp, write=False)
+        card = compute(pp)
     except Exception as e:  # noqa: BLE001
         print(f"[scorecard] 计算失败: {e}", file=sys.stderr)
         return 2
