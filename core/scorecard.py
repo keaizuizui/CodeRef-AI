@@ -358,8 +358,11 @@ def _finding_anchor(project_path: str, f: dict) -> str:
     rel = _rel(project_path, fp) if os.path.isabs(fp) else fp.replace("\\", "/")
     if rel.startswith(".."):
         return ""
-    ln = f.get("line") or 0
-    return f"{rel}#L{int(ln)}" if ln else rel
+    try:
+        ln = int(f.get("line") or 0)
+    except (TypeError, ValueError):
+        ln = 0
+    return f"{rel}#L{ln}" if ln > 0 else rel
 
 
 def _dim_findings(project_path: str) -> dict:
