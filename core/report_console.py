@@ -205,12 +205,13 @@ def _make_handler(project_path: str, out_dir: str, token: str,
                 return self._json({"ok": False, "error": f"读取失败: {e}"}, 500)
 
         def _api_scorecard(self, qs: Dict[str, Any]) -> None:
-            from core.scorecard import compute
+            from core.scorecard import compute, write_card
             refresh = str((qs.get("refresh") or ["0"])[0]).lower() in ("1", "true", "yes")
             with _LOCK:
                 card = cache.get("card")
                 if card is None or refresh:
-                    card = compute(project_path, write=True)
+                    card = compute(project_path)
+                    write_card(project_path, card)
                     cache["card"] = card
             return self._json(card)
 
