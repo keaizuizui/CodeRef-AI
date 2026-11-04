@@ -662,7 +662,11 @@ class HtmlReportRenderer:
         note += "</section>"
 
         # ── 概览面板：记分卡（首位）+ 评估标准 + 既有业务/技术概览 ──
-        overview = self._scorecard_html(scorecard) + self._method_html(scorecard)
+        # 快照来自可能不可信的项目仓库：面板构建失败只降级记分卡，不让整站四页一起失败
+        try:
+            overview = self._scorecard_html(scorecard) + self._method_html(scorecard)
+        except Exception as e:  # noqa: BLE001
+            overview = self._scorecard_html({"error": f"记分卡快照渲染失败: {e}"})
         overview_summary = self._read_overview_summary(wiki_dir)
         if overview_summary:
             overview += (f'<section class="biz-hero"><h2>业务视角 <span class="badge badge-ok">优先阅读</span></h2>'
