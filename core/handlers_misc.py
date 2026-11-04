@@ -189,30 +189,48 @@ def _frontend(a) -> str:
     return json.dumps(r, ensure_ascii=False)
 
 
+def _has_audit_artifacts(project_path: str) -> bool:
+    """是否已有落盘的审计产物（只做 stat，不触发任何扫描）。"""
+    try:
+        from core.pr_whitelist import project_hash
+        names = (f"audit_findings_{project_hash(project_path)}.json", "audit_findings.json")
+    except Exception:  # noqa: BLE001
+        names = ("audit_findings.json",)
+    for d in ("coderef-report", ".coderef"):
+        for n in names:
+            if os.path.isfile(os.path.join(project_path, d, n)):
+                return True
+    return False
+
+
 def _report(a) -> str:
     """执行 HTML 报告渲染（coderef_report）：
-    优先重渲染既有产物（图谱+Wiki，不重跑扫描）；无既有产物时回退为跑一次全量审计并渲染。
+    优先重渲染既有产物（图谱+Wiki）；无既有产物时回退为跑一次全量审计并渲染。
+    渲染前会重算一次记分卡快照（确定性聚合，含一次结构扫描），其他渲染路径只读该快照。
     open_server=true 时额外拉起本地回环评估台（点按钮即评估，不依赖 AI 在旁）。"""
     from core.pipeline_runner import Pipe
     pp = a["project_path"]
     out = a.get("output_dir") or None
-    sc_err = ""
+
+    def _refresh_card() -> str:
+        """重算并落盘记分卡快照；成功返回空串（用于清除上一次的错误）。"""
+        try:
+            from core.scorecard import compute, write_card
+            write_card(pp, compute(pp))
+            return ""
+        except Exception as e:  # noqa: BLE001
+            return str(e)
+
     # 评估台是用户入口：这里显式重算并落盘记分卡快照；渲染层只读快照，
     # 因此审计/docs 等其他渲染路径不会再被拖进一次全量结构扫描。
-    try:
-        from core.scorecard import compute, write_card
-        write_card(pp, compute(pp))
-    except Exception as e:  # noqa: BLE001
-        sc_err = str(e)
+    # 已有审计产物时才先算分；没有产物时等回退审计产出后再算，避免空算一次。
+    sc_err = _refresh_card() if _has_audit_artifacts(pp) else ""
     r, has_artifacts = Pipe().render_report(pp, output_dir=out)
     if not has_artifacts:
         r = Pipe().audit(pp, output_dir=out)
         # 审计刚产出新 findings：重算快照并只重渲染一次（render_report 不扫描），
         # 避免首页记分卡落后一轮。
-        try:
-            write_card(pp, compute(pp))
-        except Exception as e:  # noqa: BLE001
-            sc_err = str(e)
+        sc_err = _refresh_card()
         r, _ = Pipe().render_report(pp, output_dir=out)
     hr = getattr(r, "html_report", None) or {}
     if sc_err:

@@ -15,8 +15,10 @@
 
 import argparse
 import json
+import math
 import os
 import sys
+import tempfile
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -66,7 +68,8 @@ def _normalize_config(raw: dict) -> dict:
         if not isinstance(d, dict) or not d.get("id"):
             raise ValueError("dimension 缺少 id")
         w = d.get("weight")
-        if not isinstance(w, (int, float)) or isinstance(w, bool) or w < 0:
+        if (not isinstance(w, (int, float)) or isinstance(w, bool)
+                or not math.isfinite(w) or w < 0):
             raise ValueError(f"dimension {d.get('id')} 的 weight 非法: {w!r}")
         total += float(w)
         out_dims.append({
@@ -81,12 +84,14 @@ def _normalize_config(raw: dict) -> dict:
 
     th = raw.get("thresholds") or {}
     min_score = th.get("min_score", 60)
-    if not isinstance(min_score, (int, float)) or isinstance(min_score, bool):
+    if (not isinstance(min_score, (int, float)) or isinstance(min_score, bool)
+            or not math.isfinite(min_score) or not 0 <= min_score <= 100):
         raise ValueError(f"thresholds.min_score 非法: {min_score!r}")
     grades = raw.get("grades") or {}
     for k in ("A", "B", "C"):
         v = grades.get(k)
-        if v is not None and (not isinstance(v, (int, float)) or isinstance(v, bool)):
+        if v is not None and (not isinstance(v, (int, float)) or isinstance(v, bool)
+                              or not math.isfinite(v) or not 0 <= v <= 100):
             raise ValueError(f"grades.{k} 非法: {v!r}")
 
     return {
@@ -118,6 +123,23 @@ def _config_path(project_path: str) -> str:
     return os.path.join(os.path.abspath(project_path), ".coderef", "eval_config.json")
 
 
+def _atomic_write_json(path: str, obj: Any) -> None:
+    """原子写 JSON：同目录唯一临时文件 + os.replace（并发写不共享 tmp 路径）。"""
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def load_config(project_path: str) -> dict:
     """项目级覆盖 > 入库默认 > 内置兜底。覆盖只按维度 id 改权重/阈值，不改维度集合。"""
     cfg = default_config()
@@ -128,12 +150,14 @@ def load_config(project_path: str) -> dict:
     if isinstance(weights, dict):
         by_id = {d["id"]: d for d in cfg["dimensions"]}
         for did, w in weights.items():
-            if did in by_id and isinstance(w, (int, float)) and not isinstance(w, bool) and w >= 0:
+            if (did in by_id and isinstance(w, (int, float)) and not isinstance(w, bool)
+                    and math.isfinite(w) and w >= 0):
                 by_id[did]["weight"] = float(w)
     th = over.get("thresholds")
     if isinstance(th, dict):
         ms = th.get("min_score")
-        if isinstance(ms, (int, float)) and not isinstance(ms, bool):
+        if (isinstance(ms, (int, float)) and not isinstance(ms, bool)
+                and math.isfinite(ms) and 0 <= ms <= 100):
             cfg["thresholds"]["min_score"] = float(ms)
         if isinstance(th.get("fail_on_below"), bool):
             cfg["thresholds"]["fail_on_below"] = th["fail_on_below"]
@@ -155,13 +179,15 @@ def save_config(project_path: str, payload: dict) -> dict:
     for did, w in weights.items():
         if did not in known:
             raise ValueError(f"未知维度 id: {did!r}（可选: {sorted(known)}）")
-        if not isinstance(w, (int, float)) or isinstance(w, bool) or w < 0:
+        if (not isinstance(w, (int, float)) or isinstance(w, bool)
+                or not math.isfinite(w) or w < 0):
             raise ValueError(f"维度 {did} 的 weight 非法: {w!r}")
         clean_w[did] = float(w)
     clean_th: Dict[str, Any] = {}
     if "min_score" in thresholds:
         ms = thresholds["min_score"]
-        if not isinstance(ms, (int, float)) or isinstance(ms, bool):
+        if (not isinstance(ms, (int, float)) or isinstance(ms, bool)
+                or not math.isfinite(ms) or not 0 <= ms <= 100):
             raise ValueError(f"min_score 非法: {ms!r}")
         clean_th["min_score"] = float(ms)
     if "fail_on_below" in thresholds:
@@ -177,11 +203,7 @@ def save_config(project_path: str, payload: dict) -> dict:
 
     merged = {"weights": clean_w, "thresholds": clean_th}
     path = _config_path(project_path)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(merged, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    _atomic_write_json(path, merged)
     return {"saved": True, "path": path, "config": merged}
 
 
@@ -516,11 +538,7 @@ def compute(project_path: str, config: Optional[dict] = None) -> dict:
 def write_card(project_path: str, card: dict) -> str:
     """把记分卡落盘到 `<project>/.coderef/scorecard.json`（机器可读旁路产物）。"""
     out = os.path.join(os.path.abspath(project_path), ".coderef", "scorecard.json")
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    tmp = out + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(card, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, out)
+    _atomic_write_json(out, card)
     return out
 
 
@@ -573,11 +591,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         out = os.path.join(pp, ".coderef", "scorecard.json")
     try:
-        os.makedirs(os.path.dirname(out), exist_ok=True)
-        tmp = out + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(card, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, out)
+        _atomic_write_json(out, card)
     except Exception as e:  # noqa: BLE001
         print(f"[scorecard] 落盘失败: {e}", file=sys.stderr)
 
