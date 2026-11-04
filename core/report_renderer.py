@@ -445,6 +445,8 @@ class HtmlReportRenderer:
             output_dir: 报告输出目录；默认 {项目上级}/coderef-report/html
             dimension_states: 各维度（audit/kg/wiki）执行状态，用于透明化展示
                               （未执行的维度标注"未执行"而非静默为空/全 0）
+            scorecard: 记分卡数据（可选）。缺省读 <project>/.coderef/scorecard.json 快照；
+                       渲染阶段**不计算、不写盘**，计算由 coderef_report 入口显式触发。
 
         Returns:
             {"ok": bool, "index": 绝对路径, "files": [..], "error": str?}
@@ -705,13 +707,14 @@ class HtmlReportRenderer:
                     '<p class="empty">暂无记分卡数据。</p></section>')
 
         overall = card.get("overall")
+        # 快照来自被分析的项目（可能是克隆仓库），所有字段都按不可信内容转义
         num = ('N/A' if overall is None else
-               f'{overall}<span style="font-size:14px;color:#6b7280">/100</span>')
+               f'{_esc(str(overall))}<span style="font-size:14px;color:#6b7280">/100</span>')
         rows = []
         for d in card.get("dimensions") or []:
             status = d.get("status")
             if status == "ok":
-                s = f'<strong>{d.get("score")}</strong>'
+                s = f'<strong>{_esc(str(d.get("score")))}</strong>'
             elif status == "not_applicable":
                 s = '<span class="badge badge-missing">不适用</span>'
             else:
@@ -720,7 +723,7 @@ class HtmlReportRenderer:
                          if v not in ("", None)][:6]
             rows.append(
                 f'<tr><td>{_esc(d.get("name", d.get("id", "")))}</td>'
-                f'<td>{d.get("weight", "")}</td><td>{s}</td>'
+                f'<td>{_esc(str(d.get("weight", "")))}</td><td>{s}</td>'
                 f'<td>{_esc(" · ".join(raw_items))}</td>'
                 f'<td>{_esc("、".join(d.get("evidence") or []))}</td>'
                 f'<td>{_esc(d.get("source_tool", ""))}</td></tr>')
@@ -748,7 +751,7 @@ class HtmlReportRenderer:
         if not dims:
             return ""
         rows = "".join(
-            f'<tr><td>{_esc(d.get("name", ""))}</td><td>{d.get("weight", "")}</td>'
+            f'<tr><td>{_esc(d.get("name", ""))}</td><td>{_esc(str(d.get("weight", "")))}</td>'
             f'<td>{_esc(d.get("desc", ""))}</td><td>{_esc(d.get("source_tool", ""))}</td></tr>'
             for d in dims)
         gate = (card or {}).get("gate") or {}
@@ -760,7 +763,7 @@ class HtmlReportRenderer:
             '<table><thead><tr><th>维度</th><th>权重</th><th>口径</th><th>来源工具</th></tr></thead>'
             f'<tbody>{rows}</tbody></table>'
             f'<p class="sc-note" style="margin-top:10px">阈值：最低分 '
-            f'{gate.get("min_score", "")}（CI 默认只告警，显式开启才阻断）</p></section>')
+            f'{_esc(str(gate.get("min_score", "")))}（CI 默认只告警，显式开启才阻断）</p></section>')
 
     @staticmethod
     def _console_shell(overview: str, arch: str, product: str, ux: str) -> str:

@@ -169,6 +169,12 @@ def save_config(project_path: str, payload: dict) -> dict:
             raise ValueError("fail_on_below 必须是布尔值")
         clean_th["fail_on_below"] = thresholds["fail_on_below"]
 
+    # 合并后的权重合计必须为正，否则后续聚合无意义（单维度允许为 0）
+    merged_weights = {d["id"]: d["weight"] for d in cfg["dimensions"]}
+    merged_weights.update(clean_w)
+    if sum(merged_weights.values()) <= 0:
+        raise ValueError("权重合计为 0，至少保留一个正权重")
+
     merged = {"weights": clean_w, "thresholds": clean_th}
     path = _config_path(project_path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -445,11 +451,12 @@ def _aggregate(project_path: str, cfg: dict, results: Dict[str, dict]) -> dict:
 
     no_code = (results.get("structure") or {}).get("status") == "not_applicable"
     coverage = (sum(d["weight"] for d in known) / total_w) if total_w else 0.0
-    if no_code or not known:
+    known_w = sum(d["weight"] for d in known)
+    if no_code or not known or known_w <= 0:
+        # 已知维度权重合计为 0 视为「没有可用证据」，避免除以 0 抛异常
         overall = None
     else:
-        overall = round(sum(d["score"] * d["weight"] for d in known)
-                        / sum(d["weight"] for d in known))
+        overall = round(sum(d["score"] * d["weight"] for d in known) / known_w)
 
     if overall is None:
         confidence = "low"
