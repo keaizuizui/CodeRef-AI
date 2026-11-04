@@ -209,9 +209,11 @@ def _make_handler(project_path: str, out_dir: str, token: str,
             refresh = str((qs.get("refresh") or ["0"])[0]).lower() in ("1", "true", "yes")
             with _LOCK:
                 card = cache.get("card")
-                if card is None or refresh:
-                    card = compute(project_path)
-                    write_card(project_path, card)
+            if card is None or refresh:
+                # 重计算放在锁外：避免秒级扫描阻塞配置写入与服务句柄增删
+                card = compute(project_path)
+                write_card(project_path, card)
+                with _LOCK:
                     cache["card"] = card
             return self._json(card)
 
@@ -255,12 +257,8 @@ def _make_handler(project_path: str, out_dir: str, token: str,
 
 
 def serve(project_path: str, output_dir: Optional[str] = None,
-          host: str = "127.0.0.1", port: int = 0,
-          token: Optional[str] = None) -> dict:
-    """启动评估台回环服务（进程内常驻线程；同项目重复调用先关闭旧句柄）。
-
-    token 缺省随机生成；仅供测试注入固定值，正常调用不要传。
-    """
+          host: str = "127.0.0.1", port: int = 0) -> dict:
+    """启动评估台回环服务（进程内常驻线程；同项目重复调用先关闭旧句柄）。"""
     pp = os.path.abspath(project_path)
     if not os.path.isdir(pp):
         raise ValueError(f"项目路径不存在: {pp}")
@@ -269,7 +267,7 @@ def serve(project_path: str, output_dir: Optional[str] = None,
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir, exist_ok=True)
 
-    token = token or secrets.token_urlsafe(24)
+    token = secrets.token_urlsafe(24)
     cache: Dict[str, Any] = {"card": None}
     handler = _make_handler(pp, out_dir, token, cache)
 

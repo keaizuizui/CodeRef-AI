@@ -27,24 +27,16 @@ from core.version import __version__
 _WEIGHTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "scorecard_weights.json")
 
+# 兜底只保留「无法从别处推导」的最小信息：维度 id/名称与默认权重。
+# 口径说明与来源工具以 core/scorecard_weights.json 为唯一真源，避免双份文案漂移。
 _FALLBACK_CONFIG: Dict[str, Any] = {
     "version": "5.17.0",
     "dimensions": [
-        {"id": "structure", "name": "结构健康", "weight": 0.25,
-         "desc": "循环依赖、上帝模块、超规模模块、分层违例",
-         "source_tool": "coderef_arch_audit"},
-        {"id": "alignment", "name": "架构对齐", "weight": 0.20,
-         "desc": "目标架构的角色覆盖度与模块归属度",
-         "source_tool": "coderef_arch_gap"},
-        {"id": "findings", "name": "审计发现", "weight": 0.25,
-         "desc": "全维度审计发现按严重度加权扣分",
-         "source_tool": "coderef_audit"},
-        {"id": "governance", "name": "治理闭环", "weight": 0.15,
-         "desc": "治理库未结工作项与逾期项",
-         "source_tool": "coderef_gov_report"},
-        {"id": "docs", "name": "文档覆盖", "weight": 0.15,
-         "desc": "Wiki 文档对代码模块的覆盖率",
-         "source_tool": "coderef_docs"},
+        {"id": "structure", "name": "结构健康", "weight": 0.25},
+        {"id": "alignment", "name": "架构对齐", "weight": 0.20},
+        {"id": "findings", "name": "审计发现", "weight": 0.25},
+        {"id": "governance", "name": "治理闭环", "weight": 0.15},
+        {"id": "docs", "name": "文档覆盖", "weight": 0.15},
     ],
     "thresholds": {"min_score": 60, "fail_on_below": False},
     "grades": {"A": 85, "B": 70, "C": 55},
@@ -225,8 +217,8 @@ def _rel(project_path: str, path: str) -> str:
 def _find_findings_json(project_path: str) -> Optional[str]:
     """定位落盘的审计 findings JSON（项目侧，优先带项目哈希的版本）。"""
     try:
-        from core.pr_whitelist import _phash
-        fname = f"audit_findings_{_phash(project_path)}.json"
+        from core.pr_whitelist import project_hash
+        fname = f"audit_findings_{project_hash(project_path)}.json"
     except Exception:
         fname = "audit_findings.json"
     candidates = [
@@ -241,11 +233,20 @@ def _find_findings_json(project_path: str) -> Optional[str]:
     return None
 
 
+def _exclude_dirs(project_path: str) -> List[str]:
+    """白名单里的目录级排除项（与 arch_gap / arch_view 口径一致）。"""
+    try:
+        from core.pipeline_runner import whitelist_list
+        return [e["dir"] for e in whitelist_list(project_path) if e.get("dir")]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _dim_structure(project_path: str) -> dict:
     from core.arch_audit import audit, locate_kg_db
 
     try:
-        a = audit(project_path)
+        a = audit(project_path, exclude_dirs=_exclude_dirs(project_path))
     except Exception as e:
         return _unknown("structure", f"架构诊断执行失败: {e}")
     gs = a.get("graph_stats") or {}
@@ -294,6 +295,31 @@ def _dim_alignment(project_path: str) -> dict:
                 [".coderef/target_arch.json"])
 
 
+_SRC_SUFFIXES = (".py", ".js", ".jsx", ".ts", ".tsx", ".vue", ".java", ".go", ".rs")
+_SKIP_DIRS = {".git", ".coderef", ".venv", "venv", "__pycache__", "node_modules",
+              "dist", "build", "coderef-report", "data", "tests"}
+_MAX_STAT_FILES = 20000
+
+
+def _latest_source_mtime(project_path: str) -> float:
+    """项目内源码文件的最新修改时间（用于判断审计产物是否过期）。"""
+    latest = 0.0
+    seen = 0
+    for dirpath, dirnames, filenames in os.walk(project_path):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        for fn in filenames:
+            if not fn.endswith(_SRC_SUFFIXES):
+                continue
+            seen += 1
+            if seen > _MAX_STAT_FILES:
+                return latest
+            try:
+                latest = max(latest, os.path.getmtime(os.path.join(dirpath, fn)))
+            except OSError:
+                continue
+    return latest
+
+
 def _finding_anchor(project_path: str, f: dict) -> str:
     """把审计发现的 file_path 归一成项目相对锚点（`rel#L行号`），目录级/项目外跳过。"""
     fp = str(f.get("file_path") or "")
@@ -333,9 +359,15 @@ def _dim_findings(project_path: str) -> dict:
             if anchor:
                 evidence.append(anchor)
     score = max(0, 100 - h * 8 - m * 3 - lo * 1)
+    # 新鲜度：源码比审计产物新超过 1 天 → 标记过期，避免把旧结论当当前健康度
+    try:
+        stale = _latest_source_mtime(project_path) > os.path.getmtime(fp) + 86400
+    except OSError:
+        stale = False
     raw = {"high": h, "medium": m, "low": lo,
            "total_files": data.get("total_files", 0),
-           "scan_ts": data.get("scan_ts", "")}
+           "scan_ts": data.get("scan_ts", ""),
+           "stale": stale}
     return _dim("findings", score, "ok", raw, evidence)
 
 
@@ -362,12 +394,12 @@ def _dim_governance(project_path: str) -> dict:
 
 
 def _dim_docs(project_path: str, module_total: int) -> dict:
-    from core.pr_whitelist import _count_md, _detect_wiki_dir
+    from core.pr_whitelist import count_md, detect_wiki_dir
 
-    wiki_dir = _detect_wiki_dir(project_path)
+    wiki_dir = detect_wiki_dir(project_path)
     if not wiki_dir:
         return _unknown("docs", "未生成 Wiki 文档，请先运行 coderef_docs")
-    md = _count_md(wiki_dir)
+    md = count_md(wiki_dir)
     if md <= 0:
         return _unknown("docs", "Wiki 目录存在但没有 Markdown 文档")
     if module_total <= 0:
@@ -434,6 +466,8 @@ def _aggregate(project_path: str, cfg: dict, results: Dict[str, dict]) -> dict:
     for d in dims:
         if d["status"] == "unknown":
             notes.append(f"{d['name']}：{d.get('reason', '证据不足')}")
+        elif (d.get("raw") or {}).get("stale"):
+            notes.append(f"{d['name']}：审计产物已过期（代码比产物更新），请重跑 coderef_audit")
     if overall is not None and coverage < 0.8:
         notes.append(f"证据覆盖率 {coverage:.0%}，总分只代表已知维度")
 
