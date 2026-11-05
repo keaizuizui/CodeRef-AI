@@ -459,7 +459,8 @@ class FrontendInspector:
         _dedup: Dict[tuple, ButtonItem] = {}
         _dedup_buttons: List[ButtonItem] = []
         for b in buttons:
-            key = (b.text, b.tag, b.file, b.form, b.has_confirm, b.href)
+            key = (b.text, b.tag, b.file, b.form, b.has_confirm, b.href,
+                   b.disabled, tuple(b.events))
             if key in _dedup:
                 _dedup[key].occurrences += 1
             else:
@@ -596,6 +597,20 @@ class FrontendInspector:
 
         result = self._inspect_static(project_path, entry, check_levels)
         if result.get("applicable") is False:
+            if runtime_ok:
+                # 组件源码项目（无 HTML）：静态枚举不适用，但运行时抽查已成功，
+                # 不能把浏览器结论连同静态占位一起丢掉。
+                return {
+                    "ok": True,
+                    "applicable": True,
+                    "buttons": [],
+                    "menu_tree": [],
+                    "findings": runtime_findings,
+                    "summary": ("组件源码项目：静态枚举不适用（无 HTML），"
+                                "已改用浏览器运行时抽查。\n"
+                                + str(result.get("message") or "")),
+                    "runtime_only": True,
+                }
             return result
 
         if not runtime_ok:
