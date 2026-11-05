@@ -185,6 +185,8 @@ def _frontend(a) -> str:
     levels = a.get("check_levels") or None
     r = FrontendInspector().inspect(
         pp, entry=entry, mode=mode, url=url, check_levels=levels,
+        persona=a.get("persona") or None,
+        journey=a.get("journey") or None,
     )
     return json.dumps(r, ensure_ascii=False)
 

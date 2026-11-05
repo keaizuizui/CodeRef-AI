@@ -236,7 +236,9 @@ BUILTIN_TOOLS: List[Dict] = [
                         "description": (
                             "前端交互审查（Frontend Review）= 静态清单全量枚举 + LLM 审查（可选运行时抽查）。\n"
                             "静态枚举 HTML/JS 所有按钮（含事件/确认弹窗/禁用）与 L1-L5 菜单树，再按 6 维度审查。\n"
-                            "mode=static（默认）：静态清单 + LLM 审查，不依赖浏览器，100% 覆盖。\n"
+                            "传入 persona / journey 时附带 U 轨人格走查（只判「呈现问题是否阻断任务完成」，"
+                            "不产出体验评分；Rage Map 带业务后果列，全部标 simulated=true + E4）。\n"
+                            "mode=static（默认）：静态清单 + LLM 审查，不依赖浏览器。\n"
                             "mode=runtime：需 url，用浏览器抽查关键路径，失败自动降级为静态结论。\n"
                             "支持 background=True 后台执行。\n"
                             "诚实边界：静态枚举只确证按钮/菜单'存在与否'，不确证'交互逻辑正确'；"
@@ -248,6 +250,8 @@ BUILTIN_TOOLS: List[Dict] = [
                             "mode": {"type": "string", "enum": ["static", "runtime"], "default": "static"},
                             "url": {"type": "string", "description": "运行 URL（mode=runtime 时必填）"},
                             "check_levels": {"type": "array", "items": {"type": "integer"}, "description": "要审查的菜单层级，默认 [1,2,3,4,5]"},
+                            "persona": {"type": "string", "description": "人格 id（impatient_newbie / cautious_comparer / time_pressed_exec），传入则附带 U 轨阻断判定"},
+                            "journey": {"type": "string", "description": "关键任务旅程（配合 persona；不填用默认「打开页面到首个可用结果」）"},
                             "background": {"type": "boolean", "description": "后台执行", "default": True},
                         }, "required": ["project_path"]},
                     },
@@ -256,14 +260,17 @@ BUILTIN_TOOLS: List[Dict] = [
                         "description": (
                             "把审计报告 / 知识图谱 / Wiki 聚合成自包含 HTML 报告目录，index.html 即「项目评估台」"
                             "（唯一用户入口，v5.17 起）：\n"
-                            "四个 Tab——概览（健康记分卡 + 评估标准）/ 架构（内嵌业务树画布）/ 产品 / UX（后续版本）。\n"
+                            "四个 Tab——概览（健康记分卡 + 评估标准）/ 架构（内嵌业务树画布）/ "
+                            "产品（F 轨业务契合度）/ UX（U 轨人格走查，只判阻断）。\n"
                             "记分卡为确定性聚合（结构健康/架构对齐/审计发现/治理闭环/文档覆盖），"
                             "证据不足的维度标 unknown 不给 0 分；同时落盘 .coderef/scorecard.json 供 CI 与 AI 读取。\n"
+                            "产品/UX 评估产物落 .coderef/product_fit.json / .coderef/ux_fit.json；"
+                            "产品评估无 LLM Key 时只回证据包（status=SKIP），UX 无 Key 时降级 STATIC_ONLY，均不编造结论。\n"
                             "audit.html / kg.html / wiki.html 仍作为概览 Tab 的详情页保留。\n"
                             "优先重渲染既有产物（图谱+Wiki）；若项目尚无审计/图谱产物，则回退为跑一次全量审计并渲染。\n"
                             "渲染前会重算一次记分卡快照（确定性聚合，含一次结构扫描）；其余渲染路径只读该快照，不重复扫描。\n"
-                            "open_server=true 时同时启动仅回环的本地评估台服务（GET /api/scorecard / POST /api/config；"
-                            "产品与 UX 场景的 /api/evaluate 在 v5.17.1/v5.18.0 接入）。\n"
+                            "open_server=true 时同时启动仅回环的本地评估台服务（GET /api/scorecard / POST /api/config / "
+                            "POST /api/evaluate 点按钮即跑产品/UX 评估，不依赖 AI 在旁）。\n"
                             "返回 index.html 绝对路径、生成文件清单与（可选）服务 URL。"
                         ),
                         "inputSchema": {"type": "object", "properties": {

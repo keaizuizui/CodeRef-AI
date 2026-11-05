@@ -4,6 +4,16 @@
 
 ---
 
+### v5.18.0 — 三轨评估：F 轨业务契合度 + B 轨条件触发 + U 轨只判阻断
+
+> 承接用户 2026-11-05 拍板（采纳外部 `ui-business-eval` skill 的三轨层级）：评估台从「产品/UX 两 Tab 平行」改为**三轨有主轴**——F 轨业务契合度必跑、B 轨业务模式条件触发、U 轨人格走查只判阻断不独立评分。版本按 SOP 升 minor（5.17.0 → 5.18.0；原计划 P1/P2 合并落地）。
+
+- **产品证据包（`core/product_evidence.py`，确定性、无 LLM）**：能力清单自动枚举——业务架构树（`arch_framework`）+ 前端菜单/表单（`FrontendInspector.enumerate_static`）+ 路由/接口 + CLI 子命令；声称（README/文档）、首次价值路径、许可/付费/路线图信号全部带 `file:line` / 路由 / 命令锚点。推不出的写 `unknown`，不写 0、不编造；枚举摘要明确「可能遗漏，不宣称全量」。
+- **F 轨五问矩阵（`core/product_eval.py`）**：逐能力核对①支撑哪个决策 ②输入现实性 ③输出可行动性 ④数据诚实度 ⑤频率匹配；**②强制 `proxy=true`**（代码只能推「有无上游数据源」）；F2 优先用知识图谱 CALLS 边核验上下游消费，无图谱时降级并标注；三档结论 Go / Validate-first / No-go + 待验证假设清单；**无 LLM Key 只回证据包 `status="SKIP"`**；LLM 输出含市场/竞品数字整份拒收；E4 必须进假设清单；业务不支撑决策的能力进「砍/改清单」。
+- **U 轨人格走查（`core/personas.json` + `core/ux_eval.py`）**：内置 3 人格（低耐心新手 / 谨慎比价者 / 时间紧迫决策者），7 项必填且放弃触发 ≥3 条，禁止「普通用户」；只输出 `blocking` / `partial` / `non_blocking`；Rage Map 必带业务后果列（愤怒 ≥4 且任务中断 → P0/P1，否则最高 P2）；无锚点不输出；全部 `simulated=true` + E4；只评 1280/1440/1920 桌面视口，不产出窄屏课题。
+- **页面与工具接入**：`POST /api/evaluate` 真实现（`scene=product|ux`，同项目同场景串行，写 `.coderef/product_fit.json` / `.coderef/ux_fit.json` 后自动重渲染评估台）；产品/UX Tab 展示结论、五问矩阵、Rage Map 与证据锚点，并带「运行评估」按钮（离线时如实提示）；`coderef_frontend` 新增可选 `persona` / `journey`，复用 `ux_eval`，不新增工具（仍 52）。
+- **验证**：三层审查（pyflakes → Brooks-Lint → CodeRabbit）无新增 finding；全量 pytest 全绿；`check_version` 通过。
+
 ### v5.17.0 — 项目评估台：聚合层 + 健康记分卡 + 回环轻后端 + CI 门禁
 
 > 承接用户 2026-11-04 反馈（"没必要单独给用户出聚合……skill 也应该内置在网页中"）：不新增第二份聚合报告，把聚合长进既有报告页，`index.html` 升级为**唯一用户入口「项目评估台」**；记分卡以页面 Tab + `.coderef/scorecard.json` 旁路产物呈现；页面自带仅回环的轻后端，点按钮即可评估，不依赖 AI 在旁。版本按 SOP 升 minor（5.16.0 → 5.17.0）。

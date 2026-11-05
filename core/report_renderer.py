@@ -329,6 +329,11 @@ _CONSOLE_JS = """
   btns.forEach(function(b){
     b.addEventListener('click', function(){ show(b.getAttribute('data-tab')); });
   });
+  // 评估完成会刷新页面：恢复用户所在 Tab，避免被重置回「概览」
+  try {
+    var t = sessionStorage.getItem('coderef-tab');
+    if (t) { sessionStorage.removeItem('coderef-tab'); show(t); }
+  } catch (e) {}
 })();
 function scEsc(s){
   return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function(c){
@@ -375,6 +380,37 @@ function scRefresh(){
     if (st) st.textContent = '已重新评估（本地服务）';
   }).catch(function(){
     if (st) st.textContent = '离线快照：未连接本地评估服务，无法重新评估（用 coderef_report open_server=true 打开）';
+  });
+}
+function runEval(scene){
+  var meta = document.querySelector('meta[name="coderef-token"]');
+  var token = meta ? meta.getAttribute('content') : '';
+  var st = document.getElementById('eval-status-' + scene);
+  if (!token){
+    if (st) st.textContent = '离线页面：请用 coderef_report open_server=true 打开后再评估';
+    return;
+  }
+  // 同一场景在途时忽略重复点击（服务端也会以 409 BUSY 兜底）
+  window._evalBusy = window._evalBusy || {};
+  if (window._evalBusy[scene]) return;
+  window._evalBusy[scene] = true;
+  if (st) st.textContent = '评估中…（可能需要数分钟，请勿关闭页面）';
+  fetch('/api/evaluate', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CodeRef-Token': token},
+    body: JSON.stringify({scene: scene})
+  }).then(function(r){
+    return r.json().then(function(j){ return {ok: r.ok, j: j}; });
+  }).then(function(x){
+    if (!x.ok || (x.j && x.j.status === 'ERROR')){
+      throw new Error((x.j && (x.j.error || x.j.message)) || '评估失败');
+    }
+    if (st) st.textContent = '评估完成（' + ((x.j && x.j.status) || 'OK') + '），正在刷新…';
+    try { sessionStorage.setItem('coderef-tab', scene); } catch (e) {}
+    setTimeout(function(){ location.reload(); }, 400);
+  }).catch(function(e){
+    window._evalBusy[scene] = false;
+    if (st) st.textContent = '评估失败：' + e.message;
   });
 }
 </script>
@@ -570,14 +606,10 @@ class HtmlReportRenderer:
         """评估台首页：只做面板编排，内容组装见各自面板方法。"""
         overview = self._overview_panel(pr, kg_stats, wiki_dir, dimension_states, scorecard)
         arch = self._arch_panel(arch_link)
-        product = self._placeholder_panel(
-            "产品评估",
-            "v5.17.1 接入：产品证据包 + 六维评判 + 三档结论（值得做/先验证/不建议）。"
-            "本版不输出任何产品结论，避免用占位内容误导决策。")
-        ux = self._placeholder_panel(
-            "UX 人格走查",
-            "v5.18.0 接入：目标人格 + 走查剧本 + 生存分 + 愤怒地图；"
-            "每条发现必须带静态证据锚点，全部标注 simulated=true。")
+        # 快照来自可能不可信的项目仓库：单个面板渲染失败只降级该面板，
+        # 不让一份坏 JSON 导致四页全部失败（与概览记分卡口径一致）。
+        product = self._safe_panel(self._product_panel, "产品评估")
+        ux = self._safe_panel(self._ux_panel, "UX 人格走查")
         body = self._console_shell(overview, arch, product, ux)
         return _page("项目评估台", body, _nav("index.html", self.project_name), self.project_name)
 
@@ -703,12 +735,204 @@ class HtmlReportRenderer:
                 '<p class="empty">尚无架构画布产物：请先调用 coderef_arch_canvas（open_server=true 可直接推送），'
                 '生成后刷新本页即可内嵌。</p></section>')
 
+    # ─── 评估台：产品（F 轨）/ UX（U 轨） ───
+
     @staticmethod
-    def _placeholder_panel(title: str, desc: str) -> str:
-        """未接入的 Tab：明确标注下一版，不产出任何结论。"""
-        return ('<section><h2>' + _esc(title)
-                + ' <span class="badge badge-missing">下一版</span></h2>'
-                f'<p class="empty">{_esc(desc)}</p></section>')
+    def _safe_panel(builder, title: str) -> str:
+        """面板渲染失败只降级该面板（快照可能来自被分析项目的不可信仓库）。"""
+        try:
+            return builder()
+        except Exception as e:  # noqa: BLE001
+            return ('<section><h2>' + _esc(title)
+                    + ' <span class="badge badge-missing">渲染失败</span></h2>'
+                    + f'<p class="empty">评估快照结构非法：{_esc(str(e))}</p></section>')
+
+    def _eval_snapshot(self, name: str) -> dict:
+        path = os.path.join(self.project_path, ".coderef", name)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {"error": f"{name} 结构非法"}
+        except FileNotFoundError:
+            return {}
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"{name} 读取失败: {e}"}
+
+    @staticmethod
+    def _eval_metrics(items) -> str:
+        return '<div class="cards">' + "".join(
+            f'<div class="card"><div class="lbl">{_esc(k)}</div>'
+            f'<div class="val">{_esc(str(v if v is not None else "N/A"))}</div></div>'
+            for k, v in items) + '</div>'
+
+    @staticmethod
+    def _q_cell(q) -> str:
+        if not isinstance(q, dict):
+            return '<span class="badge badge-missing">未判定</span>'
+        status = str(q.get("status") or "unknown")
+        level = str(q.get("evidence_level") or "")
+        proxy = " · proxy" if q.get("proxy") else ""
+        ok = status in ("known", "has_source_candidate",
+                        "has_output_candidate", "interactive",
+                        "batch_or_command", "request_driven")
+        badge = "badge-ok" if ok else "badge-missing"
+        return (f'<span class="badge {badge}">{_esc(status)}</span> '
+                f'<span class="sc-note">{_esc(level + proxy)}</span><br>'
+                f'<span class="sc-note">{_esc(str(q.get("answer") or ""))}</span>')
+
+    @staticmethod
+    def _eval_button(scene: str, label: str) -> str:
+        return ('<button class="tab-btn" onclick="runEval(\'' + _attr(scene) + '\')">'
+                + _esc(label) + '</button>'
+                '<span class="sc-note" id="eval-status-' + _attr(scene) + '">'
+                '本地服务可用时点按钮即评估；离线请用 coderef_report open_server=true</span>')
+
+    def _product_panel(self) -> str:
+        """产品评估：F 轨主轴（业务契合度），不评价界面美观。"""
+        data = self._eval_snapshot("product_fit.json")
+        head = ('<section><h2>产品评估 · F 轨业务契合度'
+                '<span class="badge badge-ok">主轴</span></h2>')
+        if not data:
+            return (head + '<p class="empty">尚未运行产品评估。F 轨逐能力核对业务逻辑是否'
+                    '支撑真实决策；证据不足时只回证据包（SKIP），不产出三档结论。</p>'
+                    + self._eval_button("product", "运行产品评估") + '</section>')
+        if data.get("error"):
+            return (head + '<p class="empty">' + _esc(data["error"]) + '</p>'
+                    + self._eval_button("product", "运行产品评估") + '</section>')
+
+        status = str(data.get("status") or "")
+        badge = {"OK": "badge-ok", "SKIP": "badge-missing"}.get(status, "badge-missing")
+        stage = data.get("stage") or {}
+        concl = data.get("conclusion") or {}
+        parts = [head.replace("</h2>", f'<span class="badge {badge}">{_esc(status)}</span></h2>')]
+        parts.append(f'<p class="sc-note">阶段：{_esc(stage.get("phase", "-"))}'
+                     f'（{_esc(stage.get("reason", ""))} · {_esc(stage.get("decided_by", ""))}）</p>')
+        parts.append(self._eval_metrics([
+            ("契合率", data.get("fit_rate")),
+            ("断链数", data.get("broken_chains")),
+            ("卡死字段", data.get("blocked_fields")),
+            ("红线", data.get("redlines")),
+        ]))
+        verdict = concl.get("verdict")
+        if verdict:
+            vbadge = {"Go": "badge-ok", "Validate-first": "badge-missing",
+                      "No-go": "badge-high"}.get(str(verdict), "badge-missing")
+            parts.append(f'<h3 style="margin:14px 0 8px">结论 '
+                         f'<span class="badge {vbadge}">{_esc(str(verdict))}</span></h3>'
+                         f'<p>{_esc(str(concl.get("reason") or ""))}</p>')
+            conds = concl.get("conditions") or []
+            if conds:
+                parts.append('<ul>' + "".join(f'<li>{_esc(str(c))}</li>' for c in conds) + '</ul>')
+        else:
+            parts.append(f'<p class="empty">{_esc(str(concl.get("reason") or "未产出结论"))}</p>')
+
+        rows = (data.get("f1") or (data.get("f1_deterministic") or {}).get("rows") or [])
+        if rows:
+            body = []
+            for r in rows[:60]:
+                if not isinstance(r, dict):
+                    continue
+                body.append(
+                    f'<tr><td>{_esc(str(r.get("name", r.get("capability_id", ""))))}</td>'
+                    f'<td>{_esc(str(r.get("source", "")))}</td>'
+                    f'<td>{self._q_cell(r.get("q1_decision"))}</td>'
+                    f'<td>{self._q_cell(r.get("q2_input"))}</td>'
+                    f'<td>{self._q_cell(r.get("q3_output"))}</td>'
+                    f'<td>{self._q_cell(r.get("q4_honesty"))}</td>'
+                    f'<td>{self._q_cell(r.get("q5_frequency"))}</td>'
+                    f'<td><code>{_esc("、".join(r.get("anchors") or []))}</code></td></tr>')
+            parts.append('<h3 style="margin:14px 0 8px">F1 能力 × 五问矩阵</h3>'
+                         '<table><thead><tr><th>能力</th><th>来源</th><th>①支撑决策</th>'
+                         '<th>②输入现实性</th><th>③输出可行动</th><th>④数据诚实</th>'
+                         '<th>⑤频率匹配</th><th>证据锚点</th></tr></thead><tbody>'
+                         + "".join(body) + '</tbody></table>')
+
+        cut = data.get("cut_or_change") or []
+        if cut:
+            parts.append('<h3 style="margin:14px 0 8px">砍 / 改清单</h3><ul>' + "".join(
+                f'<li><strong>{_esc(str(c.get("capability_id", "")))}</strong>：'
+                f'{_esc(str(c.get("reason", "")))}</li>'
+                for c in cut if isinstance(c, dict)) + '</ul>')
+        assumptions = data.get("assumptions") or []
+        if assumptions:
+            parts.append('<h3 style="margin:14px 0 8px">待验证假设（E4）</h3><ul>' + "".join(
+                f'<li>{_esc(str(a.get("text", a) if isinstance(a, dict) else a))}</li>'
+                for a in assumptions[:20]) + '</ul>')
+        unknowns = data.get("unknowns") or (data.get("evidence") or {}).get("unknowns") or []
+        if unknowns:
+            parts.append('<h3 style="margin:14px 0 8px">未知项</h3><ul>' + "".join(
+                f'<li>{_esc(str(u))}</li>' for u in unknowns[:20]) + '</ul>')
+        parts.append('<p class="sc-note">' + _esc(str((data.get("chain") or {}).get("note", ""))) + '</p>')
+        parts.append(self._eval_button("product", "运行产品评估"))
+        parts.append('</section>')
+        return "".join(parts)
+
+    def _ux_panel(self) -> str:
+        """UX 人格走查：只判阻断，不产出体验评分。"""
+        data = self._eval_snapshot("ux_fit.json")
+        head = ('<section><h2>UX 人格走查 · U 轨'
+                '<span class="badge badge-ok">只判阻断</span></h2>')
+        if not data:
+            return (head + '<p class="empty">尚未运行人格走查。U 轨只回答「呈现问题是否阻断'
+                    '任务完成」，不产出体验分数；无锚点的发现不输出。</p>'
+                    + self._eval_button("ux", "运行 UX 走查") + '</section>')
+        if data.get("error"):
+            return (head + '<p class="empty">' + _esc(data["error"]) + '</p>'
+                    + self._eval_button("ux", "运行 UX 走查") + '</section>')
+
+        status = str(data.get("status") or "")
+        persona = data.get("persona") or {}
+        verdict = str(data.get("verdict") or "")
+        vbadge = {"blocking": "badge-high", "partial": "badge-missing",
+                  "non_blocking": "badge-ok"}.get(verdict, "badge-missing")
+        vlabel = {"blocking": "阻断", "partial": "部分阻断",
+                  "non_blocking": "不阻断"}.get(verdict, verdict)
+        parts = [head.replace(
+            "</h2>",
+            f'<span class="badge {vbadge}">{_esc(vlabel)}</span>'
+            f'<span class="badge badge-missing">{_esc(status)}</span></h2>')]
+        parts.append(f'<p class="sc-note">人格：{_esc(str(persona.get("name", "-")))}'
+                     f'（{_esc(str(persona.get("identity", "")))}）</p>')
+        parts.append(f'<p class="sc-note">旅程：{_esc(str(data.get("journey", "")))} · '
+                     'simulated=true · 结论 E4（锚点为 E2）</p>')
+        three = data.get("three_second") or {}
+        if three:
+            parts.append('<h3 style="margin:14px 0 8px">3 秒生存</h3><ul>' + "".join(
+                f'<li>{_esc(k)}：{_esc(str(v))}</li>' for k, v in three.items()) + '</ul>')
+
+        findings = data.get("findings") or []
+        if findings:
+            rows = []
+            for f in findings[:80]:
+                if not isinstance(f, dict):
+                    continue
+                sev = str(f.get("severity") or "P2")
+                sb = {"P0": "badge-high", "P1": "badge-medium",
+                      "P2": "badge-low"}.get(sev, "badge-low")
+                rows.append(
+                    f'<tr><td><span class="badge {sb}">{_esc(sev)}</span></td>'
+                    f'<td>{_esc(str(f.get("problem", "")))}</td>'
+                    f'<td>{_esc(str(f.get("rage", "")))}</td>'
+                    f'<td>{_esc("是" if f.get("task_interrupted") else "否")}</td>'
+                    f'<td>{_esc(str(f.get("business_consequence", "")))}</td>'
+                    f'<td><code>{_esc(str(f.get("anchor", "")))}</code></td></tr>')
+            parts.append('<h3 style="margin:14px 0 8px">Rage Map（含业务后果）</h3>'
+                         '<table><thead><tr><th>级别</th><th>问题</th><th>愤怒</th>'
+                         '<th>任务中断</th><th>业务后果</th><th>证据锚点</th></tr></thead><tbody>'
+                         + "".join(rows) + '</tbody></table>')
+        else:
+            parts.append('<p class="empty">未发现带锚点的阻断项。</p>')
+
+        unknowns = data.get("unknowns") or []
+        if unknowns:
+            parts.append('<h3 style="margin:14px 0 8px">未知项</h3><ul>' + "".join(
+                f'<li>{_esc(str(u))}</li>' for u in unknowns[:20]) + '</ul>')
+        vp = data.get("viewports") or {}
+        parts.append(f'<p class="sc-note">视口：{_esc(str(vp.get("evaluated", "")))}'
+                     f' · {_esc(str(vp.get("note", "")))}</p>')
+        parts.append(self._eval_button("ux", "运行 UX 走查"))
+        parts.append('</section>')
+        return "".join(parts)
 
     # ─── 评估台：记分卡 / 评估标准 / Tab 外壳 ───
 

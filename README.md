@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.17.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.18.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -128,7 +128,8 @@ coderef_docs(project_path="/path/to/project", background=True)
 coderef_interpret(project_path="/path/to/project", action="dashboard")
 
 # 4. 打开「项目评估台」（唯一用户入口）：四 Tab（概览记分卡 / 架构 / 产品 / UX）
-#    页面自带仅回环的轻后端，点「重新评估」即可刷新分数，不依赖 AI 在旁
+#    页面自带仅回环的轻后端：点「重新评估」刷新分数，
+#    点产品/UX Tab 的按钮即跑 F 轨业务契合度 / U 轨人格走查，不依赖 AI 在旁
 coderef_report(project_path="/path/to/project", open_server=True)
 ```
 
@@ -248,7 +249,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 | `coderef_query` | 知识图谱结构化查询（9 种查询类型） | 否 |
 | `coderef_review` | 代码审查：diff 变更审查 / 新项目全量语义首查 | 是 |
 | `coderef_frontend` | 前端交互审查（按钮/菜单静态枚举 + 6 维度审查） | 是 |
-| `coderef_report` | 聚合审计/图谱/Wiki 为自包含 HTML，`index.html` 即「项目评估台」（四 Tab + 健康记分卡；`open_server` 起回环服务） | 否 |
+| `coderef_report` | 聚合审计/图谱/Wiki 为自包含 HTML，`index.html` 即「项目评估台」（四 Tab + 健康记分卡 + 产品 F 轨 + UX U 轨；`open_server` 起回环服务） | 否 |
 | `coderef_audit_advisor` | 审计策略判定（增量/全量）+ 重点维度 | 可选 |
 | `coderef_whitelist` | 白名单管理 + 核心模块规则配置 | 否 |
 | `coderef_task_status` | 后台任务状态查询 | 否 |
@@ -325,7 +326,10 @@ coderef-ai/
 │   ├── functional_review.py          # 功能审查（创新传播/结构复杂度等）
 │   ├── report_renderer.py            # 报告站点渲染（index.html = 项目评估台四 Tab）
 │   ├── scorecard.py / scorecard_weights.json  # 健康记分卡（确定性聚合 + 权重外置 + CLI）
-│   ├── report_console.py             # 评估台回环轻后端（/api/scorecard、/api/config）
+│   ├── report_console.py             # 评估台回环轻后端（/api/scorecard、/api/config、/api/evaluate）
+│   ├── product_evidence.py           # 产品证据包（能力/声称/首次价值路径自动枚举，全部带锚点）
+│   ├── product_eval.py               # F 轨业务契合度（五问矩阵 + 链路核验 + 三档结论）
+│   ├── personas.json / ux_eval.py    # U 轨人格走查（只判阻断 + Rage Map 业务后果列）
 │   ├── code_review.py                # 代码审查（diff / 全量语义首查，evidence 标记）
 │   ├── frontend_inspector.py         # 前端交互审查
 │   ├── code_analyzer.py / ast_parser.py / code_models.py   # AST 分析
@@ -417,7 +421,17 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 > 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.14.3）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.17.0 — 项目评估台：聚合层 + 健康记分卡 + 回环轻后端
+### 当前版本 v5.18.0 — 三轨评估：F 轨业务契合度 + B 轨条件触发 + U 轨只判阻断
+
+> 承接用户 2026-11-05 拍板（采纳外部 skill 的「三轨层级」）：评估台从「产品/UX 两 Tab 平行」改为**三轨有主轴**——F 轨业务契合度必跑，B 轨业务模式条件触发，U 轨人格走查只判阻断、不独立评分。版本按 SOP 升 minor（5.17.0 → 5.18.0；P1/P2 合并落地）。
+> - **产品证据包**（`core/product_evidence.py`，确定性、无 LLM）：能力清单**自动枚举**（业务架构树 + 前端菜单/表单 + 路由 + CLI 子命令），声称/首次价值路径/许可/付费/路线图信号全部带 `file:line`、路由或命令锚点；推不出的写 `unknown`，不写 0、不编造。
+> - **F 轨五问矩阵**（`core/product_eval.py`）：逐能力核对「支撑哪个决策 / 输入现实性 / 输出可行动性 / 数据诚实度 / 频率匹配」；**输入现实性强制标 `proxy=true`**（代码只能推「有无上游数据源」，不能宣称用户手上有什么）；F2 链路核验优先用知识图谱 CALLS 边，图谱跑不出才降级并如实标注。
+> - **三档结论与硬红线**：Go / Validate-first / No-go + 待验证假设清单；**无 LLM Key 只回证据包（status=SKIP）不产结论**；LLM 输出含市场/竞品数字即整份拒收；E4 必须进假设清单；业务逻辑不支撑决策的能力进「砍/改清单」而非修复清单。
+> - **U 轨人格走查**（`core/personas.json` + `core/ux_eval.py`）：3 个内置人格（低耐心新手 / 谨慎比价者 / 时间紧迫决策者），7 项必填（身份/目标/行为特征/耐心/信任与验证习惯/价格敏感/放弃触发 ≥3 条/第一人称口吻），禁止「普通用户」；只输出 `blocking` / `partial` / `non_blocking`；**Rage Map 必带业务后果列**（愤怒 ≥4 且任务中断 → P0/P1，否则最高 P2）；无锚点不输出；全部 `simulated=true` + E4；只评 1280/1440/1920 桌面视口。
+> - **页面与工具接入**：`POST /api/evaluate` 真实现（同项目同场景串行，写 `.coderef/product_fit.json` / `ux_fit.json` 后自动重渲染页面）；产品/UX Tab 直接展示结论、五问矩阵、Rage Map 与锚点；`coderef_frontend` 新增可选 `persona` / `journey`（不新增工具，工具总数仍 52）。
+> - **审查与验证**：三层审查（pyflakes → Brooks-Lint → CodeRabbit）0 新增 finding；全量 pytest 全绿；`check_version` 通过。
+
+### 历史版本 v5.17.0 — 项目评估台：聚合层 + 健康记分卡 + 回环轻后端
 
 > 承接用户 2026-11-04 反馈（"没必要单独给用户出聚合……skill 也应该内置在网页中"）：不新增第二份聚合报告，把聚合长进既有报告页，`index.html` 升级为**唯一用户入口「项目评估台」**；记分卡以页面 Tab + `.coderef/scorecard.json` 旁路产物呈现；页面自带仅回环的轻后端，点按钮即可评估，不依赖 AI 在旁。
 > - **评估台四 Tab**：概览（健康记分卡 + 评估标准）/ 架构（内嵌业务树画布）/ 产品 / UX（后两者 P0 只占位，不产出假结论）。

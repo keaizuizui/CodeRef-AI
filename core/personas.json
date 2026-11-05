@@ -1,0 +1,86 @@
+{
+  "version": "5.18.0",
+  "required_fields": [
+    "identity",
+    "goal",
+    "behaviors",
+    "patience",
+    "trust_level",
+    "verification_habit",
+    "price_sensitivity",
+    "abandon_triggers",
+    "voice_sample"
+  ],
+  "rules": {
+    "abandon_triggers_min": 3,
+    "scale_min": 0,
+    "scale_max": 5,
+    "note": "禁止「普通用户」这类无特征人格；内置模板可按项目改写，但 7 项必填不得缺失。"
+  },
+  "personas": [
+    {
+      "id": "impatient_newbie",
+      "name": "低耐心新手",
+      "identity": "第一次使用该类工具的小商家运营，没有技术背景",
+      "goal": "10 分钟内把一次营销内容做完并发布，不想学整套系统",
+      "behaviors": [
+        "只用主流程，不读文档",
+        "遇到第二个弹窗就开始怀疑能不能做完",
+        "看到专业术语会直接跳过"
+      ],
+      "patience": 2,
+      "trust_level": 2,
+      "verification_habit": "不主动核对数据来源，只看结果像不像真的",
+      "price_sensitivity": 4,
+      "abandon_triggers": [
+        "需要注册后才能看到任何结果",
+        "首屏看不到「下一步点哪」",
+        "必须手工准备 3 个以上外部数据"
+      ],
+      "voice_sample": "我就想赶紧发出去，别让我填一堆看不懂的东西。"
+    },
+    {
+      "id": "cautious_comparer",
+      "name": "谨慎比价者",
+      "identity": "同时对比 2-3 家工具的中小团队负责人",
+      "goal": "确认这家在数据来源与产出质量上不比别家差，再决定付费",
+      "behaviors": [
+        "先看定价页与样例产出",
+        "会翻帮助文档核对口径",
+        "发现一处夸大就整体不信任"
+      ],
+      "patience": 4,
+      "trust_level": 3,
+      "verification_habit": "强：会对照样例与自己的数据验证",
+      "price_sensitivity": 5,
+      "abandon_triggers": [
+        "定价不透明",
+        "样例产出与实际结果不一致",
+        "找不到数据来源说明",
+        "退款或试用条件缺失"
+      ],
+      "voice_sample": "先给我看真实样例和数据从哪来，我再决定要不要付钱。"
+    },
+    {
+      "id": "time_pressed_exec",
+      "name": "时间紧迫决策者",
+      "identity": "要在例会前拿到一页结论的团队负责人",
+      "goal": "5 分钟内拿到可直接汇报的结论与依据",
+      "behaviors": [
+        "只看首屏结论与数字",
+        "不看过程细节",
+        "结论含糊就换工具"
+      ],
+      "patience": 1,
+      "trust_level": 2,
+      "verification_habit": "中：抽查 1-2 个关键数字是否可点回原文",
+      "price_sensitivity": 2,
+      "abandon_triggers": [
+        "首屏没有结论只有功能罗列",
+        "结论没有证据锚点",
+        "要等很久才出结果"
+      ],
+      "voice_sample": "别讲过程，直接告诉我结论和依据在哪。"
+    }
+  ]
+}
