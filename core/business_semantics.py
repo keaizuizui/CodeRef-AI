@@ -309,6 +309,43 @@ def analyze(project_path: str, use_llm: bool = True) -> dict:
     if llm_note:
         unknowns.append(llm_note)
 
+    # ── 给 AI 直接消费的两份结构（人看的是画布，AI 读的是这些）──
+    # lanes：泳道分组（actor → 模块）；clusters：连通分量（"力聚合"的确定性等价，
+    # 只回答"哪些模块成簇"，不产坐标——AI 不需要像素位置，需要可复现的分组）。
+    lanes: Dict[str, List[str]] = {}
+    for r in rows:
+        lanes.setdefault(r["actor"], []).append(r["module"])
+
+    def _components() -> List[dict]:
+        undirected: Dict[str, set] = {r["module"]: set() for r in rows}
+        for e in edges:
+            undirected[e["from"]].add(e["to"])
+            undirected[e["to"]].add(e["from"])
+        seen: set = set()
+        comps: List[dict] = []
+        for start in sorted(undirected):
+            if start in seen:
+                continue
+            stack = [start]
+            seen.add(start)
+            members: List[str] = []
+            while stack:
+                cur = stack.pop()
+                members.append(cur)
+                for nxt in sorted(undirected[cur]):
+                    if nxt not in seen:
+                        seen.add(nxt)
+                        stack.append(nxt)
+            comps.append({
+                "id": f"c{len(comps) + 1}",
+                "modules": sorted(members),
+                "actors": sorted({by_mod[m]["actor"] for m in members}),
+                "stages": sorted({by_mod[m]["stage"] for m in members}),
+            })
+        return sorted(comps, key=lambda c: (-len(c["modules"]), c["id"]))
+
+    clusters = _components()
+
     return {
         "version": __version__,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -319,6 +356,8 @@ def analyze(project_path: str, use_llm: bool = True) -> dict:
             {"id": UNLABELED_ACTOR, "name": "未归类"}],
         "nodes": rows,
         "edges": edges,
+        "lanes": lanes,
+        "clusters": clusters,
         "summary": {
             "modules": len(rows),
             "actor_labeled": actor_labeled,

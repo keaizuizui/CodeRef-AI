@@ -465,6 +465,11 @@ BUILTIN_TOOLS: List[Dict] = [
                             "output_dir": {"type": "string", "description": "画布输出目录（可选，默认 <project>/.coderef/）"},
                             "with_flow": {"type": "boolean", "description": "同时生成业务流程泳道视图（默认 true）", "default": True},
                             "flow_use_llm": {"type": "boolean", "description": "业务流程标注是否允许 LLM 补命名/归类（默认 true；无 Key 自动降级）", "default": True},
+                            "format": {"type": "string", "enum": ["html", "data"], "default": "html",
+                                "description": ("html=渲染画布供人看（默认）；data=只回结构化数据不渲染 HTML，"
+                                                "供 AI 直接读取：tree（业务树）+ semantics（lanes 泳道分组 / "
+                                                "edges 模块邻接 / clusters 连通分量聚类）。AI 读不了交互页面，"
+                                                "需要数据时用 data")},
                             "background": {"type": "boolean", "description": "后台执行（超大项目同步可能超时，默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
                             "open_server": {"type": "boolean", "description": "生成后启动本地回环静态服务，把画布 push 给用户浏览器（默认 false）", "default": False},
                             "host": {"type": "string", "description": "open_server 绑定地址（仅允许回环 127.0.0.1/::1/localhost，默认 127.0.0.1）", "default": "127.0.0.1"},
