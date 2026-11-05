@@ -4,6 +4,19 @@
 
 ---
 
+### v5.17.0 — 项目评估台：聚合层 + 健康记分卡 + 回环轻后端 + CI 门禁
+
+> 承接用户 2026-11-04 反馈（"没必要单独给用户出聚合……skill 也应该内置在网页中"）：不新增第二份聚合报告，把聚合长进既有报告页，`index.html` 升级为**唯一用户入口「项目评估台」**；记分卡以页面 Tab + `.coderef/scorecard.json` 旁路产物呈现；页面自带仅回环的轻后端，点按钮即可评估，不依赖 AI 在旁。版本按 SOP 升 minor（5.16.0 → 5.17.0）。
+
+- **评估台四 Tab（`core/report_renderer.py`）**：概览（健康记分卡 + 评估标准面板）/ 架构（iframe 内嵌既有业务树画布）/ 产品 / UX；后两者本版只做占位并标注"下一版"，不产出任何结论。`audit.html` / `kg.html` / `wiki.html` 保留为概览 Tab 的详情页，**不产生第二份聚合报告**。
+- **健康记分卡（`core/scorecard.py`，确定性聚合、无 LLM）**：结构健康 / 架构对齐 / 审计发现 / 治理闭环 / 文档覆盖五个维度；**证据不足标 `unknown` 且不给分**（不写 0、不给满分），无代码项目按 U-46 口径整体 `N/A`；总分只在已知维度上按权重归一化，并暴露 `coverage` / `confidence`；审计发现维度带新鲜度判定（源码比产物新超过 1 天标 `stale`）。
+- **权重外置与项目级覆盖**：`core/scorecard_weights.json` 为默认值与口径唯一真源，`<project>/.coderef/eval_config.json` 按 key 合并覆盖（非法权重 / 非有限值 / 合并后合计为 0 一律拒绝）；页面「评估标准」面板把口径摊开。
+- **机器可读旁路与 CLI**：记分卡落盘 `<project>/.coderef/scorecard.json`，并提供 `python -m core.scorecard --json/--min-score/--fail-on-below` 供 CI 与编程 AI 消费（默认 warn 不阻断）。
+- **回环轻后端（`core/report_console.py`）**：`GET /`、子页与业务架构画布白名单路由、`GET /api/scorecard`、`GET /api/health`、`POST /api/config`、`POST /api/evaluate`（本版固定 501）。安全约束：仅回环绑定、项目路径服务端固定、无 CORS、GET/POST 统一 Host 校验（防 DNS rebinding）、POST 需同源 Origin + `application/json` + 一次性 token、请求体 64KB 上限、无目录列举与路径穿越。
+- **`coderef_report` 参数**：新增 `open_server` / `host` / `port`（工具总数仍为 52）；渲染前重算一次记分卡快照，其余渲染路径只读快照，不重复扫描。
+- **CI 门禁**：新增 `.github/workflows/coderef-gate.yml`，调用记分卡 CLI 与基线比对；默认只告警，显式开启阻断才影响构建。
+- **审查与验证**：pyflakes 无新增告警；全量自测 **259 全绿**；Brooks-Lint 全仓体检 Composite 90/100；CodeRabbit 对最近修订复核 8 轮累计 16 条 finding（0 critical / 0 major）全部修复。
+
 ### v5.16.0 — 架构画布方向调整：业务架构大白话图（替代模块依赖图展示）
 
 > 承接用户 2026-09-21 反馈（模块图"没眼看"，给出「选品工作台」业务层级样例）：用户端画布从**模块依赖图**改为**业务架构大白话图**——入口 → 主功能 → 子功能 → 步骤链，AI 自动归纳 + LLM 辅助大白话，人工在 skill 确认门确认框架；模块图降级为编程 AI 数据结构。版本按 SOP 升 minor（5.15.0 → 5.16.0）。

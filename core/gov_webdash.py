@@ -411,18 +411,43 @@ def _make_handler(project_path: str):
                                        "message": "流转回写仅允许本机(127.0.0.1)"}, 403)
                 body = self._read_body()
                 return self._json(_transition(project_path, body))
-            if name == "GET" and path in ("/", "/board", "/index.html",
-                                          "/board.html", "/overview.html"):
+            if name == "GET" and path in ("/", "/board", "/index.html", "/board.html"):
                 # U-47：根路径直回看板 HTML（页面与 /api/transition 等接口同源）。
                 # 每次 GET 动态生成（不缓存），保证 transition 流转后刷新即见新数据；
                 # 非 GET 请求走下方 404 JSON 兜底。
                 return self._html(render_board(project_path).get("board_html_str") or "")
+            if name == "GET" and path == "/overview.html":
+                # O-U47-1：/overview.html 按语义返回「项目总览」页，而非同一张治理看板。
+                html = _overview_page_html(project_path)
+                if html:
+                    return self._html(html)
+                return self._json({"ok": False,
+                                   "message": "项目总览尚未生成（coderef_gov_report action=overview）"},
+                                  404)
             return self._json({"ok": False, "error": f"404 {path}"}, 404)
 
         def log_message(self, *a):
             pass
 
     return Handler
+
+
+def _overview_page_html(project_path: str) -> str:
+    """项目总览页 HTML：优先读已落盘产物，缺失时现场生成一次（失败返回空串）。"""
+    path = os.path.join(os.path.abspath(project_path), ".coderef", "project_overview.html")
+    if not os.path.isfile(path):
+        try:
+            from core.project_overview import render_overview
+            render_overview(project_path)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[gov_webdash] 项目总览生成失败: {e}")
+            return ""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[gov_webdash] 项目总览读取失败: {e}")
+        return ""
 
 
 def _transition(project_path: str, body: Dict[str, Any]) -> Dict[str, Any]:
