@@ -260,22 +260,30 @@ def _rel(project_path: str, path: str) -> str:
         return path
 
 
-def _find_findings_json(project_path: str) -> Optional[str]:
-    """定位落盘的审计 findings JSON（项目侧，优先带项目哈希的版本）。"""
+def _findings_names(project_path: str) -> List[str]:
+    """审计产物的候选文件名：同时覆盖「原样路径」与「绝对路径」两种哈希口径。
+
+    写端（pipeline_runner）按调用方传入的原始路径哈希；本模块内部统一用 abspath，
+    因此两种形态都要试，避免同一项目因路径写法不同而找不到产物。
+    """
+    names: List[str] = []
     try:
         from core.pr_whitelist import project_hash
-        fname = f"audit_findings_{project_hash(project_path)}.json"
-    except Exception:
-        fname = "audit_findings.json"
-    candidates = [
-        os.path.join(project_path, "coderef-report", fname),
-        os.path.join(project_path, ".coderef", fname),
-        os.path.join(project_path, "coderef-report", "audit_findings.json"),
-        os.path.join(project_path, ".coderef", "audit_findings.json"),
-    ]
-    for p in candidates:
-        if os.path.isfile(p):
-            return p
+        for pp in dict.fromkeys([project_path, os.path.abspath(project_path)]):
+            names.append(f"audit_findings_{project_hash(pp)}.json")
+    except Exception:  # noqa: BLE001
+        pass
+    names.append("audit_findings.json")
+    return list(dict.fromkeys(names))
+
+
+def find_findings_json(project_path: str) -> Optional[str]:
+    """定位落盘的审计 findings JSON（项目侧，优先带项目哈希的版本）。"""
+    for d in ("coderef-report", ".coderef"):
+        for n in _findings_names(project_path):
+            p = os.path.join(project_path, d, n)
+            if os.path.isfile(p):
+                return p
     return None
 
 
@@ -384,7 +392,7 @@ def _finding_anchor(project_path: str, f: dict) -> str:
 
 
 def _dim_findings(project_path: str) -> dict:
-    fp = _find_findings_json(project_path)
+    fp = find_findings_json(project_path)
     if not fp:
         return _unknown("findings", "未找到 audit_findings 产物，请先运行 coderef_audit")
     data = _load_json(fp)

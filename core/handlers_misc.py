@@ -191,16 +191,8 @@ def _frontend(a) -> str:
 
 def _has_audit_artifacts(project_path: str) -> bool:
     """是否已有落盘的审计产物（只做 stat，不触发任何扫描）。"""
-    try:
-        from core.pr_whitelist import project_hash
-        names = (f"audit_findings_{project_hash(project_path)}.json", "audit_findings.json")
-    except Exception:  # noqa: BLE001
-        names = ("audit_findings.json",)
-    for d in ("coderef-report", ".coderef"):
-        for n in names:
-            if os.path.isfile(os.path.join(project_path, d, n)):
-                return True
-    return False
+    from core.scorecard import find_findings_json
+    return bool(find_findings_json(project_path))
 
 
 def _report(a) -> str:
