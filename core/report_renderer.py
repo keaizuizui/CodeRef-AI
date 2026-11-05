@@ -321,6 +321,8 @@ _CONSOLE_CSS = """
 .scroll-x { overflow-x:auto; margin-top:4px; }
 .badge-neutral { background:#1f2433; color:#c9cdd4; }
 .warn-line { font-size:12px; color:#fcd34d; margin:8px 0; }
+.arch-frame { display:none; }
+.arch-frame.active { display:block; }
 """
 
 # ── 评估台交互：Tab 切换 + 记分卡刷新（离线时如实提示，不假装成功） ──
@@ -388,6 +390,15 @@ function scRefresh(){
     if (st) st.textContent = '已重新评估（本地服务）';
   }).catch(function(){
     if (st) st.textContent = '离线快照：未连接本地评估服务，无法重新评估（用 coderef_report open_server=true 打开）';
+  });
+}
+function showArch(btn, key){
+  var wrap = btn.parentNode.parentNode;
+  wrap.querySelectorAll('.arch-frame').forEach(function(f){
+    f.classList.toggle('active', f.id === 'arch-frame-' + key);
+  });
+  btn.parentNode.querySelectorAll('.tab-btn').forEach(function(b){
+    b.classList.toggle('active', b === btn);
   });
 }
 function runEval(scene){
@@ -518,7 +529,8 @@ class HtmlReportRenderer:
             sc = scorecard if scorecard is not None else self._load_scorecard_snapshot()
             results["index.html"] = self._render_index(
                 pipe_result, kg_stats, wiki_dir, dimension_states,
-                scorecard=sc, arch_link=self._latest_arch_link(out))
+                scorecard=sc, arch_link=self._latest_arch_link(out),
+                flow_link=self._latest_flow_link(out))
         except Exception as e:
             return {"ok": False, "error": str(e), "files": []}
 
@@ -576,6 +588,22 @@ class HtmlReportRenderer:
         except Exception:  # noqa: BLE001
             return ""
 
+    def _latest_flow_link(self, out_dir: str) -> str:
+        """定位最新一张业务流程泳道画布（无则空串）。"""
+        d = os.path.join(self.project_path, ".coderef")
+        try:
+            files = sorted(f for f in os.listdir(d)
+                           if f.startswith("arch_flow_") and f.endswith(".html"))
+        except Exception:  # noqa: BLE001
+            return ""
+        if not files:
+            return ""
+        try:
+            rel = os.path.relpath(os.path.join(d, files[-1]), out_dir)
+            return rel.replace(os.sep, "/")
+        except Exception:  # noqa: BLE001
+            return ""
+
     # ─── 各类渲染 ───
 
     def _read_overview_summary(self, wiki_dir: Optional[str]) -> str:
@@ -618,10 +646,10 @@ class HtmlReportRenderer:
         return links
 
     def _render_index(self, pr, kg_stats, wiki_dir, dimension_states=None,
-                      scorecard=None, arch_link="") -> str:
+                      scorecard=None, arch_link="", flow_link="") -> str:
         """评估台首页：只做面板编排，内容组装见各自面板方法。"""
         overview = self._overview_panel(pr, kg_stats, wiki_dir, dimension_states, scorecard)
-        arch = self._arch_panel(arch_link)
+        arch = self._arch_panel(arch_link, flow_link)
         # 快照来自可能不可信的项目仓库：单个面板渲染失败只降级该面板，
         # 不让一份坏 JSON 导致四页全部失败（与概览记分卡口径一致）。
         product = self._safe_panel(self._product_panel, "产品评估")
@@ -750,19 +778,52 @@ class HtmlReportRenderer:
         return overview
 
     @staticmethod
-    def _arch_panel(arch_link: str) -> str:
-        """架构面板：iframe 复用既有业务树画布（未生成则诚实占位）。"""
-        if arch_link:
-            return ('<section><h2>业务架构视图 <span class="badge badge-ok">已生成</span></h2>'
-                    '<p>业务树大白话图：入口层 → 主功能 → 子功能 → 步骤链；模块依赖只作为编程 AI 的数据。</p>'
-                    f'<iframe src="{_attr(arch_link)}" style="width:100%;height:78vh;'
-                    'border:1px solid #2a2d3a;border-radius:8px;background:#0f1117"></iframe></section>')
-        return ('<section><h2>业务架构视图 <span class="badge badge-missing">未生成</span></h2>'
-                '<p class="empty">尚无架构画布产物。请在 MCP 中调用 '
-                '<code>coderef_arch_canvas(project_path=..., open_server=true)</code> 生成；'
-                '画布无法在本页内现场生成，生成后刷新本页即可内嵌。</p>'
-                '<p class="sc-note">当前视图为「业务树」：入口 → 主功能 → 子功能 → 步骤。'
-                '按角色划分的业务流程视图（actor × stage 泳道）在后续版本接入。</p></section>')
+    def _arch_panel(arch_link: str, flow_link: str = "") -> str:
+        """架构面板：业务流程视图（actor × stage 泳道）+ 业务树视图，可切换。
+
+        两个视图共用同一份业务语义标注：流程视图回答「谁在哪一步交接什么」，
+        树视图回答「模块归属哪个功能」。缺产物时如实占位，不在页内现场生成。
+        """
+        if not arch_link and not flow_link:
+            return ('<section><h2>业务架构视图 <span class="badge badge-missing">未生成</span></h2>'
+                    '<p class="empty">尚无架构画布产物。请在 MCP 中调用 '
+                    '<code>coderef_arch_canvas(project_path=..., open_server=true)</code> 生成；'
+                    '该调用会同时产出「业务流程视图」与「业务树视图」，生成后刷新本页即可内嵌。</p>'
+                    '<p class="sc-note">业务流程视图 = 泳道（角色）× 阶段（触发→校验→执行→落库→通知→交付）；'
+                    '业务树视图 = 入口 → 主功能 → 子功能 → 步骤。</p></section>')
+
+        btns = []
+        frames = []
+        first = True
+        for key, label, link, desc in (
+            ("flow", "业务流程视图", flow_link,
+             "按角色（泳道）与流程阶段排布；含「交接点」「交付点」标记。未判定 actor/stage 的模块进「未归类」。"),
+            ("tree", "业务树视图", arch_link,
+             "入口层 → 主功能 → 子功能 → 步骤链；模块依赖只作为编程 AI 的数据。"),
+        ):
+            if not link:
+                continue
+            active = " active" if first else ""
+            btns.append(f'<button class="tab-btn{active}" onclick="showArch(this, \'{key}\')">'
+                        f'{label}</button>')
+            frames.append(
+                f'<div class="arch-frame{active}" id="arch-frame-{key}">'
+                f'<p class="sc-note">{_esc(desc)}</p>'
+                f'<iframe src="{_attr(link)}" style="width:100%;height:72vh;'
+                'border:1px solid #2a2d3a;border-radius:8px;background:#0f1117"></iframe></div>')
+            first = False
+
+        missing = []
+        if not flow_link:
+            missing.append('业务流程视图（重跑 coderef_arch_canvas 生成）')
+        if not arch_link:
+            missing.append('业务树视图（重跑 coderef_arch_canvas 生成）')
+        missing_html = ("<p class=\"warn-line\">尚未生成：" + "；".join(_esc(m) for m in missing)
+                        + "</p>") if missing else ""
+
+        return ('<section><h2>业务架构视图 <span class="badge badge-ok">已生成</span></h2>'
+                f'<div class="tabs" style="margin-bottom:12px">{"".join(btns)}</div>'
+                + "".join(frames) + missing_html + '</section>')
 
     # ─── 评估台：产品（F 轨）/ UX（U 轨） ───
 

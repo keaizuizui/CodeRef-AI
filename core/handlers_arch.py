@@ -383,7 +383,11 @@ def _arch_gap(a: dict) -> str:
 
 
 def _arch_canvas(a: dict) -> str:
-    """可视化架构画布（coderef_arch_canvas，5.15 决策者报告首屏 + 分区画布 + open_server 前端推送）"""
+    """可视化架构画布（coderef_arch_canvas，5.15 决策者报告首屏 + 分区画布 + open_server 前端推送）
+
+    v5.18：同时产出「业务流程视图」（actor × stage 泳道），与业务树画布并列，
+    两者共用同一份业务语义标注（`.coderef/business_semantics.json`）。
+    """
     from core.arch_view import render_arch_view
     pp = a["project_path"]
     ta = a.get("target_arch")
@@ -400,6 +404,23 @@ def _arch_canvas(a: dict) -> str:
         "message": ("架构视图已生成：默认打开为决策者架构总览报告（一段话讲清 这是什么系统·怎么搭·怎么跑·哪里要修），"
                     "点「查看业务架构图」进入业务树画布（入口→主功能→子功能→步骤，AI 归纳大白话）"),
     }
+    if a.get("with_flow", True):
+        try:
+            from core.business_semantics import analyze, write_result
+            from core.arch_flow import render_file
+            sem = analyze(pp, use_llm=bool(a.get("flow_use_llm", True)))
+            sem_path = write_result(pp, sem)
+            flow_dir = output_dir or os.path.join(pp, ".coderef")
+            flow_path = render_file(pp, sem, output_dir=flow_dir,
+                                    title="业务流程视图")
+            r["flow_path"] = flow_path
+            r["semantics_path"] = sem_path
+            r["flow_summary"] = sem.get("summary", {})
+            r["message"] += ("；已同时生成「业务流程视图」（按角色与流程阶段划分的泳道画布），"
+                             "未判定 actor/stage 的模块会进「未归类」并计数，不假装已归类")
+        except Exception as e:  # noqa: BLE001
+            # 流程视图是增强项：失败不影响业务树画布可用性
+            r["flow_error"] = f"业务流程视图生成失败: {e}"
     if a.get("open_server"):
         r["server"] = _serve_arch_static(
             os.path.dirname(filepath),

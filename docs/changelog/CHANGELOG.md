@@ -12,6 +12,10 @@
 - **F 轨五问矩阵（`core/product_eval.py`）**：逐能力核对①支撑哪个决策 ②输入现实性 ③输出可行动性 ④数据诚实度 ⑤频率匹配；**②强制 `proxy=true`**（代码只能推「有无上游数据源」）；F2 优先用知识图谱 CALLS 边核验上下游消费，无图谱时降级并标注；三档结论 Go / Validate-first / No-go + 待验证假设清单；**无 LLM Key 只回证据包 `status="SKIP"`**；LLM 输出含市场/竞品数字整份拒收；E4 必须进假设清单；业务不支撑决策的能力进「砍/改清单」。
 - **U 轨人格走查（`core/personas.json` + `core/ux_eval.py`）**：内置 3 人格（低耐心新手 / 谨慎比价者 / 时间紧迫决策者），7 项必填且放弃触发 ≥3 条，禁止「普通用户」；只输出 `blocking` / `partial` / `non_blocking`；Rage Map 必带业务后果列（愤怒 ≥4 且任务中断 → P0/P1，否则最高 P2）；无锚点不输出；全部 `simulated=true` + E4；只评 1280/1440/1920 桌面视口，不产出窄屏课题。
 - **页面与工具接入**：`POST /api/evaluate` 真实现（`scene=product|ux`，同项目同场景串行，写 `.coderef/product_fit.json` / `.coderef/ux_fit.json` 后自动重渲染评估台）；产品/UX Tab 展示结论、五问矩阵、Rage Map 与证据锚点，并带「运行评估」按钮（离线时如实提示）；`coderef_frontend` 新增可选 `persona` / `journey`，复用 `ux_eval`，不新增工具（仍 52）。
+- **业务流程视图（`core/business_semantics.py` + `core/arch_flow.py`）**：在「图谱事实」与「画布布局」之间补一层业务叙事标注——`actor`（泳道）/`stage`（流程阶段）/`handoff`（跨泳道或跨阶段调用）/`value_node`（写库·导出·发布·扣款等交付点）。静态启发式提供事实锚点（模块路径 + 调用边），LLM 只做命名与归类；**无 Key 或判不出的模块进「未归类」泳道 / 「未归类阶段」列并计数，不假装已归类、不阻断出图**。布局确定性：X 轴 = 阶段（触发→准入校验→执行→落库→通知→交付），Y 轴 = 角色泳道，跨格调用标为交接点，同一份标注必然渲染同一张图。`coderef_arch_canvas` 新增 `with_flow`（默认开）/ `flow_use_llm`，一次调用同时产出业务树画布与流程泳道画布，标注落 `.coderef/business_semantics.json`；评估台架构 Tab 支持「业务流程视图 / 业务树视图」切换。
+- **U-49 修复（评估后页面不重渲染）**：根因不在 `render_report`，而在写入端——`_reuse_no_change` 只要有知识图谱就短路复用，首轮不跑审计、不落 `audit_findings_<hash>.json`、不写 `report_path`。修复：① 复用前必须能读到可解析的 findings JSON，否则降级 full；② findings JSON 同写项目侧 `<project>/.coderef/`（权威副本）+ 调用方输出目录，`render_report` 与审计状态探测双路径查找；③ `/api/evaluate` 新增 `page_refreshed` / `page_refresh_error`，重渲染未产出新页面时页面显式提示"刷新失败，请手动重跑"，不再假装成功。
+- **评估台 UI 修复（12 项）**：概览 section 嵌套套框改子卡片；去掉与 Tab 重名的顶部导航；记分卡覆盖 <50% 时加限定语（A 级不代表整体健康）；审计未执行时扫描文件/代码行显示 `--` 而非 `0`；产品阶段行去掉空来源残渣；契合率改百分比；目录兜底能力标「弱证据」；产品/UX 面板显示数据生成时间；UX 状态徽章改中性色并加 E4 提示行；宽表加横向滚动；架构空态说明具体调用方式。
+- **`arch_framework` 结构 bug**：深度 2 的模块（如 `core/ingest_reader`）不再生成与父节点同名的自我嵌套子节点（画布上表现为空壳重复卡）。
 - **验证**：三层审查（pyflakes → Brooks-Lint → CodeRabbit）无新增 finding；全量 pytest 全绿；`check_version` 通过。
 
 ### v5.17.0 — 项目评估台：聚合层 + 健康记分卡 + 回环轻后端 + CI 门禁

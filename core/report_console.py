@@ -8,6 +8,7 @@
     GET  /                      评估台页面（注入一次性 token 供写操作使用）
     GET  /audit.html|kg.html|wiki.html   既有子页
     GET  /.coderef/arch_canvas_*.html   业务架构画布（iframe 引用）
+    GET  /.coderef/arch_flow_*.html     业务流程泳道视图（iframe 引用）
     GET  /api/scorecard?refresh=0|1     记分卡（refresh=1 重算并落盘）
     GET  /api/health                    健康探针
     POST /api/config                    权重/阈值（写 <project>/.coderef/eval_config.json）
@@ -213,9 +214,12 @@ def _make_handler(project_path: str, out_dir: str, token: str,
                 return self._json({"ok": False, "error": f"读取失败: {e}"}, 500)
 
         def _serve_arch(self, name: str) -> None:
-            # 只放行 .coderef 下的业务架构画布产物；不允许分隔符/目录穿越
+            # 只放行 .coderef 下的画布产物（业务树 arch_canvas_* / 业务流程 arch_flow_*）；
+            # 不允许分隔符/目录穿越
             fn = os.path.basename(name)
-            if fn != name or not fn.startswith("arch_canvas_") or not fn.endswith(".html"):
+            prefixes = ("arch_canvas_", "arch_flow_")
+            if (fn != name or not fn.endswith(".html")
+                    or not fn.startswith(prefixes)):
                 return self._json({"ok": False, "error": "404"}, 404)
             fp = os.path.join(project_path, ".coderef", fn)
             if not os.path.isfile(fp):

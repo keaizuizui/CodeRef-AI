@@ -447,14 +447,21 @@ BUILTIN_TOOLS: List[Dict] = [
                         "节点为 AI 自动归纳的业务大白话（入口/main 启发 + 目录域分组），子功能展开显示归属模块；\n"
                         "模块依赖数据降级为 modules_graph（编程 AI 经工具消费，不用户展示）。\n"
                         "React 单文件构建，全内联零 CDN 依赖、离线可用。\n"
+                        "同时产出「业务流程视图」（actor × stage 泳道画布，with_flow 默认开）：\n"
+                        "  X 轴=流程阶段（触发→准入校验→执行→落库→通知→交付），Y 轴=角色泳道；\n"
+                        "  跨泳道/跨阶段的调用标为「交接点」，写库/导出/发布等标为「交付点」；\n"
+                        "  标注层（business_semantics）静态启发式给事实锚点，LLM 只做命名与归类；\n"
+                        "  无 Key 或判不出的模块进「未归类」并计数，不假装已归类。\n"
                         "open_server=true 时起本地回环静态服务直接把视图 push 给用户浏览器（根路径引导页直达最新产物）。\n"
                         "数据层复用 arch_gap_analyzer + 知识图谱 + arch_framework（确定性归纳），LLM 仅辅助大白话、缺 key 静态兜底。\n"
-                        "输出 HTML 文件路径。超大项目同步可能超时，默认后台执行。"
+                        "输出 HTML 文件路径（flow_path 为业务流程视图，semantics_path 为标注 JSON）。超大项目同步可能超时，默认后台执行。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
                             "target_arch": {"type": "object", "description": "目标架构 JSON（可选，缺省读已存储）"},
                             "output_dir": {"type": "string", "description": "画布输出目录（可选，默认 <project>/.coderef/）"},
+                            "with_flow": {"type": "boolean", "description": "同时生成业务流程泳道视图（默认 true）", "default": True},
+                            "flow_use_llm": {"type": "boolean", "description": "业务流程标注是否允许 LLM 补命名/归类（默认 true；无 Key 自动降级）", "default": True},
                             "background": {"type": "boolean", "description": "后台执行（超大项目同步可能超时，默认后台，返回 task_id 用 coderef_task_status 查询）", "default": True},
                             "open_server": {"type": "boolean", "description": "生成后启动本地回环静态服务，把画布 push 给用户浏览器（默认 false）", "default": False},
                             "host": {"type": "string", "description": "open_server 绑定地址（仅允许回环 127.0.0.1/::1/localhost，默认 127.0.0.1）", "default": "127.0.0.1"},

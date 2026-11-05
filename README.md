@@ -330,6 +330,7 @@ coderef-ai/
 │   ├── product_evidence.py           # 产品证据包（能力/声称/首次价值路径自动枚举，全部带锚点）
 │   ├── product_eval.py               # F 轨业务契合度（五问矩阵 + 链路核验 + 三档结论）
 │   ├── personas.json / ux_eval.py    # U 轨人格走查（只判阻断 + Rage Map 业务后果列）
+│   ├── business_semantics.py / arch_flow.py  # 业务叙事标注（actor/stage/handoff）+ 流程泳道画布
 │   ├── code_review.py                # 代码审查（diff / 全量语义首查，evidence 标记）
 │   ├── frontend_inspector.py         # 前端交互审查
 │   ├── code_analyzer.py / ast_parser.py / code_models.py   # AST 分析
@@ -421,7 +422,7 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 > 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.14.3）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.18.0 — 三轨评估：F 轨业务契合度 + B 轨条件触发 + U 轨只判阻断
+### 当前版本 v5.18.0 — 三轨评估（F 轨契合度 / B 轨条件触发 / U 轨只判阻断）+ 业务流程视图
 
 > 承接用户 2026-11-05 拍板（采纳外部 skill 的「三轨层级」）：评估台从「产品/UX 两 Tab 平行」改为**三轨有主轴**——F 轨业务契合度必跑，B 轨业务模式条件触发，U 轨人格走查只判阻断、不独立评分。版本按 SOP 升 minor（5.17.0 → 5.18.0；P1/P2 合并落地）。
 > - **产品证据包**（`core/product_evidence.py`，确定性、无 LLM）：能力清单**自动枚举**（业务架构树 + 前端菜单/表单 + 路由 + CLI 子命令），声称/首次价值路径/许可/付费/路线图信号全部带 `file:line`、路由或命令锚点；推不出的写 `unknown`，不写 0、不编造。
@@ -429,6 +430,8 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 > - **三档结论与硬红线**：Go / Validate-first / No-go + 待验证假设清单；**无 LLM Key 只回证据包（status=SKIP）不产结论**；LLM 输出含市场/竞品数字即整份拒收；E4 必须进假设清单；业务逻辑不支撑决策的能力进「砍/改清单」而非修复清单。
 > - **U 轨人格走查**（`core/personas.json` + `core/ux_eval.py`）：3 个内置人格（低耐心新手 / 谨慎比价者 / 时间紧迫决策者），7 项必填（身份/目标/行为特征/耐心/信任与验证习惯/价格敏感/放弃触发 ≥3 条/第一人称口吻），禁止「普通用户」；只输出 `blocking` / `partial` / `non_blocking`；**Rage Map 必带业务后果列**（愤怒 ≥4 且任务中断 → P0/P1，否则最高 P2）；无锚点不输出；全部 `simulated=true` + E4；只评 1280/1440/1920 桌面视口。
 > - **页面与工具接入**：`POST /api/evaluate` 真实现（同项目同场景串行，写 `.coderef/product_fit.json` / `ux_fit.json` 后自动重渲染页面）；产品/UX Tab 直接展示结论、五问矩阵、Rage Map 与锚点；`coderef_frontend` 新增可选 `persona` / `journey`（不新增工具，工具总数仍 52）。
+> - **业务流程视图**（`core/business_semantics.py` + `core/arch_flow.py`）：在图谱事实与画布之间补一层业务叙事标注——`actor`（泳道）/ `stage`（流程阶段）/ `handoff`（交接点）/ `value_node`（交付点）。静态启发式给事实锚点，LLM 只做命名与归类；**判不出的进「未归类」并计数，不假装已归类**。布局确定性：X=阶段（触发→校验→执行→落库→通知→交付），Y=角色泳道，同一份标注必出同一张图。`coderef_arch_canvas` 默认同时产出业务树与流程泳道两张画布，架构 Tab 可切换。
+> - **U-49 修复**：根因在写入端——`_reuse_no_change` 只要图谱存在就短路复用，首轮不跑审计、不落 findings JSON。已改为「必须能读到 findings 才复用」，findings 同写项目侧 `.coderef/`，`/api/evaluate` 返回 `page_refreshed` 让页面在刷新失败时显式提示。
 > - **审查与验证**：三层审查（pyflakes → Brooks-Lint → CodeRabbit）0 新增 finding；全量 pytest 全绿；`check_version` 通过。
 
 ### 历史版本 v5.17.0 — 项目评估台：聚合层 + 健康记分卡 + 回环轻后端
