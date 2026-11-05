@@ -371,6 +371,8 @@ class FrontendInspector:
         mode: str = "static",
         url: Optional[str] = None,
         check_levels: Optional[List[int]] = None,
+        persona: Optional[object] = None,
+        journey: Optional[str] = None,
     ) -> Dict[str, Any]:
         """主入口。返回 {"buttons": [...], "menu_tree": [...], "findings": [...], "summary": "..."}。
 
@@ -379,25 +381,41 @@ class FrontendInspector:
         mode         : "static"（默认，静态解析 + LLM 审查）或 "runtime"（浏览器抽查，失败降级）
         url          : runtime 模式所需的服务地址
         check_levels : 菜单要列出到第几层（默认 [1,2,3,4,5]）
+        persona      : 可选人格 id/对象；传入则附带 U 轨「是否阻断任务完成」走查结论
+        journey      : 可选关键任务旅程描述（配合 persona）
         """
         if check_levels is None:
             check_levels = list(DEFAULT_CHECK_LEVELS)
 
         mode = (mode or "static").lower()
         if mode == "runtime":
-            return self._inspect_runtime(project_path, entry, url, check_levels)
+            result = self._inspect_runtime(project_path, entry, url, check_levels)
+        else:
+            if mode != "static":
+                logger.warning(f"未知模式 {mode!r}，降级为 static")
+            result = self._inspect_static(project_path, entry, check_levels)
 
-        if mode != "static":
-            logger.warning(f"未知模式 {mode!r}，降级为 static")
-        return self._inspect_static(project_path, entry, check_levels)
+        if persona or journey:
+            # 复用 core/ux_eval 的 U 轨逻辑，不在前端审查里复制第二套判定
+            try:
+                from core.ux_eval import evaluate as eval_ux
+                result["ux"] = eval_ux(project_path, persona=persona,
+                                       journey=journey or "")
+            except Exception as e:  # noqa: BLE001
+                result["ux"] = {"status": "ERROR", "error": str(e)}
+        return result
 
-    # ── 静态分析 ──
-    def _inspect_static(
+    # ── 静态枚举（确定性，不调用 LLM；供前端审查与产品证据包共用） ──
+    def enumerate_static(
         self,
         project_path: str,
-        entry: Optional[str],
-        check_levels: List[int],
+        entry: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """只做静态枚举（不审查、不调 LLM），返回按钮与菜单树原始结构。
+
+        产品证据包（product_evidence）需要「有哪些按钮/菜单/表单」的确定性
+        事实，不能为了拿清单触发一次 LLM 审查；因此把枚举与审查拆开。
+        """
         # 项目预检：确认存在用户维护的前端源码（HTML/Vue/JSX/TSX，已排除
         # coderef-report/.gitnexus 等工具自产输出目录）。纯 Python 项目的
         # HTML 通常只是工具自产的审计报告/历史快照，直接跳过静态枚举，
@@ -426,17 +444,41 @@ class FrontendInspector:
         # 同文件去重：同一文件内重复出现的按钮（生成产物重复块）合并，
         # 出现次数记入 occurrences；不同文件的按钮各自保留（同名按钮
         # 属于不同源码位置的证据锚点，合并会丢失 file:line 位置）。
+        # 去重键必须含 form / has_confirm：同名按钮若归属表单或确认弹窗不同，
+        # 合并会掩盖「无确认的删除」或把提交按钮错配到别的表单（U 轨误判阻断）。
         _dedup: Dict[tuple, ButtonItem] = {}
         _dedup_buttons: List[ButtonItem] = []
         for b in buttons:
-            key = (b.text, b.tag, b.file)
+            key = (b.text, b.tag, b.file, b.form, b.has_confirm)
             if key in _dedup:
                 _dedup[key].occurrences += 1
             else:
                 b.occurrences = 1
                 _dedup[key] = b
                 _dedup_buttons.append(b)
-        buttons = _dedup_buttons
+
+        return {
+            "ok": True,
+            "applicable": True,
+            "files": html_files,
+            "buttons": _dedup_buttons,
+            "menu_roots": menu_roots,
+        }
+
+    # ── 静态分析 ──
+    def _inspect_static(
+        self,
+        project_path: str,
+        entry: Optional[str],
+        check_levels: List[int],
+    ) -> Dict[str, Any]:
+        enum = self.enumerate_static(project_path, entry)
+        if enum.get("applicable") is False:
+            return enum
+
+        html_files = enum["files"]
+        buttons: List[ButtonItem] = enum["buttons"]
+        menu_roots: List[MenuNode] = enum["menu_roots"]
 
         # 收集需要审查的菜单节点（仅 check_levels 内的层级）
         menu_nodes: List[MenuNode] = []

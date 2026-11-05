@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""report_console — 项目评估台的回环轻后端（v5.17.0）。
+"""report_console — 项目评估台的回环轻后端（v5.18.0）。
 
 背景：评估台页面（`coderef-report/html/index.html`）需要"点按钮即评估"，
 但又不能把任意文件/路径暴露给浏览器。本模块起一个**仅回环**的
@@ -11,7 +11,7 @@
     GET  /api/scorecard?refresh=0|1     记分卡（refresh=1 重算并落盘）
     GET  /api/health                    健康探针
     POST /api/config                    权重/阈值（写 <project>/.coderef/eval_config.json）
-    POST /api/evaluate                  评估场景（P0 固定 501 NOT_IMPLEMENTED）
+    POST /api/evaluate                  产品（F 轨）/ UX（U 轨）评估，写 product_fit/ux_fit.json
 
 安全约束（缺一不通过）：
   1. 仅回环绑定（127.0.0.1 / ::1 / localhost），其他 host 直接 ValueError；
@@ -37,6 +37,15 @@ _MAX_BODY = 64 * 1024
 _LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
 _SERVERS: Dict[str, Dict[str, Any]] = {}
 _LOCK = threading.Lock()
+# 同一项目同一场景的评估串行（LLM 慢调用时不重复跑）；不同场景可并行
+_EVAL_LOCKS: Dict[str, threading.Lock] = {}
+# 页面重渲染串行：产品/UX 两个场景可能同时收尾，render 写文件非原子
+_RENDER_LOCK = threading.Lock()
+
+
+def _eval_lock(key: str) -> threading.Lock:
+    with _LOCK:
+        return _EVAL_LOCKS.setdefault(key, threading.Lock())
 
 
 def _normalize_host(host: str) -> str:
@@ -66,7 +75,7 @@ color:#93c5fd;font-size:13px}}.muted{{color:#9ca3af;font-size:13px}}</style></he
 def _make_handler(project_path: str, out_dir: str, token: str,
                   cache: Dict[str, Any]):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "CodeRefEval/5.17"
+        server_version = "CodeRefEval/5.18"
 
         # ── 基础响应 ──
         def _json(self, obj: Any, code: int = 200) -> None:
@@ -230,6 +239,48 @@ def _make_handler(project_path: str, out_dir: str, token: str,
                     cache["card"] = card
             return self._json(card)
 
+        def _refresh_page(self) -> None:
+            """评估产物落盘后重渲染评估台（只聚合既有产物，不重跑扫描）。"""
+            try:
+                from core.pipeline_runner import Pipe
+                with _RENDER_LOCK:
+                    Pipe().render_report(project_path, output_dir=out_dir)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[report_console] 评估后台页重渲染失败（忽略）: {e}")
+
+        def _api_evaluate(self, scene: str, data: dict) -> None:
+            """产品（F 轨）/ UX（U 轨）评估：同项目同场景串行，不同场景可并行。"""
+            lock = _eval_lock(f"{project_path}:{scene}")
+            if not lock.acquire(blocking=False):
+                return self._json({
+                    "ok": False, "status": "BUSY", "scene": scene,
+                    "message": "同一项目同一场景正在评估，请稍后重试",
+                }, 409)
+            try:
+                if scene == "product":
+                    from core.product_eval import evaluate as eval_product
+                    res = eval_product(
+                        project_path,
+                        stage=data.get("stage") or None,
+                        scope=data.get("scope") or None)
+                else:
+                    from core.ux_eval import evaluate as eval_ux
+                    res = eval_ux(
+                        project_path,
+                        persona=data.get("persona"),
+                        journey=str(data.get("journey") or ""),
+                        problems=data.get("problems") or None,
+                        viewports=data.get("viewports") or None)
+                self._refresh_page()
+                res.setdefault("ok", res.get("status") != "ERROR")
+                return self._json(res, 400 if res.get("status") == "ERROR" else 200)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"[report_console] 评估失败 scene={scene}: {e}")
+                return self._json({"ok": False, "status": "ERROR",
+                                   "scene": scene, "error": f"评估失败: {e}"}, 500)
+            finally:
+                lock.release()
+
         # ── POST 路由 ──
         def _route_post(self) -> None:
             if not self._host_ok():
@@ -248,14 +299,11 @@ def _make_handler(project_path: str, out_dir: str, token: str,
                 return self._json({"ok": False, "error": bad}, code)
 
             if path == "/api/evaluate":
-                scene = str((data or {}).get("scene") or "")
-                return self._json({
-                    "ok": False,
-                    "status": "NOT_IMPLEMENTED",
-                    "scene": scene,
-                    "message": ("产品评估（v5.17.1）与 UX 人格走查（v5.18.0）尚未接入；"
-                                "本版不产出任何评估结论，避免占位内容被误当真实判断。"),
-                }, 501)
+                scene = str((data or {}).get("scene") or "").strip().lower()
+                if scene not in ("product", "ux"):
+                    return self._json(
+                        {"ok": False, "error": "scene 必须为 product 或 ux"}, 400)
+                return self._api_evaluate(scene, data or {})
 
             try:
                 from core.scorecard import save_config
