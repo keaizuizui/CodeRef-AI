@@ -694,7 +694,8 @@ class Server:
                     f"auto/full/incr/no_change")
             strat = None if strat == "auto" else strat
             r = Pipe().audit(p, output_dir=o, progress_cb=progress_cb,
-                             strategy=strat)
+                             strategy=strat,
+                             with_dashboard=bool(a.get("with_dashboard", False)))
             d = getattr(r, 'dashboard_path', '')
             # 结构化返回：携带落盘路径与明细统计，避免调用方只看得到摘要
             return json.dumps({

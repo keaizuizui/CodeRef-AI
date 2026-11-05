@@ -99,6 +99,9 @@ BUILTIN_TOOLS: List[Dict] = [
                                 "enum": ["auto", "full", "incr", "no_change"],
                                 "default": "auto",
                                 "description": "审计策略：auto=自动判定（首次全量/增量裁剪重型工具）；full=全量 11 工具；incr=增量裁剪；no_change=复用既有结论"},
+                            "with_dashboard": {"type": "boolean",
+                                "description": "是否额外产出独立健康仪表盘 HTML（默认 false：健康读数统一走「项目评估台」记分卡，避免两份口径）",
+                                "default": False},
                         }, "required": ["project_path"]},
                     },
         {
@@ -924,7 +927,7 @@ BUILTIN_TOOLS: List[Dict] = [
                     "description": (
                         "人话解读平台：让非编程人员一屏看懂 AI 项目的真实状态。\n"
                         "action=health → 健康总览（确定性人话：健康分 + 高危清单 + 图谱/合规背景；未审计时诚实提示不给分）；\n"
-                        "action=dashboard → 生成健康仪表盘 HTML（非编程人员可读）；\n"
+                        "action=dashboard → 健康仪表盘：**已并入「项目评估台」**。存在评估台时只返回其路径（preferred_entry，不再产第二份仪表盘）；无评估台时才兜底渲染；\n"
                         "action=wiki → 生成 Wiki 人话文档（依赖 LLM，无 API Key 时诚实阻断）；\n"
                         "action=prompt → Prompt 治理总览；\n"
                         "action=assets → 人话解读已固化创新资产。\n"

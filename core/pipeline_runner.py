@@ -684,7 +684,8 @@ class Pipe:
 
     def audit(self, project_path: str, output_dir: str = None,
               resume: bool = False, progress_cb=None,
-              strategy: Optional[str] = None) -> PipeResult:
+              strategy: Optional[str] = None,
+              with_dashboard: bool = False) -> PipeResult:
         """安全审计管线：11 工具（按策略裁剪）
 
         progress_cb: 可选回调 progress_cb(stage:str, done:int, total:int)
@@ -693,6 +694,9 @@ class Pipe:
         strategy: 可选，显式指定审计策略（"full"/"incr"/"no_change"）。
         为 None 时自动调用 ReviewAdvisor 判定（变更信号 + 影响闭包），
         并据此裁剪工具集 —— 动态兜底：首次/无基线→全量，增量→裁剪重型工具。
+
+        with_dashboard: 是否额外产出独立健康仪表盘 HTML。默认关闭——
+        健康读数已并入「项目评估台」的记分卡，重复产出会让非技术读者面对两份口径。
         """
         self._t0 = time.time()
         r = PipeResult(project_path=project_path)
@@ -759,7 +763,9 @@ class Pipe:
             _prog("生成报告", total_stages - 1, total_stages)
 
             self._write_audit_report(project_path, r, out)
-            self._build_dashboard(project_path, r, kg_stats)
+            # 健康仪表盘默认不再自动产出：评估台记分卡是唯一健康读数来源。
+            if with_dashboard:
+                self._build_dashboard(project_path, r, kg_stats)
 
             # 渲染 HTML 报告目录（审计 + 图谱；若已有 wiki 产物则一并纳入）
             self._render_html(project_path, r, kg_stats=kg_stats,

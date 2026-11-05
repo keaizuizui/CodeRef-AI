@@ -30,9 +30,9 @@ class _ArchViewHandler(SimpleHTTPRequestHandler):
         # 三类画布分组展示：业务树 / 业务流程 / 旧角色分区布局。
         # 前缀分离后不再按文件名混排，避免"同前缀抢最新"。
         groups = [
-            ("arch_canvas_", "业务树视图（入口 → 主功能 → 子功能 → 步骤）"),
-            ("arch_flow_", "业务流程视图（泳道 × 阶段）"),
-            ("arch_layout_", "角色分区布局图（早期产物，保留可查）"),
+            ("arch_canvas_", "用户视图 · 业务树（入口 → 主功能 → 子功能 → 步骤）"),
+            ("arch_flow_", "用户视图 · 业务流程（泳道 × 阶段）"),
+            ("arch_layout_", "技术视图 · 角色分区布局图（面向架构师/AI，非用户交付物）"),
         ]
         try:
             all_files = os.listdir(self.directory)

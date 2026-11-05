@@ -205,6 +205,22 @@ def _scan_ts_key(data: Dict) -> float:
         return float("-inf")
 
 
+def _index_belongs_to(index_path: str, project_name: str) -> bool:
+    """判断评估台 index.html 是否属于指定项目（页头含项目名）。
+
+    共享输出目录里可能同时存在多个项目的 index.html，只看文件存在会把
+    别的项目页面当成本项目入口返回。
+    """
+    if not project_name:
+        return False
+    try:
+        with open(index_path, "r", encoding="utf-8", errors="replace") as f:
+            head = f.read(4096)
+    except OSError:
+        return False
+    return project_name in head
+
+
 def _load_audit_findings(project_path: str) -> Optional[Dict]:
     """读取已落盘的审计 findings（确定性；无则返回 None，由调用方诚实提示）。
 
@@ -403,8 +419,38 @@ class InterpretationPlatform:
     # ─── dashboard：健康仪表盘 HTML ────────────────────────────
 
     def _action_dashboard(self, project_path: str) -> Dict[str, Any]:
-        """生成健康仪表盘 HTML（复用已有审计 findings；无则诚实提示）。"""
+        """健康仪表盘：优先指向「项目评估台」这一唯一用户入口。
+
+        评估台（`coderef_report` 的 index.html）已涵盖健康记分卡、架构、产品与 UX，
+        再产一份独立仪表盘只会让非技术读者面对两份互相矛盾的健康读数。
+        因此：存在评估台就直接返回其路径；仅在评估台尚未生成时兜底渲染一份。
+        """
         project_path = os.path.abspath(project_path)
+
+        # ── 唯一入口优先 ──
+        project_name = os.path.basename(project_path.rstrip(os.sep))
+        report_index = os.path.join(project_path, "coderef-report", "html", "index.html")
+        if not os.path.isfile(report_index):
+            # 兼容默认输出目录（工具仓库侧）；必须确认该页面确实属于当前项目，
+            # 否则会把别的项目的评估台当成本项目的入口返回。
+            alt = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "coderef-report", "html", "index.html")
+            report_index = alt if (os.path.isfile(alt)
+                                   and _index_belongs_to(alt, project_name)) else ""
+        if report_index:
+            return {
+                "ok": True,
+                "action": "dashboard",
+                "tool": "coderef_interpret",
+                "project_path": project_path,
+                "preferred_entry": report_index,
+                "deduplicated": True,
+                "summary": ("已存在「项目评估台」（唯一用户入口），健康读数请在该页概览 Tab 查看；"
+                            "不再单独产第二份仪表盘，避免同一指标出现两个版本。"),
+                "note": "如需独立仪表盘，请显式使用 coderef_report 之外的旧版工具链（已不推荐）。",
+            }
+
         data = _load_audit_findings(project_path)
         if data is None:
             return {
@@ -412,7 +458,7 @@ class InterpretationPlatform:
                 "action": "dashboard",
                 "tool": "coderef_interpret",
                 "project_path": project_path,
-                "error": "尚无审计结果。请先运行 coderef_audit 生成 findings，再生成仪表盘。",
+                "error": "尚无审计结果。请先运行 coderef_report（会同时产出评估台与记分卡）。",
                 "summary": "仪表盘依赖审计结果；未审计时无法渲染健康读数。",
                 "data_source": "none",
                 "scan_ts": None,
