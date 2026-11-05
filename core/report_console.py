@@ -239,16 +239,21 @@ def _make_handler(project_path: str, out_dir: str, token: str,
                     cache["card"] = card
             return self._json(card)
 
-        def _refresh_page(self) -> None:
-            """评估产物落盘后重渲染评估台（重渲染由组合根注入，避免传输层依赖编排层）。"""
+        def _refresh_page(self) -> Tuple[bool, str]:
+            """评估产物落盘后重渲染评估台；返回 (是否产出新页面, 失败原因)。
+
+            重渲染未产出新页面时必须让调用方感知（U-49：此前只记日志，
+            页面仍显示"正在刷新…"却拿到旧快照）。
+            """
             if rerender is None:
-                logger.info("[report_console] 未提供重渲染回调，跳过页面刷新")
-                return
+                return False, "未注入重渲染回调，页面未刷新"
             try:
                 with _RENDER_LOCK:
                     rerender()
+                return True, ""
             except Exception as e:  # noqa: BLE001
-                logger.warning(f"[report_console] 评估后台页重渲染失败（忽略）: {e}")
+                logger.warning(f"[report_console] 评估后台页重渲染失败: {e}")
+                return False, str(e)
 
         def _api_evaluate(self, scene: str, data: dict) -> None:
             """产品（F 轨）/ UX（U 轨）评估：同项目同场景串行，不同场景可并行。"""
@@ -273,7 +278,10 @@ def _make_handler(project_path: str, out_dir: str, token: str,
                         journey=str(data.get("journey") or ""),
                         problems=data.get("problems") or None,
                         viewports=data.get("viewports") or None)
-                self._refresh_page()
+                refreshed, refresh_err = self._refresh_page()
+                res["page_refreshed"] = refreshed
+                if not refreshed:
+                    res["page_refresh_error"] = refresh_err
                 res.setdefault("ok", res.get("status") != "ERROR")
                 return self._json(res, 400 if res.get("status") == "ERROR" else 200)
             except Exception as e:  # noqa: BLE001

@@ -204,7 +204,11 @@ def _report(a) -> str:
     open_server=true 时额外拉起本地回环评估台（点按钮即评估，不依赖 AI 在旁）。"""
     from core.pipeline_runner import Pipe
     pp = a["project_path"]
-    out = a.get("output_dir") or None
+    # 统一输出口径：out_html 是报告目录（index.html 所在），out_root 是审计产物根。
+    # audit 会在 out_root 下落 findings JSON 并在 out_root/html 渲染；
+    # render_report 直接在 out_html 渲染。两者必须同源，否则重渲染永远找不到产物（U-49）。
+    out_html = os.path.abspath(a["output_dir"]) if a.get("output_dir") else None
+    out_root = os.path.dirname(out_html) if out_html else None
 
     def _refresh_card() -> str:
         """重算并落盘记分卡快照；成功返回空串（用于清除上一次的错误）。"""
@@ -220,22 +224,21 @@ def _report(a) -> str:
     # 已有审计产物时才先算分；没有产物时等回退审计产出后再算，避免空算一次。
     refreshed = _has_audit_artifacts(pp)
     sc_err = _refresh_card() if refreshed else ""
-    r, has_artifacts = Pipe().render_report(pp, output_dir=out)
+    r, has_artifacts = Pipe().render_report(pp, output_dir=out_html)
     if not has_artifacts:
-        r = Pipe().audit(pp, output_dir=out)
-        # 审计刚产出新 findings：重算快照并只重渲染一次（render_report 不扫描），
-        # 避免首页记分卡落后一轮。
+        r = Pipe().audit(pp, output_dir=out_root)
+    # 审计刚产出新 findings（或此前没有审计产物）：重算快照后只重渲染一次。
+    # render_report 只聚合既有产物、不重扫，因此这一步很轻。
+    if not has_artifacts or not refreshed:
         sc_err = _refresh_card()
-        refreshed = True
-        r2, _ = Pipe().render_report(pp, output_dir=out)
+        r2, ok2 = Pipe().render_report(pp, output_dir=out_html)
         # 重渲染失败时保留审计结果，避免丢掉 html_report 与审计错误
-        r = r2 if getattr(r2, "html_report", None) else r
-    elif not refreshed:
-        # 只有图谱/Wiki、没有审计 findings 时也属于"有产物"：同样刷新一次，
-        # 页面此前用的是旧/空快照，需要重渲染一次才对得上。
-        sc_err = _refresh_card()
-        r2, _ = Pipe().render_report(pp, output_dir=out)
-        r = r2 if getattr(r2, "html_report", None) else r
+        if ok2 and getattr(r2, "html_report", None):
+            r = r2
+        else:
+            errs = list(getattr(r2, "errors", []) or [])
+            if errs and hasattr(r, "errors"):
+                r.errors.extend(errs)
     hr = getattr(r, "html_report", None) or {}
     if sc_err:
         hr["scorecard_error"] = sc_err
@@ -243,14 +246,24 @@ def _report(a) -> str:
         try:
             from core.report_console import serve
             idx = hr.get("index") or ""
-            out_dir = os.path.dirname(os.path.abspath(idx)) if idx else None
+            serve_dir = os.path.dirname(os.path.abspath(idx)) if idx else out_html
+
+            def _rerender() -> None:
+                """重渲染评估台；未产出新页面时必须抛错，供页面显式提示（U-49）。"""
+                r2, ok = Pipe().render_report(pp, output_dir=serve_dir)
+                got = (getattr(r2, "html_report", None) or {}).get("index")
+                if not ok or not got:
+                    reason = "；".join(getattr(r2, "errors", []) or []) \
+                        or "重渲染未产出 index.html"
+                    raise RuntimeError(reason)
+
             srv = serve(pp,
-                        output_dir=out_dir,
+                        output_dir=serve_dir,
                         host=a.get("host") or "127.0.0.1",
                         port=int(a.get("port") or 0),
                         # 组合根注入重渲染：评估落盘后刷新页面，
                         # 传输层（report_console）不直接依赖编排层（pipeline_runner）
-                        rerender=lambda: Pipe().render_report(pp, output_dir=out_dir))
+                        rerender=_rerender)
             hr["serve"] = srv
         except Exception as e:  # noqa: BLE001
             hr["serve"] = {"ok": False, "error": str(e)}

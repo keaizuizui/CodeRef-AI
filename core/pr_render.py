@@ -127,7 +127,17 @@ def _collect_dimension_states(project_path: str,
     states: Dict[str, dict] = {}
 
     # ── 审计维度 ──
+    # 与 has_artifacts 判定一致：findings 可能落在调用方输出目录，也可能落在
+    # 项目侧 `.coderef/`（权威副本）。只看一处会出现"加载到了发现却显示未执行"。
     audit_fp = _findings_json_path(project_path, output_dir)
+    if not os.path.isfile(audit_fp):
+        try:
+            from core.pr_whitelist import project_findings_json_path
+            candidate = project_findings_json_path(project_path)
+            if os.path.isfile(candidate):
+                audit_fp = candidate
+        except Exception:  # noqa: BLE001
+            pass
     if os.path.isfile(audit_fp):
         try:
             with open(audit_fp, "r", encoding="utf-8") as f:
