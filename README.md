@@ -314,6 +314,40 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 
 ---
 
+## 产物地图：哪些给人看，哪些给 AI 用
+
+CodeRef 会落很多文件，但**用户只需要看两个入口**。其余产物要么是详情页，要么是给编程 AI 消费的数据。
+
+### 用户面（需要打开看）
+
+| 入口 | 从哪来 | 看什么 |
+|---|---|---|
+| **项目评估台** `coderef-report/html/index.html` | `coderef_report` | 概览记分卡 / 架构（业务树 + 业务流程）/ 产品 F 轨 / UX U 轨；`audit.html` / `kg.html` / `wiki.html` 是它的详情页 |
+| **架构治理看板** `gov_board.html` / `project_overview.html` | `coderef_gov_start(open_server=true)` / `coderef_gov_report` | 治理工作项流转、周期体检（L2 治理专用，与评估台定位不同） |
+
+### 架构画布：三种视图，前缀已分离
+
+| 文件前缀 | 生成者 | 回答什么 |
+|---|---|---|
+| `arch_canvas_*.html` | `coderef_arch_canvas`（arch_view） | 业务树：入口 → 主功能 → 子功能 → 步骤 |
+| `arch_flow_*.html` | `coderef_arch_canvas`（arch_flow） | 业务流程：泳道（角色）× 阶段（触发→校验→执行→落库→通知→交付） |
+| `arch_layout_*.html` | `coderef_architecture`（canvas_generator） | 早期角色分区布局图，保留可查（不再作为主视图） |
+
+### 给编程 AI 的数据（不需要人工打开）
+
+| 文件 | 用途 |
+|---|---|
+| `.coderef/scorecard.json` | 健康记分卡（CI 门禁、AI 读分） |
+| `.coderef/product_fit.json` / `ux_fit.json` | F 轨 / U 轨结论 |
+| `.coderef/business_semantics.json` | 业务语义标注（actor / stage / handoff / value_node） |
+| `.coderef/audit_findings_<hash>.json` | 审计发现结构化产物（重渲染的输入） |
+| `workflow_graph_*.html` / `flow_canvas_*.html` | 调用链/数据流调试视图，供 AI 定位，不建议作为交付物 |
+| `health_dashboard_*.html` / `interpret_dashboard_*.html` | 早期独立仪表盘，能力已并入评估台；保留可查 |
+
+> 原则：**报告只有一个站首页**（评估台），画布按「问题」分工（业务树看归属、业务流程看交接），数据文件给机器读。同名不同内容的产物一律用前缀区分。
+
+---
+
 ## 项目结构
 
 ```
