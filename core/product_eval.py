@@ -327,6 +327,8 @@ def _validate_llm(out: dict) -> str:
         return "LLM 结论缺少合法 verdict（Go / Validate-first / No-go）"
     if not isinstance(out.get("unknowns"), list) or not out["unknowns"]:
         return "LLM 输出未给出 unknowns（未知项必须非空）"
+    if not isinstance(out.get("f1"), list) or not out["f1"]:
+        return "LLM 输出没有能力矩阵（f1 为空），拒收"
     e4 = [r for r in (out.get("f1") or [])
           if isinstance(r, dict) and str(r.get("evidence_level")) == "E4"]
     assumptions = out.get("assumptions") or []
@@ -422,6 +424,16 @@ def evaluate(project_path: str, stage: Optional[str] = None,
     }
     result["assumptions"] = []
     result["cut_or_change"] = []
+
+    # 没有任何可评估能力时，不允许 LLM 基于空证据给出方向性结论
+    if not caps:
+        reason = ("未枚举到任何可评估能力（业务树/前端/路由/CLI 均为空，"
+                  "或 scope 指定的能力全部缺失），不产出三档结论")
+        result["conclusion"]["reason"] = reason
+        result["unknowns"] = list(dict.fromkeys(
+            list(evidence.get("unknowns") or []) + [reason]))
+        write_result(pp, result)
+        return result
 
     if not use_llm:
         write_result(pp, result)

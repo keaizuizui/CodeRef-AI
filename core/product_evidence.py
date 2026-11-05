@@ -191,10 +191,9 @@ def _dir_capabilities(project_path: str) -> List[dict]:
             break
         if not first:
             continue
-        anchors = [first + "#L1"]
-        # 锚点用项目相对路径，避免把绝对路径写进产物
-        if not first.startswith(name):
-            anchors = [f"{name}/{first}#L1"]
+        # _iter_text(d) 返回相对 d 的路径；必须补回目录前缀才是项目相对锚点，
+        # 否则 core/core_utils.py 这类会被误判成已带前缀，产出不存在的路径。
+        anchors = [f"{name}/{first}#L1"]
         caps.append(_cap("directory", name, anchors, [name]))
     return caps
 
@@ -335,6 +334,21 @@ def _read_doc(project_path: str, name: str) -> Tuple[str, str]:
         return name, ""
 
 
+def _key_in_text(key: str, text_low: str) -> bool:
+    """能力键匹配：ASCII 键按词边界、中文键按子串（CJK 文本无空格分词）。
+
+    裸子串会把 core 命中 scorecard、ui 命中 build，从而把无关声称标成已验证。
+    """
+    if not key:
+        return False
+    if re.fullmatch(r"[a-z0-9_.\-/ ]+", key):
+        if len(key) < 2:
+            return False
+        return bool(re.search(r"(?<![a-z0-9])" + re.escape(key) + r"(?![a-z0-9])",
+                              text_low))
+    return len(key) >= 2 and key in text_low
+
+
 def _clean_claim(line: str) -> str:
     text = line.strip()
     text = re.sub(r"^[-*+>\s]+", "", text)
@@ -379,7 +393,7 @@ def extract_claims(project_path: str, capabilities: List[dict]) -> List[dict]:
             keys = [name] + [m.split("/")[-1].replace("_", " ") for m in mods[:2] if m]
             for k in keys:
                 k = str(k).strip().lower()
-                if k and len(k) >= 2 and k in low:
+                if _key_in_text(k, low):
                     matched.append(name)
                     break
         claims.append({
@@ -389,7 +403,8 @@ def extract_claims(project_path: str, capabilities: List[dict]) -> List[dict]:
             # 只有"声称里出现了已枚举能力/模块名"才算代码侧可核；
             # 匹配不上不等于没实现，保持 unknown，不武断判 false。
             "verified": "true" if matched else "unknown",
-            "evidence_level": "E3" if matched else "E3",
+            # 声称来自文档，证据等级恒为 E3；是否匹配能力只影响 verified
+            "evidence_level": "E3",
         })
     return claims
 
@@ -450,8 +465,11 @@ def business_signals(project_path: str) -> dict:
 
 
 def _has_tests(project_path: str) -> bool:
-    if os.path.isdir(os.path.join(project_path, "tests")):
-        return True
+    # 目录名检查要覆盖 _iter_text 跳过的常见测试目录，否则只有 test/ 的项目
+    # 会被判成无测试，阶段退化到 concept。
+    for d in ("tests", "test", "__tests__"):
+        if os.path.isdir(os.path.join(project_path, d)):
+            return True
     for _rel_path, _text in _iter_text(project_path, _PY_EXTS + _WEB_EXTS, max_files=200):
         base = _rel_path.split("/")[-1].lower()
         if base.startswith("test_") or ".test." in base or ".spec." in base:
