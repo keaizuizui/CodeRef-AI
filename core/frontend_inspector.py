@@ -50,8 +50,10 @@ TOOL_OUTPUT_DIRS = {"coderef-report", ".gitnexus", "coderef-wiki"}
 DOC_DIRS = {"docs"}
 IGNORED_DIRS = {".git", ".node_modules", "node_modules", "__pycache__", "dist", "build", ".venv", "venv"} | TOOL_OUTPUT_DIRS | DOC_DIRS
 
+# 组件源码扩展名（静态 HTML 枚举不覆盖，必须标"部分覆盖"或改用 runtime）
+COMPONENT_SOURCE_EXTS = (".vue", ".jsx", ".tsx")
 # 用户维护的前端源码扩展名（项目预检用）
-FRONTEND_SOURCE_EXTS = (".html", ".htm", ".vue", ".jsx", ".tsx")
+FRONTEND_SOURCE_EXTS = (".html", ".htm") + COMPONENT_SOURCE_EXTS
 
 # HTML 空元素（void elements）：无结束标签，遇到即视为闭合
 VOID_TAGS = {
@@ -471,12 +473,18 @@ class FrontendInspector:
                 _dedup[key] = b
                 _dedup_buttons.append(b)
 
+        has_components = self._has_component_sources(project_path, entry)
         return {
             "ok": True,
             "applicable": True,
             "files": html_files,
             "buttons": _dedup_buttons,
             "menu_roots": menu_roots,
+            # HTML 与组件源码并存时，静态枚举只覆盖 HTML 部分
+            "partial": has_components,
+            "coverage_note": ("项目同时含 HTML 与组件源码（Vue/JSX/TSX），"
+                              "静态枚举仅覆盖 HTML 部分；组件交互需 mode=runtime 抽查。")
+            if has_components else "",
         }
 
     # ── 静态分析 ──
@@ -554,12 +562,27 @@ class FrontendInspector:
             logger.warning("LLM 不可用，仅完成静态枚举，未进行 AI 审查")
 
         summary = self._build_static_summary(html_files, buttons, menu_nodes, findings)
+        coverage_note = str(enum.get("coverage_note") or "")
+        if coverage_note:
+            summary = coverage_note + "\n" + summary
 
         return {
             "buttons": [b.to_dict() for b in buttons],
             "menu_tree": self._serialize_menu(menu_roots, check_levels),
             "findings": findings,
             "summary": summary,
+            "partial": bool(enum.get("partial")),
+        }
+
+    def _runtime_unavailable_result(self, static_result: Dict[str, Any],
+                                    reason: str) -> Dict[str, Any]:
+        """组件源码项目且 runtime 不可用：同时报告静态不适用与运行时未产出结论。"""
+        msg = str(static_result.get("message") or "")
+        return {
+            **static_result,
+            "applicable": False,
+            "findings": [self._pending_finding("运行时", reason)],
+            "summary": reason + ("\n" + msg if msg else ""),
         }
 
     # ── 运行时抽查（可选；失败降级为静态结论） ──
@@ -574,7 +597,9 @@ class FrontendInspector:
             logger.warning("runtime 模式需要 url，降级为静态分析")
             result = self._inspect_static(project_path, entry, check_levels)
             if result.get("applicable") is False:
-                return result
+                return self._runtime_unavailable_result(
+                    result, "runtime 模式未提供 url，且静态枚举不适用（无 HTML），"
+                            "本次未产出可用结论")
             result["summary"] = "runtime 模式未提供 url，已降级为静态分析。\n" + result["summary"]
             return result
 
@@ -584,7 +609,9 @@ class FrontendInspector:
             logger.warning(f"runtime url 校验未通过，拒绝访问并降级为静态分析: {url_err}")
             result = self._inspect_static(project_path, entry, check_levels)
             if result.get("applicable") is False:
-                return result
+                return self._runtime_unavailable_result(
+                    result, f"runtime url 未通过白名单校验（{url_err}），"
+                            "且静态枚举不适用（无 HTML），本次未产出可用结论")
             result["findings"].append(self._pending_finding(
                 "运行时", f"runtime url 未通过白名单校验（{url_err}），已拒绝访问并降级为静态分析"))
             result["summary"] = f"runtime 模式：url 未通过白名单校验（{url_err}），已拒绝访问并降级为静态分析。\n" + result["summary"]
@@ -614,7 +641,9 @@ class FrontendInspector:
                                 + str(result.get("message") or "")),
                     "runtime_only": True,
                 }
-            return result
+            return self._runtime_unavailable_result(
+                result, "浏览器自动化不可用或运行失败，且静态枚举不适用（无 HTML），"
+                        "本次未产出可用结论")
 
         if not runtime_ok:
             result["findings"].append(self._pending_finding(
@@ -779,6 +808,22 @@ class FrontendInspector:
             dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
             for name in names:
                 if os.path.splitext(name)[1].lower() in FRONTEND_SOURCE_EXTS:
+                    return True
+        return False
+
+    @staticmethod
+    def _has_component_sources(project_path: Optional[str],
+                               entry: Optional[str] = None) -> bool:
+        """是否存在 Vue/JSX/TSX 组件源码（静态 HTML 枚举不覆盖）。"""
+        if entry and os.path.isfile(entry):
+            return entry.lower().endswith(COMPONENT_SOURCE_EXTS)
+        scan_root = entry if entry and os.path.isdir(entry) else project_path
+        if not scan_root or not os.path.isdir(scan_root):
+            return False
+        for _root, dirs, names in os.walk(scan_root):
+            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
+            for name in names:
+                if name.lower().endswith(COMPONENT_SOURCE_EXTS):
                     return True
         return False
 
