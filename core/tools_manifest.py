@@ -107,9 +107,11 @@ BUILTIN_TOOLS: List[Dict] = [
         {
                         "name": "coderef_architecture",
                         "description": (
-                            "架构分析图谱 = 代码结构分析 + 交互式模块画布(HTML)。\n"
+                            "架构分析图谱 = 代码结构分析 + 技术分区布局图(HTML)。\n"
                             "含 GitNexus 索引增强，展示模块交互关系、调用链。\n"
-                            "用于发现零散重复代码、模块不统一等问题。"
+                            "用于发现零散重复代码、模块不统一等问题。\n"
+                            "画布产物前缀为 arch_layout_*（按技术角色分区，面向架构师/AI，"
+                            "不是给非技术读者的交付物；用户面看 coderef_report 的项目评估台）。"
                         ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
@@ -625,7 +627,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         "  interactive=false 退化为只读；open_server=true 可起本地 http.server 服务（进程常驻，返回 URL）。\n"
                         "action=overview：生成'项目总览'自包含 HTML（5.13 起）——五区块一屏收拢：\n"
                         "  ① 一句话体检结论（健康分 + 治理差距/豁免结论，顶栏大字）；\n"
-                        "  ② 项目架构图（iframe 引用 arch_canvas_*.html，未生成则诚实占位）；\n"
+                        "  ② 项目架构图（iframe 引用 arch_canvas_*.html，未生成则回退 arch_layout_*.html，都没有则诚实占位）；\n"
                         "  ③ 项目 wiki 介绍（WIKI_INDEX/OVERVIEW 核心内联 + 全库链接）；\n"
                         "  ④ 人话解读摘要（高危清单 + 分项计数 + 确定性总结）；\n"
                         "  ⑤ 治理工作项（完整标题列 + 详情内联展开 + 全量统计）。\n"

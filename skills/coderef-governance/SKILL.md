@@ -94,7 +94,7 @@ description: 治理主链场景化 Skill。把 CodeRef-AI 的 MCP 工具收敛�
 2. `coderef_target_arch_get` → 读回已存目标架构核对（改前确认基线、verify/gap 前复核，纯确定性）。
 3. `coderef_arch_gap` → 差距清单（含 duplicate/directory_duplicate 差距类型；游离区分真游离 vs 未建模）。
 4. `coderef_role_boundary` → 符号级职责越界检测（模块归属正确但符号逾越所属角色边界：命名语义/调用边界/复用信号），与 arch_gap 模块级差距互补——同一目标架构下查「模块缺失 + 符号越界」两层问题。
-5. `coderef_arch_canvas` → 差距高亮画布（游离灰底/依赖违例红连线/缺失红虚线/循环黄框），治理前把差距可视化、治理中作工作台。
+5. `coderef_arch_canvas` → 业务树 + 业务流程泳道（差距高亮仍在：游离灰底/依赖违例红连线/缺失红虚线/循环黄框），治理前把差距可视化、治理中作工作台；技术角色分区图由 `coderef_architecture` 产出（`arch_layout_*`）。
 
 **产出**：目标架构 vN + 差距清单（优先级队列）。**常见坑**：target_modules 需覆盖全部核心模块，否则游离清单失真（未建模被误报为真游离）。
 

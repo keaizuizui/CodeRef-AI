@@ -43,7 +43,7 @@ description: "治理主链「半自动确认版」。在 coderef-governance 五�
 0. **框架确认门 M-FW（硬门禁）**：调 `coderef_arch_canvas`（或 `arch_framework` 归纳）产出**业务架构树初稿**（入口 → 主功能 → 子功能 → 步骤，大白话）——AI 自动归纳 + 辅助大白话，人工负责确认框架。**必须停下** AskUserQuestion：「业务框架对吗？」（确认框架 / 修正节点标题与层级 / 重新归纳）。**确认后仅保留在草案中，不写盘**；step 3 落盘时才按 `coderef_target_arch_set` 的 business_flows 形状映射写入（业务树 ↔ 目标架构双向一致）。
 1. **产出目标架构草案（不持久化）**：基于已确认框架 + 模板/现有 target_arch，整理「目标架构草案」（角色/目标模块/业务流），供用户审阅——此步**不调用会写盘的工具**。
 2. **确认门 M2（硬门禁）**：**必须停下** AskUserQuestion：「定标对吗？治理范围圈哪些？」（确认落盘 / 调整后重交 / 跳过定标仅诊断）。**未确认不得落盘**。
-3. **落盘与差距（确认后才执行）**：`coderef_target_arch_set`（写入 target_arch.json）→ `coderef_target_arch_get`（核对）→ `coderef_arch_gap`（差距清单）→ `coderef_role_boundary`（符号越界）→ `coderef_arch_canvas`（业务树画布）。
+3. **落盘与差距（确认后才执行）**：`coderef_target_arch_set`（写入 target_arch.json）→ `coderef_target_arch_get`（核对）→ `coderef_arch_gap`（差距清单）→ `coderef_role_boundary`（符号越界）→ `coderef_arch_canvas`（业务树 + 业务流程泳道；技术分区图走 `coderef_architecture`）。
 
 **交付物**：「业务架构树（已确认框架）+ 目标架构草案 vN + 差距清单」——业务树层级/大白话、角色/目标模块/业务流摘要、差距按严重度分组、画布文件路径。
 
