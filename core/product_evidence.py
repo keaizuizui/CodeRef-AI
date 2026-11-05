@@ -64,14 +64,14 @@ _PAYMENT_MARKERS = ("定价", "价格", "付费", "订阅", "购买", "套餐",
 _ROADMAP_MARKERS = ("TODO", "FIXME", "WIP", "未完成", "待实现", "计划中",
                     "planned", "roadmap", "coming soon")
 # 硬编码 / 演示数据标记（用于数据诚实度的代码侧线索）
-_FAKE_DATA_MARKERS = ("mock", "dummy", "fake", "sample data", "演示数据",
-                      "示例数据", "test data")
+FAKE_DATA_MARKERS = ("mock", "dummy", "fake", "sample data", "演示数据",
+                     "示例数据", "test data")
 # 输出类模块命名线索（仅作可行动性的代码侧线索，不作绝对判断）
-_OUTPUT_HINTS = ("export", "report", "render", "output", "generate", "write",
-                 "save", "download", "publish")
+OUTPUT_HINTS = ("export", "report", "render", "output", "generate", "write",
+                "save", "download", "publish")
 # 输入类模块命名线索（仅作上游数据源存在的代码侧线索）
-_INPUT_HINTS = ("ingest", "import", "upload", "parse", "reader", "loader",
-                "fetch", "crawler", "spider", "collect", "sync")
+INPUT_HINTS = ("ingest", "import", "upload", "parse", "reader", "loader",
+               "fetch", "crawler", "spider", "collect", "sync")
 
 
 def _rel(project_path: str, path: str) -> str:

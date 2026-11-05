@@ -25,10 +25,10 @@ from typing import Dict, List, Optional
 from loguru import logger
 
 from core.product_evidence import (
-    _FAKE_DATA_MARKERS,
-    _INPUT_HINTS,
-    _OUTPUT_HINTS,
+    FAKE_DATA_MARKERS,
+    INPUT_HINTS,
     MARKET_NUMBER_RE,
+    OUTPUT_HINTS,
     build_evidence,
     save_stage,
 )
@@ -94,7 +94,7 @@ def _matrix(project_path: str, capabilities: List[dict],
                       "E3" if matched else "E4")
 
         # ② 输入现实性：代码只能推「有无上游数据源」，不能推「用户手上有什么」
-        has_src = _hint_in_modules(mods, _INPUT_HINTS) or cap["source"] == "frontend"
+        has_src = _hint_in_modules(mods, INPUT_HINTS) or cap["source"] == "frontend"
         input_q = _q(
             "存在上游数据源候选（模块命名/前端表单），仍需人工确证用户是否持有该数据"
             if has_src else
@@ -103,7 +103,7 @@ def _matrix(project_path: str, capabilities: List[dict],
             "E2", proxy=True)
 
         # ③ 输出可行动性：是否有用户可见/可导出的产出线索
-        has_out = _hint_in_modules(mods, _OUTPUT_HINTS) or cap["source"] == "frontend"
+        has_out = _hint_in_modules(mods, OUTPUT_HINTS) or cap["source"] == "frontend"
         output_q = _q(
             "存在产出/展示线索，需人工确证产出是否可被直接用于决策"
             if has_out else "未发现明确产出线索",
@@ -112,7 +112,7 @@ def _matrix(project_path: str, capabilities: List[dict],
 
         # ④ 数据诚实度：代码里是否有演示/假数据标记
         text = "\n".join(_module_text(project_path, m) for m in mods[:2]).lower()
-        fake = any(k in text for k in _FAKE_DATA_MARKERS) if text else False
+        fake = any(k in text for k in FAKE_DATA_MARKERS) if text else False
         honesty_q = _q(
             "检测到演示/示例数据标记，需人工确认线上是否仍使用" if fake else
             "未检测到演示/示例数据标记（不构成「数据真实」的证明）",
@@ -213,7 +213,7 @@ def _chain_check(project_path: str, capabilities: List[dict],
                 other = cap_by_mod.get(tm)
                 if other and other != cap["id"]:
                     targets[other] = targets.get(other, 0) + 1
-        has_output = _hint_in_modules(cap.get("modules") or [], _OUTPUT_HINTS)
+        has_output = _hint_in_modules(cap.get("modules") or [], OUTPUT_HINTS)
         status = ("connected" if targets else
                   ("isolated" if ids else "no_graph_node"))
         rows.append({
@@ -346,13 +346,11 @@ def _filter_scope(capabilities: List[dict], scope) -> tuple:
     if not scope:
         return capabilities, []
     want = {str(s).strip().lower() for s in scope if str(s).strip()}
-    picked, missing = [], []
+    picked = []
     for c in capabilities:
         keys = {c["id"].lower(), c["name"].lower()}
         if keys & want:
             picked.append(c)
-        elif want:
-            continue
     seen = {k for c in picked for k in (c["id"].lower(), c["name"].lower())}
     missing = sorted(w for w in want if w not in seen)
     return picked, missing
