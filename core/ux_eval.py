@@ -125,15 +125,27 @@ def _problem(rule: str, text: str, anchor: str, component: str,
     }
 
 
+def _anchor_exists(project_path: str, anchor: str) -> bool:
+    """锚点文件是否存在（外部传入的 problems 必须可回到真实 file:line）。"""
+    fp = str(anchor or "").split("#L")[0]
+    return bool(fp) and os.path.isfile(os.path.join(project_path, fp))
+
+
 def collect_static_problems(project_path: str,
-                            problems: Optional[List[dict]] = None) -> List[dict]:
-    """枚举可静态确证的呈现问题；无锚点一律丢弃（不输出）。"""
+                            problems: Optional[List[dict]] = None) -> dict:
+    """枚举可静态确证的呈现问题；无锚点或锚点不存在的条目一律丢弃。
+
+    Returns:
+        {"problems": [...], "surface": {"applicable": bool, ...}}
+        surface 用于区分「检查过且无问题」与「根本没有页面可查」。
+    """
     pp = os.path.abspath(project_path)
     found: List[dict] = []
 
     for p in problems or []:
         anchor = str(p.get("anchor") or "")
-        if not anchor:
+        # 外部问题同样要求锚点可回到真实文件，避免伪造证据进入产物
+        if not anchor or not _anchor_exists(pp, anchor):
             continue
         found.append(_problem(
             str(p.get("rule") or "external"),
@@ -149,10 +161,13 @@ def collect_static_problems(project_path: str,
         enum = FrontendInspector().enumerate_static(pp)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[ux_eval] 前端枚举失败，仅使用外传问题: {e}")
-        return found
+        return {"problems": found[:_MAX_FINDINGS],
+                "surface": {"applicable": False, "error": str(e)}}
 
     if enum.get("applicable") is False:
-        return found
+        return {"problems": found[:_MAX_FINDINGS],
+                "surface": {"applicable": False,
+                            "message": enum.get("message", "")}}
 
     buttons = enum.get("buttons") or []
     forms: Dict[str, List] = {}
@@ -198,7 +213,13 @@ def collect_static_problems(project_path: str,
             continue
         seen.add(key)
         out.append(p)
-    return out[:_MAX_FINDINGS]
+    return {
+        "problems": out[:_MAX_FINDINGS],
+        "surface": {"applicable": True,
+                    "files": len(enum.get("files") or []),
+                    "buttons": len(buttons),
+                    "menu_roots": len(enum.get("menu_roots") or [])},
+    }
 
 
 # ────────────────────────────────────────────────────────────────
@@ -228,14 +249,21 @@ def _verdict(findings: List[dict]) -> str:
 
 
 def _dedup_findings(findings: List[dict]) -> List[dict]:
-    seen = set()
+    """按锚点去重：同一元素的静态规则发现与 persona 发现只保留更严重的一条。"""
+    by_anchor = {}
     out = []
     for f in findings:
-        key = (str(f.get("rule") or ""), str(f.get("anchor") or ""))
-        if not f.get("anchor") or key in seen:
+        anchor = str(f.get("anchor") or "")
+        if not anchor:
             continue
-        seen.add(key)
         f["severity"] = _severity(_rage(f.get("rage")), bool(f.get("task_interrupted")))
+        if anchor in by_anchor:
+            idx = by_anchor[anchor]
+            if (_SEVERITY_ORDER.get(f["severity"], 3)
+                    < _SEVERITY_ORDER.get(out[idx]["severity"], 3)):
+                out[idx] = f
+            continue
+        by_anchor[anchor] = len(out)
         out.append(f)
     out.sort(key=lambda x: (_SEVERITY_ORDER.get(x["severity"], 3), x["anchor"]))
     return out
@@ -338,7 +366,8 @@ def _result(project_path: str, status: str, persona: dict, journey: str,
         "project": os.path.basename(os.path.abspath(project_path).rstrip(os.sep)),
         "persona": persona,
         "journey": journey,
-        "verdict": _verdict(findings),
+        # SKIP 表示未产出结论，不能沿用空 findings 推导的 non_blocking
+        "verdict": _verdict(findings) if status != "SKIP" else None,
         "findings": findings,
         "three_second": three_second or {},
         "viewports": {
@@ -383,7 +412,9 @@ def evaluate(project_path: str, persona: object = None,
     vps = [int(v) for v in (viewports or _DEFAULT_VIEWPORTS)
            if str(v).isdigit() and 1024 <= int(v) <= 3840] or list(_DEFAULT_VIEWPORTS)
 
-    static_problems = collect_static_problems(pp, problems)
+    collected = collect_static_problems(pp, problems)
+    static_problems = collected["problems"]
+    surface = collected["surface"] or {}
     findings = [_finding(p, "rule") for p in static_problems]
 
     unknowns = [
@@ -391,6 +422,17 @@ def evaluate(project_path: str, persona: object = None,
         "未覆盖窄屏/移动端，不推断移动端流失",
         "人格为内置模板，未与真实用户画像核对",
     ]
+
+    # 没有页面可查、也没有外部显式问题：不能把空结果当成「不阻断」
+    if not surface.get("applicable") and not static_problems:
+        reason = ("未检测到可走查的前端页面"
+                  + (f"：{surface.get('message')}" if surface.get("message") else "")
+                  + "，不产出阻断结论")
+        res = _result(pp, "SKIP", person, journey, [], None, vps,
+                      unknowns + [reason], False,
+                      {"applicable": False, "reason": reason})
+        write_result(pp, res)
+        return res
 
     if not use_llm:
         res = _result(pp, "STATIC_ONLY", person, journey, _dedup_findings(findings),

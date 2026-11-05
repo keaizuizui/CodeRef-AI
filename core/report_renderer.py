@@ -888,8 +888,8 @@ class HtmlReportRenderer:
         verdict = str(data.get("verdict") or "")
         vbadge = {"blocking": "badge-high", "partial": "badge-missing",
                   "non_blocking": "badge-ok"}.get(verdict, "badge-missing")
-        vlabel = {"blocking": "阻断", "partial": "部分阻断",
-                  "non_blocking": "不阻断"}.get(verdict, verdict)
+        vlabel = ({"blocking": "阻断", "partial": "部分阻断",
+                   "non_blocking": "不阻断"}.get(verdict) or "未产出结论")
         parts = [head.replace(
             "</h2>",
             f'<span class="badge {vbadge}">{_esc(vlabel)}</span>'
@@ -927,7 +927,10 @@ class HtmlReportRenderer:
                 parts.append(f'<p class="sc-note">仅展示前 80 条，共 {len(findings)} 条；'
                              '完整明细见 .coderef/ux_fit.json。</p>')
         else:
-            parts.append('<p class="empty">未发现带锚点的阻断项。</p>')
+            parts.append('<p class="empty">'
+                         + ('未产出阻断结论（无页面可走查或证据不足）。'
+                            if status == "SKIP" else '未发现带锚点的阻断项。')
+                         + '</p>')
 
         unknowns = data.get("unknowns") or []
         if unknowns:
