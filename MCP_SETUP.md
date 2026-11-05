@@ -175,7 +175,7 @@ export CODEREF_API_KEY="ollama"
 | `coderef_query` | 知识图谱结构化查询（9 种查询类型） | 同步 | 否 |
 | `coderef_review` | 代码审查：diff 变更 / 全量语义首查 | 后台 | 是 |
 | `coderef_frontend` | 前端交互审查：按钮/菜单静态枚举 | 后台 | 是 |
-| `coderef_report` | 审计报告/图谱/Wiki 聚合 HTML 报告 | 后台 | 否 |
+| `coderef_report` | 生成「项目评估台」（唯一用户入口：五 Tab 概览/架构/产品/UX/技术 + 审计/图谱/Wiki 详情页） | 后台 | 否 |
 | `coderef_audit_advisor` | 审计策略判定（增量/全量）+ 功能维度 | 后台 | 可选 |
 | `coderef_flow_verify` | 流程合规验证（期望流程确证） | 同步 | 否 |
 | `coderef_arch_audit` | 架构腐化诊断（循环依赖/上帝模块/分层违例） | 同步 | 否 |

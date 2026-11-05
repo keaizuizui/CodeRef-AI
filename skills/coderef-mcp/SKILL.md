@@ -30,11 +30,11 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 | `coderef_docs` | 生成结构化 Wiki（OVERVIEW/架构/安装/使用/API/ENTRIES/FLOWS）+ 交叉验证徽标 + YAML front matter | 后台，3-20 分钟 |
 | `coderef_docs_read` | 按需读已生成的 Wiki 正文（返回内容而非路径） | 省 token |
 | `coderef_query` | 查询知识图谱（callers/callees/impact/search 等） | 替代 grep，省 10-100 倍 token |
-| `coderef_report` | 聚合审计/图谱/Wiki 为自包含 HTML 报告 | 给非编程人员看 |
+| `coderef_report` | 聚合审计/图谱/Wiki 为**项目评估台**（唯一用户入口；五 Tab：概览 / 架构 / 产品 / UX / 技术；`open_server` 点按钮即评估） | 给非编程人员看 |
 | `coderef_audit_advisor` | 判断该增量还是全量审查 + 重点维度 | 审计前用 |
 | `coderef_review` | 代码审查（diff 变更审查 / full 新项目全量语义首查） | LLM 语义判断，后台 |
 | `coderef_frontend` | 前端交互审查（静态清单枚举按钮/菜单 + 可选运行时抽查） | mode=static/runtime |
-| `coderef_arch_canvas` | 可视化架构画布（三层拖拽 + 差距高亮 + 导出目标架构） | 纯静态，后台 |
+| `coderef_arch_canvas` | 架构视图：决策者报告 + **业务树**（入口→主功能→子功能→步骤）+ **业务流程泳道**（actor×stage，含交接点/交付点）；`format=data` 只回结构化数据给 AI（不渲染 HTML） | 纯静态，后台 |
 | `coderef_dynamic_probe` | 动态探针：补全静态盲区（动态导入/装饰器注册/工厂登记/entry_points，零执行） | 纯静态，executed=false |
 
 ### 确定性核验 / 流程验证 — 非编程人员最核心需求
@@ -82,7 +82,7 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 |------|------|------|
 | `coderef_owasp` | OWASP LLM Top 10 合规检测 | 逐类分级 |
 | `coderef_prompt_governance` | Prompt 治理平台（资产生命周期×合规审计×跨模块一致性） | 唯一入口 |
-| `coderef_interpret` | 人话解读：健康总览/仪表盘/Wiki/assets | 给非编程人员看 |
+| `coderef_interpret` | 人话解读：健康 / Wiki / assets（**action=dashboard 已归并评估台**：有评估台时只返回其路径，不产第二份仪表盘） | 给非编程人员看 |
 | `coderef_whitelist` | 误报白名单 + 核心模块规则管理 | 审查确认为误报后写入 |
 | `coderef_eval` | 产出物语义评估：4 指标 + 软硬判定 → verdict PASS/FAIL（LLM-as-judge，像写单测一样断言 LLM 输出过不过阈值） | LLM 语义判断，无 Key 返回 SKIP |
 
@@ -116,7 +116,7 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 | 查调用关系 / 影响面 | `coderef_query` | 替代 grep，省 token |
 | 安全合规（OWASP） | `coderef_owasp` | + `coderef_prompt_governance` |
 | LLM 产出物质量过不过关 / 语义断言 | `coderef_eval` | + `coderef_verify_findings`（确定性论断核验互补） |
-| 架构差距可视化 / 画布工作台 | `coderef_arch_canvas` | + `coderef_flow_canvas`（流程画布） |
+| 架构差距可视化 / 画布工作台 | `coderef_arch_canvas`（业务树 + 业务流程，差距高亮在内） | + `coderef_flow_canvas`（交互式流程画布，调试用） |
 | 静态盲区补全 / 动态信号 | `coderef_dynamic_probe` | 零执行，纯静态 |
 | 上下文丢了，东西在哪儿 | `coderef_operation_memory`（action=recover） | 强制 gate（见工作流 E） |
 
@@ -131,7 +131,8 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 3. coderef_docs (background=true) → 生成 Wiki
 4. coderef_arch_audit → 架构健康度
 5. coderef_owasp → 合规
-6. coderef_interpret (action=dashboard) → 人话仪表盘给非编程人员
+6. coderef_report (open_server=true) → 项目评估台（唯一用户入口，五 Tab：概览/架构/产品/UX/技术）
+   · 需要人话健康摘要时用 coderef_interpret(action=dashboard)，它会直接指向评估台，不另产仪表盘
 ```
 
 ### 工作流 B：非编程人员验证「项目是否按我期待的流程执行」
@@ -169,6 +170,21 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 4. coderef_operation_memory (action=find, name=test/.env/model) → 定位具体资源
 5. coderef_memory (action=query, query_type=semantic) → 恢复代码语义记忆
 ```
+
+## 产物分层（先分清「给人看」与「给 AI 读」）
+
+| 类别 | 产物 | 谁看 |
+|---|---|---|
+| 唯一用户入口 | `coderef_report` → `index.html`（五 Tab：概览 / 架构 / 产品 / UX / 技术）+ `audit/kg/wiki.html` 详情页 | 非技术人员 |
+| 治理入口 | `gov_board.html` / `project_overview.html`（L2 治理专用） | 治理负责人 |
+| 架构画布 | `arch_canvas_*`（业务树）/ `arch_flow_*`（业务流程泳道） | 人看 |
+| 技术视图 | `arch_layout_*`（角色分区，`coderef_architecture` 产出）/ 技术 Tab | 架构师 |
+| AI 数据 | `coderef_arch_canvas(format="data")` → `tree` + `lanes`（泳道分组）/ `edges`（邻接）/ `clusters`（连通分量）；`.coderef/business_semantics.json`、`scorecard.json`、`product_fit.json`、`ux_fit.json` | 编程 AI |
+
+铁律：
+- **不要给 AI 生成交互 HTML 当上下文**——LLM 读不了页面。要结构数据就用 `format=data` 或直接读 `.coderef/*.json`。
+- **不要产出第二份健康仪表盘**：`coderef_audit` 默认不写 `health_dashboard`（需显式 `with_dashboard=true`）；`coderef_interpret(action=dashboard)` 有评估台时只返回其路径。
+- **画布前缀不可混用**：`arch_canvas_`=业务树、`arch_flow_`=业务流程、`arch_layout_`=技术分区。
 
 ## 常见陷阱
 

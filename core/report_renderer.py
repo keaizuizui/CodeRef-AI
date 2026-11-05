@@ -1143,17 +1143,23 @@ class HtmlReportRenderer:
             for d in card.get("dimensions") or []:
                 raw_items = [f'{k}={v}' for k, v in (d.get("raw") or {}).items()
                              if v not in ("", None)][:8]
+                if d.get("status") == "ok":
+                    score = str(d.get("score"))
+                elif d.get("status") == "not_applicable":
+                    score = "不适用"
+                else:
+                    score = "证据不足"
                 rows.append(
                     f'<tr><td>{_esc(d.get("name", d.get("id", "")))}</td>'
                     f'<td>{_esc(str(d.get("weight", "")))}</td>'
-                    f'<td>{_esc(str(d.get("score")))}</td>'
+                    f'<td>{_esc(score)}</td>'
                     f'<td>{_esc(" · ".join(raw_items) or "-")}</td>'
                     f'<td>{_esc("、".join(d.get("evidence") or []) or "-")}</td></tr>')
             gate = card.get("gate") or {}
             parts.append(
                 '<section><h2>技术评分明细 <span class="badge badge-neutral">面向技术</span></h2>'
-                '<p class="sc-note">同一份记分卡的原始分项与证据锚点；口径与权重见 '
-                '<a href="#panel-overview">概览 · 评估标准</a>。</p>'
+                '<p class="sc-note">同一份记分卡的原始分项与证据锚点；口径、权重与阈值见'
+                '「概览 · 评估标准」。</p>'
                 '<div class="scroll-x"><table><thead><tr><th>维度</th><th>权重</th><th>得分</th>'
                 '<th>原始分项</th><th>证据锚点</th></tr></thead><tbody>'
                 + "".join(rows) + '</tbody></table></div>'
