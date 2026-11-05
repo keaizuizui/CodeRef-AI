@@ -243,10 +243,14 @@ def _report(a) -> str:
         try:
             from core.report_console import serve
             idx = hr.get("index") or ""
+            out_dir = os.path.dirname(os.path.abspath(idx)) if idx else None
             srv = serve(pp,
-                        output_dir=os.path.dirname(os.path.abspath(idx)) if idx else None,
+                        output_dir=out_dir,
                         host=a.get("host") or "127.0.0.1",
-                        port=int(a.get("port") or 0))
+                        port=int(a.get("port") or 0),
+                        # 组合根注入重渲染：评估落盘后刷新页面，
+                        # 传输层（report_console）不直接依赖编排层（pipeline_runner）
+                        rerender=lambda: Pipe().render_report(pp, output_dir=out_dir))
             hr["serve"] = srv
         except Exception as e:  # noqa: BLE001
             hr["serve"] = {"ok": False, "error": str(e)}

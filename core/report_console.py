@@ -28,7 +28,7 @@ import os
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from loguru import logger
@@ -73,7 +73,7 @@ color:#93c5fd;font-size:13px}}.muted{{color:#9ca3af;font-size:13px}}</style></he
 
 
 def _make_handler(project_path: str, out_dir: str, token: str,
-                  cache: Dict[str, Any]):
+                  cache: Dict[str, Any], rerender: Optional[Callable[[], Any]] = None):
     class Handler(BaseHTTPRequestHandler):
         server_version = "CodeRefEval/5.18"
 
@@ -240,11 +240,13 @@ def _make_handler(project_path: str, out_dir: str, token: str,
             return self._json(card)
 
         def _refresh_page(self) -> None:
-            """评估产物落盘后重渲染评估台（只聚合既有产物，不重跑扫描）。"""
+            """评估产物落盘后重渲染评估台（重渲染由组合根注入，避免传输层依赖编排层）。"""
+            if rerender is None:
+                logger.info("[report_console] 未提供重渲染回调，跳过页面刷新")
+                return
             try:
-                from core.pipeline_runner import Pipe
                 with _RENDER_LOCK:
-                    Pipe().render_report(project_path, output_dir=out_dir)
+                    rerender()
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"[report_console] 评估后台页重渲染失败（忽略）: {e}")
 
@@ -320,7 +322,8 @@ def _make_handler(project_path: str, out_dir: str, token: str,
 
 
 def serve(project_path: str, output_dir: Optional[str] = None,
-          host: str = "127.0.0.1", port: int = 0) -> dict:
+          host: str = "127.0.0.1", port: int = 0,
+          rerender: Optional[Callable[[], Any]] = None) -> dict:
     """启动评估台回环服务（进程内常驻线程；同项目重复调用先关闭旧句柄）。"""
     pp = os.path.abspath(project_path)
     if not os.path.isdir(pp):
@@ -332,7 +335,7 @@ def serve(project_path: str, output_dir: Optional[str] = None,
 
     token = secrets.token_urlsafe(24)
     cache: Dict[str, Any] = {"card": None}
-    handler = _make_handler(pp, out_dir, token, cache)
+    handler = _make_handler(pp, out_dir, token, cache, rerender)
 
     with _LOCK:
         old = _SERVERS.pop(pp, None)
