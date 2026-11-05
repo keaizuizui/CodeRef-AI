@@ -809,7 +809,10 @@ class HtmlReportRenderer:
             frames.append(
                 f'<div class="arch-frame{active}" id="arch-frame-{key}">'
                 f'<p class="sc-note">{_esc(desc)}</p>'
-                f'<iframe src="{_attr(link)}" style="width:100%;height:72vh;'
+                # sandbox 不含 allow-same-origin：画布来自被分析项目（不可信），
+                # 隔离到不透明源，读不到父页面的 coderef-token，也调不到 /api/evaluate。
+                f'<iframe src="{_attr(link)}" sandbox="allow-scripts allow-popups" '
+                'style="width:100%;height:72vh;'
                 'border:1px solid #2a2d3a;border-radius:8px;background:#0f1117"></iframe></div>')
             first = False
 
