@@ -846,6 +846,9 @@ class HtmlReportRenderer:
                          '<th>②输入现实性</th><th>③输出可行动</th><th>④数据诚实</th>'
                          '<th>⑤频率匹配</th><th>证据锚点</th></tr></thead><tbody>'
                          + "".join(body) + '</tbody></table>')
+            if len(rows) > 60:
+                parts.append(f'<p class="sc-note">仅展示前 60 条，共 {len(rows)} 条能力；'
+                             '完整明细见 .coderef/product_fit.json。</p>')
 
         cut = data.get("cut_or_change") or []
         if cut:
@@ -920,6 +923,9 @@ class HtmlReportRenderer:
                          '<table><thead><tr><th>级别</th><th>问题</th><th>愤怒</th>'
                          '<th>任务中断</th><th>业务后果</th><th>证据锚点</th></tr></thead><tbody>'
                          + "".join(rows) + '</tbody></table>')
+            if len(findings) > 80:
+                parts.append(f'<p class="sc-note">仅展示前 80 条，共 {len(findings)} 条；'
+                             '完整明细见 .coderef/ux_fit.json。</p>')
         else:
             parts.append('<p class="empty">未发现带锚点的阻断项。</p>')
 
