@@ -335,7 +335,7 @@ def _validate_llm(out: dict) -> str:
     if e4 and not assumptions:
         return "LLM 输出含 E4 推断却未给出待验证假设清单"
     st = out.get("stage")
-    if isinstance(st, dict) and st.get("phase") not in _STAGES:
+    if st is not None and (not isinstance(st, dict) or st.get("phase") not in _STAGES):
         return "LLM 输出的阶段判定非法（应为 concept/pmf/expansion）"
     return ""
 
@@ -472,16 +472,33 @@ def evaluate(project_path: str, stage: Optional[str] = None,
 
     merged = _result(pp, "OK", evidence, matrix, chain, b_track,
                      extra, llm_available=True)
-    merged["stage"] = out.get("stage") or evidence.get("stage")
-    merged["f1"] = out.get("f1") or matrix["rows"]
-    for key in ("fit_rate", "broken_chains", "blocked_fields", "redlines"):
-        if isinstance(out.get(key), (int, float)) and not isinstance(out.get(key), bool):
-            merged[key] = out[key]
-        else:
-            merged[key] = {"fit_rate": matrix["fit_rate"],
-                           "broken_chains": chain.get("broken_chains"),
-                           "blocked_fields": matrix["blocked_fields"],
-                           "redlines": matrix["redlines"]}[key]
+    st = out.get("stage")
+    merged["stage"] = st if isinstance(st, dict) else evidence.get("stage")
+
+    # LLM 只补五问的语义判断，不覆盖确定性身份字段（name/source/anchors）与计数。
+    llm_rows = {r.get("capability_id"): r for r in (out.get("f1") or [])
+                if isinstance(r, dict) and r.get("capability_id")}
+    f1_rows = []
+    for det in matrix["rows"]:
+        row = dict(det)
+        llm_row = llm_rows.get(det["capability_id"]) or {}
+        for qk, qv in llm_row.items():
+            if not qk.startswith("q") or not isinstance(qv, dict):
+                continue
+            merged_q = dict(row.get(qk) or {})
+            for k, v in qv.items():
+                if k != "proxy":  # proxy 口径由本模块强制，不接受 LLM 覆盖
+                    merged_q[k] = v
+            row[qk] = merged_q
+        for qk in ("q2_input", "q3_output"):
+            if isinstance(row.get(qk), dict):
+                row[qk]["proxy"] = True
+        f1_rows.append(row)
+    merged["f1"] = f1_rows
+    merged["fit_rate"] = matrix["fit_rate"]
+    merged["broken_chains"] = chain.get("broken_chains")
+    merged["blocked_fields"] = matrix["blocked_fields"]
+    merged["redlines"] = matrix["redlines"]
     merged["cut_or_change"] = out.get("cut_or_change") or []
     merged["b_track"] = out.get("b_track") or b_track
     merged["conclusion"] = out["conclusion"]
