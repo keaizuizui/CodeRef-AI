@@ -33,6 +33,7 @@ from core.pr_kg import (
 )
 from core.pr_whitelist import (
     _match_whitelist, _xval, _latest_report, _workflow, _findings_json_path,
+    project_findings_json_path,
     _finding_from_dict, _finding_to_dict, _count_md, _detect_wiki_dir,
     docs_read, _select_tools, list_single_tools, _build_kg, _build_scope_text,
     _scan, core_rules_reset, core_rules_set, core_rules_get, whitelist_clear,
@@ -388,8 +389,13 @@ def render_report(project_path: str,
         # 补全 has_artifacts 判定：kg 与 审计 findings 均存在才走重渲染。
         # 若只有图谱没有审计 findings，产物残缺，audit.html 与 index 审计卡片
         # 会缺失真实数据，回退到一次全量审计更完整（社区反馈的"全 0/暂无"bug 根源）。
-        audit_fp = _findings_json_path(project_path, output_dir)
-        if not os.path.isfile(audit_fp):
+        # findings 可能落在项目侧 `.coderef/`（权威副本）或调用方输出目录，
+        # 只要任一处存在即可重渲染（U-49：外部项目曾因只找输出目录而永久失败）。
+        audit_candidates = [
+            _findings_json_path(project_path, output_dir),
+            project_findings_json_path(project_path),
+        ]
+        if not any(os.path.isfile(p) for p in dict.fromkeys(audit_candidates)):
             r.errors.append("未检测到审计 findings 产物（audit_findings.json），"
                             "已回退为一次全量审计以产出完整报告")
             return r, False
@@ -414,7 +420,12 @@ def render_report(project_path: str,
         return r, False
 
 def _dump_findings_json(r: PipeResult, out: str) -> None:
-    """把 audit 的 findings 与统计序列化落盘，供 coderef_report 重渲染复用。"""
+    """把 audit 的 findings 与统计序列化落盘，供 coderef_report 重渲染复用。
+
+    落两处：项目侧 `<project>/.coderef/`（权威副本，与 scorecard 同目录）与调用方
+    `out`（兼容既有共享输出目录的消费方）。缺项目侧副本时，外部项目的重渲染会
+    因找不到产物而静默失败（U-49 根因之一）。
+    """
     try:
         data = {
             "version": 1,
@@ -425,12 +436,15 @@ def _dump_findings_json(r: PipeResult, out: str) -> None:
             "scope_text": r.scope_text or "",
             "findings": [_finding_to_dict(f) for f in r.findings],
         }
-        fp = _findings_json_path(r.project_path, out)
-        os.makedirs(os.path.dirname(fp), exist_ok=True)
-        tmp = fp + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, fp)
+        targets = [project_findings_json_path(r.project_path)]
+        if out:
+            targets.append(_findings_json_path(r.project_path, out))
+        for fp in dict.fromkeys(targets):
+            os.makedirs(os.path.dirname(fp), exist_ok=True)
+            tmp = fp + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, fp)
     except Exception as e:
         r.errors.append(f"dump_findings_json: {e}")
 
@@ -438,8 +452,11 @@ def _load_findings_json(project_path: str, r: PipeResult,
                         out: Optional[str] = None) -> bool:
     """从落盘的 findings JSON 恢复统计与 findings 到 r；无可用 JSON 返回 False。"""
     candidates = [
+        project_findings_json_path(project_path),
         _findings_json_path(project_path, out),
         _findings_json_path(project_path),
+        os.path.join(project_path, ".coderef",
+                     f"audit_findings_{Pipe._phash(project_path)}.json"),
         os.path.join(project_path, "coderef-report",
                      f"audit_findings_{Pipe._phash(project_path)}.json"),
         # 向后兼容：旧版全局单文件（无项目标识）
@@ -1019,6 +1036,11 @@ class Pipe:
         """
         try:
             from core.code_knowledge_graph import load_knowledge_graph
+            # U-49：只有图谱、没有可复用的审计结论时不得短路复用，
+            # 否则既不落 findings JSON，又渲染出"审计未执行"的页面，
+            # 后续每次重渲染都因找不到产物而静默失败。
+            if not _load_findings_json(project_path, r, out):
+                return False
             kg = load_knowledge_graph(project_path)
             if kg is None:
                 return False

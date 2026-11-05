@@ -108,10 +108,15 @@ def build_framework(project_path: str,
         mods = sorted(domains[d])
         title = _DIR_CN.get(d.lower(), _readable(d))
         # ── 子功能层：域内下一级分组 ──
+        # 只对路径深度 ≥3 的模块分组（如 core/pipeline/scan）。
+        # 深度 2 的模块本身就是该域的主模块，若仍按 basename 分组会生成
+        # 与父节点同名同模块的自我嵌套子节点（画布上表现为空壳重复卡）。
         sub: Dict[str, List[str]] = {}
         for m in mods:
             parts = m.split("/")
-            key = parts[2] if len(parts) > 2 else parts[-1]
+            if len(parts) <= 2:
+                continue
+            key = parts[2]
             sub.setdefault(key, []).append(m)
         subchildren = []
         for k in sorted(sub):

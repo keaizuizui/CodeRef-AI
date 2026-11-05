@@ -85,6 +85,16 @@ def _findings_json_path(project_path: str, out: Optional[str] = None) -> str:
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "coderef-report", fname)
 
+
+def project_findings_json_path(project_path: str) -> str:
+    """项目侧 findings JSON 路径（`<project>/.coderef/`）。
+
+    与 scorecard / product_fit / ux_fit 同目录：分析外部项目时不再依赖工具仓库的
+    共享输出目录，避免「审计写一处、重渲染读另一处」导致的静默失败（U-49）。
+    """
+    fname = f"audit_findings_{_phash(project_path)}.json"
+    return os.path.join(os.path.abspath(project_path), ".coderef", fname)
+
 def _finding_from_dict(d: dict) -> "Finding":
     tier = Tier(d.get("tier", "low")) if d.get("tier") else Tier.LOW
     return Finding(

@@ -313,6 +313,14 @@ _CONSOLE_CSS = """
   background:#1e2234; border:1px solid #2a2d3a; color:#6ee7b7; }
 .sc-meta { font-size:12px; color:#9ca3af; }
 .sc-note { font-size:12px; color:#9ca3af; }
+/* 概览内的子区块：避免 section 套 section 造成边框叠边框 */
+.subcard { background:#14161f; border:1px solid #2a2d3a; border-radius:10px;
+  padding:14px 16px; margin-top:12px; }
+.subcard h3 { font-size:14px; color:#c9cdd4; margin:0 0 8px; }
+/* 宽表格横向滚动，避免窄视口溢出 */
+.scroll-x { overflow-x:auto; margin-top:4px; }
+.badge-neutral { background:#1f2433; color:#c9cdd4; }
+.warn-line { font-size:12px; color:#fcd34d; margin:8px 0; }
 """
 
 # ── 评估台交互：Tab 切换 + 记分卡刷新（离线时如实提示，不假装成功） ──
@@ -405,6 +413,13 @@ function runEval(scene){
     if (!x.ok || (x.j && x.j.status === 'ERROR')){
       throw new Error((x.j && (x.j.error || x.j.message)) || '评估失败');
     }
+    // 服务端明确告知"评估成功但页面没刷新"时，不能假装成功后静默重载（U-49）
+    if (x.j && x.j.page_refreshed === false){
+      window._evalBusy[scene] = false;
+      if (st) st.textContent = '评估已完成，但页面刷新失败：'
+        + (x.j.page_refresh_error || '未知原因') + '。请手动重跑 coderef_report。';
+      return;
+    }
     if (st) st.textContent = '评估完成（' + ((x.j && x.j.status) || 'OK') + '），正在刷新…';
     try { sessionStorage.setItem('coderef-tab', scene); } catch (e) {}
     setTimeout(function(){ location.reload(); }, 400);
@@ -418,6 +433,7 @@ function runEval(scene){
 
 
 def _page(title: str, body: str, nav_links: str, project_name: str) -> str:
+    nav_html = f"<nav>{nav_links}</nav>" if nav_links else ""
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -430,9 +446,9 @@ def _page(title: str, body: str, nav_links: str, project_name: str) -> str:
 <div class="wrap">
   <div class="topbar">
     <h1>{_esc(title)}</h1>
-    <div class="meta">{_esc(project_name)} · {datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
+    <div class="meta">{_esc(project_name)} · 页面生成 {datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
   </div>
-  <nav>{nav_links}</nav>
+  {nav_html}
   {body}
   <div class="footer">由 CodeRef-AI 生成 · 自包含 HTML 报告</div>
 </div>
@@ -611,7 +627,9 @@ class HtmlReportRenderer:
         product = self._safe_panel(self._product_panel, "产品评估")
         ux = self._safe_panel(self._ux_panel, "UX 人格走查")
         body = self._console_shell(overview, arch, product, ux)
-        return _page("项目评估台", body, _nav("index.html", self.project_name), self.project_name)
+        # 评估台是唯一入口：顶部不再放重复的「概览/审计/图谱/Wiki」导航，
+        # 详情页链接已收进概览面板，避免两套导航语义冲突。
+        return _page("项目评估台", body, "", self.project_name)
 
     def _overview_panel(self, pr, kg_stats, wiki_dir, dimension_states,
                         scorecard) -> str:
@@ -644,8 +662,9 @@ class HtmlReportRenderer:
             return f'<div class="card"><div class="lbl">{lbl}</div><div class="val"{style}>{val}</div></div>'
 
         cards = '<div class="cards">'
-        cards += _card("扫描文件", getattr(pr, "total_files", 0))
-        cards += _card("代码行", getattr(pr, "total_lines", 0))
+        # 审计未执行时不展示 0：0 会被误读成"扫描过且没东西"
+        cards += _card("扫描文件", getattr(pr, "total_files", 0) if audit_status == "done" else "--")
+        cards += _card("代码行", getattr(pr, "total_lines", 0) if audit_status == "done" else "--")
         cards += _card("HIGH", h, "#fca5a5" if audit_status == "done" else "#fcd34d")
         cards += _card("MEDIUM", m, "#fcd34d" if audit_status == "done" else "#fcd34d")
         cards += _card("LOW", lo, "#93c5fd" if audit_status == "done" else "#fcd34d")
@@ -654,33 +673,34 @@ class HtmlReportRenderer:
         cards += _card("图谱边", kge)
         cards += '</div>'
 
-        # 报告章节：按维度分区，每区带执行状态徽章 + 一句话摘要 + 链接
+        # 报告章节：按维度分区，每区带执行状态徽章 + 一句话摘要 + 链接。
+        # 用 subcard（div）而不是嵌套 section，避免边框叠边框。
         secs = []
         if audit_status == "done":
             if findings:
-                secs.append(f'<section><h2>审计发现 <span class="badge badge-ok">已执行</span></h2>'
-                            f'<p>共 <strong>{len(findings)}</strong> 条发现，详见 <a href="audit.html">审计发现</a>。</p></section>')
+                secs.append(f'<div class="subcard"><h3>审计发现 <span class="badge badge-ok">已执行</span></h3>'
+                            f'<p>共 <strong>{len(findings)}</strong> 条发现，详见 <a href="audit.html">审计发现</a>。</p></div>')
             else:
-                secs.append('<section><h2>审计发现 <span class="badge badge-ok">已执行</span></h2>'
-                            '<p>审计已执行，未发现任何问题。详见 <a href="audit.html">审计发现</a>。</p></section>')
+                secs.append('<div class="subcard"><h3>审计发现 <span class="badge badge-ok">已执行</span></h3>'
+                            '<p>审计已执行，未发现任何问题。详见 <a href="audit.html">审计发现</a>。</p></div>')
         else:
             hint = _esc(audit_d.get("hint", "尚未执行审计，请先运行 coderef_audit"))
-            secs.append(f'<section><h2>审计发现 <span class="badge badge-missing">未执行</span></h2>'
-                        f'<p class="empty">{hint}</p></section>')
+            secs.append(f'<div class="subcard"><h3>审计发现 <span class="badge badge-missing">未执行</span></h3>'
+                        f'<p class="empty">{hint}</p></div>')
 
         if kg_status == "done":
-            secs.append(f'<section><h2>知识图谱 <span class="badge badge-ok">已执行</span></h2>'
-                        f'<p>{_esc(kg_d.get("hint", ""))}，详见 <a href="kg.html">知识图谱</a>。</p></section>')
+            secs.append(f'<div class="subcard"><h3>知识图谱 <span class="badge badge-ok">已执行</span></h3>'
+                        f'<p>{_esc(kg_d.get("hint", ""))}，详见 <a href="kg.html">知识图谱</a>。</p></div>')
         else:
-            secs.append(f'<section><h2>知识图谱 <span class="badge badge-missing">未执行</span></h2>'
-                        f'<p class="empty">{_esc(kg_d.get("hint", "尚未构建知识图谱"))}</p></section>')
+            secs.append(f'<div class="subcard"><h3>知识图谱 <span class="badge badge-missing">未执行</span></h3>'
+                        f'<p class="empty">{_esc(kg_d.get("hint", "尚未构建知识图谱"))}</p></div>')
 
         if wiki_status == "done":
-            secs.append(f'<section><h2>Wiki 文档 <span class="badge badge-ok">已执行</span></h2>'
-                        f'<p>{_esc(wiki_d.get("hint", ""))}，详见 <a href="wiki.html">Wiki 文档</a>。</p></section>')
+            secs.append(f'<div class="subcard"><h3>Wiki 文档 <span class="badge badge-ok">已执行</span></h3>'
+                        f'<p>{_esc(wiki_d.get("hint", ""))}，详见 <a href="wiki.html">Wiki 文档</a>。</p></div>')
         else:
-            secs.append(f'<section><h2>Wiki 文档 <span class="badge badge-missing">未执行</span></h2>'
-                        f'<p class="empty">{_esc(wiki_d.get("hint", "尚未生成 Wiki，请先运行 coderef_docs"))}</p></section>')
+            secs.append(f'<div class="subcard"><h3>Wiki 文档 <span class="badge badge-missing">未执行</span></h3>'
+                        f'<p class="empty">{_esc(wiki_d.get("hint", "尚未生成 Wiki，请先运行 coderef_docs"))}</p></div>')
 
         # 统计口径透明化：披露各维度时间，避免旧产物被当作本次结果
         ts = getattr(pr, "scan_ts", "") or ""
@@ -717,7 +737,13 @@ class HtmlReportRenderer:
                          f'<p>模块之间如何传递数据，直接回答"谁向谁要东西"。</p>'
                          f'{"".join(flow_links)}</section>')
 
-        overview += '<section><h2>报告章节</h2>' + "".join(secs) + "</section>"
+        overview += ('<section><h2>详情页</h2>'
+                     '<p class="sc-note">概览只放结论与口径；明细在各详情页。</p>'
+                     '<div class="subcard"><h3>审计发现 · 知识图谱 · Wiki</h3>'
+                     '<p><a href="audit.html">审计发现明细</a> ｜ '
+                     '<a href="kg.html">知识图谱统计</a> ｜ '
+                     '<a href="wiki.html">Wiki 文档</a></p></div>'
+                     + "".join(secs) + "</section>")
         overview += '<section><h2>技术概览</h2><p class="empty">以下为代码级统计，业务理解请以上方业务视角为主。</p>' \
                     + cards + '</section>' + note
 
@@ -732,8 +758,11 @@ class HtmlReportRenderer:
                     f'<iframe src="{_attr(arch_link)}" style="width:100%;height:78vh;'
                     'border:1px solid #2a2d3a;border-radius:8px;background:#0f1117"></iframe></section>')
         return ('<section><h2>业务架构视图 <span class="badge badge-missing">未生成</span></h2>'
-                '<p class="empty">尚无架构画布产物：请先调用 coderef_arch_canvas（open_server=true 可直接推送），'
-                '生成后刷新本页即可内嵌。</p></section>')
+                '<p class="empty">尚无架构画布产物。请在 MCP 中调用 '
+                '<code>coderef_arch_canvas(project_path=..., open_server=true)</code> 生成；'
+                '画布无法在本页内现场生成，生成后刷新本页即可内嵌。</p>'
+                '<p class="sc-note">当前视图为「业务树」：入口 → 主功能 → 子功能 → 步骤。'
+                '按角色划分的业务流程视图（actor × stage 泳道）在后续版本接入。</p></section>')
 
     # ─── 评估台：产品（F 轨）/ UX（U 轨） ───
 
@@ -766,6 +795,19 @@ class HtmlReportRenderer:
             for k, v in items) + '</div>'
 
     @staticmethod
+    def _pct(value) -> str:
+        """契合率等 0~1 数值按百分比展示；未知保持 N/A（不当 0）。"""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return "N/A"
+        return f"{round(float(value) * 100)}%"
+
+    @staticmethod
+    def _stamp(data: dict) -> str:
+        """数据生成时间：让读者能判断"结论是不是比页面旧"（U-49 观感防线）。"""
+        ts = str(data.get("generated_at") or "")
+        return f'数据生成 {ts}' if ts else '数据生成时间未记录'
+
+    @staticmethod
     def _q_cell(q) -> str:
         if not isinstance(q, dict):
             return '<span class="badge badge-missing">未判定</span>'
@@ -787,6 +829,15 @@ class HtmlReportRenderer:
                 '<span class="sc-note" id="eval-status-' + _attr(scene) + '">'
                 '本地服务可用时点按钮即评估；离线请用 coderef_report open_server=true</span>')
 
+    @staticmethod
+    def _source_cell(source) -> str:
+        """能力来源：目录兜底是最弱证据，必须显式标注，避免被当成业务能力。"""
+        src = str(source or "")
+        if src == "directory":
+            return ('<span class="badge badge-neutral">directory</span>'
+                    '<br><span class="sc-note">目录兜底（弱证据）</span>')
+        return f'<span class="badge badge-neutral">{_esc(src)}</span>'
+
     def _product_panel(self) -> str:
         """产品评估：F 轨主轴（业务契合度），不评价界面美观。"""
         data = self._eval_snapshot("product_fit.json")
@@ -801,14 +852,19 @@ class HtmlReportRenderer:
                     + self._eval_button("product", "运行产品评估") + '</section>')
 
         status = str(data.get("status") or "")
-        badge = {"OK": "badge-ok", "SKIP": "badge-missing"}.get(status, "badge-missing")
+        badge = {"OK": "badge-ok", "SKIP": "badge-missing"}.get(status, "badge-neutral")
         stage = data.get("stage") or {}
         concl = data.get("conclusion") or {}
         parts = [head.replace("</h2>", f'<span class="badge {badge}">{_esc(status)}</span></h2>')]
-        parts.append(f'<p class="sc-note">阶段：{_esc(stage.get("phase", "-"))}'
-                     f'（{_esc(stage.get("reason", ""))} · {_esc(stage.get("decided_by", ""))}）</p>')
+        # 阶段行：decided_by 为空时不留 " · ）" 残渣；来源翻译成人话
+        decided = {"auto": "自动判定", "user": "用户确认"}.get(
+            str(stage.get("decided_by") or ""), str(stage.get("decided_by") or ""))
+        stage_tail = " · ".join(x for x in (str(stage.get("reason") or ""), decided) if x)
+        parts.append(f'<p class="sc-note">阶段：{_esc(str(stage.get("phase") or "-"))}'
+                     + (f'（{_esc(stage_tail)}）' if stage_tail else '') + '</p>')
+        parts.append(f'<p class="sc-note">{_esc(self._stamp(data))}</p>')
         parts.append(self._eval_metrics([
-            ("契合率", data.get("fit_rate")),
+            ("契合率", self._pct(data.get("fit_rate"))),
             ("断链数", data.get("broken_chains")),
             ("卡死字段", data.get("blocked_fields")),
             ("红线", data.get("redlines")),
@@ -834,7 +890,7 @@ class HtmlReportRenderer:
                     continue
                 body.append(
                     f'<tr><td>{_esc(str(r.get("name", r.get("capability_id", ""))))}</td>'
-                    f'<td>{_esc(str(r.get("source", "")))}</td>'
+                    f'<td>{self._source_cell(r.get("source"))}</td>'
                     f'<td>{self._q_cell(r.get("q1_decision"))}</td>'
                     f'<td>{self._q_cell(r.get("q2_input"))}</td>'
                     f'<td>{self._q_cell(r.get("q3_output"))}</td>'
@@ -842,10 +898,10 @@ class HtmlReportRenderer:
                     f'<td>{self._q_cell(r.get("q5_frequency"))}</td>'
                     f'<td><code>{_esc("、".join(r.get("anchors") or []))}</code></td></tr>')
             parts.append('<h3 style="margin:14px 0 8px">F1 能力 × 五问矩阵</h3>'
-                         '<table><thead><tr><th>能力</th><th>来源</th><th>①支撑决策</th>'
+                         '<div class="scroll-x"><table><thead><tr><th>能力</th><th>来源</th><th>①支撑决策</th>'
                          '<th>②输入现实性</th><th>③输出可行动</th><th>④数据诚实</th>'
                          '<th>⑤频率匹配</th><th>证据锚点</th></tr></thead><tbody>'
-                         + "".join(body) + '</tbody></table>')
+                         + "".join(body) + '</tbody></table></div>')
             if len(rows) > 60:
                 parts.append(f'<p class="sc-note">仅展示前 60 条，共 {len(rows)} 条能力；'
                              '完整明细见 .coderef/product_fit.json。</p>')
@@ -893,11 +949,14 @@ class HtmlReportRenderer:
         parts = [head.replace(
             "</h2>",
             f'<span class="badge {vbadge}">{_esc(vlabel)}</span>'
-            f'<span class="badge badge-missing">{_esc(status)}</span></h2>')]
+            f'<span class="badge badge-neutral">{_esc(status or "-")}</span></h2>')]
+        parts.append('<p class="warn-line">模拟推断（E4）：以下结论来自人格模拟，'
+                     '非真实用户实测；每条发现可回到 file:line（E2）。</p>')
         parts.append(f'<p class="sc-note">人格：{_esc(str(persona.get("name", "-")))}'
                      f'（{_esc(str(persona.get("identity", "")))}）</p>')
         parts.append(f'<p class="sc-note">旅程：{_esc(str(data.get("journey", "")))} · '
                      'simulated=true · 结论 E4（锚点为 E2）</p>')
+        parts.append(f'<p class="sc-note">{_esc(self._stamp(data))}</p>')
         three = data.get("three_second") or {}
         if three:
             parts.append('<h3 style="margin:14px 0 8px">3 秒生存</h3><ul>' + "".join(
@@ -920,9 +979,9 @@ class HtmlReportRenderer:
                     f'<td>{_esc(str(f.get("business_consequence", "")))}</td>'
                     f'<td><code>{_esc(str(f.get("anchor", "")))}</code></td></tr>')
             parts.append('<h3 style="margin:14px 0 8px">Rage Map（含业务后果）</h3>'
-                         '<table><thead><tr><th>级别</th><th>问题</th><th>愤怒</th>'
+                         '<div class="scroll-x"><table><thead><tr><th>级别</th><th>问题</th><th>愤怒</th>'
                          '<th>任务中断</th><th>业务后果</th><th>证据锚点</th></tr></thead><tbody>'
-                         + "".join(rows) + '</tbody></table>')
+                         + "".join(rows) + '</tbody></table></div>')
             if len(findings) > 80:
                 parts.append(f'<p class="sc-note">仅展示前 80 条，共 {len(findings)} 条；'
                              '完整明细见 .coderef/ux_fit.json。</p>')
@@ -976,21 +1035,27 @@ class HtmlReportRenderer:
                 f'<td>{_esc("、".join(d.get("evidence") or []))}</td>'
                 f'<td>{_esc(d.get("source_tool", ""))}</td></tr>')
         notes = "".join(f'<p class="sc-note">{_esc(n)}</p>' for n in card.get("notes") or [])
+        coverage = float(card.get("coverage") or 0)
+        # 低覆盖时"A 级"极易被误读成整体健康：显式给出限定语
+        low_cov = (overall is not None and coverage < 0.5)
+        cov_warn = (f'<p class="warn-line">证据覆盖仅 {int(round(coverage * 100))}%：'
+                    f'该等级只代表已知维度，不代表项目整体健康。</p>' if low_cov else '')
         return (
             '<section><h2>健康记分卡 <span class="badge badge-ok">确定性聚合</span></h2>'
             '<div class="sc-hero">'
             f'<div class="sc-num" id="sc-overall">{num}</div>'
             f'<div class="sc-grade" id="sc-grade">{_esc(card.get("grade", "N/A"))}</div>'
             '<div><div class="sc-meta" id="sc-meta">'
-            f'置信度 {_esc(card.get("confidence", "-"))} · 证据覆盖 {int(round((card.get("coverage") or 0) * 100))}%'
+            f'置信度 {_esc(card.get("confidence", "-"))} · 证据覆盖 {int(round(coverage * 100))}%'
             '</div>'
             f'<div class="sc-meta" id="sc-stamp">评估时间 {_esc(card.get("generated_at", ""))}</div></div>'
             '<button class="tab-btn" onclick="scRefresh()">重新评估</button>'
             '<span class="sc-note" id="sc-status">离线快照（重新评估需经 coderef_report open_server 打开）</span>'
             '</div>'
-            '<table style="margin-top:18px"><thead><tr>'
+            + cov_warn +
+            '<div class="scroll-x"><table style="margin-top:18px"><thead><tr>'
             '<th>维度</th><th>权重</th><th>得分</th><th>原始分项</th><th>证据锚点</th><th>来源工具</th>'
-            '</tr></thead><tbody id="sc-rows">' + "".join(rows) + '</tbody></table>'
+            '</tr></thead><tbody id="sc-rows">' + "".join(rows) + '</tbody></table></div>'
             f'<div id="sc-notes" style="margin-top:12px">{notes}</div></section>')
 
     def _method_html(self, card: Optional[dict]) -> str:
