@@ -225,12 +225,15 @@ def _report(a) -> str:
         # 避免首页记分卡落后一轮。
         sc_err = _refresh_card()
         refreshed = True
-        r, _ = Pipe().render_report(pp, output_dir=out)
+        r2, _ = Pipe().render_report(pp, output_dir=out)
+        # 重渲染失败时保留审计结果，避免丢掉 html_report 与审计错误
+        r = r2 if getattr(r2, "html_report", None) else r
     elif not refreshed:
         # 只有图谱/Wiki、没有审计 findings 时也属于"有产物"：同样刷新一次，
         # 页面此前用的是旧/空快照，需要重渲染一次才对得上。
         sc_err = _refresh_card()
-        r, _ = Pipe().render_report(pp, output_dir=out)
+        r2, _ = Pipe().render_report(pp, output_dir=out)
+        r = r2 if getattr(r2, "html_report", None) else r
     hr = getattr(r, "html_report", None) or {}
     if sc_err:
         hr["scorecard_error"] = sc_err

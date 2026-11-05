@@ -613,7 +613,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         card = compute(pp)
     except Exception as e:  # noqa: BLE001
         print(f"[scorecard] 计算失败: {e}", file=sys.stderr)
-        return 2
+        # warn 模式（默认）不应因计算失败而阻断构建；仅显式阻断时才返回非 0
+        try:
+            blocking = args.fail_on_below or bool(
+                (load_config(pp).get("thresholds") or {}).get("fail_on_below"))
+        except Exception:  # noqa: BLE001
+            blocking = args.fail_on_below
+        return 2 if blocking else 0
 
     if args.out:
         out = os.path.abspath(args.out)
