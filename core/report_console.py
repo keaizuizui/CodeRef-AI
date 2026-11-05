@@ -217,7 +217,7 @@ def _make_handler(project_path: str, out_dir: str, token: str,
             # 只放行 .coderef 下的画布产物（业务树 arch_canvas_* / 业务流程 arch_flow_*）；
             # 不允许分隔符/目录穿越
             fn = os.path.basename(name)
-            prefixes = ("arch_canvas_", "arch_flow_")
+            prefixes = ("arch_canvas_", "arch_flow_", "arch_layout_")
             if (fn != name or not fn.endswith(".html")
                     or not fn.startswith(prefixes)):
                 return self._json({"ok": False, "error": "404"}, 404)

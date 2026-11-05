@@ -530,7 +530,8 @@ class HtmlReportRenderer:
             results["index.html"] = self._render_index(
                 pipe_result, kg_stats, wiki_dir, dimension_states,
                 scorecard=sc, arch_link=self._latest_arch_link(out),
-                flow_link=self._latest_flow_link(out))
+                flow_link=self._latest_flow_link(out),
+                layout_link=self._latest_layout_link(out))
         except Exception as e:
             return {"ok": False, "error": str(e), "files": []}
 
@@ -588,12 +589,20 @@ class HtmlReportRenderer:
         except Exception:  # noqa: BLE001
             return ""
 
+    def _latest_layout_link(self, out_dir: str) -> str:
+        """定位最新的技术分区图（canvas_generator 的 arch_layout_*，面向技术）。"""
+        return self._latest_html_link("arch_layout_", out_dir)
+
     def _latest_flow_link(self, out_dir: str) -> str:
-        """定位最新一张业务流程泳道画布（无则空串）。"""
+        """定位最新的业务流程泳道画布（arch_flow_*）。"""
+        return self._latest_html_link("arch_flow_", out_dir)
+
+    def _latest_html_link(self, prefix: str, out_dir: str) -> str:
+        """在 `<project>/.coderef/` 下取指定前缀的最新产物并转成相对链接。"""
         d = os.path.join(self.project_path, ".coderef")
         try:
             files = sorted(f for f in os.listdir(d)
-                           if f.startswith("arch_flow_") and f.endswith(".html"))
+                           if f.startswith(prefix) and f.endswith(".html"))
         except Exception:  # noqa: BLE001
             return ""
         if not files:
@@ -646,15 +655,17 @@ class HtmlReportRenderer:
         return links
 
     def _render_index(self, pr, kg_stats, wiki_dir, dimension_states=None,
-                      scorecard=None, arch_link="", flow_link="") -> str:
+                      scorecard=None, arch_link="", flow_link="",
+                      layout_link="") -> str:
         """评估台首页：只做面板编排，内容组装见各自面板方法。"""
         overview = self._overview_panel(pr, kg_stats, wiki_dir, dimension_states, scorecard)
         arch = self._arch_panel(arch_link, flow_link)
         # 快照来自可能不可信的项目仓库：单个面板渲染失败只降级该面板，
-        # 不让一份坏 JSON 导致四页全部失败（与概览记分卡口径一致）。
+        # 不让一份坏 JSON 导致五页全部失败（与概览记分卡口径一致）。
         product = self._safe_panel(self._product_panel, "产品评估")
         ux = self._safe_panel(self._ux_panel, "UX 人格走查")
-        body = self._console_shell(overview, arch, product, ux)
+        tech = self._safe_panel(lambda: self._tech_panel(scorecard, layout_link), "技术视图")
+        body = self._console_shell(overview, arch, product, ux, tech)
         # 评估台是唯一入口：顶部不再放重复的「概览/审计/图谱/Wiki」导航，
         # 详情页链接已收进概览面板，避免两套导航语义冲突。
         return _page("项目评估台", body, "", self.project_name)
@@ -1090,13 +1101,9 @@ class HtmlReportRenderer:
                 s = '<span class="badge badge-missing">不适用</span>'
             else:
                 s = '<span class="badge badge-missing">证据不足</span>'
-            raw_items = [f'{k}={v}' for k, v in (d.get("raw") or {}).items()
-                         if v not in ("", None)][:6]
             rows.append(
                 f'<tr><td>{_esc(d.get("name", d.get("id", "")))}</td>'
                 f'<td>{_esc(str(d.get("weight", "")))}</td><td>{s}</td>'
-                f'<td>{_esc(" · ".join(raw_items))}</td>'
-                f'<td>{_esc("、".join(d.get("evidence") or []))}</td>'
                 f'<td>{_esc(d.get("source_tool", ""))}</td></tr>')
         notes = "".join(f'<p class="sc-note">{_esc(n)}</p>' for n in card.get("notes") or [])
         coverage = float(card.get("coverage") or 0)
@@ -1118,9 +1125,60 @@ class HtmlReportRenderer:
             '</div>'
             + cov_warn +
             '<div class="scroll-x"><table style="margin-top:18px"><thead><tr>'
-            '<th>维度</th><th>权重</th><th>得分</th><th>原始分项</th><th>证据锚点</th><th>来源工具</th>'
+            '<th>维度</th><th>权重</th><th>得分</th><th>来源工具</th>'
             '</tr></thead><tbody id="sc-rows">' + "".join(rows) + '</tbody></table></div>'
-            f'<div id="sc-notes" style="margin-top:12px">{notes}</div></section>')
+            f'<div id="sc-notes" style="margin-top:12px">{notes}</div>'
+            '<p class="sc-note">原始分项、证据锚点与阈值在「技术」Tab 展开（面向架构师/技术负责人）。</p>'
+            '</section>')
+
+    def _tech_panel(self, card: Optional[dict], layout_link: str = "") -> str:
+        """技术视图：技术评分明细 + 技术分区图。
+
+        定位：面向架构师 / 技术负责人。非技术读者看「概览」即可，
+        这里只把口径、原始分项、证据锚点与技术分区布局摊开，不做业务解释。
+        """
+        parts = []
+        if card and card.get("dimensions"):
+            rows = []
+            for d in card.get("dimensions") or []:
+                raw_items = [f'{k}={v}' for k, v in (d.get("raw") or {}).items()
+                             if v not in ("", None)][:8]
+                rows.append(
+                    f'<tr><td>{_esc(d.get("name", d.get("id", "")))}</td>'
+                    f'<td>{_esc(str(d.get("weight", "")))}</td>'
+                    f'<td>{_esc(str(d.get("score")))}</td>'
+                    f'<td>{_esc(" · ".join(raw_items) or "-")}</td>'
+                    f'<td>{_esc("、".join(d.get("evidence") or []) or "-")}</td></tr>')
+            gate = card.get("gate") or {}
+            parts.append(
+                '<section><h2>技术评分明细 <span class="badge badge-neutral">面向技术</span></h2>'
+                '<p class="sc-note">同一份记分卡的原始分项与证据锚点；口径与权重见 '
+                '<a href="#panel-overview">概览 · 评估标准</a>。</p>'
+                '<div class="scroll-x"><table><thead><tr><th>维度</th><th>权重</th><th>得分</th>'
+                '<th>原始分项</th><th>证据锚点</th></tr></thead><tbody>'
+                + "".join(rows) + '</tbody></table></div>'
+                f'<p class="sc-note" style="margin-top:10px">置信度 '
+                f'{_esc(card.get("confidence", "-"))} · 证据覆盖 '
+                f'{int(round(float(card.get("coverage") or 0) * 100))}% · 阈值 '
+                f'{_esc(str(gate.get("min_score", "")))}（CI 默认只告警）</p></section>')
+        else:
+            parts.append('<section><h2>技术评分明细 <span class="badge badge-missing">未生成</span></h2>'
+                         '<p class="empty">暂无记分卡数据，请先运行 coderef_report。</p></section>')
+
+        if layout_link:
+            parts.append(
+                '<section><h2>技术分区图 <span class="badge badge-neutral">面向技术</span></h2>'
+                '<p class="sc-note">按技术角色（入口 / 接口 / 业务 / 数据 / 基础）划分的模块布局，'
+                '用于排查分层与依赖，不回答业务问题。</p>'
+                # 与被分析项目的画布隔离，避免读取父页 token
+                f'<iframe src="{_attr(layout_link)}" sandbox="allow-scripts allow-popups" '
+                'style="width:100%;height:70vh;border:1px solid #2a2d3a;'
+                'border-radius:8px;background:#0f1117"></iframe></section>')
+        else:
+            parts.append('<section><h2>技术分区图 <span class="badge badge-missing">未生成</span></h2>'
+                         '<p class="empty">尚无技术分区图。运行 '
+                         '<code>coderef_architecture</code> 生成（产物前缀 arch_layout_）。</p></section>')
+        return "".join(parts)
 
     def _method_html(self, card: Optional[dict]) -> str:
         """评估标准面板：把"按什么标准评、权重多少"摊开，避免黑箱打分。"""
@@ -1143,15 +1201,18 @@ class HtmlReportRenderer:
             f'{_esc(str(gate.get("min_score", "")))}（CI 默认只告警，显式开启才阻断）</p></section>')
 
     @staticmethod
-    def _console_shell(overview: str, arch: str, product: str, ux: str) -> str:
-        tabs = [("overview", "概览"), ("arch", "架构"), ("product", "产品"), ("ux", "UX")]
+    def _console_shell(overview: str, arch: str, product: str, ux: str,
+                       tech: str = "") -> str:
+        tabs = [("overview", "概览"), ("arch", "架构"), ("product", "产品"),
+                ("ux", "UX"), ("tech", "技术")]
         bar = "".join(
             f'<button class="tab-btn{" active" if i == 0 else ""}" data-tab="{k}">{label}</button>'
             for i, (k, label) in enumerate(tabs))
         panels = (f'<div class="tab-panel active" id="panel-overview">{overview}</div>'
                   f'<div class="tab-panel" id="panel-arch">{arch}</div>'
                   f'<div class="tab-panel" id="panel-product">{product}</div>'
-                  f'<div class="tab-panel" id="panel-ux">{ux}</div>')
+                  f'<div class="tab-panel" id="panel-ux">{ux}</div>'
+                  f'<div class="tab-panel" id="panel-tech">{tech}</div>')
         return f'<div class="tabs">{bar}</div>{panels}{_CONSOLE_JS}'
 
     def _render_audit(self, pr, dimension_states=None) -> str:

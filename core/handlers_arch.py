@@ -409,6 +409,25 @@ def _arch_canvas(a: dict) -> str:
     ta = a.get("target_arch")
     if ta is not None:
         ta = _coerce_target_arch("coderef_arch_canvas", ta)
+
+    # format=data：只回结构化数据，不渲染 HTML（AI 读不了交互页面，也不该为它生成）。
+    # 返回 tree（业务树）+ semantics（泳道分组/邻接/连通分量），可直接当上下文用。
+    if str(a.get("format") or "html").lower() == "data":
+        from core.business_semantics import analyze
+        from core.arch_framework import build_framework
+        sem = analyze(pp, use_llm=bool(a.get("flow_use_llm", True)))
+        return json.dumps({
+            "status": "completed",
+            "tool": "coderef_arch_canvas",
+            "format": "data",
+            "project_path": pp,
+            "tree": build_framework(pp, ta),
+            "semantics": sem,
+            "usage": ("可直接读取 semantics.lanes（泳道分组）、semantics.edges（模块邻接）、"
+                      "semantics.clusters（连通分量＝确定性聚类）；"
+                      "无需解析 HTML，坐标对 AI 无意义"),
+        }, ensure_ascii=False)
+
     output_dir = a.get("output_dir")
     filepath = render_arch_view(project_path=pp, target_arch=ta,
                                 output_dir=output_dir)

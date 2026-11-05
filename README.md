@@ -124,10 +124,10 @@ coderef_task_status(task_id="...")
 # 2. 生成项目 Wiki（未配 Key 时被硬阻断并提示配置）
 coderef_docs(project_path="/path/to/project", background=True)
 
-# 3. 看人话健康仪表盘（无需读代码）
+# 3. 看健康读数（已归并到评估台；有评估台时直接返回其路径，不再产第二份仪表盘）
 coderef_interpret(project_path="/path/to/project", action="dashboard")
 
-# 4. 打开「项目评估台」（唯一用户入口）：四 Tab（概览记分卡 / 架构 / 产品 / UX）
+# 4. 打开「项目评估台」（唯一用户入口）：五 Tab（概览记分卡 / 架构 / 产品 / UX / 技术）
 #    页面自带仅回环的轻后端：点「重新评估」刷新分数，
 #    点产品/UX Tab 的按钮即跑 F 轨业务契合度 / U 轨人格走查，不依赖 AI 在旁
 coderef_report(project_path="/path/to/project", open_server=True)
@@ -249,7 +249,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 | `coderef_query` | 知识图谱结构化查询（9 种查询类型） | 否 |
 | `coderef_review` | 代码审查：diff 变更审查 / 新项目全量语义首查 | 是 |
 | `coderef_frontend` | 前端交互审查（按钮/菜单静态枚举 + 6 维度审查） | 是 |
-| `coderef_report` | 聚合审计/图谱/Wiki 为自包含 HTML，`index.html` 即「项目评估台」（四 Tab + 健康记分卡 + 产品 F 轨 + UX U 轨；`open_server` 起回环服务） | 否 |
+| `coderef_report` | 聚合审计/图谱/Wiki 为自包含 HTML，`index.html` 即「项目评估台」（五 Tab：概览 / 架构 / 产品 / UX / 技术 + 健康记分卡；`open_server` 起回环服务） | 否 |
 | `coderef_audit_advisor` | 审计策略判定（增量/全量）+ 重点维度 | 可选 |
 | `coderef_whitelist` | 白名单管理 + 核心模块规则配置 | 否 |
 | `coderef_task_status` | 后台任务状态查询 | 否 |
@@ -322,7 +322,7 @@ CodeRef 会落很多文件，但**用户只需要看两个入口**。其余产�
 
 | 入口 | 从哪来 | 看什么 |
 |---|---|---|
-| **项目评估台** `coderef-report/html/index.html` | `coderef_report` | 概览记分卡 / 架构（业务树 + 业务流程）/ 产品 F 轨 / UX U 轨；`audit.html` / `kg.html` / `wiki.html` 是它的详情页 |
+| **项目评估台** `coderef-report/html/index.html` | `coderef_report` | 概览（结论）/ 架构（业务树 + 业务流程）/ 产品 F 轨 / UX U 轨 / **技术**（原始分项 + 证据锚点 + 技术分区图）；`audit.html` / `kg.html` / `wiki.html` 是它的详情页 |
 | **架构治理看板** `gov_board.html` / `project_overview.html` | `coderef_gov_start(open_server=true)` / `coderef_gov_report` | 治理工作项流转、周期体检（L2 治理专用，与评估台定位不同） |
 
 ### 架构画布：三种视图，前缀已分离
@@ -342,6 +342,7 @@ CodeRef 会落很多文件，但**用户只需要看两个入口**。其余产�
 | `.coderef/business_semantics.json` | 业务语义标注（actor / stage / handoff / value_node） |
 | `.coderef/audit_findings_<hash>.json` | 审计发现结构化产物（重渲染的输入） |
 | `workflow_graph_*.html` / `flow_canvas_*.html` | 调用链/数据流调试视图，供 AI 定位，非交付物 |
+| **AI 直接取数据**：`coderef_arch_canvas(format="data")` | 不渲染 HTML，直接返回 `tree` + `semantics`（`lanes` 泳道分组 / `edges` 邻接 / `clusters` 连通分量聚类）——AI 读不了交互页面，需要的是可复现的结构数据 |
 | `health_dashboard_*.html` | **默认不再自动生成**（需 `coderef_audit(with_dashboard=true)`）；健康读数统一看评估台 |
 | `interpret_dashboard_*.html` | `coderef_interpret(action=dashboard)` 已改为**直接返回评估台路径**；仅评估台不存在时才兜底渲染 |
 
@@ -359,7 +360,7 @@ coderef-ai/
 │   ├── tool_registry.py              # 工具注册中心
 │   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
 │   ├── functional_review.py          # 功能审查（创新传播/结构复杂度等）
-│   ├── report_renderer.py            # 报告站点渲染（index.html = 项目评估台四 Tab）
+│   ├── report_renderer.py            # 报告站点渲染（index.html = 项目评估台五 Tab）
 │   ├── scorecard.py / scorecard_weights.json  # 健康记分卡（确定性聚合 + 权重外置 + CLI）
 │   ├── report_console.py             # 评估台回环轻后端（/api/scorecard、/api/config、/api/evaluate）
 │   ├── product_evidence.py           # 产品证据包（能力/声称/首次价值路径自动枚举，全部带锚点）
