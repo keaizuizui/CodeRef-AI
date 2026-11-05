@@ -221,17 +221,22 @@ def _govern_data(project_path: str, cid: str = "") -> Dict[str, Any]:
 
 
 def _find_arch_canvas(project_path: str) -> Optional[str]:
-    """找到最新生成的架构画布**绝对路径**；无则 None。"""
+    """找到最新生成的架构画布**绝对路径**；无则 None。
+
+    优先业务树画布（arch_canvas_，arch_view 产出），其次旧角色分区布局图
+    （arch_layout_，canvas_generator 产出）。两者前缀已分离，避免同前缀抢"最新"。
+    """
     cfg = os.path.join(project_path, ".coderef")
     if not os.path.isdir(cfg):
         return None
-    cands = [f for f in os.listdir(cfg)
-             if f.startswith("arch_canvas_") and f.endswith(".html")]
-    if not cands:
-        return None
-    cands.sort(key=lambda f: os.path.getmtime(os.path.join(cfg, f)),
-               reverse=True)
-    return os.path.join(cfg, cands[0])
+    for prefix in ("arch_canvas_", "arch_layout_"):
+        cands = [f for f in os.listdir(cfg)
+                 if f.startswith(prefix) and f.endswith(".html")]
+        if cands:
+            cands.sort(key=lambda f: os.path.getmtime(os.path.join(cfg, f)),
+                       reverse=True)
+            return os.path.join(cfg, cands[0])
+    return None
 
 
 def _find_workflow_graph(project_path: str) -> Optional[str]:

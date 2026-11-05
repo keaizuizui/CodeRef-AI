@@ -27,15 +27,30 @@ class _ArchViewHandler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def _serve_index(self) -> None:
+        # 三类画布分组展示：业务树 / 业务流程 / 旧角色分区布局。
+        # 前缀分离后不再按文件名混排，避免"同前缀抢最新"。
+        groups = [
+            ("arch_canvas_", "业务树视图（入口 → 主功能 → 子功能 → 步骤）"),
+            ("arch_flow_", "业务流程视图（泳道 × 阶段）"),
+            ("arch_layout_", "角色分区布局图（早期产物，保留可查）"),
+        ]
         try:
-            items = sorted(
-                f for f in os.listdir(self.directory)
-                if f.startswith("arch_canvas_") and f.endswith(".html"))
+            all_files = os.listdir(self.directory)
         except OSError:
-            items = []
-        latest = items[-1] if items else None
-        links = "".join(
-            f'<li><a href="{escape(f)}">{escape(f)}</a></li>' for f in reversed(items))
+            all_files = []
+        sections = []
+        latest = None
+        for prefix, label in groups:
+            items = sorted(f for f in all_files
+                           if f.startswith(prefix) and f.endswith(".html"))
+            if not items:
+                continue
+            if latest is None:
+                latest = items[-1]
+            links = "".join(
+                f'<li><a href="{escape(f)}">{escape(f)}</a></li>'
+                for f in reversed(items))
+            sections.append(f"<h3>{label}（{len(items)}）</h3><ul>{links}</ul>")
         body = (
             "<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'>"
             "<title>CodeRef 架构视图</title>"
@@ -44,11 +59,12 @@ class _ArchViewHandler(SimpleHTTPRequestHandler):
             "h1{font-size:22px}a{color:#4f6ef7;text-decoration:none}"
             ".latest{display:inline-block;margin:12px 0;padding:10px 18px;"
             "background:#4f6ef7;color:#fff;border-radius:8px}"
-            "ul{line-height:2}</style></head><body>"
+            "ul{line-height:2}h3{margin-top:24px}</style></head><body>"
             "<h1>CodeRef 架构视图</h1>"
             + (f'<a class="latest" href="{escape(latest)}">打开最新架构视图 →</a>'
                if latest else "<p>暂无产物</p>")
-            + f"<h3>历史产物（{len(items)}）</h3><ul>{links}</ul></body></html>")
+            + ("".join(sections) or "")
+            + "</body></html>")
         data = body.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")

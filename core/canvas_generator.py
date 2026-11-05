@@ -83,7 +83,9 @@ class ArchCanvas:
         if not output_dir:
             output_dir = os.path.join(project_path, ".coderef")
         os.makedirs(output_dir, exist_ok=True)
-        filename = f"arch_canvas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+        # 文件名前缀必须与业务树画布（arch_view 的 arch_canvas_）区分：
+        # 两个生成器曾共用 arch_canvas_ 前缀，评估台按文件名取"最新"时会嵌错图。
+        filename = f"arch_layout_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
         filepath = os.path.join(output_dir, filename)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(html_content)
