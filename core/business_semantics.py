@@ -249,6 +249,13 @@ def analyze(project_path: str, use_llm: bool = True) -> dict:
             "evidence_level": "E2",
         })
 
+    # 先补 LLM 标注再算交接点：否则「未归类 vs 已归类」会被误判成交接，
+    # 且 LLM 把两侧标成同一角色后，旧的 handoff 标记也不会撤销。
+    # by_mod 持有同一批 dict 引用，原地改写后仍然有效。
+    llm_note = ""
+    if use_llm and rows:
+        rows, llm_note = _llm_refine(rows)
+
     # 模块级调用边（跨泳道/跨阶段 = 交接点）
     mod_adj: Dict[str, List[str]] = {}
     by_mod = {r["module"]: r for r in rows}
@@ -270,17 +277,16 @@ def analyze(project_path: str, use_llm: bool = True) -> dict:
     for sm in sorted(mod_adj):
         for tm in sorted(mod_adj[sm]):
             a, b = by_mod[sm], by_mod[tm]
-            cross_actor = a["actor"] != b["actor"]
-            cross_stage = a["stage"] != b["stage"]
+            # 只有两侧都判定了才敢断言「跨」；任一侧 unknown 时不下判断
+            cross_actor = (UNLABELED_ACTOR not in (a["actor"], b["actor"])
+                           and a["actor"] != b["actor"])
+            cross_stage = (UNLABELED_STAGE not in (a["stage"], b["stage"])
+                           and a["stage"] != b["stage"])
             handoff = cross_actor or cross_stage
             if handoff:
                 handoff_count += 1
             edges.append({"from": sm, "to": tm, "handoff": handoff,
                           "cross_actor": cross_actor, "cross_stage": cross_stage})
-
-    llm_note = ""
-    if use_llm and rows:
-        rows, llm_note = _llm_refine(rows)
 
     # 归类口径：Y 轴（actor/泳道）是主要叙事维度，X 轴（stage/阶段）允许缺席。
     # 「已归类」= actor 已判定；stage 未定的模块仍留在自己的泳道，
@@ -290,6 +296,7 @@ def analyze(project_path: str, use_llm: bool = True) -> dict:
     unknowns: List[str] = [
         "actor/stage 由路径与调用边启发式推断，不是业务方确认的口径",
         "跨泳道边只代表代码调用，不代表真实业务交接（可能由编排层代劳）",
+        "任一侧未判定的调用不计为交接点（避免把「未知」当成「不同角色」）",
     ]
     if not db:
         unknowns.append("未找到知识图谱：只能按模块名归类，无法识别交接点")
