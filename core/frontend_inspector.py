@@ -118,7 +118,8 @@ class ButtonItem:
     text: str = ""
     file: str = ""
     line: int = 0
-    events: List[str] = field(default_factory=list)   # 绑定事件（onclick/onchange 等）
+    events: List[str] = field(default_factory=list)   # 绑定事件名（onclick/onchange 等）
+    handlers: List[str] = field(default_factory=list)  # 事件名=处理值（区分同名按钮的不同行为）
     form: str = ""                                     # 所属表单（id/name），无则空串
     has_confirm: bool = False                          # 是否有确认弹窗
     disabled: bool = False                             # 是否禁用
@@ -132,6 +133,7 @@ class ButtonItem:
             "file": self.file,
             "line": self.line,
             "events": self.events,
+            "handlers": self.handlers,
             "form": self.form,
             "has_confirm": self.has_confirm,
             "disabled": self.disabled,
@@ -334,6 +336,7 @@ class _HtmlScanner(HTMLParser):
             file=self.filepath,
             line=elem["line"],
             events=events,
+            handlers=[f"{k}={attrs[k]}" for k in events],
             form=elem["form_ctx"],
             has_confirm=bool(CONFIRM_PATTERN.search(onclick)),
             disabled="disabled" in attrs,
@@ -460,7 +463,7 @@ class FrontendInspector:
         _dedup_buttons: List[ButtonItem] = []
         for b in buttons:
             key = (b.text, b.tag, b.file, b.form, b.has_confirm, b.href,
-                   b.disabled, tuple(b.events))
+                   b.disabled, tuple(b.handlers))
             if key in _dedup:
                 _dedup[key].occurrences += 1
             else:
