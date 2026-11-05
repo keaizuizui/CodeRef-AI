@@ -126,6 +126,10 @@ coderef_docs(project_path="/path/to/project", background=True)
 
 # 3. 看人话健康仪表盘（无需读代码）
 coderef_interpret(project_path="/path/to/project", action="dashboard")
+
+# 4. 打开「项目评估台」（唯一用户入口）：四 Tab（概览记分卡 / 架构 / 产品 / UX）
+#    页面自带仅回环的轻后端，点「重新评估」即可刷新分数，不依赖 AI 在旁
+coderef_report(project_path="/path/to/project", open_server=True)
 ```
 
 ### 后续 · 按需深入
@@ -319,7 +323,9 @@ coderef-ai/
 │   ├── tool_registry.py              # 工具注册中心
 │   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
 │   ├── functional_review.py          # 功能审查（创新传播/结构复杂度等）
-│   ├── report_renderer.py            # 报告/图谱/Wiki → HTML 渲染
+│   ├── report_renderer.py            # 报告站点渲染（index.html = 项目评估台四 Tab）
+│   ├── scorecard.py / scorecard_weights.json  # 健康记分卡（确定性聚合 + 权重外置 + CLI）
+│   ├── report_console.py             # 评估台回环轻后端（/api/scorecard、/api/config）
 │   ├── code_review.py                # 代码审查（diff / 全量语义首查，evidence 标记）
 │   ├── frontend_inspector.py         # 前端交互审查
 │   ├── code_analyzer.py / ast_parser.py / code_models.py   # AST 分析
@@ -327,7 +333,7 @@ coderef-ai/
 │   ├── health_dashboard.py           # 健康仪表盘（零外部依赖 HTML）
 │   ├── wiki_generator.py / wiki_ir.py / wiki_compare.py / wiki_cross_verify.py  # Wiki 生成与交叉验证
 │   ├── flow_verify.py                # 流程合规验证
-│   ├── arch_audit.py / arch_gap_analyzer.py / target_arch_schema.py / refactor_task_generator.py / arch_alignment_verifier.py  # 架构治理
+│   ├── arch_audit.py / arch_gap_analyzer.py / arch_framework.py / target_arch_schema.py / refactor_task_generator.py / arch_alignment_verifier.py  # 架构治理
 │   ├── canvas_generator.py / workflow_graph.py / diagram_generator.py  # 可视化
 │   ├── governance_audit.py / agent_security_auditor.py / sca_checker.py / tech_debt_detector.py / integrity_checker.py / blind_spot_detector.py / innovation_propagation_detector.py / junk_detector.py / resource_gap_detector.py / code_simplifier.py / project_maturity_checker.py  # 11 检测器
 │   ├── memory_layer.py / memory_quality.py / prompt_governance.py / prompt_compliance.py  # 记忆与 Prompt 治理
@@ -417,7 +423,7 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 > - **评估台四 Tab**：概览（健康记分卡 + 评估标准）/ 架构（内嵌业务树画布）/ 产品 / UX（后两者 P0 只占位，不产出假结论）。
 > - **健康记分卡**（`core/scorecard.py`）：结构健康 / 架构对齐 / 审计发现 / 治理闭环 / 文档覆盖，全部确定性聚合、无 LLM；**证据不足标 unknown，不写 0 也不给满分**；无代码项目按 U-46 口径整体 `N/A`。
 > - **权重外置**：`core/scorecard_weights.json` 默认值 + 项目级 `.coderef/eval_config.json` 覆盖，页面「评估标准」面板把口径摊开。
-> - **回环轻后端**（`core/report_console.py`）：`GET /api/scorecard`、`GET /api/health`、`POST /api/config`；`POST /api/evaluate` 本版固定 501。仅回环绑定、项目路径服务端固定、无 CORS、POST 需同源 + JSON + 一次性 token、请求体 64KB 上限。
+> - **回环轻后端**（`core/report_console.py`）：`GET /api/scorecard`、`GET /api/health`、`POST /api/config`；`POST /api/evaluate` 本版固定 501。仅回环绑定（含 Host 校验防 DNS rebinding）、项目路径服务端固定、无 CORS、POST 需同源 + JSON + 一次性 token、请求体 64KB 上限、静态读取仅放行白名单文件（无目录列举/穿越）。
 > - **CI 门禁**：新增 `coderef-gate.yml`，`python -m core.scorecard --json`，默认 warn，仓库变量显式开启才阻断。
 
 ### 历史版本 v5.16.0 — 架构画布方向调整：业务架构大白话图
