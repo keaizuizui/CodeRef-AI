@@ -331,7 +331,7 @@ CodeRef 会落很多文件，但**用户只需要看两个入口**。其余产�
 |---|---|---|
 | `arch_canvas_*.html` | `coderef_arch_canvas`（arch_view） | 业务树：入口 → 主功能 → 子功能 → 步骤 |
 | `arch_flow_*.html` | `coderef_arch_canvas`（arch_flow） | 业务流程：泳道（角色）× 阶段（触发→校验→执行→落库→通知→交付） |
-| `arch_layout_*.html` | `coderef_architecture`（canvas_generator） | 早期角色分区布局图，保留可查（不再作为主视图） |
+| `arch_layout_*.html` | `coderef_architecture`（canvas_generator） | **技术视图**：角色分区布局图，面向架构师/AI 排查结构，非用户交付物 |
 
 ### 给编程 AI 的数据（不需要人工打开）
 
@@ -341,10 +341,11 @@ CodeRef 会落很多文件，但**用户只需要看两个入口**。其余产�
 | `.coderef/product_fit.json` / `ux_fit.json` | F 轨 / U 轨结论 |
 | `.coderef/business_semantics.json` | 业务语义标注（actor / stage / handoff / value_node） |
 | `.coderef/audit_findings_<hash>.json` | 审计发现结构化产物（重渲染的输入） |
-| `workflow_graph_*.html` / `flow_canvas_*.html` | 调用链/数据流调试视图，供 AI 定位，不建议作为交付物 |
-| `health_dashboard_*.html` / `interpret_dashboard_*.html` | 早期独立仪表盘，能力已并入评估台；保留可查 |
+| `workflow_graph_*.html` / `flow_canvas_*.html` | 调用链/数据流调试视图，供 AI 定位，非交付物 |
+| `health_dashboard_*.html` | **默认不再自动生成**（需 `coderef_audit(with_dashboard=true)`）；健康读数统一看评估台 |
+| `interpret_dashboard_*.html` | `coderef_interpret(action=dashboard)` 已改为**直接返回评估台路径**；仅评估台不存在时才兜底渲染 |
 
-> 原则：**报告只有一个站首页**（评估台），画布按「问题」分工（业务树看归属、业务流程看交接），数据文件给机器读。同名不同内容的产物一律用前缀区分。
+> 原则：**用户面只有两个入口**——项目评估台（代码健康 / 架构 / 产品 / UX）与架构治理看板（治理工作项）。其余 HTML 均为技术视图或历史产物，不作为交付物交付给非技术读者。
 
 ---
 
