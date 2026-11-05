@@ -430,6 +430,16 @@ class FrontendInspector:
             }
 
         html_files = self._find_html_files(project_path, entry)
+        if not html_files:
+            # 预检可能因 Vue/JSX/TSX 源码通过，但静态枚举只解析 HTML；
+            # 此时必须诚实标注「未覆盖组件源码」，不能报 applicable=True + 空清单。
+            logger.info("存在前端源码但没有 HTML 文件，静态枚举未覆盖组件源码")
+            return {
+                "ok": True,
+                "applicable": False,
+                "message": ("检测到前端源码但没有 HTML 文件（Vue/JSX/TSX 等组件源码"
+                            "不在静态枚举范围内），请改用 mode=runtime 做浏览器抽查"),
+            }
         buttons: List[ButtonItem] = []
         menu_roots: List[MenuNode] = []
 
@@ -449,7 +459,7 @@ class FrontendInspector:
         _dedup: Dict[tuple, ButtonItem] = {}
         _dedup_buttons: List[ButtonItem] = []
         for b in buttons:
-            key = (b.text, b.tag, b.file, b.form, b.has_confirm)
+            key = (b.text, b.tag, b.file, b.form, b.has_confirm, b.href)
             if key in _dedup:
                 _dedup[key].occurrences += 1
             else:

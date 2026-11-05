@@ -535,7 +535,9 @@ def build_evidence(project_path: str) -> dict:
     if not claims:
         unknowns.append("未从 README/文档提取到产品声称，无法核对「声称 vs 实现」")
     if enum_summary.get("frontend", {}).get("applicable") is False:
-        unknowns.append("未检测到用户维护的前端源码，无法核对用户可见文案与首次价值路径")
+        unknowns.append(
+            enum_summary["frontend"].get("message")
+            or "未检测到用户维护的前端源码，无法核对用户可见文案与首次价值路径")
     if not capabilities:
         unknowns.append("未枚举到任何能力（无业务树/前端/路由/CLI），无法评估业务契合度")
     unknowns.append("代码只能推断「该能力有无上游数据源」，不能证明「用户手上是否有该数据」")
