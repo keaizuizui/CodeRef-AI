@@ -229,6 +229,9 @@ def _frontend_capabilities(project_path: str) -> Tuple[List[dict], dict]:
         "buttons": len(buttons),
         "menu_roots": len(enum.get("menu_roots") or []),
         "forms": len(forms),
+        # HTML 与组件源码并存时只覆盖 HTML，必须向下游标注部分覆盖
+        "partial": bool(enum.get("partial")),
+        "coverage_note": str(enum.get("coverage_note") or ""),
     }
     return caps, summary
 
@@ -552,10 +555,15 @@ def build_evidence(project_path: str) -> dict:
     unknowns: List[str] = []
     if not claims:
         unknowns.append("未从 README/文档提取到产品声称，无法核对「声称 vs 实现」")
-    if enum_summary.get("frontend", {}).get("applicable") is False:
+    fe = enum_summary.get("frontend", {}) or {}
+    if fe.get("applicable") is False:
         unknowns.append(
-            enum_summary["frontend"].get("message")
+            fe.get("message")
             or "未检测到用户维护的前端源码，无法核对用户可见文案与首次价值路径")
+    elif fe.get("partial"):
+        unknowns.append(
+            fe.get("coverage_note")
+            or "项目含组件源码，静态枚举只覆盖 HTML 部分，组件交互未核对")
     if not capabilities:
         unknowns.append("未枚举到任何能力（无业务树/前端/路由/CLI），无法评估业务契合度")
     unknowns.append("代码只能推断「该能力有无上游数据源」，不能证明「用户手上是否有该数据」")
