@@ -373,7 +373,7 @@ class CodeAnalyzer:
         """跳过超大文件，避免卡死"""
         try:
             return os.path.getsize(file_path) > self.MAX_PARSE_FILE_SIZE
-        except:
+        except Exception:
             return False
     
     def _detect_language(self, file_path: str) -> Optional[str]:

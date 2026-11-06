@@ -647,7 +647,6 @@ class MemoryLayer:
              "dashboard_path","html"}
         """
         project_path = os.path.abspath(project_path)
-        phash = self._project_hash(project_path)
         state = self._load_state(project_path)
 
         # 重新扫描以获得最新的文件清单

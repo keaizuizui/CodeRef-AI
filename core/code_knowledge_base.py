@@ -262,7 +262,7 @@ class CodeKnowledgeBase:
 
         使用 AST 解析所有 Python 文件，将每个函数/类/方法作为代码块存储
         """
-        from core.ast_parser import AstProjectParser, AstParser
+        from core.ast_parser import AstProjectParser
 
         logger.info(f"[CodeKB] 开始索引项目: {project_path}")
 
@@ -806,7 +806,7 @@ def build_knowledge_base(project_path: str, db_path: str = None) -> CodeKnowledg
         db_path = os.path.join(project_path, f".code_knowledge_{project_name}.db")
 
     kb = CodeKnowledgeBase(db_path)
-    count = kb.index_project(project_path)
+    kb.index_project(project_path)
     stats = kb.stats()
     logger.info(f"[CodeKB] 构建完成: {stats}")
     return kb

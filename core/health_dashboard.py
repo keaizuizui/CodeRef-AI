@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Dict, List, TYPE_CHECKING
 
 if TYPE_CHECKING:  # 仅类型引用；运行时断环（Tier 在用到处延迟导入）
-    from .pipeline_runner import PipeResult, Finding, Tier
+    from .pipeline_runner import PipeResult, Finding
 
 
 # ═══════════════════════════════════════════════════════════════════

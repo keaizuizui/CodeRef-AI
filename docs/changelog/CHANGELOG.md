@@ -22,6 +22,7 @@
 - **画布产物收敛**：`canvas_generator`（`coderef_architecture` 的旧角色分区图）产物前缀由 `arch_canvas_` 改为 `arch_layout_`，与业务树画布 `arch_canvas_` 彻底分离——此前两者同前缀，评估台按文件名取"最新"会嵌错图；架构静态服务引导页按「用户视图（业务树 / 业务流程）/ 技术视图（角色分区）」分组展示；`project_overview` 优先业务树、其次旧布局图。README 新增「产物地图」：明确用户只需看两个入口（评估台、治理看板），其余为详情页或 AI 数据。
 - **重复产物去重**：`coderef_audit` 不再默认产出 `health_dashboard_*.html`（新增 `with_dashboard` 参数，默认 false）——健康读数统一由评估台记分卡提供，避免同一指标两份口径；`coderef_interpret(action=dashboard)` 改为检测到评估台即直接返回其路径（`preferred_entry`），仅在评估台不存在时兜底渲染旧仪表盘。
 - **`arch_framework` 结构 bug**：深度 2 的模块（如 `core/ingest_reader`）不再生成与父节点同名的自我嵌套子节点（画布上表现为空壳重复卡）。
+- **代码卫生（不改变行为）**：核心库 6 处裸 `except:` 收口为 `except Exception:`（不再吞 `KeyboardInterrupt`）；清理 pyflakes 报告中的确定性死变量与重复导入（`core/` pyflakes 归零）；`pipeline_runner` 的 re-export 显式标注为**兼容层**——新代码直接从 `pr_*` 子模块导入，不再扩符号面。
 - **验证**：三层审查（pyflakes → Brooks-Lint → CodeRabbit）无新增 finding；全量 pytest **265 全绿**（新增 U-50/U-51 回归 6 例：原始路径与编码变体拦截、两类服务路由 404/200、项目侧目录隔离与交替渲染不覆盖、`interpret` 各自 `preferred_entry`）；`check_version` 通过。
 
 ### v5.17.0 — 项目评估台：聚合层 + 健康记分卡 + 回环轻后端 + CI 门禁

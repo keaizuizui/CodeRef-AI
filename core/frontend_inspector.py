@@ -726,7 +726,7 @@ class FrontendInspector:
             except urllib.error.HTTPError as he:
                 status = he.code
                 location = he.headers.get("Location")
-            except Exception as e:
+            except Exception:
                 # 请求失败（连接拒绝/超时）视为不可达，交由上层决定；不把失败当逃逸
                 return current, ""
             if status in (301, 302, 303, 307, 308) and location:

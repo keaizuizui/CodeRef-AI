@@ -335,7 +335,6 @@ def _subgraph_from_impact(subgraph: Subgraph, impact: Any, entry: str):
                 for proc in affected:
                     if isinstance(proc, dict):
                         name = proc.get("name", "")
-                        fp = proc.get("filePath", "")
                         if name and name != entry:
                             if name not in subgraph.downstream and name not in subgraph.upstream:
                                 subgraph.downstream.append(name)

@@ -30,7 +30,7 @@ from loguru import logger
 
 from core.design_registry import DesignRegistry
 from core.innovation_propagation_detector import InnovationPropagationDetector
-from core.innovation_engine import DESIGN_CAPABILITY_TAG, INTENT_DESIGN, INTENT_ORDER
+from core.innovation_engine import DESIGN_CAPABILITY_TAG, INTENT_DESIGN
 
 
 # ═══════════════════════════════════════════════════════════════════

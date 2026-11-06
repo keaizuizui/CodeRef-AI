@@ -348,7 +348,7 @@ def whitelist_list(project_path: str) -> list:
     if os.path.exists(path):
         try:
             return json.load(open(path, "r", encoding="utf-8"))
-        except: pass
+        except Exception: pass
     return []
 
 def whitelist_add(project_path: str, entries: List[dict]) -> int:
@@ -365,7 +365,7 @@ def whitelist_add(project_path: str, entries: List[dict]) -> int:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 existing = json.load(f)
-        except: pass
+        except Exception: pass
     added = 0
     for e in entries:
         entry = {}

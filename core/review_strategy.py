@@ -330,7 +330,6 @@ class ReviewAdvisor:
         # 3. 影响闭包
         impact_nodes: Set[str] = set()
         impact_depth = 0
-        closed = False
         if kg is not None and edges:
             start_nodes: Set[str] = set()
             # 变更/新增文件对应的节点
@@ -345,7 +344,6 @@ class ReviewAdvisor:
             if start_nodes:
                 impact_nodes, impact_depth = compute_impact_closure(
                     kg, start_nodes, edges)
-                closed = True
         result["impact"]["count"] = len(impact_nodes)
         result["impact"]["depth"] = impact_depth
         result["impact"]["nodes"] = sorted(impact_nodes)[:_IMPACT_NODES_RETURN]

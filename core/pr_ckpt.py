@@ -23,7 +23,7 @@ def _save(p: str, done: List[str]):
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"done": done, "ts": datetime.now().isoformat()}, f)
         os.replace(tmp, cp)  # 原子替换，避免多 Agent 并发时读到半写入的检查点
-    except: pass
+    except Exception: pass
 
 def _load(p: str) -> set:
     try:

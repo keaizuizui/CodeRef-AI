@@ -369,7 +369,7 @@ class CodeKnowledgeGraph:
             if row:
                 built_at = float(row[0])
                 return (time.time() - built_at) > max_age_hours * 3600
-        except: pass
+        except Exception: pass
         return True
 
     def get_built_at(self) -> Optional[str]:
@@ -382,7 +382,7 @@ class CodeKnowledgeGraph:
                 "SELECT value FROM meta WHERE key='built_at'").fetchone()
             if row:
                 return datetime.fromtimestamp(float(row[0])).strftime("%Y-%m-%d %H:%M:%S")
-        except: pass
+        except Exception: pass
         return None
 
     # ═══════════════════════════════════════════════════════════════════
@@ -761,7 +761,6 @@ class CodeKnowledgeGraph:
                     reader = csv.DictReader(f)
                     for row in reader:
                         label = row.get("label", "")
-                        cohesion = row.get("cohesion", "")
                         if label:
                             # 更新所有匹配节点的 community 属性
                             self._conn.execute(

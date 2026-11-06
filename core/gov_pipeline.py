@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Any
 
 
 from core.governance_store import (
-    GovernanceStore, gap_key, STATUS_CONFIRMED, STATUS_DETECTED,
+    GovernanceStore, gap_key, STATUS_CONFIRMED,
     STATUS_FIXING, STATUS_VERIFIED,
 )
 

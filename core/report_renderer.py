@@ -1348,8 +1348,6 @@ class HtmlReportRenderer:
             return _page("Wiki 文档", body, _nav("wiki.html", self.project_name), self.project_name)
 
         # 分组：业务视角优先，入口/数据流次之，技术文档，模块文档最后
-        _TECH = {"README.md", "ARCHITECTURE.md", "INSTALLATION.md",
-                 "USAGE.md", "API.md", "WIKI_INDEX.md"}
         groups = {"业务视角": [], "入口流程": [], "数据流": [],
                   "技术文档": [], "模块文档": []}
         for fp in md_files:

@@ -1240,7 +1240,6 @@ class SCAChecker:
         # 摘要卡
         score = report.clean_score
         grade = "A" if score >= 90 else "B" if score >= 75 else "C" if score >= 60 else "D" if score >= 40 else "F"
-        color = "#3fb950" if score >= 90 else "#d29922" if score >= 75 else "#f0883e" if score >= 60 else "#f85149"
 
         lines.append("## 安全评分")
         lines.append("")

@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 
-from core.prompt_extractor import PromptExtractionResult, ExtractedPrompt
+from core.prompt_extractor import PromptExtractionResult
 
 
 # ═══════════════════════════════════════════════════════════════
