@@ -105,8 +105,6 @@ class SharedFilter:
         else:
             combined = SharedFilter._SECURITY_KEYWORDS
 
-        stripped = line.strip()
-
         # 正则模式字符串: r'...' 或 r"..."
         if re.search(rf"""r['"].*(?:{combined})""", line, re.IGNORECASE):
             return True

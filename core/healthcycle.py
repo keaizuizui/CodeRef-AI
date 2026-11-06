@@ -18,8 +18,7 @@ from typing import Dict, Optional, Any
 
 from loguru import logger
 
-from core.governance_store import (
-    GovernanceStore, gap_key, STATUS_DETECTED, STATUS_REJECTED)
+from core.governance_store import GovernanceStore
 
 
 def _load_target_arch(project_path: str) -> Optional[Dict[str, Any]]:

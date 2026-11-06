@@ -19,12 +19,11 @@
 作者: CodeRef-AI Team
 """
 
-import os
 from typing import Dict, List, Optional, Any
 
 from loguru import logger
 
-from core.code_review import parse_diff, _read_file_content, _llm_available
+from core.code_review import parse_diff, _llm_available
 from core.llm_integration import LLMIntegration
 
 
@@ -126,8 +125,6 @@ class ChangeReport:
         blocks = []
         for i, unit in enumerate(units[:MAX_UNITS_PER_PROMPT]):
             file_rel = unit["file"]
-            abs_path = os.path.join(project_path, file_rel)
-            content = _read_file_content(abs_path)
             changed = sorted(unit.get("changed_lines", []))
             # 变更内容（hunks）
             diff_text = self._format_unit(unit)

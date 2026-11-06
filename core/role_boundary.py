@@ -336,7 +336,7 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
             try:
                 with open(ta_path, encoding="utf-8") as f:
                     target_arch = json.load(f)
-            except Exception as e:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 target_arch = {}
         else:
             target_arch = {}

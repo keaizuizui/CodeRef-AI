@@ -1187,7 +1187,6 @@ class TechDebtDetector:
         """计算代码的认知复杂度（SonarQube 标准）"""
         score = 0
         nesting = 0
-        i = 0
         lines = code.split("\n")
         tokens = []
         for line in lines:

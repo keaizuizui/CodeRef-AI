@@ -13,6 +13,9 @@ All modes share: single AST scan + checkpoint resume.
 Pipe 类；数据模型、kg_query 家族、白名单家族、报告渲染、checkpoint、管线阶段
 分别迁至 core/pr_models.py、core/pr_kg.py、core/pr_whitelist.py、core/pr_render.py、
 core/pr_ckpt.py、core/pr_stages.py，并经下方 import 全部 re-export，对外符号不变。
+
+兼容层约定：下方 re-export 只为既有调用方（含仓外测试）保持 `core.pipeline_runner.X`
+可达；**新代码请直接从 `pr_*` 子模块导入，不要往本文件的符号面里加新名字**。
 """
 
 import os, json, time, threading

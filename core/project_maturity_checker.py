@@ -666,7 +666,6 @@ class ProjectMaturityChecker:
             ))
 
         # 依赖锁文件
-        has_lock = self._file_exists(project_path, "requirements.txt") and not self._file_exists(project_path, "pyproject.toml")
         has_pipfile_lock = self._file_exists(project_path, "Pipfile.lock")
         has_poetry_lock = self._file_exists(project_path, "poetry.lock")
 

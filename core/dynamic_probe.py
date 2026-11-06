@@ -155,7 +155,6 @@ def probe(project_path: str, include_tests: bool = False) -> Dict[str, Any]:
     """动态探针主入口（静态层，零执行）。"""
     root = os.path.abspath(project_path)
     files = _collect_py_files(root, include_tests=include_tests)
-    vis = _Visitor()
     imports, regs, indirect = [], [], []
     for f in files:
         try:
