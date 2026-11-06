@@ -92,7 +92,7 @@ BUILTIN_TOOLS: List[Dict] = [
                             ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
-                            "output_dir": {"type": "string", "description": "报告输出目录（默认 coderef-report/）"},
+                            "output_dir": {"type": "string", "description": "报告输出目录（默认 <project_path>/.coderef/report/，按项目隔离）"},
                             "background": {"type": "boolean", "description": "后台执行", "default": True},
                             "wait": {"type": "boolean", "description": "阻塞等待任务完成，直接返回最终结果（免轮询 coderef_task_status）；默认 False 返回 task_id", "default": False},
                             "strategy": {"type": "string",
@@ -280,7 +280,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
-                            "output_dir": {"type": "string", "description": "报告输出目录（默认 coderef-report/html/）"},
+                            "output_dir": {"type": "string", "description": "报告输出目录（默认 <project_path>/.coderef/report/html/，按项目隔离）"},
                             "open_server": {"type": "boolean", "description": "生成后启动本地回环评估台服务，把页面 push 给浏览器（默认 false）", "default": False},
                             "host": {"type": "string", "description": "服务绑定地址（仅允许回环 127.0.0.1/::1/localhost）", "default": "127.0.0.1"},
                             "port": {"type": "integer", "description": "服务端口（0=自动分配）", "default": 0},

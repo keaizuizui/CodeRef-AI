@@ -429,8 +429,14 @@ class InterpretationPlatform:
 
         # ── 唯一入口优先 ──
         project_name = os.path.basename(project_path.rstrip(os.sep))
-        report_index = os.path.join(project_path, "coderef-report", "html", "index.html")
-        if not os.path.isfile(report_index):
+        candidates = [
+            # v5.18 起的项目侧隔离目录（U-51）
+            os.path.join(project_path, ".coderef", "report", "html", "index.html"),
+            # 旧版项目内输出目录
+            os.path.join(project_path, "coderef-report", "html", "index.html"),
+        ]
+        report_index = next((p for p in candidates if os.path.isfile(p)), "")
+        if not report_index:
             # 兼容默认输出目录（工具仓库侧）；必须确认该页面确实属于当前项目，
             # 否则会把别的项目的评估台当成本项目的入口返回。
             alt = os.path.join(
