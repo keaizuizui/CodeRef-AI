@@ -4,6 +4,16 @@
 
 ---
 
+### v5.18.1 — 一致性与真源：技术 Tab 同源刷新 + 默认目录单一真源
+
+> 承接 v5.18.0 四层审查（CodeRabbit / Brooks-Lint / code-review-report / CodeRef 自审）的排班第一批；只修一致性与真源，不改评估口径。
+
+- **技术 Tab 与概览同源刷新**：`scApply` 在「重新评估」后同步重绘 `#tech-rows`，避免概览显示新分数、技术 Tab 仍是旧快照。
+- **默认报告目录单一真源**：`interpret(dashboard)` 复用 `report_renderer.default_report_dir()`，不再手工拼 `.coderef/report/html/index.html`；旧目录仍作兼容候选。
+- **路径判据归位**：`has_unsafe_path` 移到中立模块 `core/http_path_guard.py`；`report_console` 保留 re-export 兼容，画布静态服务不再依赖评估台后端。
+- **描述漂移**：评估台样式注释「四 Tab」→「五 Tab」。
+- **验证**：`core/` pyflakes 0；全量 pytest 265 全绿；`check_version` EXIT=0。
+
 ### v5.18.0 — 三轨评估：F 轨业务契合度 + B 轨条件触发 + U 轨只判阻断
 
 > 承接用户 2026-11-05 拍板（采纳外部 `ui-business-eval` skill 的三轨层级）：评估台从「产品/UX 两 Tab 平行」改为**三轨有主轴**——F 轨业务契合度必跑、B 轨业务模式条件触发、U 轨人格走查只判阻断不独立评分。版本按 SOP 升 minor（5.17.0 → 5.18.0；原计划 P1/P2 合并落地）。

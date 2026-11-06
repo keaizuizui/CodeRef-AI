@@ -34,6 +34,10 @@ from urllib.parse import parse_qs, urlparse
 
 from loguru import logger
 
+# 兼容层：判据实现已移到中立模块 core/http_path_guard.py（画布服务直接用它），
+# 这里 re-export 保留既有调用方与测试的 `core.report_console.has_unsafe_path` 入口。
+from core.http_path_guard import has_unsafe_path
+
 _MAX_BODY = 64 * 1024
 _LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
 _SERVERS: Dict[str, Dict[str, Any]] = {}
@@ -334,25 +338,6 @@ def _make_handler(project_path: str, out_dir: str, token: str,
             return self._json({"ok": True, **saved})
 
     return Handler
-
-
-def has_unsafe_path(raw_path: str) -> bool:
-    """原始请求路径是否含 `..`（含 URL 编码 `%2e%2e` / `%2E%2E`）。
-
-    必须在**规范化之前**判定：`/.coderef/../index.html` 会被 HTTP 层折叠成
-    `/index.html` 而命中白名单，看起来像目录穿越未被拦截（U-50）。按原始 path
-    判定，拒绝后不影响 `/`、`/index.html`、`/.coderef/arch_*.html` 等正常路由。
-    """
-    from urllib.parse import unquote
-    raw = raw_path or ""
-    for _ in range(3):  # 逐层解码兜底（含双重编码 %252e%252e）
-        if ".." in raw:
-            return True
-        decoded = unquote(raw)
-        if decoded == raw:
-            break
-        raw = decoded
-    return False
 
 
 def serve(project_path: str, output_dir: Optional[str] = None,
