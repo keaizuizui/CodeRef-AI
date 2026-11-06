@@ -326,7 +326,7 @@ python -m core.mcp_server
 coderef_task_status(task_id="xxx")
 # 返回 running → 还在执行，继续等待
 # 返回 error → 查看错误信息
-# 返回 completed → 已完成，报告已保存到 coderef-report/
+# 返回 completed → 已完成，报告已保存到 <project>/.coderef/report/
 ```
 
 ### 知识图谱查询返回空
