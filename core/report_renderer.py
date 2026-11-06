@@ -380,12 +380,8 @@ function scApply(j){
       : (d.status === 'not_applicable'
         ? '<span class="badge badge-missing">不适用</span>'
         : '<span class="badge badge-missing">证据不足</span>');
-    var raw = Object.keys(d.raw || {}).map(function(k){
-      return scEsc(k) + '=' + scEsc(d.raw[k]);
-    }).join(' · ');
-    var ev = (d.evidence || []).map(scEsc).join('、');
     return '<tr><td>' + scEsc(d.name) + '</td><td>' + scEsc(d.weight) + '</td><td>' + s
-      + '</td><td>' + raw + '</td><td>' + ev + '</td><td>' + scEsc(d.source_tool || '') + '</td></tr>';
+      + '</td><td>' + scEsc(d.source_tool || '') + '</td></tr>';
   }).join('');
   var rb = document.getElementById('sc-rows');
   if (rb) rb.innerHTML = rows;

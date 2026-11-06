@@ -265,8 +265,8 @@ BUILTIN_TOOLS: List[Dict] = [
                         "description": (
                             "把审计报告 / 知识图谱 / Wiki 聚合成自包含 HTML 报告目录，index.html 即「项目评估台」"
                             "（唯一用户入口，v5.17 起）：\n"
-                            "四个 Tab——概览（健康记分卡 + 评估标准）/ 架构（内嵌业务树画布）/ "
-                            "产品（F 轨业务契合度）/ UX（U 轨人格走查，只判阻断）。\n"
+                            "五个 Tab——概览（健康记分卡 + 评估标准）/ 架构（业务流程视图 + 业务树视图）/ "
+                            "产品（F 轨业务契合度）/ UX（U 轨人格走查，只判阻断）/ 技术（评分明细 + 技术分区图）。\n"
                             "记分卡为确定性聚合（结构健康/架构对齐/审计发现/治理闭环/文档覆盖），"
                             "证据不足的维度标 unknown 不给 0 分；同时落盘 .coderef/scorecard.json 供 CI 与 AI 读取。\n"
                             "产品/UX 评估产物落 .coderef/product_fit.json / .coderef/ux_fit.json；"
