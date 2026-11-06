@@ -35,27 +35,8 @@ def _load_stored_arch(project_path: str) -> Optional[dict]:
     return None
 
 
-def build_arch_data(
-    project_path: str,
-    target_arch: Optional[dict] = None,
-) -> dict:
-    """整形成视图友好数据（§4.4 契约）。复用 gap 分析 + 图谱，业务计算全在 Python 侧。
-
-    Returns:
-        {project, summary, roles, flows, modules, violations, gaps, meta}
-    """
-    if target_arch is None:
-        target_arch = _load_stored_arch(project_path) or {
-            "version": "5.0", "project": os.path.basename(project_path)}
-
-    db = locate_kg_db(project_path)
-    has_kg = bool(db and os.path.exists(db))
-    gap_result = analyze_gap(project_path, target_arch) if has_kg else None
-    nodes, adj = (load_graph(db) if has_kg else ({}, {}))
-
-    gaps = (gap_result or {}).get("gaps", [])
-
-    # ── gap 标记集合 ──
+def _collect_gap_marks(gaps: List[dict]) -> tuple:
+    """把差距清单折叠成画布需要的标记集合。"""
     unassigned: set = set()
     cycle_mods: set = set()
     twin: Dict[str, str] = {}
@@ -72,8 +53,11 @@ def build_arch_data(
         elif t == "twin_identity":
             for c in g.get("copies", []):
                 twin[c.get("module", "")] = c.get("verdict", "")
+    return unassigned, cycle_mods, twin, violation_pairs
 
-    # ── 角色 → 归属模块（口径：过滤测试模块，与 canvas_generator 一致）──
+
+def _build_roles(target_arch: dict, nodes: dict, project_path: str) -> tuple:
+    """角色 → 归属模块（口径：过滤测试模块，与 canvas_generator 一致）。"""
     roles: List[dict] = []
     module_role: Dict[str, str] = {}
     for role in target_arch.get("tech_roles") or []:
@@ -95,8 +79,11 @@ def build_arch_data(
             "missing": len(mods) == 0,
             "desc": "",
         })
+    return roles, module_role
 
-    # ── 全量模块（含归属/标记/调用）──
+
+def _collect_module_names(nodes: dict, project_path: str) -> List[str]:
+    """全量非测试模块名（保持图谱遍历顺序）。"""
     module_names: List[str] = []
     for nid, n in nodes.items():
         if n.get("type") != "module":
@@ -105,7 +92,12 @@ def build_arch_data(
         if _is_test_module(m):
             continue
         module_names.append(m)
+    return module_names
 
+
+def _build_call_index(module_names: List[str], nodes: dict, adj: dict,
+                      project_path: str) -> tuple:
+    """模块级出边/入边索引（只保留已知模块之间的边）。"""
     known = set(module_names)
     call_out: Dict[str, List[str]] = {}
     call_in: Dict[str, List[str]] = {}
@@ -118,8 +110,14 @@ def build_arch_data(
         call_out[m] = outs
         for o in outs:
             call_in.setdefault(o, []).append(m)
+    return known, call_out, call_in
 
-    modules = [{
+
+def _build_module_rows(module_names: List[str], module_role: Dict[str, str],
+                       cycle_mods: set, unassigned: set, twin: Dict[str, str],
+                       call_out: Dict[str, List[str]],
+                       call_in: Dict[str, List[str]]) -> List[dict]:
+    return [{
         "name": m,
         "short": m.split("/")[-1] if "/" in m else m,
         "role": module_role.get(m, None),
@@ -131,7 +129,10 @@ def build_arch_data(
         "call_in": call_in.get(m, []),
     } for m in module_names]
 
-    # ── 违规边：dependency_violation + cycle 内部调用边 ──
+
+def _build_violations(violation_pairs: List[tuple], cycle_mods: set,
+                      known: set, call_out: Dict[str, List[str]]) -> List[dict]:
+    """违规边：dependency_violation + cycle 内部调用边。"""
     violations: List[dict] = []
     for fm, to, detail in violation_pairs:
         if fm in known and to in known:
@@ -146,22 +147,26 @@ def build_arch_data(
                 seen.add((m, o))
                 violations.append({"from": m, "to": o, "kind": "cycle",
                                    "detail": "循环依赖成员"})
+    return violations
 
-    # ── flows（业务主干流）──
-    flows = [{
+
+def _build_flows(target_arch: dict) -> List[dict]:
+    """业务主干流（只取名称与步骤，画布不承载业务细节）。"""
+    return [{
         "name": f.get("name", f.get("id", "")),
         "steps": [st.get("name", st.get("id", "")) for st in f.get("steps", [])],
         "desc": "",
     } for f in target_arch.get("business_flows") or []]
 
-    # ── summary / gaps 透传（无图谱时 gap_result 为 None，回退空字典）──
+
+def _build_summary(gap_result: Optional[dict], gaps: List[dict],
+                   module_names: List[str], modules: List[dict],
+                   cycle_mods: set) -> dict:
+    """汇总口径：空图谱/无代码态走 no_code（U-46）。"""
     s = (gap_result or {}).get("summary") or {}
     a = (gap_result or {}).get("alignment") or {}
-    # U-46：空图谱/无代码态走 no_code 口径（对齐 arch_audit no_code 分支）——
-    # 无非测试代码模块时不得按"0 模块 + 对齐度 100% + 整体健康"渲染，
-    # alignment/role_coverage 置 None 表示不适用，前端据此抑制百分比与健康表述。
     no_code = len(module_names) == 0
-    summary = {
+    return {
         "no_code": no_code,
         "alignment": None if no_code else a.get("module_assigned", 0),
         "role_coverage": None if no_code else a.get("role_coverage", 0),
@@ -172,22 +177,55 @@ def build_arch_data(
         "medium": s.get("medium", 0),
         "low": s.get("low", 0),
     }
-    report_gaps = [
-        {k: g.get(k) for k in ("type", "severity", "detail", "module") if k in g}
-        for g in gaps
-    ]
 
-    # v5.16：业务架构树（自动归纳 + LLM 大白话，缺 key 静态兜底）——画布主数据
-    # 隔离归纳失败：异常不阻断整个架构视图（CodeRabbit），回退空框架树
+
+def _build_framework(project_path: str, target_arch: dict) -> dict:
+    """业务架构树（自动归纳 + LLM 大白话，缺 key 静态兜底）；失败回退空树。"""
     _EMPTY_FW = {"id": "__root__", "name": "入口层",
                  "desc": "系统入口", "modules": [], "children": []}
     try:
         from core.arch_framework import build_framework_enhanced
         _fw = build_framework_enhanced(project_path, target_arch)
-        fw = (_fw or {}).get("framework") or _EMPTY_FW
+        return (_fw or {}).get("framework") or _EMPTY_FW
     except Exception as e:
         logger.warning(f"[arch_view] 业务树归纳失败，回退空框架: {e}")
-        fw = _EMPTY_FW
+        return _EMPTY_FW
+
+
+def build_arch_data(
+    project_path: str,
+    target_arch: Optional[dict] = None,
+) -> dict:
+    """整形成视图友好数据（§4.4 契约）。复用 gap 分析 + 图谱，业务计算全在 Python 侧。
+
+    Returns:
+        {project, summary, roles, flows, modules, violations, gaps, meta}
+    """
+    if target_arch is None:
+        target_arch = _load_stored_arch(project_path) or {
+            "version": "5.0", "project": os.path.basename(project_path)}
+
+    db = locate_kg_db(project_path)
+    has_kg = bool(db and os.path.exists(db))
+    gap_result = analyze_gap(project_path, target_arch) if has_kg else None
+    nodes, adj = (load_graph(db) if has_kg else ({}, {}))
+    gaps = (gap_result or {}).get("gaps", [])
+
+    unassigned, cycle_mods, twin, violation_pairs = _collect_gap_marks(gaps)
+    roles, module_role = _build_roles(target_arch, nodes, project_path)
+    module_names = _collect_module_names(nodes, project_path)
+    known, call_out, call_in = _build_call_index(
+        module_names, nodes, adj, project_path)
+    modules = _build_module_rows(module_names, module_role, cycle_mods,
+                                 unassigned, twin, call_out, call_in)
+    violations = _build_violations(violation_pairs, cycle_mods, known, call_out)
+    flows = _build_flows(target_arch)
+    summary = _build_summary(gap_result, gaps, module_names, modules, cycle_mods)
+    report_gaps = [
+        {k: g.get(k) for k in ("type", "severity", "detail", "module") if k in g}
+        for g in gaps
+    ]
+    fw = _build_framework(project_path, target_arch)
 
     return {
         "project": target_arch.get("project", os.path.basename(project_path)),

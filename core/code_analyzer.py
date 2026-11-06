@@ -209,7 +209,16 @@ class CodeAnalyzer:
         'third_party', 'third-party',
         # Composer/NPM 等包管理器依赖目录（PHP vendor / Ruby bundle 等）
         'vendor', 'bundle', 'node_modules/.store',
+        # CodeRef 自身运行时产物目录（分析它们只会把报告当代码审）
+        '.coderef', '.gitnexus', 'coderef-report', 'coderef-wiki',
+        # 运行时缓存目录：多存临时产物/数据快照，审计无意义（且会误报硬编码凭据）
+        'cache',
     }
+
+    # 目录名模式：备份/归档目录是复制品，纳入审计会重复计数旧代码
+    IGNORE_DIR_PATTERNS = [
+        r'^(?:[a-zA-Z0-9]*_)?backups?(?:[_-][a-zA-Z0-9_-]*)?$',
+    ]
     
     # 忽略的文件名模式（正则表达式）— 仅排除编译产物
     IGNORE_FILE_PATTERNS = [
@@ -385,6 +394,11 @@ class CodeAnalyzer:
         """判断是否应该忽略该文件/目录"""
         # 1. 检查目录名是否在忽略列表中
         if any(part in self.IGNORE_DIRS for part in path.parts):
+            return True
+
+        # 1.1 备份/归档目录（复制品，审计会重复计数）
+        if any(re.search(p, part, re.IGNORECASE)
+               for p in self.IGNORE_DIR_PATTERNS for part in path.parts):
             return True
 
         # 1.5 检查额外忽略目录（由调用方通过 analyze_project 的 extra_ignore_dirs 传入）

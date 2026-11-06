@@ -348,7 +348,8 @@ def whitelist_list(project_path: str) -> list:
     if os.path.exists(path):
         try:
             return json.load(open(path, "r", encoding="utf-8"))
-        except Exception: pass
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[whitelist] 读取白名单失败，按空处理: {e}")
     return []
 
 def whitelist_add(project_path: str, entries: List[dict]) -> int:
@@ -365,7 +366,9 @@ def whitelist_add(project_path: str, entries: List[dict]) -> int:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 existing = json.load(f)
-        except Exception: pass
+        except Exception as e:  # noqa: BLE001
+            # 既有条目读不出时按空处理（本次新增条目仍会写入），需在日志可追溯
+            logger.warning(f"[whitelist] 既有条目读取失败，按空处理: {e}")
     added = 0
     for e in entries:
         entry = {}

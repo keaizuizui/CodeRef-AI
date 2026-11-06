@@ -362,10 +362,72 @@ def write_result(project_path: str, result: dict) -> str:
     return write_json_result(project_path, "product_fit.json", result)
 
 
+def _degrade(pp: str, result: dict, reason: str) -> dict:
+    """LLM 不可用/失败/输出非法时如实降级为 SKIP 并落盘。"""
+    result["conclusion"]["reason"] = reason
+    write_result(pp, result)
+    return result
+
+
+def _call_llm(prompt: List[dict]) -> tuple:
+    """调用 LLM；返回 (raw, error, available)，不抛异常。"""
+    try:
+        from core.llm_integration import LLMIntegration
+        llm = LLMIntegration()
+        if not llm.is_available():
+            return None, "", False
+        raw = llm.chat_completion(prompt, response_format={"type": "json_object"},
+                                  max_tokens=4000)
+        return raw, "", True
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[product_eval] LLM 调用异常，降级 SKIP: {e}")
+        return None, f"LLM 调用异常，已降级为 SKIP: {e}", True
+
+
+def _merge_llm(out: dict, evidence: dict, matrix: dict, chain: dict,
+               b_track: dict, extra: dict, pp: str) -> dict:
+    """把 LLM 的语义判断合进确定性结果：只补五问，不覆盖身份字段与计数。"""
+    merged = _result(pp, "OK", evidence, matrix, chain, b_track,
+                     extra, llm_available=True)
+    st = out.get("stage")
+    merged["stage"] = st if isinstance(st, dict) else evidence.get("stage")
+
+    llm_rows = {r.get("capability_id"): r for r in (out.get("f1") or [])
+                if isinstance(r, dict) and r.get("capability_id")}
+    f1_rows = []
+    for det in matrix["rows"]:
+        row = dict(det)
+        llm_row = llm_rows.get(det["capability_id"]) or {}
+        for qk, qv in llm_row.items():
+            if not qk.startswith("q") or not isinstance(qv, dict):
+                continue
+            merged_q = dict(row.get(qk) or {})
+            for k, v in qv.items():
+                if k != "proxy":  # proxy 口径由本模块强制，不接受 LLM 覆盖
+                    merged_q[k] = v
+            row[qk] = merged_q
+        for qk in ("q2_input", "q3_output"):
+            if isinstance(row.get(qk), dict):
+                row[qk]["proxy"] = True
+        f1_rows.append(row)
+    merged["f1"] = f1_rows
+    merged["fit_rate"] = matrix["fit_rate"]
+    merged["broken_chains"] = chain.get("broken_chains")
+    merged["blocked_fields"] = matrix["blocked_fields"]
+    merged["redlines"] = matrix["redlines"]
+    merged["cut_or_change"] = out.get("cut_or_change") or []
+    merged["b_track"] = out.get("b_track") or b_track
+    merged["conclusion"] = out["conclusion"]
+    merged["assumptions"] = out.get("assumptions") or []
+    merged["unknowns"] = out.get("unknowns") or evidence.get("unknowns") or []
+    merged["evidence_note"] = evidence.get("evidence_note", "")
+    return merged
+
+
 def evaluate(project_path: str, stage: Optional[str] = None,
              scope: Optional[List[str]] = None,
              use_llm: bool = True) -> dict:
-    """执行 F 轨评估并落盘。
+    """F 轨评估：确定性证据包 + 五问矩阵 +（可选）LLM 语义确认与三档结论。
 
     Args:
         project_path: 目标项目。
@@ -404,81 +466,33 @@ def evaluate(project_path: str, stage: Optional[str] = None,
     if not caps:
         reason = ("未枚举到任何可评估能力（业务树/前端/路由/CLI 均为空，"
                   "或 scope 指定的能力全部缺失），不产出三档结论")
-        result["conclusion"]["reason"] = reason
         result["unknowns"] = list(dict.fromkeys(
             list(evidence.get("unknowns") or []) + [reason]))
-        write_result(pp, result)
-        return result
+        return _degrade(pp, result, reason)
 
     if not use_llm:
         write_result(pp, result)
         return result
 
-    try:
-        from core.llm_integration import LLMIntegration
-        llm = LLMIntegration()
-        if not llm.is_available():
-            write_result(pp, result)
-            return result
-        raw = llm.chat_completion(_prompt(evidence, matrix, chain, b_track),
-                                  response_format={"type": "json_object"},
-                                  max_tokens=4000)
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"[product_eval] LLM 调用异常，降级 SKIP: {e}")
-        result["conclusion"]["reason"] = f"LLM 调用异常，已降级为 SKIP: {e}"
+    raw, err, available = _call_llm(_prompt(evidence, matrix, chain, b_track))
+    if err:
+        return _degrade(pp, result, err)
+    if not available:
         write_result(pp, result)
         return result
 
+    from core.llm_integration import LLMIntegration
     if LLMIntegration.is_error_response(raw):
-        result["conclusion"]["reason"] = f"LLM 调用失败，已降级为 SKIP: {raw[:200]}"
-        write_result(pp, result)
-        return result
+        return _degrade(pp, result, f"LLM 调用失败，已降级为 SKIP: {raw[:200]}")
 
     out = _parse_json(raw)
     if out is None:
-        result["conclusion"]["reason"] = "LLM 返回无法解析为 JSON，已降级为 SKIP（不编造结论）"
-        write_result(pp, result)
-        return result
+        return _degrade(pp, result,
+                        "LLM 返回无法解析为 JSON，已降级为 SKIP（不编造结论）")
     bad = _validate_llm(out)
     if bad:
-        result["conclusion"]["reason"] = bad
-        write_result(pp, result)
-        return result
+        return _degrade(pp, result, bad)
 
-    merged = _result(pp, "OK", evidence, matrix, chain, b_track,
-                     extra, llm_available=True)
-    st = out.get("stage")
-    merged["stage"] = st if isinstance(st, dict) else evidence.get("stage")
-
-    # LLM 只补五问的语义判断，不覆盖确定性身份字段（name/source/anchors）与计数。
-    llm_rows = {r.get("capability_id"): r for r in (out.get("f1") or [])
-                if isinstance(r, dict) and r.get("capability_id")}
-    f1_rows = []
-    for det in matrix["rows"]:
-        row = dict(det)
-        llm_row = llm_rows.get(det["capability_id"]) or {}
-        for qk, qv in llm_row.items():
-            if not qk.startswith("q") or not isinstance(qv, dict):
-                continue
-            merged_q = dict(row.get(qk) or {})
-            for k, v in qv.items():
-                if k != "proxy":  # proxy 口径由本模块强制，不接受 LLM 覆盖
-                    merged_q[k] = v
-            row[qk] = merged_q
-        for qk in ("q2_input", "q3_output"):
-            if isinstance(row.get(qk), dict):
-                row[qk]["proxy"] = True
-        f1_rows.append(row)
-    merged["f1"] = f1_rows
-    merged["fit_rate"] = matrix["fit_rate"]
-    merged["broken_chains"] = chain.get("broken_chains")
-    merged["blocked_fields"] = matrix["blocked_fields"]
-    merged["redlines"] = matrix["redlines"]
-    merged["cut_or_change"] = out.get("cut_or_change") or []
-    merged["b_track"] = out.get("b_track") or b_track
-    merged["conclusion"] = out["conclusion"]
-    merged["assumptions"] = out.get("assumptions") or []
-    merged["unknowns"] = out.get("unknowns") or evidence.get("unknowns") or []
-    merged["evidence_note"] = evidence.get("evidence_note", "")
+    merged = _merge_llm(out, evidence, matrix, chain, b_track, extra, pp)
     write_result(pp, merged)
     return merged

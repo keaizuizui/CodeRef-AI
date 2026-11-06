@@ -4,6 +4,15 @@
 
 ---
 
+### v5.18.4 — 复杂度治理与自审口径
+
+> 排班第四批：拆掉 5 个决策中枢超长函数，并把自审里由运行时产物/备份目录造成的误报从口径上消掉。
+
+- **超长函数拆分（行为对照验证）**：`arch_gap_analyzer.analyze_gap`（260 行 → 编排约 60 行）、`target_arch_schema.validate_target_arch`（212 → 约 20）、`role_boundary.detect`（240 → 约 140）、`business_semantics.analyze`（154 → 约 40）、`arch_view.build_arch_data`（171 → 约 40）；分别以「汇总/对齐度/差距集合」「错误列表逐条」」「泳道/交接点/聚类」「视图数据」对照，输出一致。
+- **空异常处理显式化**：6 处 `except Exception: pass` 改为 `debug` / `warning` 日志并保留 best-effort 语义（检查点、白名单、图谱元数据、进度回调），不再静默吞错。
+- **自审扫描口径**：默认跳过 `.coderef` / `.gitnexus` / `coderef-report` / `coderef-wiki`、`cache/` 与 `*backup*` 目录；本项目自审文件数 141 → 136，去掉缓存快照的「硬编码凭据」误报与备份目录的重复计数。
+- **验证**：`core/` pyflakes 0；全量 pytest **269 全绿**；`check_version` EXIT=0。
+
 ### v5.18.3 — 渲染器拆分：内容面板独立 + 首页输入收敛
 
 > 排班第三批：评估台渲染器从「一个类装五类面板」收敛为「编排 + 外壳」，面板只依赖项目路径与快照。

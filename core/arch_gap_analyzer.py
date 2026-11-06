@@ -746,6 +746,216 @@ def _whitelist_exclude_dirs(project_path: str) -> List[str]:
         return []
 
 
+def _build_assignment(roles: List[dict], nodes: dict, project_path: str,
+                      mod_index) -> tuple:
+    """目标归属映射：角色 → 模块，以及每个角色是否有有效实现。"""
+    role_of: Dict[str, str] = {}          # mod 节点 id → 角色 id
+    role_has_impl: Dict[str, bool] = {}   # 角色 id → 是否有有效实现
+    assigned_ids: Set[str] = set()
+    for role in roles:
+        rid = role.get("id", "")
+        specs = role.get("target_modules", [])
+        matched = _match_module_ids(nodes, project_path, specs, idx=mod_index)
+        for nid in matched:
+            role_of[nid] = rid
+        assigned_ids |= matched
+        role_has_impl[rid] = any(
+            _module_exists(project_path, s, nodes, idx=mod_index) for s in specs)
+    return role_of, role_has_impl, assigned_ids
+
+
+def _detect_twin_gaps(nodes: dict, adj: dict, project_path: str, db: str,
+                      ds: dict) -> List[dict]:
+    """孪生目录真身/孤本标注（③）：同名模块按 fan_in 判真身/孤本。"""
+    out: List[dict] = []
+    for twin in _detect_twin_identity(nodes, adj, project_path, db_path=db, ds=ds):
+        true_mods = [c["module"] for c in twin["copies"] if c["verdict"] == "真身"]
+        orphan_mods = [c["module"] for c in twin["copies"] if c["verdict"] == "孤本"]
+        out.append({
+            "type": "twin_identity",
+            "severity": SEVERITY["twin_identity"],
+            "dir_a": twin["dir_a"],
+            "dir_b": twin["dir_b"],
+            "file_sim": twin.get("file_sim", 0.0),
+            "func_sim": twin.get("func_sim", 0.0),
+            "copies": twin["copies"],
+            "detail": (f"孪生目录 {twin['dir_a']} 与 {twin['dir_b']} 同构"
+                       f"（文件相似度 {twin['file_sim']:.0%}），同名模块按 fan_in 判真身/孤本："
+                       f"{'、'.join(true_mods)} 为真身，{'、'.join(orphan_mods)} 为孤本，"
+                       f"建议收敛（G1 优先）"),
+        })
+    return out
+
+
+def _collect_cycles(arch: dict) -> List[dict]:
+    """循环依赖（复用 arch_audit，过滤纯测试模块组成的环）。"""
+    out: List[dict] = []
+    cycle_details = arch.get("cycle_details", [])
+    for idx, cyc in enumerate(arch.get("cycles", [])):
+        prod = [m for m in cyc if not _is_test_module(m)]
+        if not prod:
+            continue  # 环完全由测试模块组成，对齐目标不关注
+        detail = f"循环依赖: {' → '.join(cyc)}"
+        min_cycle = None
+        key_edges = []
+        if idx < len(cycle_details):
+            cd = cycle_details[idx]
+            min_cycle = cd.get("min_cycle")
+            key_edges = cd.get("key_edges") or []
+            if min_cycle:
+                detail += f"；最小真环: {' → '.join(min_cycle)}"
+            if cd.get("hint_large_scc"):
+                detail += "；该环节点数较多，可能是整个子图被圈为强连通分量而非局部循环，请核对是否真需重构"
+        out.append({
+            "type": "cycle",
+            "severity": SEVERITY["cycle"],
+            "modules": cyc,
+            "min_cycle": min_cycle,
+            "key_edges": key_edges,
+            "detail": detail,
+        })
+    return out
+
+
+def _collect_size_gaps(arch: dict) -> List[dict]:
+    """上帝模块 + 异常规模（复用 arch_audit，过滤测试模块）。"""
+    out: List[dict] = []
+    for g in arch.get("god_modules", []):
+        if _is_test_module(g.get("module", "")):
+            continue
+        out.append({
+            "type": "god_module",
+            "severity": SEVERITY["god_module"],
+            "module": g.get("module", ""),
+            "detail": (f"上帝模块 {g.get('module', '')}: "
+                       f"扇出 {g.get('fan_out', 0)}, 扇入 {g.get('fan_in', 0)}"),
+        })
+    for lm in arch.get("large_modules", []):
+        if _is_test_module(lm.get("module", "")):
+            continue
+        out.append({
+            "type": "large_module",
+            "severity": SEVERITY["large_module"],
+            "module": lm.get("module", ""),
+            "detail": f"异常规模模块 {lm.get('module', '')}: {lm.get('symbols', 0)} 个符号",
+        })
+    return out
+
+
+def _resolve_members(flows: List[dict], project_path: str, nodes: dict,
+                     mod_index) -> Dict[str, bool]:
+    """解析 sub_module_refs 成员是否实现，供阶段内成员断链判定。"""
+    member_resolved: Dict[str, bool] = {}
+    for flow in flows:
+        for step in flow.get("steps", []):
+            for ref in step.get("sub_module_refs") or []:
+                if not isinstance(ref, dict):
+                    continue
+                items = ref.get("items") or [] if "group" in ref else [ref]
+                for it in items:
+                    spec = it.get("module", "") if isinstance(it, dict) else ""
+                    if spec and spec not in member_resolved:
+                        member_resolved[spec] = _module_exists(
+                            project_path, spec, nodes, idx=mod_index)
+    return member_resolved
+
+
+def _summarize(gaps: List[dict], unassigned_total: int,
+               unassigned_gaps: List[dict], unassigned_free: int,
+               unassigned_unmodeled: int) -> dict:
+    by_sev = {"high": 0, "medium": 0, "low": 0}
+    for g in gaps:
+        by_sev[g.get("severity", "low")] = by_sev.get(g.get("severity", "low"), 0) + 1
+    dup_cnt = sum(1 for g in gaps if g.get("type") == "duplicate")
+    dir_dup_cnt = sum(1 for g in gaps if g.get("type") == "directory_duplicate")
+    twin_cnt = sum(1 for g in gaps if g.get("type") == "twin_identity")
+    return {
+        "total": len(gaps),
+        "high": by_sev["high"],
+        "medium": by_sev["medium"],
+        "low": by_sev["low"],
+        "duplicate": dup_cnt,
+        "directory_duplicate": dir_dup_cnt,
+        "twin_identity": twin_cnt,
+        "unassigned_total": unassigned_total,
+        "unassigned_shown": len(unassigned_gaps),
+        "unassigned_free": unassigned_free,
+        "unassigned_unmodeled": unassigned_unmodeled,
+    }
+
+
+def _build_alignment(roles: List[dict], role_has_impl: Dict[str, bool],
+                     nodes: dict, assigned_ids: Set[str],
+                     project_path: str) -> tuple:
+    """对齐度（Phase 0 简化）：角色覆盖度 + 模块归属度。"""
+    total_roles = len(roles)
+    impl_roles = sum(1 for v in role_has_impl.values() if v)
+    # 口径与 unassigned/`arch_verify` 对齐：total_mods 与 assigned_ids 均排除 test 模块
+    total_mods = sum(
+        1 for n in nodes.values()
+        if n.get("type") == "module"
+        and not _is_test_module(module_of(n, project_path) or n.get("name", "")))
+    assigned_production = sum(
+        1 for nid in assigned_ids
+        if not _is_test_module(
+            module_of(nodes[nid], project_path) or nodes[nid].get("name", "")))
+    module_assigned = round(assigned_production / total_mods, 2) if total_mods else 1.0
+    alignment = {
+        "role_coverage": round(impl_roles / total_roles, 2) if total_roles else 1.0,
+        "module_assigned": module_assigned,
+        "note": "Phase 0 简化对齐度：role_coverage=已实现角色/总角色；module_assigned=已归属模块/总模块",
+    }
+    return alignment, module_assigned
+
+
+def _coverage_guidance(roles: List[dict], module_assigned: float,
+                       unassigned_total: int, flows: List[dict]) -> List[str]:
+    """覆盖引导（①）：target 覆盖面低或业务流不足时显式提示。"""
+    guidance: List[str] = []
+    empty_target_roles = [
+        role.get("name", role.get("id", ""))
+        for role in roles
+        if not role.get("target_modules")
+    ]
+    if empty_target_roles:
+        guidance.append(
+            "以下角色未声明 target_modules：" + "、".join(empty_target_roles)
+            + "。请在 define-target 阶段补全真实实现模块")
+    if module_assigned < 0.3:
+        guidance.append(
+            f"target_modules 覆盖不完整（module_assigned={module_assigned}，"
+            f"{unassigned_total} 个游离模块），建议在 define-target 阶段基于真实调用"
+            f"补全主干模块，否则治理建在残缺图上")
+    if len(flows) < 2:
+        guidance.append(
+            f"业务流仅 {len(flows)} 条，建议纳入多条主干业务流（可参考本轮 domain_flow "
+            f"suggestions 列出的真实跨域主干），而非唯一定义单条链路")
+    return guidance
+
+
+def _templating(project_path: str) -> dict:
+    """模板整理建议（引导非强求）：识别项目形态，对比模板期望骨架。"""
+    from core.arch_templates import TEMPLATES, detect_template, templating_suggestions
+    found = detect_template(project_path)
+    if found:
+        tid, score = found
+        return {
+            "template_id": tid,
+            "template_name": TEMPLATES[tid]["name"],
+            "matched": True,
+            "score": score,
+            "suggestions": templating_suggestions(project_path, tid),
+            "note": "模板是整理建议而非强制标准：按期望骨架整理文件夹有助于生成目标架构；可自主决定是否照做",
+        }
+    return {
+        "template_id": None,
+        "template_name": None,
+        "matched": False,
+        "suggestions": [],
+        "note": "未识别到常见软件形态模板；可用 coderef_target_arch_set 的 template/detect 参数按模板生成目标架构初稿",
+    }
+
+
 def analyze_gap(project_path: str, target_arch: Dict[str, Any],
                 max_unassigned: int = DEFAULT_MAX_UNASSIGNED,
                 db_path: Optional[str] = None) -> dict:
@@ -796,18 +1006,8 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
 
     # 目标归属映射（一次建模块索引，供匹配/缺失/实现复用，避免逐 spec 全扫 nodes）
     mod_index = _build_module_index(nodes, project_path)
-    role_of: Dict[str, str] = {}          # mod 节点 id → 角色 id
-    role_has_impl: Dict[str, bool] = {}   # 角色 id → 是否有有效实现
-    assigned_ids: Set[str] = set()
-    for role in roles:
-        rid = role.get("id", "")
-        specs = role.get("target_modules", [])
-        matched = _match_module_ids(nodes, project_path, specs, idx=mod_index)
-        for nid in matched:
-            role_of[nid] = rid
-        assigned_ids |= matched
-        role_has_impl[rid] = any(
-            _module_exists(project_path, s, nodes, idx=mod_index) for s in specs)
+    role_of, role_has_impl, assigned_ids = _build_assignment(
+        roles, nodes, project_path, mod_index)
 
     gaps: List[dict] = []
 
@@ -830,129 +1030,28 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
                                                       "directory_duplicate": True},
                                    ds=ds))
 
-    # 3.6) 孪生模块真身/孤本标注（③）：目录级同构对中同名模块按 fan_in 判真身/孤本
-    for twin in _detect_twin_identity(nodes, adj, project_path, db_path=db, ds=ds):
-        true_mods = [c["module"] for c in twin["copies"] if c["verdict"] == "真身"]
-        orphan_mods = [c["module"] for c in twin["copies"] if c["verdict"] == "孤本"]
-        gaps.append({
-            "type": "twin_identity",
-            "severity": SEVERITY["twin_identity"],
-            "dir_a": twin["dir_a"],
-            "dir_b": twin["dir_b"],
-            "file_sim": twin.get("file_sim", 0.0),
-            "func_sim": twin.get("func_sim", 0.0),
-            "copies": twin["copies"],
-            "detail": (f"孪生目录 {twin['dir_a']} 与 {twin['dir_b']} 同构"
-                       f"（文件相似度 {twin['file_sim']:.0%}），同名模块按 fan_in 判真身/孤本："
-                       f"{'、'.join(true_mods)} 为真身，{'、'.join(orphan_mods)} 为孤本，"
-                       f"建议收敛（G1 优先）"),
-        })
+    # 3.6) 孪生模块真身/孤本标注（③）
+    gaps.extend(_detect_twin_gaps(nodes, adj, project_path, db, ds))
 
     # 4) 循环依赖（复用 arch_audit，过滤纯测试模块组成的环）
-    cycle_details = arch.get("cycle_details", [])
-    for idx, cyc in enumerate(arch.get("cycles", [])):
-        prod = [m for m in cyc if not _is_test_module(m)]
-        if not prod:
-            continue  # 环完全由测试模块组成，对齐目标不关注
-        detail = f"循环依赖: {' → '.join(cyc)}"
-        min_cycle = None
-        key_edges = []
-        if idx < len(cycle_details):
-            cd = cycle_details[idx]
-            min_cycle = cd.get("min_cycle")
-            key_edges = cd.get("key_edges") or []
-            if min_cycle:
-                detail += f"；最小真环: {' → '.join(min_cycle)}"
-            if cd.get("hint_large_scc"):
-                detail += "；该环节点数较多，可能是整个子图被圈为强连通分量而非局部循环，请核对是否真需重构"
-        gaps.append({
-            "type": "cycle",
-            "severity": SEVERITY["cycle"],
-            "modules": cyc,
-            "min_cycle": min_cycle,
-            "key_edges": key_edges,
-            "detail": detail,
-        })
+    gaps.extend(_collect_cycles(arch))
 
-    # 5) 上帝模块（复用 arch_audit，过滤测试模块）
-    for g in arch.get("god_modules", []):
-        if _is_test_module(g.get("module", "")):
-            continue
-        gaps.append({
-            "type": "god_module",
-            "severity": SEVERITY["god_module"],
-            "module": g.get("module", ""),
-            "detail": (f"上帝模块 {g.get('module', '')}: "
-                       f"扇出 {g.get('fan_out', 0)}, 扇入 {g.get('fan_in', 0)}"),
-        })
-
-    # 6) 异常规模（复用 arch_audit，过滤测试模块）
-    for lm in arch.get("large_modules", []):
-        if _is_test_module(lm.get("module", "")):
-            continue
-        gaps.append({
-            "type": "large_module",
-            "severity": SEVERITY["large_module"],
-            "module": lm.get("module", ""),
-            "detail": f"异常规模模块 {lm.get('module', '')}: {lm.get('symbols', 0)} 个符号",
-        })
+    # 5) 上帝模块 / 6) 异常规模（复用 arch_audit，过滤测试模块）
+    gaps.extend(_collect_size_gaps(arch))
 
     # 7) 业务断链
-    # ：解析 sub_module_refs 成员是否实现，供阶段内成员断链判定
-    member_resolved: Dict[str, bool] = {}
-    for flow in flows:
-        for step in flow.get("steps", []):
-            for ref in step.get("sub_module_refs") or []:
-                if not isinstance(ref, dict):
-                    continue
-                items = ref.get("items") or [] if "group" in ref else [ref]
-                for it in items:
-                    spec = it.get("module", "") if isinstance(it, dict) else ""
-                    if spec and spec not in member_resolved:
-                        member_resolved[spec] = _module_exists(
-                            project_path, spec, nodes, idx=mod_index)
+    member_resolved = _resolve_members(flows, project_path, nodes, mod_index)
     gaps.extend(_detect_business_gaps(flows, role_has_impl, member_resolved))
 
     # 汇总
-    by_sev = {"high": 0, "medium": 0, "low": 0}
-    for g in gaps:
-        by_sev[g.get("severity", "low")] = by_sev.get(g.get("severity", "low"), 0) + 1
     result["gaps"] = gaps
-    dup_cnt = sum(1 for g in gaps if g.get("type") == "duplicate")
-    dir_dup_cnt = sum(1 for g in gaps if g.get("type") == "directory_duplicate")
-    twin_cnt = sum(1 for g in gaps if g.get("type") == "twin_identity")
-    result["summary"] = {
-        "total": len(gaps),
-        "high": by_sev["high"],
-        "medium": by_sev["medium"],
-        "low": by_sev["low"],
-        "duplicate": dup_cnt,
-        "directory_duplicate": dir_dup_cnt,
-        "twin_identity": twin_cnt,
-        "unassigned_total": unassigned_total,
-        "unassigned_shown": len(unassigned_gaps),
-        "unassigned_free": unassigned_free,
-        "unassigned_unmodeled": unassigned_unmodeled,
-    }
+    result["summary"] = _summarize(gaps, unassigned_total, unassigned_gaps,
+                                   unassigned_free, unassigned_unmodeled)
 
     # 对齐度（Phase 0 简化：角色覆盖度 + 模块归属度）
-    total_roles = len(roles)
-    impl_roles = sum(1 for v in role_has_impl.values() if v)
-    # 口径与 unassigned/`arch_verify` 对齐：total_mods 与 assigned_ids 均排除 test 模块
-    total_mods = sum(
-        1 for n in nodes.values()
-        if n.get("type") == "module"
-        and not _is_test_module(module_of(n, project_path) or n.get("name", "")))
-    assigned_production = sum(
-        1 for nid in assigned_ids
-        if not _is_test_module(
-            module_of(nodes[nid], project_path) or nodes[nid].get("name", "")))
-    module_assigned = round(assigned_production / total_mods, 2) if total_mods else 1.0
-    result["alignment"] = {
-        "role_coverage": round(impl_roles / total_roles, 2) if total_roles else 1.0,
-        "module_assigned": module_assigned,
-        "note": "Phase 0 简化对齐度：role_coverage=已实现角色/总角色；module_assigned=已归属模块/总模块",
-    }
+    alignment, module_assigned = _build_alignment(
+        roles, role_has_impl, nodes, assigned_ids, project_path)
+    result["alignment"] = alignment
 
     # 域间业务流量透视（②）：domain_flow 三层 + flow_suggestions 兼容简表
     flow_scope = (target_arch.get("business_flow") or {}).get("scope") or {}
@@ -960,49 +1059,12 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
     result["domain_flow"] = domain_flow
     result["flow_suggestions"] = domain_flow["suggestions"]
 
-    # 覆盖引导（①）：target 覆盖面低或业务流不足时显式提示，防治理建在残缺图上
-    guidance: List[str] = []
-    empty_target_roles = [
-        role.get("name", role.get("id", ""))
-        for role in roles
-        if not role.get("target_modules")
-    ]
-    if empty_target_roles:
-        guidance.append(
-            "以下角色未声明 target_modules：" + "、".join(empty_target_roles)
-            + "。请在 define-target 阶段补全真实实现模块")
-    if module_assigned < 0.3:
-        guidance.append(
-            f"target_modules 覆盖不完整（module_assigned={module_assigned}，"
-            f"{unassigned_total} 个游离模块），建议在 define-target 阶段基于真实调用"
-            f"补全主干模块，否则治理建在残缺图上")
-    if len(flows) < 2:
-        guidance.append(
-            f"业务流仅 {len(flows)} 条，建议纳入多条主干业务流（可参考本轮 domain_flow "
-            f"suggestions 列出的真实跨域主干），而非唯一定义单条链路")
-    result["coverage_guidance"] = guidance
+    # 覆盖引导（①）
+    result["coverage_guidance"] = _coverage_guidance(
+        roles, module_assigned, unassigned_total, flows)
 
-    # 模板整理建议（引导非强求）：识别项目形态，对比模板期望骨架给整理建议
-    from core.arch_templates import TEMPLATES, detect_template, templating_suggestions
-    found = detect_template(project_path)
-    if found:
-        tid, score = found
-        result["templating"] = {
-            "template_id": tid,
-            "template_name": TEMPLATES[tid]["name"],
-            "matched": True,
-            "score": score,
-            "suggestions": templating_suggestions(project_path, tid),
-            "note": "模板是整理建议而非强制标准：按期望骨架整理文件夹有助于生成目标架构；可自主决定是否照做",
-        }
-    else:
-        result["templating"] = {
-            "template_id": None,
-            "template_name": None,
-            "matched": False,
-            "suggestions": [],
-            "note": "未识别到常见软件形态模板；可用 coderef_target_arch_set 的 template/detect 参数按模板生成目标架构初稿",
-        }
+    # 模板整理建议（引导非强求）
+    result["templating"] = _templating(project_path)
 
     result["ok"] = True
     return result
