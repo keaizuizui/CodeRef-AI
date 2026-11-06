@@ -18,12 +18,17 @@
 
 import json
 import os
-import re
 from datetime import datetime
 from typing import Dict, List, Optional
 
 from loguru import logger
 
+from core.eval_common import (
+    anchor_exists as _anchor_exists,
+    parse_json_object as _parse_json,
+    rel as _rel,
+    write_json_result,
+)
 from core.product_evidence import (
     FAKE_DATA_MARKERS,
     INPUT_HINTS,
@@ -36,13 +41,6 @@ from core.version import __version__
 
 _VERDICTS = ("Go", "Validate-first", "No-go")
 _STAGES = ("concept", "pmf", "expansion")
-
-
-def _rel(project_path: str, path: str) -> str:
-    try:
-        return os.path.relpath(path, project_path).replace(os.sep, "/")
-    except Exception:  # noqa: BLE001
-        return path.replace(os.sep, "/")
 
 
 def _module_text(project_path: str, module: str) -> str:
@@ -64,11 +62,6 @@ def _hint_in_modules(modules: List[str], hints: tuple) -> bool:
         if any(h in low for h in hints):
             return True
     return False
-
-
-def _anchor_exists(project_path: str, anchor: str) -> bool:
-    fp = str(anchor or "").split("#L")[0]
-    return bool(fp) and os.path.isfile(os.path.join(project_path, fp))
 
 
 # ────────────────────────────────────────────────────────────────
@@ -303,21 +296,6 @@ def _prompt(evidence: dict, matrix: dict, chain: dict, b_track: dict) -> List[di
     ]
 
 
-def _parse_json(raw: str) -> Optional[dict]:
-    if not raw:
-        return None
-    text = raw.strip()
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    try:
-        data = json.loads(text[start:end + 1])
-    except Exception:  # noqa: BLE001
-        return None
-    return data if isinstance(data, dict) else None
-
-
 def _validate_llm(out: dict) -> str:
     """返回空串表示通过；否则返回拒收原因。"""
     if MARKET_NUMBER_RE.search(json.dumps(out, ensure_ascii=False)):
@@ -381,10 +359,7 @@ def _result(project_path: str, status: str, evidence: dict, matrix: dict,
 
 def write_result(project_path: str, result: dict) -> str:
     """落盘 `.coderef/product_fit.json`（CI 与 AI 可读旁路产物）。"""
-    from core.scorecard import _atomic_write_json
-    out = os.path.join(os.path.abspath(project_path), ".coderef", "product_fit.json")
-    _atomic_write_json(out, result)
-    return out
+    return write_json_result(project_path, "product_fit.json", result)
 
 
 def evaluate(project_path: str, stage: Optional[str] = None,

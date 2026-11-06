@@ -15,12 +15,17 @@
 
 import json
 import os
-import re
 from datetime import datetime
 from typing import Dict, List, Optional
 
 from loguru import logger
 
+from core.eval_common import (
+    anchor_exists as _anchor_exists,
+    parse_json_object as _parse_json,
+    rel as _rel,
+    write_json_result,
+)
 from core.product_evidence import MARKET_NUMBER_RE
 from core.version import __version__
 
@@ -37,13 +42,6 @@ _SUBMIT_MARKERS = ("提交", "保存", "生成", "开始", "发布", "确定", "
                    "导出", "submit", "save", "generate", "start", "confirm")
 
 _SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2}
-
-
-def _rel(project_path: str, path: str) -> str:
-    try:
-        return os.path.relpath(path, project_path).replace(os.sep, "/")
-    except Exception:  # noqa: BLE001
-        return path.replace(os.sep, "/")
 
 
 # ────────────────────────────────────────────────────────────────
@@ -123,12 +121,6 @@ def _problem(rule: str, text: str, anchor: str, component: str,
         "task_interrupted": interrupted,
         "business_consequence": consequence,
     }
-
-
-def _anchor_exists(project_path: str, anchor: str) -> bool:
-    """锚点文件是否存在（外部传入的 problems 必须可回到真实 file:line）。"""
-    fp = str(anchor or "").split("#L")[0]
-    return bool(fp) and os.path.isfile(os.path.join(project_path, fp))
 
 
 def collect_static_problems(project_path: str,
@@ -327,20 +319,6 @@ def _prompt(persona: dict, journey: str, problems: List[dict],
             {"role": "user", "content": json.dumps(user, ensure_ascii=False)}]
 
 
-def _parse_json(raw: str) -> Optional[dict]:
-    if not raw:
-        return None
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    try:
-        data = json.loads(text[start:end + 1])
-    except Exception:  # noqa: BLE001
-        return None
-    return data if isinstance(data, dict) else None
-
-
 def _validate_llm(out: dict) -> str:
     if MARKET_NUMBER_RE.search(json.dumps(out, ensure_ascii=False)):
         return "LLM 输出含市场/竞品数字，按硬红线拒收"
@@ -389,10 +367,8 @@ def _result(project_path: str, status: str, persona: dict, journey: str,
 
 
 def write_result(project_path: str, result: dict) -> str:
-    from core.scorecard import _atomic_write_json
-    out = os.path.join(os.path.abspath(project_path), ".coderef", "ux_fit.json")
-    _atomic_write_json(out, result)
-    return out
+    """落盘 `.coderef/ux_fit.json`（CI 与 AI 可读旁路产物）。"""
+    return write_json_result(project_path, "ux_fit.json", result)
 
 
 def evaluate(project_path: str, persona: object = None,

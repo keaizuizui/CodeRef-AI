@@ -4,6 +4,15 @@
 
 ---
 
+### v5.18.2 — 两轨公共规则下沉（eval_common）
+
+> 排班第二批：把 F 轨与 U 轨重复的评估基础规则收敛为一份实现，消除两条轨悄悄分叉的漂移源。
+
+- **新增 `core/eval_common.py`**：`rel`（路径相对化）、`anchor_exists`（锚点文件存在性）、`parse_json_object`（LLM JSON 提取）、`write_json_result`（结论原子落盘）。
+- **两轨改用同一实现**：`product_eval` / `ux_eval` 通过别名导入保留 `_rel` / `_parse_json` / `_anchor_exists` 的既有调用形态，`write_result` 保留为落盘文件名适配器；对外行为不变。
+- **回归**：新增 4 例等价性用例（两轨对同一输入给出同一结果、落盘文件名各自独立）。
+- **验证**：`core/` pyflakes 0；全量 pytest 269 全绿；`check_version` EXIT=0。
+
 ### v5.18.1 — 一致性与真源：技术 Tab 同源刷新 + 默认目录单一真源
 
 > 承接 v5.18.0 四层审查（CodeRabbit / Brooks-Lint / code-review-report / CodeRef 自审）的排班第一批；只修一致性与真源，不改评估口径。
