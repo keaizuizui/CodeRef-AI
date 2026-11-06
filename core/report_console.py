@@ -172,6 +172,9 @@ def _make_handler(project_path: str, out_dir: str, token: str,
         def _route_get(self) -> None:
             if not self._host_ok():
                 return self._json({"ok": False, "error": "非法 Host"}, 403)
+            # 原始路径先判 `..`（含编码），再走规范化路由（U-50）
+            if has_unsafe_path(self.path):
+                return self._json({"ok": False, "error": "404"}, 404)
             parsed = urlparse(self.path)
             path = parsed.path
             if path in ("/", "/index.html"):
@@ -333,6 +336,25 @@ def _make_handler(project_path: str, out_dir: str, token: str,
     return Handler
 
 
+def has_unsafe_path(raw_path: str) -> bool:
+    """原始请求路径是否含 `..`（含 URL 编码 `%2e%2e` / `%2E%2E`）。
+
+    必须在**规范化之前**判定：`/.coderef/../index.html` 会被 HTTP 层折叠成
+    `/index.html` 而命中白名单，看起来像目录穿越未被拦截（U-50）。按原始 path
+    判定，拒绝后不影响 `/`、`/index.html`、`/.coderef/arch_*.html` 等正常路由。
+    """
+    from urllib.parse import unquote
+    raw = raw_path or ""
+    for _ in range(3):  # 逐层解码兜底（含双重编码 %252e%252e）
+        if ".." in raw:
+            return True
+        decoded = unquote(raw)
+        if decoded == raw:
+            break
+        raw = decoded
+    return False
+
+
 def serve(project_path: str, output_dir: Optional[str] = None,
           host: str = "127.0.0.1", port: int = 0,
           rerender: Optional[Callable[[], Any]] = None) -> dict:
@@ -341,7 +363,10 @@ def serve(project_path: str, output_dir: Optional[str] = None,
     if not os.path.isdir(pp):
         raise ValueError(f"项目路径不存在: {pp}")
     host = _normalize_host(host)
-    out_dir = os.path.abspath(output_dir or os.path.join(pp, "coderef-report", "html"))
+    out_dir = os.path.abspath(output_dir) if output_dir else None
+    if out_dir is None:
+        from core.report_renderer import default_report_dir
+        out_dir = default_report_dir(pp)
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir, exist_ok=True)
 

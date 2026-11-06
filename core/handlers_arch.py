@@ -21,6 +21,12 @@ class _ArchViewHandler(SimpleHTTPRequestHandler):
     替代默认目录列表（v5.14.5/v5.15.0 测试方观察点 1）。"""
 
     def do_GET(self):  # noqa: N802
+        # 原始路径含 `..`（含 %2e%2e）时直接 404：SimpleHTTPRequestHandler 会先
+        # 规范化，`/.coderef/../index.html` 会被折叠成 `/index.html` 而误命中（U-50）
+        from core.report_console import has_unsafe_path
+        if has_unsafe_path(self.path):
+            self.send_error(404)
+            return
         if self.path in ("/", "/index.html"):
             self._serve_index()
             return

@@ -31,6 +31,22 @@ from datetime import datetime
 from typing import List, Optional
 
 
+def default_report_root(project_path: str) -> str:
+    """报告产物根目录：按项目隔离（`<project>/.coderef/report`）。
+
+    共享输出目录会 last-writer-wins：多项目交替跑 report 时，后跑项目覆盖
+    `index.html`，前一项目的用户入口被顶掉（U-51）。放到项目侧与
+    scorecard/findings 同域，既天然按项目隔离，也便于随项目一起版本管理。
+    显式传 output_dir 时仍以调用方为准。
+    """
+    return os.path.join(os.path.abspath(project_path), ".coderef", "report")
+
+
+def default_report_dir(project_path: str) -> str:
+    """评估台 index.html 所在目录（`<project>/.coderef/report/html`）。"""
+    return os.path.join(default_report_root(project_path), "html")
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 轻量 markdown 子集转换（标题/粗体/行内代码/列表/表格/围栏代码块/链接）
 # ═══════════════════════════════════════════════════════════════════
@@ -514,9 +530,7 @@ class HtmlReportRenderer:
         Returns:
             {"ok": bool, "index": 绝对路径, "files": [..], "error": str?}
         """
-        out = output_dir or os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "coderef-report", "html")
+        out = output_dir or default_report_dir(self.project_path)
         os.makedirs(out, exist_ok=True)
 
         results = {}

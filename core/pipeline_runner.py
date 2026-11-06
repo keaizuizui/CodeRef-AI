@@ -352,14 +352,15 @@ def docs(project_path: str, output_dir: str = None,
                    progress_cb=progress_cb)
 
         r.report = _fmt(r, "文档探查报告")
-        os.makedirs(output_dir or os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "coderef-report"), exist_ok=True)
+        # 报告目录按项目隔离（U-51）：docs 也渲染 index.html，落共享目录会覆盖
+        # 其他项目的评估台入口。
+        out = output_dir or _default_report_root(project_path)
+        os.makedirs(out, exist_ok=True)
 
         # 渲染 HTML 报告目录（Wiki 为主；若图谱/审计产物存在则一并纳入）
-        html_out = os.path.join(output_dir or os.path.join(os.path.dirname(
-            os.path.dirname(os.path.abspath(__file__))), "coderef-report"), "html")
+        html_out = os.path.join(out, "html")
         _render_html(project_path, r, kg_stats=None,
-                          output_dir=html_out)
+                     output_dir=html_out)
     except TaskCancelled:
         raise
     except Exception as e:
@@ -367,6 +368,15 @@ def docs(project_path: str, output_dir: str = None,
 
     r.elapsed = round(time.time() - t0, 1)
     return r
+
+def _default_report_root(project_path: str) -> str:
+    """报告产物根目录（项目侧隔离：<project>/.coderef/report，见 U-51）。
+
+    延迟导入 report_renderer，避免与渲染层形成模块级循环依赖。
+    """
+    from core.report_renderer import default_report_root
+    return default_report_root(project_path)
+
 
 def render_report(project_path: str,
                   output_dir: Optional[str] = None) -> tuple:
@@ -701,8 +711,7 @@ class Pipe:
         self._t0 = time.time()
         r = PipeResult(project_path=project_path)
         d = self._load(project_path) if resume else set()
-        out = output_dir or os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "coderef-report")
+        out = output_dir or _default_report_root(project_path)
 
         def _prog(stage, done, total, detail=None):
             if progress_cb:

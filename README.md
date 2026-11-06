@@ -322,7 +322,7 @@ CodeRef 会落很多文件，但**用户只需要看两个入口**。其余产�
 
 | 入口 | 从哪来 | 看什么 |
 |---|---|---|
-| **项目评估台** `coderef-report/html/index.html` | `coderef_report` | 概览（结论）/ 架构（业务树 + 业务流程）/ 产品 F 轨 / UX U 轨 / **技术**（原始分项 + 证据锚点 + 技术分区图）；`audit.html` / `kg.html` / `wiki.html` 是它的详情页 |
+| **项目评估台** `<project>/.coderef/report/html/index.html` | `coderef_report` | 概览（结论）/ 架构（业务树 + 业务流程）/ 产品 F 轨 / UX U 轨 / **技术**（原始分项 + 证据锚点 + 技术分区图）；`audit.html` / `kg.html` / `wiki.html` 是它的详情页。**按项目隔离**，多项目交替跑不会互相覆盖入口 |
 | **架构治理看板** `gov_board.html` / `project_overview.html` | `coderef_gov_start(open_server=true)` / `coderef_gov_report` | 治理工作项流转、周期体检（L2 治理专用，与评估台定位不同） |
 
 ### 架构画布：三种视图，前缀已分离
@@ -388,7 +388,7 @@ coderef-ai/
 ├── config/                           # 配置（settings.py + 本地 config.json，含密钥，已 gitignore）
 ├── docs/                             # 文档 + changelog 更新日志归档
 ├── cache/                            # 运行时缓存（已 gitignore）
-├── coderef-report/                   # 输出报告（已 gitignore）
+├── .coderef/report/html/             # 项目侧评估台（index.html 唯一入口，按项目隔离）
 ├── setup.bat                         # Windows 配置向导
 ├── requirements.txt
 ├── MCP_SETUP.md / LICENSE / LICENSE-MIT-v4.md
