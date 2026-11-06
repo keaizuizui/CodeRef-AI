@@ -1057,10 +1057,14 @@ class Pipe:
             # U-49：只有图谱、没有可复用的审计结论时不得短路复用，
             # 否则既不落 findings JSON，又渲染出"审计未执行"的页面，
             # 后续每次重渲染都因找不到产物而静默失败。
-            if not _load_findings_json(project_path, r, out):
-                return False
+            # 先查图谱再载入 findings：反序时若图谱缺失/异常返回 False，
+            # 已载入的旧 findings 会留在 r 上，调用方回退全量审计后新旧叠加
+            # 导致重复计数（CodeRabbit major）。
             kg = load_knowledge_graph(project_path)
             if kg is None:
+                return False
+            if not _load_findings_json(project_path, r, out):
+                kg.close()
                 return False
             stats = kg.get_stats()
             kg.close()
@@ -1084,6 +1088,11 @@ class Pipe:
             logger.info("[audit] 策略=no_change，复用既有结论，未重扫")
             return True
         except Exception as e:
+            # 复用中途失败时清空已载入的既有结论，避免调用方回退全量审计
+            # 后新旧 findings 叠加（CodeRabbit major）。
+            r.findings = []
+            r.scan_ts = ""
+            r.kg_built_at = ""
             r.errors.append(f"reuse_no_change: {e}")
             return False
 

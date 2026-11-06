@@ -218,7 +218,10 @@ def _index_belongs_to(index_path: str, project_name: str) -> bool:
             head = f.read(4096)
     except OSError:
         return False
-    return project_name in head
+    # 只认页头标题的精确后缀（_page 写入 `{title} - {project_name}</title>`）：
+    # 裸子串会让 core / app 这类短项目名在别的项目 index 的内联 CSS 里误命中。
+    from html import escape
+    return f" - {escape(project_name, quote=False)}</title>" in head
 
 
 def _load_audit_findings(project_path: str) -> Optional[Dict]:

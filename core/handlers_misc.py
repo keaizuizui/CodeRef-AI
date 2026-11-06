@@ -208,7 +208,12 @@ def _report(a) -> str:
     # audit 会在 out_root 下落 findings JSON 并在 out_root/html 渲染；
     # render_report 直接在 out_html 渲染。两者必须同源，否则重渲染永远找不到产物（U-49）。
     out_html = os.path.abspath(a["output_dir"]) if a.get("output_dir") else None
-    out_root = os.path.dirname(out_html) if out_html else None
+    # 仅当输出目录本身叫 html 时才把父目录当审计根；否则调用方给的
+    # 自定义目录就是根——直接取 dirname 会把报告/产物写到无关的上级目录。
+    if out_html and os.path.basename(out_html).lower() == "html":
+        out_root = os.path.dirname(out_html)
+    else:
+        out_root = out_html
 
     def _refresh_card() -> str:
         """重算并落盘记分卡快照；成功返回空串（用于清除上一次的错误）。"""
