@@ -314,7 +314,7 @@ hr { border:none; border-top:1px solid #2a2d3a; margin:14px 0; }
 .footer { text-align:center; color:#6b7280; font-size:12px; padding:16px 0; }
 """
 
-# ── 评估台（v5.17）专用样式：四 Tab + 记分卡 ──
+# ── 评估台（v5.17 起）专用样式：五 Tab + 记分卡 ──
 _CONSOLE_CSS = """
 .tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
 .tab-btn { cursor:pointer; padding:8px 18px; background:#1a1d2e; border:1px solid #2a2d3a;
@@ -385,6 +385,21 @@ function scApply(j){
   }).join('');
   var rb = document.getElementById('sc-rows');
   if (rb) rb.innerHTML = rows;
+  // 技术 Tab 与概览同源：重新评估后一并重绘，避免两个 Tab 显示不同时刻的结论
+  var tb = document.getElementById('tech-rows');
+  if (tb) tb.innerHTML = (j.dimensions || []).map(function(d){
+    var s = d.status === 'ok' ? String(d.score)
+      : (d.status === 'not_applicable' ? '不适用' : '证据不足');
+    var raw = Object.keys(d.raw || {}).filter(function(k){
+      var v = d.raw[k]; return v !== '' && v !== null && v !== undefined;
+    }).slice(0, 8).map(function(k){
+      return k + '=' + d.raw[k];
+    }).join(' · ');
+    var ev = (d.evidence || []).join('、');
+    return '<tr><td>' + scEsc(d.name || d.id || '') + '</td><td>' + scEsc(d.weight)
+      + '</td><td>' + scEsc(s) + '</td><td>' + scEsc(raw || '-')
+      + '</td><td>' + scEsc(ev || '-') + '</td></tr>';
+  }).join('');
   var nb = document.getElementById('sc-notes');
   if (nb) nb.innerHTML = (j.notes || []).map(function(n){
     return '<p class="sc-note">' + scEsc(n) + '</p>';
@@ -1171,7 +1186,7 @@ class HtmlReportRenderer:
                 '<p class="sc-note">同一份记分卡的原始分项与证据锚点；口径、权重与阈值见'
                 '「概览 · 评估标准」。</p>'
                 '<div class="scroll-x"><table><thead><tr><th>维度</th><th>权重</th><th>得分</th>'
-                '<th>原始分项</th><th>证据锚点</th></tr></thead><tbody>'
+                '<th>原始分项</th><th>证据锚点</th></tr></thead><tbody id="tech-rows">'
                 + "".join(rows) + '</tbody></table></div>'
                 f'<p class="sc-note" style="margin-top:10px">置信度 '
                 f'{_esc(card.get("confidence", "-"))} · 证据覆盖 '

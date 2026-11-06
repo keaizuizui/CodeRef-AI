@@ -432,10 +432,12 @@ class InterpretationPlatform:
 
         # ── 唯一入口优先 ──
         project_name = os.path.basename(project_path.rstrip(os.sep))
+        # 默认目录只从 report_renderer 取，避免同一布局决定在两处表达（改一处漏一处）
+        from core.report_renderer import default_report_dir
         candidates = [
             # v5.18 起的项目侧隔离目录（U-51）
-            os.path.join(project_path, ".coderef", "report", "html", "index.html"),
-            # 旧版项目内输出目录
+            os.path.join(default_report_dir(project_path), "index.html"),
+            # 旧版项目内输出目录（兼容历史产物）
             os.path.join(project_path, "coderef-report", "html", "index.html"),
         ]
         report_index = next((p for p in candidates if os.path.isfile(p)), "")

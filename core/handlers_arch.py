@@ -23,7 +23,7 @@ class _ArchViewHandler(SimpleHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         # 原始路径含 `..`（含 %2e%2e）时直接 404：SimpleHTTPRequestHandler 会先
         # 规范化，`/.coderef/../index.html` 会被折叠成 `/index.html` 而误命中（U-50）
-        from core.report_console import has_unsafe_path
+        from core.http_path_guard import has_unsafe_path
         if has_unsafe_path(self.path):
             self.send_error(404)
             return
