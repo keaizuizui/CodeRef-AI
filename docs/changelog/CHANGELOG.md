@@ -4,6 +4,16 @@
 
 ---
 
+### v5.18.3 — 渲染器拆分：内容面板独立 + 首页输入收敛
+
+> 排班第三批：评估台渲染器从「一个类装五类面板」收敛为「编排 + 外壳」，面板只依赖项目路径与快照。
+
+- **新增 `core/report_panels.py`**：产品 / UX / 技术三个面板与快照读取、指标卡、百分比、锚点单元格等小工具迁出，渲染器只留三个注入点。
+- **新增 `core/html_util.py`**：`esc` / `attr` 转义公共实现，渲染器与面板共用，避免第二份转义代码。
+- **输入收敛**：`_render_index` / `_overview_panel` 的 8 个位置参数改为一个 `IndexInputs`（pr / kg_stats / wiki_dir / dimension_states / scorecard / arch_link / flow_link / layout_link）。
+- **回归**：渲染快照逐行对比，除页面生成时间外 **0 差异**；F1 矩阵、砍/改清单、待验证假设、Rage Map、技术评分表均正常产出；全量 pytest **269 全绿**。
+- **验证**：`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.18.2 — 两轨公共规则下沉（eval_common）
 
 > 排班第二批：把 F 轨与 U 轨重复的评估基础规则收敛为一份实现，消除两条轨悄悄分叉的漂移源。
