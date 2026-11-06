@@ -369,7 +369,8 @@ class CodeKnowledgeGraph:
             if row:
                 built_at = float(row[0])
                 return (time.time() - built_at) > max_age_hours * 3600
-        except Exception: pass
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[kg] 读取 built_at 失败，按过期处理: {e}")
         return True
 
     def get_built_at(self) -> Optional[str]:
@@ -382,7 +383,8 @@ class CodeKnowledgeGraph:
                 "SELECT value FROM meta WHERE key='built_at'").fetchone()
             if row:
                 return datetime.fromtimestamp(float(row[0])).strftime("%Y-%m-%d %H:%M:%S")
-        except Exception: pass
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[kg] 读取构建时间失败，按未知处理: {e}")
         return None
 
     # ═══════════════════════════════════════════════════════════════════

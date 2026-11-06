@@ -720,7 +720,9 @@ class Pipe:
             if progress_cb:
                 try: progress_cb(stage, done, total, detail)
                 except TaskCancelled: raise
-                except Exception: pass
+                except Exception as e:  # noqa: BLE001
+                    # 进度回调失败只影响进度显示，不影响审计结果
+                    logger.debug(f"[audit] 进度回调失败（忽略）: {e}")
 
         try:
             # 审计证据：记录本次扫描开始时间，供调用方区分"本次结果"与历史缓存

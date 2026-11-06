@@ -216,68 +216,65 @@ def _llm_refine(nodes: List[dict]) -> Tuple[List[dict], str]:
     return nodes, ("" if refined else "LLM 未能给出可用标签")
 
 
-def analyze(project_path: str, use_llm: bool = True) -> dict:
-    """构建业务叙事标注（确定性骨架 + 可选 LLM 补标注）。"""
-    pp = os.path.abspath(project_path)
-    db, nodes_raw, adj, module_of = _load_graph(pp)
-
+def _collect_modules(pp: str, nodes_raw: dict, module_of) -> List[str]:
+    """收集非测试、非 .coderef 的模块路径（确定性、去重排序）。"""
     modules: List[str] = []
-    if nodes_raw and module_of:
-        for n in nodes_raw.values():
-            if n.get("type") != "module":
-                continue
-            m = module_of(n, pp) or ""
-            if not m or m.split("/")[-1] == "__init__":
-                continue
-            if m.startswith(".coderef"):
-                continue
-            modules.append(m)
-    modules = sorted(dict.fromkeys(modules))
+    if not (nodes_raw and module_of):
+        return modules
+    for n in nodes_raw.values():
+        if n.get("type") != "module":
+            continue
+        m = module_of(n, pp) or ""
+        if not m or m.split("/")[-1] == "__init__":
+            continue
+        if m.startswith(".coderef"):
+            continue
+        modules.append(m)
+    return sorted(dict.fromkeys(modules))
 
+
+def _annotate_modules(pp: str, modules: List[str]) -> List[dict]:
+    """给每个模块打 actor / stage / value_node / anchor（静态启发式，E2）。"""
     anchors = _module_anchors(pp, modules)
     rows: List[dict] = []
     for m in modules:
-        actor = _classify_actor(m) or UNLABELED_ACTOR
-        stage = _classify_stage(m) or UNLABELED_STAGE
         rows.append({
             "module": m,
             "title": m.split("/")[-1].replace("_", " "),
-            "actor": actor,
-            "stage": stage,
+            "actor": _classify_actor(m) or UNLABELED_ACTOR,
+            "stage": _classify_stage(m) or UNLABELED_STAGE,
             "value_node": _is_value_node(m),
             "anchor": anchors.get(m, ""),
             "evidence_level": "E2",
         })
+    return rows
 
-    # 先补 LLM 标注再算交接点：否则「未归类 vs 已归类」会被误判成交接，
-    # 且 LLM 把两侧标成同一角色后，旧的 handoff 标记也不会撤销。
-    # by_mod 持有同一批 dict 引用，原地改写后仍然有效。
-    llm_note = ""
-    if use_llm and rows:
-        rows, llm_note = _llm_refine(rows)
 
-    # 模块级调用边（跨泳道/跨阶段 = 交接点）
+def _module_adjacency(pp: str, nodes_raw: dict, adj: dict, module_of,
+                      by_mod: Dict[str, dict]) -> Dict[str, List[str]]:
+    """把符号级调用边折叠成模块级邻接（只保留双方都在标注集内的边）。"""
     mod_adj: Dict[str, List[str]] = {}
-    by_mod = {r["module"]: r for r in rows}
     for src, tgts in (adj or {}).items():
-        sn = nodes_raw.get(src) or {}
-        sm = module_of(sn, pp) if module_of else ""
+        sm = module_of(nodes_raw.get(src) or {}, pp) if module_of else ""
         if not sm or sm not in by_mod:
             continue
         for t in tgts:
-            tn = nodes_raw.get(t) or {}
-            tm = module_of(tn, pp) if module_of else ""
+            tm = module_of(nodes_raw.get(t) or {}, pp) if module_of else ""
             if tm and tm != sm and tm in by_mod:
                 mod_adj.setdefault(sm, [])
                 if tm not in mod_adj[sm]:
                     mod_adj[sm].append(tm)
+    return mod_adj
 
+
+def _build_edges(mod_adj: Dict[str, List[str]],
+                 by_mod: Dict[str, dict]) -> tuple:
+    """生成模块级边并判定交接点：两侧都已判定才敢断言「跨」。"""
     edges: List[dict] = []
     handoff_count = 0
     for sm in sorted(mod_adj):
         for tm in sorted(mod_adj[sm]):
             a, b = by_mod[sm], by_mod[tm]
-            # 只有两侧都判定了才敢断言「跨」；任一侧 unknown 时不下判断
             cross_actor = (UNLABELED_ACTOR not in (a["actor"], b["actor"])
                            and a["actor"] != b["actor"])
             cross_stage = (UNLABELED_STAGE not in (a["stage"], b["stage"])
@@ -287,12 +284,12 @@ def analyze(project_path: str, use_llm: bool = True) -> dict:
                 handoff_count += 1
             edges.append({"from": sm, "to": tm, "handoff": handoff,
                           "cross_actor": cross_actor, "cross_stage": cross_stage})
+    return edges, handoff_count
 
-    # 归类口径：Y 轴（actor/泳道）是主要叙事维度，X 轴（stage/阶段）允许缺席。
-    # 「已归类」= actor 已判定；stage 未定的模块仍留在自己的泳道，
-    # 只是落在「未归类阶段」列，不因此丢失角色信息。
-    actor_labeled = sum(1 for r in rows if r["actor"] != UNLABELED_ACTOR)
-    stage_labeled = sum(1 for r in rows if r["stage"] != UNLABELED_STAGE)
+
+def _build_unknowns(db, rows: List[dict], actor_labeled: int,
+                    stage_labeled: int, llm_note: str) -> List[str]:
+    """把「推断而非确认」的边界逐条写清楚，供页面与 AI 如实披露。"""
     unknowns: List[str] = [
         "actor/stage 由路径与调用边启发式推断，不是业务方确认的口径",
         "跨泳道边只代表代码调用，不代表真实业务交接（可能由编排层代劳）",
@@ -308,43 +305,70 @@ def analyze(project_path: str, use_llm: bool = True) -> dict:
             f"{len(rows) - stage_labeled} 个模块未判定流程阶段，已归入「未归类阶段」列")
     if llm_note:
         unknowns.append(llm_note)
+    return unknowns
 
-    # ── 给 AI 直接消费的两份结构（人看的是画布，AI 读的是这些）──
-    # lanes：泳道分组（actor → 模块）；clusters：连通分量（"力聚合"的确定性等价，
-    # 只回答"哪些模块成簇"，不产坐标——AI 不需要像素位置，需要可复现的分组）。
+
+def _components(rows: List[dict], edges: List[dict],
+                by_mod: Dict[str, dict]) -> List[dict]:
+    """无向连通分量（"力聚合"的确定性等价：只回答哪些模块成簇，不给坐标）。"""
+    undirected: Dict[str, set] = {r["module"]: set() for r in rows}
+    for e in edges:
+        undirected[e["from"]].add(e["to"])
+        undirected[e["to"]].add(e["from"])
+    seen: set = set()
+    comps: List[dict] = []
+    for start in sorted(undirected):
+        if start in seen:
+            continue
+        stack = [start]
+        seen.add(start)
+        members: List[str] = []
+        while stack:
+            cur = stack.pop()
+            members.append(cur)
+            for nxt in sorted(undirected[cur]):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+        comps.append({
+            "id": f"c{len(comps) + 1}",
+            "modules": sorted(members),
+            "actors": sorted({by_mod[m]["actor"] for m in members}),
+            "stages": sorted({by_mod[m]["stage"] for m in members}),
+        })
+    return sorted(comps, key=lambda c: (-len(c["modules"]), c["id"]))
+
+
+def analyze(project_path: str, use_llm: bool = True) -> dict:
+    """构建业务叙事标注（确定性骨架 + 可选 LLM 补标注）。"""
+    pp = os.path.abspath(project_path)
+    db, nodes_raw, adj, module_of = _load_graph(pp)
+
+    modules = _collect_modules(pp, nodes_raw, module_of)
+    rows = _annotate_modules(pp, modules)
+
+    # 先补 LLM 标注再算交接点：否则「未归类 vs 已归类」会被误判成交接，
+    # 且 LLM 把两侧标成同一角色后，旧的 handoff 标记也不会撤销。
+    llm_note = ""
+    if use_llm and rows:
+        rows, llm_note = _llm_refine(rows)
+
+    by_mod = {r["module"]: r for r in rows}
+    mod_adj = _module_adjacency(pp, nodes_raw, adj, module_of, by_mod)
+    edges, handoff_count = _build_edges(mod_adj, by_mod)
+
+    # 归类口径：Y 轴（actor/泳道）是主要叙事维度，X 轴（stage/阶段）允许缺席。
+    # 「已归类」= actor 已判定；stage 未定的模块仍留在自己的泳道，
+    # 只是落在「未归类阶段」列，不因此丢失角色信息。
+    actor_labeled = sum(1 for r in rows if r["actor"] != UNLABELED_ACTOR)
+    stage_labeled = sum(1 for r in rows if r["stage"] != UNLABELED_STAGE)
+    unknowns = _build_unknowns(db, rows, actor_labeled, stage_labeled, llm_note)
+
+    # lanes：泳道分组（actor → 模块）；clusters：连通分量。
     lanes: Dict[str, List[str]] = {}
     for r in rows:
         lanes.setdefault(r["actor"], []).append(r["module"])
-
-    def _components() -> List[dict]:
-        undirected: Dict[str, set] = {r["module"]: set() for r in rows}
-        for e in edges:
-            undirected[e["from"]].add(e["to"])
-            undirected[e["to"]].add(e["from"])
-        seen: set = set()
-        comps: List[dict] = []
-        for start in sorted(undirected):
-            if start in seen:
-                continue
-            stack = [start]
-            seen.add(start)
-            members: List[str] = []
-            while stack:
-                cur = stack.pop()
-                members.append(cur)
-                for nxt in sorted(undirected[cur]):
-                    if nxt not in seen:
-                        seen.add(nxt)
-                        stack.append(nxt)
-            comps.append({
-                "id": f"c{len(comps) + 1}",
-                "modules": sorted(members),
-                "actors": sorted({by_mod[m]["actor"] for m in members}),
-                "stages": sorted({by_mod[m]["stage"] for m in members}),
-            })
-        return sorted(comps, key=lambda c: (-len(c["modules"]), c["id"]))
-
-    clusters = _components()
+    clusters = _components(rows, edges, by_mod)
 
     return {
         "version": __version__,

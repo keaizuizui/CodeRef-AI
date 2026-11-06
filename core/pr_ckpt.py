@@ -10,6 +10,8 @@ import os, json
 from datetime import datetime
 from typing import List
 
+from loguru import logger
+
 from core.pr_whitelist import _cdir, _phash, whitelist_list
 
 # ══ 模块级函数（v4.9.5 存量债治理第三波提取：checkpoint/单维检测/报告入口） ══
@@ -23,7 +25,9 @@ def _save(p: str, done: List[str]):
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"done": done, "ts": datetime.now().isoformat()}, f)
         os.replace(tmp, cp)  # 原子替换，避免多 Agent 并发时读到半写入的检查点
-    except Exception: pass
+    except Exception as e:  # noqa: BLE001
+        # 检查点写失败只影响断点续跑，不影响本次审计结果
+        logger.debug(f"[ckpt] 保存检查点失败（忽略）: {e}")
 
 def _load(p: str) -> set:
     try:
