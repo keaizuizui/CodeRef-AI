@@ -54,7 +54,7 @@ CodeRef 不靠宣称，靠可复现的硬指标（完整方法见后文「可靠
 
 ## 快速开始
 
-如果你是**非编程人员**：把这部分说明交给你的编程 AI，它会帮你完成安装、配置和第一轮分析。你真正要做的，是最后打开它生成的健康仪表盘和 Wiki，看懂自己的项目。如果你是**自己动手**：照下面四步走。
+如果你是**非编程人员**：把这部分说明交给你的编程 AI，它会帮你完成安装、配置和第一轮分析。你真正要做的，是最后打开它生成的**项目评估台**和 Wiki，看懂自己的项目。如果你是**自己动手**：照下面四步走。
 
 ### 1. 安装
 
@@ -191,7 +191,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 
 ## 知识图谱
 
-运行 audit / architecture / docs / memory_sync 后自动构建 SQLite 知识图谱，持久化到 `cache/kg/`，一次构建跨会话复用。
+运行 audit / architecture / docs / memory_sync 后自动构建 SQLite 知识图谱，持久化到 `<project>/cache/kg/`，一次构建跨会话复用。
 
 | 想知道什么 | query_type | 参数 |
 |-----------|-----------|------|
@@ -228,7 +228,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 | `coderef_target_arch_get` | 获取当前目标架构 JSON | 否 |
 | `coderef_target_adopt` | 游离一键纳入：游离/未建模模块按角色批量追加目标模块（dry_run 预览；幂等） | 否 |
 | `coderef_arch_gap` | 架构差距分析（核心）：9 类确定性差距，游离模块区分真游离/未建模并豁免 vendor/压缩产物噪声 | 否 |
-| `coderef_arch_canvas` | 可视化架构画布（三层自由拖拽、差距高亮、导出目标架构） | 否 |
+| `coderef_arch_canvas` | 业务架构画布：业务树 + 业务流程泳道（`with_flow`，默认开）；`format=data` 不渲染 HTML、直接返回结构化数据（`lanes`/`edges`/`clusters`）给 AI | 否 |
 | `coderef_flow_canvas` | 交互式流程画布：自动提取业务管线 + 数据流 | 否 |
 | `coderef_refactor_plan` | 差距清单 → 可执行重构任务卡 + 影响范围 + 验证标准 | 否 |
 | `coderef_arch_verify` | 四维对齐度评分（职责 40%+依赖 30%+业务 20%+健康 10%）+ 差距复检 | 否 |
@@ -243,7 +243,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 | `coderef_gov_workspace` | 多代码库聚合治理 | 否 |
 | `coderef_gov_schedule` | 定时体检：生成 run_cycle.py + 离期检查 | 否 |
 | `coderef_role_boundary` | 符号级职责越界检测 | 可选 |
-| `coderef_architecture` | 架构分析图谱 + 交互式 HTML 模块画布 | 否 |
+| `coderef_architecture` | 架构分析图谱 + 技术分区布局图（`arch_layout_*`，面向架构师/AI，非用户交付物） | 否 |
 | `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 是 |
 | `coderef_docs_read` | 按需读取已生成 Wiki 正文（返回内容而非路径） | 否 |
 | `coderef_query` | 知识图谱结构化查询（9 种查询类型） | 否 |
@@ -295,7 +295,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 
 | 工具 | 功能 | 需 LLM |
 |------|------|:---:|
-| `coderef_interpret` | 把确定性结论翻译成人话：health 健康总览 / dashboard 仪表盘 HTML / wiki / prompt / assets | 可选 |
+| `coderef_interpret` | 把确定性结论翻译成人话：health 健康总览 / dashboard（已归并评估台，直接返回其路径）/ wiki / prompt / assets | 可选 |
 
 ---
 
@@ -371,7 +371,7 @@ coderef-ai/
 │   ├── frontend_inspector.py         # 前端交互审查
 │   ├── code_analyzer.py / ast_parser.py / code_models.py   # AST 分析
 │   ├── code_knowledge_graph.py       # 知识图谱引擎（SQLite 持久化）
-│   ├── health_dashboard.py           # 健康仪表盘（零外部依赖 HTML）
+│   ├── health_dashboard.py           # 健康仪表盘（默认不再自动产出，健康读数统一看评估台）
 │   ├── wiki_generator.py / wiki_ir.py / wiki_compare.py / wiki_cross_verify.py  # Wiki 生成与交叉验证
 │   ├── flow_verify.py                # 流程合规验证
 │   ├── arch_audit.py / arch_gap_analyzer.py / arch_framework.py / target_arch_schema.py / refactor_task_generator.py / arch_alignment_verifier.py  # 架构治理
@@ -388,7 +388,7 @@ coderef-ai/
 ├── config/                           # 配置（settings.py + 本地 config.json，含密钥，已 gitignore）
 ├── docs/                             # 文档 + changelog 更新日志归档
 ├── cache/                            # 运行时缓存（已 gitignore）
-├── .coderef/report/html/             # 项目侧评估台（index.html 唯一入口，按项目隔离）
+├── .coderef/                         # 运行时产物：report/html 评估台、scorecard/findings（按项目隔离，已 gitignore）
 ├── setup.bat                         # Windows 配置向导
 ├── requirements.txt
 ├── MCP_SETUP.md / LICENSE / LICENSE-MIT-v4.md
@@ -456,7 +456,7 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 ## 更新日志
 
-> 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.14.3）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
+> 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.17.0）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
 ### 当前版本 v5.18.0 — 三轨评估（F 轨契合度 / B 轨条件触发 / U 轨只判阻断）+ 业务流程视图
 
@@ -468,82 +468,13 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 > - **页面与工具接入**：`POST /api/evaluate` 真实现（同项目同场景串行，写 `.coderef/product_fit.json` / `ux_fit.json` 后自动重渲染页面）；产品/UX Tab 直接展示结论、五问矩阵、Rage Map 与锚点；`coderef_frontend` 新增可选 `persona` / `journey`（不新增工具，工具总数仍 52）。
 > - **业务流程视图**（`core/business_semantics.py` + `core/arch_flow.py`）：在图谱事实与画布之间补一层业务叙事标注——`actor`（泳道）/ `stage`（流程阶段）/ `handoff`（交接点）/ `value_node`（交付点）。静态启发式给事实锚点，LLM 只做命名与归类；**判不出的进「未归类」并计数，不假装已归类**。布局确定性：X=阶段（触发→校验→执行→落库→通知→交付），Y=角色泳道，同一份标注必出同一张图。`coderef_arch_canvas` 默认同时产出业务树与流程泳道两张画布，架构 Tab 可切换。
 > - **U-49 修复**：根因在写入端——`_reuse_no_change` 只要图谱存在就短路复用，首轮不跑审计、不落 findings JSON。已改为「必须能读到 findings 才复用」，findings 同写项目侧 `.coderef/`，`/api/evaluate` 返回 `page_refreshed` 让页面在刷新失败时显式提示。
-> - **审查与验证**：三层审查（pyflakes → Brooks-Lint → CodeRabbit）0 新增 finding；全量 pytest 全绿；`check_version` 通过。
+> - **U-50 修复**：评估台与画布静态服务在路径规范化**前**拒绝含 `..` 的原始请求（含 `%2e%2e` / 双重编码），`GET /.coderef/../index.html` 返回 404，不再看起来像目录穿越未拦截。
+> - **U-51 修复**：报告产物按项目隔离——默认目录由工具仓共享的 `coderef-report/html/` 改为 `<project>/.coderef/report/html/`，`report` / `audit` / `docs` / 回环服务 / `interpret(dashboard)` 同源，多项目交替跑不再互相顶掉入口。
+> - **审查与验证**：三层审查（pyflakes → Brooks-Lint → CodeRabbit）0 新增 finding；全量 pytest **265 全绿**；`check_version` 通过；`coderef-src` 同步 SHA256 一致。
 
-### 历史版本 v5.17.0 — 项目评估台：聚合层 + 健康记分卡 + 回环轻后端
+### 历史版本
 
-> 承接用户 2026-11-04 反馈（"没必要单独给用户出聚合……skill 也应该内置在网页中"）：不新增第二份聚合报告，把聚合长进既有报告页，`index.html` 升级为**唯一用户入口「项目评估台」**；记分卡以页面 Tab + `.coderef/scorecard.json` 旁路产物呈现；页面自带仅回环的轻后端，点按钮即可评估，不依赖 AI 在旁。
-> - **评估台四 Tab**：概览（健康记分卡 + 评估标准）/ 架构（内嵌业务树画布）/ 产品 / UX（后两者 P0 只占位，不产出假结论）。
-> - **健康记分卡**（`core/scorecard.py`）：结构健康 / 架构对齐 / 审计发现 / 治理闭环 / 文档覆盖，全部确定性聚合、无 LLM；**证据不足标 unknown，不写 0 也不给满分**；无代码项目按 U-46 口径整体 `N/A`。
-> - **权重外置**：`core/scorecard_weights.json` 默认值 + 项目级 `.coderef/eval_config.json` 覆盖，页面「评估标准」面板把口径摊开。
-> - **回环轻后端**（`core/report_console.py`）：`GET /api/scorecard`、`GET /api/health`、`POST /api/config`；`POST /api/evaluate` 本版固定 501。仅回环绑定（含 Host 校验防 DNS rebinding）、项目路径服务端固定、无 CORS、POST 需同源 + JSON + 一次性 token、请求体 64KB 上限、静态读取仅放行白名单文件（无目录列举/穿越）。
-> - **CI 门禁**：新增 `coderef-gate.yml`，`python -m core.scorecard --json`，默认 warn，仓库变量显式开启才阻断。
-
-### 历史版本 v5.16.0 — 架构画布方向调整：业务架构大白话图
-
-> 承接用户 2026-09-21 反馈（模块图"没眼看"，给出「选品工作台」业务层级样例）：用户端画布从模块依赖图改为**业务架构大白话图**（入口 → 主功能 → 子功能 → 步骤链）；AI 自动归纳 + LLM 辅助大白话，人工在 skill 确认门确认框架；模块图降级为编程 AI 数据结构。版本按 SOP 升 minor（5.15.0 → 5.16.0）。
-> - **业务架构树自动归纳**（`core/arch_framework.py`）：入口层 + 主功能域 + 子功能 + 关联模块，确定性骨架；**LLM 辅助大白话**缺 key 静态兜底不编造。
-> - **前端业务树画布**（FrameworkView）：入口层 + 主功能卡（展开/折叠）+ 子功能步骤链 + 模块穿透；模块分区图移除用户端展示，数据降级为 `modules_graph`。
-> - **skill 框架确认门**：`coderef-governance-semi` 场景② 前置——AI 归纳业务树 → 暂停确认框架 → 落盘 `target_arch.business_flows`。
-> - **open_server 根路径引导页**（直达最新产物）；报告端空角色合并提示。
-
-### 历史版本 v5.15.0 — 架构可视化层整体重写（叙事式报告 + 分区画布，React 单文件前端）
-
-> 承接用户三轮反馈（"画布跟士兵方阵一样看不出项目到底怎样 / 文档跟数数一样看不懂"）：v5.14.5 的 KPI 卡仍属"数数"。本版**重写可视化层**——报告页改叙事式（30 秒三问：几大块·怎么跑·哪儿坏），画布改角色分区泳道（主干流粗箭头+违规红边+噪声边折叠探查）；引入 React+Vite 单文件前端（全内联零 CDN，离线可开）。v5.14.5 不单独发布并入本版；版本升 minor（5.14.5 → 5.15.0）。
-> - **叙事式决策者报告（默认首屏）**：一段话总述 → 系统怎么搭（角色卡链+未建模区）→ 系统怎么跑（业务流时序链）→ 哪里有问题（差距人话清单按严重度分组）；**每条差距可点击跳画布高亮定位**。
-> - **分区架构画布**：角色泳道分区替代"士兵方阵"；**三类边其余全折叠**——主干流粗蓝箭头、违规边红曲线、角色内部依赖淡灰（悬停/点击模块展开探查）；循环黄边黄点、孪生三色；缩放/适应/导出 JSON；节点不可拖拽（展示给决策者检查，非编辑器）。
-> - **React+Vite 单文件构建**：`frontend/arch-view/` 源码 + 构建产物 `core/web/arch_view.html`（克隆用户免 Node）；`core/arch_view.py` 数据整形+占位符注入。
-> - **skill 编排补充**：新增 `coderef-governance-semi` 半自动确认版（每阶段软确认门，解决外部 AI 一次性跑完用户无感知的问题）；`coderef-governance` 加版本路由。
-> - **三层审查**：Brooks-Lint Health 96；CodeRabbit 多轮收敛 0 finding；pyflakes 0 告警；全量 259 用例通过。
-
-### 历史版本 v5.14.3 — 外部审查 9 项修复 + 结构性债务治理（4 课题）
-
-> 承接外部审查清单（版本漂移 / pyflakes / 上帝模块 / 文档漂移 / shell=True / 声明边界 9 项）+ 后续 3 个留档课题治理；CodeRabbit 复审 0 finding。
-> - **A 级**：`pyproject.toml` version 同步 5.14.3（消除 pip 安装与运行时版本漂移）；`MCP_SETUP.md` 工具数 50→52、pandas 依赖修正、版本图更新；README「不修改代码」声明边界澄清（唯一例外 `change_guard ensure_git`）；`ast_parser` 死代码清理；`gitnexus_client` 3 处 shell=True 改列表参数。
-> - **B 级**：pyflakes 未使用 import 清理 ~90→15 处（76 处删除、跨模块隐式加载导入保留），零功能变更。
-> - **课题 1 · 版本号收敛**：版本号改为**单一真源 `core/version.py`**——`__init__.py` / `pyproject.toml`（`dynamic = ["version"]` 动态读取）/ `mcp_server` 均从此处取版本，**升版本只改一处**；文档快照由 `tools/check_version.py` 发布前校验防漂移。
-> - **课题 2 · 上帝模块检测维度**：`tech_debt_detector` 新增「文件过大」检测（>1000 行分级），填自身盲区——实测命中 Coderef 自身 20 个上帝模块（含外部审查点名的 4 个）。
-> - **课题 3 · f-string 无占位清理**：清理 111 处冗余 f 前缀，AST 语义等价验证通过。
-> - **课题 4 · 覆盖率监控**：`requirements-dev.txt`（pytest-cov）+ `[tool.coverage]` 配置 + `tools/coverage_report.py`，基线 15% 趋势追踪。
-> - **测试**：全量 164 用例通过 + py_compile 全绿 + 覆盖率脚本达标。
-
-### 历史版本 v5.14.2 — coderef_eval 契约加固（Brooks-Lint 审查修订）
-
-> 承接 2026-09-17 Brooks-Lint 审查：修复 coderef_eval 多指标聚合的诚实性缺口 + 3 个可维护性改进。
-> - **修复（硬指标部分降级误 PASS）**：多指标聚合时，任一硬指标（faithfulness/hallucination）评估失败（degraded）→ 整体降级 SKIP（不误 PASS），并在结果披露 `degraded_metrics` 清单；软指标降级仅排除出平均分且披露，不否决。防「硬指标评估失败被静默排除 → 硬伤被掩盖」。
-> - **改进**：模型返回越界 score 时在 breakdown 披露 `score_clamped`（原值 + 夹取值）；`LLMIntegration.parse_json_response` 公开解析入口（code_review/output_evaluator 复用，不再直调私有 `_try_parse_json`）；`coderef_eval` schema 的 metric enum 与 `output_evaluator.VALID_METRICS` 同源（新增指标只改一处）。
-> - **测试**：全量 164 用例通过；测试方回归用例已补齐（coderef-src\tests）。
-
-### 历史版本 v5.14.1 — 新增 coderef_eval 产出物语义评估（第 52 个工具）
-
-> 承接用户 2026-09-17 立项（参考 DeepEval 思路：给 LLM 输出写「语义级单测」，可进 CI）：新增独立工具 `coderef_eval`，给 CodeRef 自身的 LLM 产出物加语义质量门禁。
-> - **新增（coderef_eval）**：`core/output_evaluator.py` + `mcp_server.py` 注册（tools 51→52，Server 实例 wrapper 同步）。4 个语义指标 + 软硬判定——硬指标（faithfulness/hallucination）挂 → 整条 FAIL 一票否决，软指标（answer_relevancy/coherence）失分只降平均分；verdict=PASS 当且仅当硬指标全过 且 得分 ≥ threshold，防「致命错误被平均分稀释」。action=assert 单条断言 / score 批量报告（逐条明细 + 平均分 + 达标/硬失败计数）。
-> - **设计吸收**：软硬维度 + 一票否决（刘胡子大叔《给 Agent 打个分》）；LLM-as-judge 显式标注「AI 判断」、仅软门禁；缺 API key 硬阻断返回 SKIP 不降级编造；JSON 解析失败一次「强制仅 JSON」重试后降级不裸崩；text/context 长度截断防成本失控；零新依赖。
-> - **边界**：只评 CodeRef 自产的 LLM 文本，不评用户项目运行时的 LLM/RAG/Agent 产出（静态审计禁区）。
-> - **skill 编排补齐**：盘点 52 工具在 `skills/` 覆盖，补编 6 个此前未入 skill 的工具——`coderef_eval`（coderef-mcp 速查/路由 + coderef-probe 场景 B）、`coderef_arch_canvas`（coderef-mcp 审计引擎 + governance 场景②）、`coderef_dynamic_probe`（coderef-mcp 审计引擎 + probe 场景 A）、`coderef_gov_workspace`（governance 路由表 + 场景⑤）、`coderef_target_arch_get`（governance 场景②）、`coderef_task_cancel`（coderef-mcp 核心原则）；`coderef_version` 为探针不编。编排口径：`coderef_eval` 独立工具保持手动调用，不自动接入 review（第 2 期）。
-> - **DeepSeek 模型名更新（测试反馈驱动）**：默认模型 `deepseek-v4-flash` → `deepseek-flash`（旧名已下线，实测旧名 + json_object 约束输出跑偏为散文致 LLM 工具 JSON 解析失败→降级；官方文档确认）。
-> - **版本号**：5.13.11 → 5.14.1（新功能新工具，minor 升位，用户拍板）。
-
-**中间补丁链概要（v5.13.3 → v5.13.11，逐条明细见 CHANGELOG）：**
-
-- **v5.13.11**：U-44 审计全维度消费白名单 dir 排除 + U-45 overview 健康分联动最新审计缓存（164 用例通过）。
-
-- **v5.13.10**：change_guard 健康基线锚定在无持久化 git 身份仓库可成功（登记册 #3；`_HEALTH_IDENTITY` 临时身份，不写 git config）。
-- **v5.13.9**：U-43 design 登记 description 拦截未核验的采用数声明（防「登记假设当事实」）。
-- **v5.13.8**：U-41 arch_verify 健康维度接入 arch_audit 真实健康分（读 `summary.health`，修复 health 恒 0.5 占位）。
-- **v5.13.7**：operation_memory 提炼来源纳入仓库根规程文件（CODEREF.md/AGENTS.md）。
-- **v5.13.6**：U-39/U-40 图谱层同步目录排除失效（过滤口径修正）+ workflow_graph 接入白名单 dir 排除。
-- **v5.13.5**：U-38 观察项双修复——coderef_version 探针路径校验豁免 + memory_layer 图谱重建接入 whitelist dir。
-- **v5.13.4**：架构图产物收敛（`coderef_architecture` 一次调用即产出画布 + 总览降级内嵌 workflow_graph）。
-- **v5.13.3**：U-37① 再修（arch_gap 豁免尾段匹配，`copies.file` 带目录前缀形态生效）。
-
-### 上一版本 v5.13.2 — U-37 外部反馈三工具问题修复（arch_gap 白名单豁免 + flow_verify 实例化调用建边）
-
-> 承接测试方交接清单（U-37）：`arch_gap` 不消费白名单 `rule=duplicate` 豁免（已豁免符号仍报 true_duplicate）/ `flow_verify` 对「import（模块级/方法体内）+ 实例化对象方法调用」建边缺口（svc.run() 漏建边致真连通步骤判 outside/missing），2 项真实缺陷修复。
-> - **fix（U-37①）**：`arch_gap_analyzer._detect_duplicates` 新增 `_whitelist_duplicate_exemptions` 读取 whitelist `rule=duplicate` 条目（file+rule+category），簇的任一副本文件命中豁免即不再产出 duplicate gap；未豁免真重复 / `designed_parallel` 语义保留。
-> - **fix（U-37②）**：`ast_parser` 新增 `local_imports`/`local_assignments` 递归提取方法体内局部 import 与赋值；`_build_from_ast` 从两档 import + 实例化赋值推导「变量名 → 宿主类」映射，`tool=ResearchTool(cfg)` → `tool.run` 建 CALLS 边到 `ResearchTool.run`（精确主键匹配防跨类同名误绑），置于短名 LIKE 回退之前杜绝伪边；caller 定位新增 AST 结构兜底。
-> - **回归测试**：`tests/test_feedback_fixes.py` 新增 11 用例（豁免消费 / 局部+模块级实例化建边 / self 兄弟保护 / 不误绑 / verify 闭环），宿主 suite 58 用例 7 RED 全转绿，全量 154 用例通过。
-> - **版本号**：5.13.1 → 5.13.2（patch，缺陷修复；不改工具暴露面）。
+> v3.0 – v5.17.0 的逐版本记录（v5.17.0 评估台首版、v5.16.0 业务架构树、v5.15.0 可视化重写、v5.14.x 契约加固与债务治理、v5.13.x 补丁链）已完整归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。README 只保留当前版本状态，避免同一份更新日志维护两处。
 
 ---
 
