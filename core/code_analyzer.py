@@ -211,13 +211,16 @@ class CodeAnalyzer:
         'vendor', 'bundle', 'node_modules/.store',
         # CodeRef 自身运行时产物目录（分析它们只会把报告当代码审）
         '.coderef', '.gitnexus', 'coderef-report', 'coderef-wiki',
-        # 运行时缓存目录：多存临时产物/数据快照，审计无意义（且会误报硬编码凭据）
-        'cache',
     }
 
-    # 目录名模式：备份/归档目录是复制品，纳入审计会重复计数旧代码
+    # 仅在项目根出现时才忽略的运行时目录：同名子包（如 src/cache、app/cache）
+    # 是真实代码，不能按名字一刀切（CodeRabbit 复审）。
+    ROOT_ONLY_IGNORE_DIRS = {'cache'}
+
+    # 目录名模式：只认「明确的副本命名」——精确 backup/backups，或 backup_v<版本>。
+    # 不匹配 backup_service / db_backup 这类真实子包（CodeRabbit 复审）。
     IGNORE_DIR_PATTERNS = [
-        r'^(?:[a-zA-Z0-9]*_)?backups?(?:[_-][a-zA-Z0-9_-]*)?$',
+        r'^(?:backups?|backup_v\d+[a-zA-Z0-9_-]*)$',
     ]
     
     # 忽略的文件名模式（正则表达式）— 仅排除编译产物
@@ -391,14 +394,28 @@ class CodeAnalyzer:
         return self.EXTENSION_MAP.get(ext)
     
     def _should_ignore(self, path: Path) -> bool:
-        """判断是否应该忽略该文件/目录"""
+        """判断是否应该忽略该文件/目录（只按扫描根之下的路径分量判定）。"""
+        # 绝对路径的 path.parts 含项目上层的祖先目录（如 /data/backups/repo），
+        # 按全量 parts 匹配会把整项目误排除；这里只取扫描根之下的分量。
+        parts = path.parts
+        root = getattr(self, "_scan_root", None)
+        if root is not None:
+            try:
+                parts = path.relative_to(root).parts
+            except ValueError:
+                parts = path.parts
+
         # 1. 检查目录名是否在忽略列表中
-        if any(part in self.IGNORE_DIRS for part in path.parts):
+        if any(part in self.IGNORE_DIRS for part in parts):
             return True
 
-        # 1.1 备份/归档目录（复制品，审计会重复计数）
+        # 1.1 项目根下的运行时缓存目录（子包 src/cache 等不排除）
+        if parts and parts[0] in self.ROOT_ONLY_IGNORE_DIRS:
+            return True
+
+        # 1.2 明确的备份副本目录（backup / backups / backup_v<版本>）
         if any(re.search(p, part, re.IGNORECASE)
-               for p in self.IGNORE_DIR_PATTERNS for part in path.parts):
+               for p in self.IGNORE_DIR_PATTERNS for part in parts):
             return True
 
         # 1.5 检查额外忽略目录（由调用方通过 analyze_project 的 extra_ignore_dirs 传入）
@@ -431,18 +448,16 @@ class CodeAnalyzer:
         """扫描目录，获取所有代码文件路径（使用 os.walk 以容错处理损坏的符号链接）"""
         code_files = []
         root = Path(dir_path)
+        # 记录扫描根：_should_ignore 只按根之下的路径分量匹配（防祖先目录误排除）
+        self._scan_root = root
         
         try:
             for current_dir, dirs, files in os.walk(str(root), topdown=True):
                 current_path = Path(current_dir)
                 
-                # 跳过应忽略的目录
-                rel_parts = current_path.relative_to(root).parts
-                skip_this = any(self._should_ignore(Path(part)) for part in rel_parts) if rel_parts else False
-                if skip_this:
-                    dirs.clear()
-                    continue
-                
+                # 跳过应忽略的目录由下方 dirs 过滤统一完成：父层已剔除的目录
+                # 不会再进入 walk，无需按 rel_parts 二次判定（裸目录名判定会
+                # 把 src/cache 这类真实子包误排除）。
                 # 过滤子目录列表：把应忽略的移除掉
                 dirs[:] = [d for d in dirs if not self._should_ignore(current_path / d)]
                 
