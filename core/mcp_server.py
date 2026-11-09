@@ -697,6 +697,7 @@ class Server:
                              strategy=strat,
                              with_dashboard=bool(a.get("with_dashboard", False)))
             d = getattr(r, 'dashboard_path', '')
+            from core.result_envelope import for_audit
             # 结构化返回：携带落盘路径与明细统计，避免调用方只看得到摘要
             return json.dumps({
                 "status": "completed",
@@ -722,6 +723,8 @@ class Server:
                     "elapsed": getattr(r, "elapsed", 0),
                 },
                 "errors": getattr(r, "errors", []),
+                # 结论信封：调用方 AI 可直接转述给人（含归属/限制/不可下结论项）
+                "envelope": for_audit(len(r.findings), getattr(r, "errors", [])),
             }, ensure_ascii=False)
         elif n == "coderef_docs":
             # 与 coderef_audit 的 strategy 一致：非法枚举显式拒绝（结构化错误），

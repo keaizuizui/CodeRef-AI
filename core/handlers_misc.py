@@ -33,6 +33,7 @@ def _scan_tool(a: dict) -> str:
             f"{', '.join(sorted(valid))}")
     pp = a["project_path"]
     r = Pipe().run_single(pp, tool)
+    from core.result_envelope import for_scan
     return json.dumps({
         "status": "completed",
         "tool": "coderef_scan",
@@ -65,6 +66,7 @@ def _scan_tool(a: dict) -> str:
             "elapsed": r.elapsed,
         },
         "errors": r.errors,
+        "envelope": for_scan(len(r.findings), tool),
     }, ensure_ascii=False)
 
 
@@ -102,6 +104,12 @@ def _version(a: dict) -> str:
         except Exception as e:  # noqa: BLE001
             # 快报是增强项：失败不影响版本探针本身
             out["artifacts_report"] = {"error": str(e)}
+    # 使用契约：对方 AI 通常不加载本仓 skill，必须由工具自己声明解读边界
+    try:
+        from core.result_envelope import handshake
+        out["consumer_contract"] = handshake()
+    except Exception as e:  # noqa: BLE001
+        out["consumer_contract"] = {"error": str(e)}
     return json.dumps(out, ensure_ascii=False)
 
 
@@ -284,6 +292,8 @@ def _report(a) -> str:
             hr["serve"] = srv
         except Exception as e:  # noqa: BLE001
             hr["serve"] = {"ok": False, "error": str(e)}
+    from core.result_envelope import for_report
+    hr["envelope"] = for_report(bool(hr.get("ok")), str(hr.get("error") or ""))
     return json.dumps(hr, ensure_ascii=False)
 
 

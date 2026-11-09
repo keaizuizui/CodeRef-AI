@@ -199,6 +199,8 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 
 外部实测（`kuajingdianshang`，v5.18.5 / v5.18.6）出现过以下误读，按此解读可避免把工具缺陷或输入问题当成项目问题：
 
+- **先读 `envelope`（v5.18.12 起）**：高频工具返回顶层的 `envelope` 已给出 `usable_for_decisions` / `blocked_by[].owner` / `cannot_conclude` / `guardrails`。`owner=coderef` 才是工具缺陷；`owner=consumer` 是输入需先重跑/重定标；`by_design` 是已知取舍。向非技术用户转述时直接引用 `verdict` 与 `blocked_by[].human`，不要自行改写归属。
+
 - **`verify_findings` 的 `file_exists_only` 不等于确证**：它只证明「论断提到的文件存在」，不能证明论断成立；`confirmed` 也不代表语义正确，必须回读代码。
 - **`coderef_architecture` 不产出代码 findings**：它只做结构分析（图谱/工作流/画布）；`summary.findings=0` 不是"无问题"，代码问题看 `coderef_audit` / `coderef_scan`（返回带 `findings_note`）。
 - **`interpret(action=health)` 必须看新鲜度**：先查 `data_source` / `scan_ts` / `data_stale`；`true` 表示过期，`null` 表示年龄未知（按需重跑，不得当新鲜），`false` 才可当现状引用。

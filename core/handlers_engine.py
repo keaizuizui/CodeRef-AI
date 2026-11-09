@@ -299,5 +299,8 @@ def _interpret(a: dict) -> str:
     )
     r["tool"] = "coderef_interpret"
     r["project_path"] = pp
+    if a.get("action", "health") == "health":
+        from core.result_envelope import for_health
+        r["envelope"] = for_health(r)
     return json.dumps(r, ensure_ascii=False)
 
