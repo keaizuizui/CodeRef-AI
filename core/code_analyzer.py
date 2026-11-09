@@ -275,16 +275,34 @@ class CodeAnalyzer:
         except Exception as e:
             logger.debug(f"[CodeAnalyzer] GitNexus初始化检测失败: {e}")
     
+    @staticmethod
+    def _normalize_project_path(project_path: str) -> str:
+        """缓存键归一：相对/绝对、大小写、尾分隔符不同都应命中同一份缓存。"""
+        try:
+            return os.path.normcase(os.path.abspath(project_path))
+        except Exception:  # noqa: BLE001 —— 非法路径退回原字符串
+            return str(project_path)
+
+    def _cache_file(self, project_path: str, suffix: str) -> str:
+        """按归一化路径定位缓存文件；归一化文件不存在时回退旧版原始字符串缓存。"""
+        safe_name = hashlib.md5(
+            self._normalize_project_path(project_path).encode('utf-8')).hexdigest()
+        path = os.path.join(self._cache_dir, f"{safe_name}{suffix}")
+        if not os.path.exists(path):
+            legacy = os.path.join(
+                self._cache_dir,
+                f"{hashlib.md5(str(project_path).encode('utf-8')).hexdigest()}{suffix}")
+            if os.path.exists(legacy):
+                return legacy
+        return path
+
     def _cache_path(self, project_path: str) -> str:
         """获取项目对应的缓存文件路径"""
-        # 用项目路径的 hash 做文件名
-        safe_name = hashlib.md5(project_path.encode('utf-8')).hexdigest()
-        return os.path.join(self._cache_dir, f"{safe_name}.json")
-    
+        return self._cache_file(project_path, ".json")
+
     def _cache_snapshot_path(self, project_path: str) -> str:
         """获取项目文件快照路径（用于判断缓存是否过期）"""
-        safe_name = hashlib.md5(project_path.encode('utf-8')).hexdigest()
-        return os.path.join(self._cache_dir, f"{safe_name}_snapshot.json")
+        return self._cache_file(project_path, "_snapshot.json")
     
     def _compute_file_snapshot(self, project_path: str) -> Dict[str, Dict[str, float]]:
         """计算项目所有代码文件的快照（mtime + size），用于判断缓存是否过期
@@ -653,6 +671,10 @@ class CodeAnalyzer:
         self._current_project = project_path
         current_abs = {os.path.abspath(f) for f in current_files}
         changed_abs = {os.path.abspath(f) for f in changed_files}
+        # 调用方 changed_files 来自 memory_state 快照，可能比 analyzer 自身缓存
+        # 快照更旧（或 project_path 写法不同导致哈希不同），用自身快照补漂移文件，
+        # 避免编辑过的文件被当成未变而复用旧 CodeFile。
+        changed_abs |= self._snapshot_drift(project_path, current_files)
 
         kept: List[CodeFile] = []
         existing_abs: Set[str] = set()
@@ -692,6 +714,39 @@ class CodeAnalyzer:
             logger.warning(f"[CodeAnalyzer] 增量分析缓存写入失败: {e}")
         return cached
     
+    def _snapshot_drift(self, project_path: str,
+                        current_files: List[str]) -> Set[str]:
+        """对比 analyzer 自身文件快照，返回 mtime/size 已漂移的文件绝对路径。
+
+        快照缺失或为空时返回空集（保持旧行为），不因缺少比对基准而全量重解析。
+        """
+        try:
+            with open(self._cache_snapshot_path(project_path), "r",
+                      encoding="utf-8") as f:
+                saved = json.load(f)
+        except Exception:  # noqa: BLE001 —— 无快照/损坏时不做漂移判定
+            return set()
+        if not isinstance(saved, dict) or not saved:
+            return set()
+        by_abs = {}
+        for fp, meta in saved.items():
+            if isinstance(meta, dict):
+                by_abs[os.path.abspath(fp)] = meta
+        drifted: Set[str] = set()
+        for fp in current_files:
+            ap = os.path.abspath(fp)
+            old = by_abs.get(ap)
+            try:
+                mtime = os.path.getmtime(ap)
+                size = os.path.getsize(ap)
+            except OSError:
+                continue
+            if (old is None
+                    or abs(old.get("mtime", 0) - mtime) > 0.1
+                    or old.get("size") != size):
+                drifted.add(ap)
+        return drifted
+
     def _analyze_tech_stack(self, analysis: ProjectAnalysis) -> List[str]:
         """分析技术栈（实现提取至模块级 _tech_stack_summary）"""
         return _tech_stack_summary(analysis)

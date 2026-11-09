@@ -444,6 +444,16 @@ class MemoryLayer:
         return out
 
     @staticmethod
+    def _kg_exists(project_path: str) -> bool:
+        """图谱 DB 是否已存在（不存在时必须走全量重建，不能只读计数）。"""
+        try:
+            from core.arch_audit import locate_kg_db
+            return bool(locate_kg_db(project_path))
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[MemoryLayer] 图谱存在性判断失败，按缺失处理: {e}")
+            return False
+
+    @staticmethod
     def _kg_counts(project_path: str) -> dict:
         """只读图谱现有节点/边数（增量无变更时避免无谓重建）。"""
         try:
@@ -538,8 +548,13 @@ class MemoryLayer:
                 affected += self._dependents(analysis, affected)
             incremental = {"files": sorted(set(os.path.abspath(f) for f in affected))}
 
+        # 图谱 DB 缺失时增量只会建出残图（并写 built_at），必须强制全量重建。
+        kg_exists = self._kg_exists(project_path)
+        if not kg_exists:
+            incremental = None
+
         # 更新知识图谱（结构记忆）
-        if mode != "full" and not changed and not deleted:
+        if mode != "full" and not changed and not deleted and kg_exists:
             kg_stats = self._kg_counts(project_path)  # 无变更：不重建，只报现状
         else:
             kg_stats = self._update_knowledge_graph(project_path, analysis,

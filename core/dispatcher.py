@@ -487,13 +487,21 @@ def report(project_path: str, task_id: str) -> dict:
             freshness = env["freshness"]
 
     status_text = trace.get("status", "")
-    usable = status_text == "completed" and not blocked
-    verdict = step_verdict or {
+    # fail:continue 的失败步骤不会让 trace 变 failed，必须单独收集，否则
+    # 整条链会被当成「可用」并保留成功话术（CodeRabbit major）。
+    failed_steps = [s.get("id") for s in trace.get("steps") or []
+                    if s.get("status") == "failed"]
+    usable = status_text == "completed" and not blocked and not failed_steps
+    chain_verdict = {
         "completed": f"调度完成：{trace.get('intent')} 链共 "
                      f"{len(trace.get('steps') or [])} 步",
         "paused": "调度暂停：存在需要用户决策的步骤，链未继续",
         "failed": "调度失败：链在中途停止，请按步骤索引排查",
     }.get(status_text, f"调度状态：{status_text}")
+    # 只有整条链 completed 时才用步骤结论；paused/failed 一律取链级结论。
+    verdict = step_verdict if status_text == "completed" and step_verdict else chain_verdict
+    if failed_steps:
+        verdict += f"（失败步骤: {', '.join(str(s) for s in failed_steps)}）"
     env = envelope(verdict, usable=usable, blocked_by=blocked,
                    owner_actions=owner_actions,
                    cannot_conclude=["未执行步骤的任何结论"],
