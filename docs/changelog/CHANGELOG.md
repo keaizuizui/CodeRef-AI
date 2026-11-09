@@ -4,6 +4,16 @@
 
 ---
 
+### v5.18.9 — 陈旧输入防呆：`coderef_version` 附带派生产物新鲜度快报
+
+> 承接「对方输入陈旧」课题。不做内容指纹/不改评分，只在版本探针上增加一份只读快报，让调用 AI 一行确认「哪些产物、生成于何时、代码是否已比它新」，自行决定是否先重跑。
+
+- **`coderef_version` 可选传 `project_path`**：返回新增 `artifacts_report`——target_arch / 治理库 / audit findings / scorecard / 图谱 / 评估台 / Wiki / 产品契合 / UX 走查 / 业务语义标注，逐项给出是否存在、生成时间、`age_days`、约定时效 `suggested_max_age_days`、`stale_by_age`、`code_newer`（代码最后修改晚于产物）与 `refresh_hint`。不传路径时行为不变（仍只返回版本号，零副作用）。
+- **代码修改时间复用统一扫描范围**：`latest_code_mtime` 通过 `CodeAnalyzer.scan_directory` 计算，与审计同一套忽略规则，不重复造口径。
+- **skill 加规则**：`coderef-mcp` 增「引用任何历史产物/报告前先跑 `coderef_version(project_path)`；`code_newer` / `stale_by_age` 为真时先按 `refresh_hint` 重跑」。
+- **对方现场实测**：`target_arch` 生成于 2026-09-01（69.2 天前，`code_newer=true`）、治理库 64.6 天前 → 正是 D-4 的陈旧定标与治理 100 分假象来源；同一次调用即可看到近期产物（audit/scorecard/图谱 `code_newer=false`）无需重跑。
+- **验证**：新增 4 例（无路径保持极简、旧产物被标记 `code_newer`、传路径返回清单、无效路径空报告）；全量 pytest **291 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.18.8 — 老口径收尾：扫描范围统一、模块数口径显式化、导入解析修正
 
 > 承接外部审计第二轮遗留项。本批不改变分析能力，只把「同一项目不同工具扫到不同文件集 / 同一个词在不同工具里数字不同 / 子工程内导入被判缺失」这三类长期误读从根上收掉。

@@ -1059,9 +1059,21 @@ BUILTIN_TOOLS: List[Dict] = [
                         "轻量版本探针（只读、零副作用）：返回当前 CodeRef-AI 进程加载的版本号。\n"
                         "一行调用即可断言 版本==target，杜绝「结果字段反推版本」的进程新旧误判\n"
                         "（测试方 2026-08-31 反馈：v5.12.6 首探即因进程未重启加载旧代码而误判）。\n"
-                        "无需 project_path，秒级返回，不触发任何扫描/图谱构建。"
+                        "可选传 project_path：额外返回派生产物新鲜度快报（target_arch / 治理库 /\n"
+                        "audit findings / scorecard / 图谱 / 评估台 / Wiki / 产品与 UX 评估的生成时间、\n"
+                        "约定时效、代码是否比产物更新、建议刷新方式）。引用任何历史结论前先看本快报，\n"
+                        "避免把旧报告当现状。不传 project_path 时只返回版本号，秒级返回。"
                     ),
-                    "inputSchema": {"type": "object", "properties": {}, "required": []},
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project_path": {
+                                "type": "string",
+                                "description": "可选。被测项目路径；传入时附带派生产物新鲜度快报",
+                            },
+                        },
+                        "required": [],
+                    },
                 },
         {
                         "name": "coderef_eval",

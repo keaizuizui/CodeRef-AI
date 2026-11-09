@@ -83,14 +83,26 @@ def _version(a: dict) -> str:
 
     测试方反馈：靠「结果字段反推版本」会因进程未重启加载旧代码而误判进程新旧，
     需一行调用即可断言 版本==target。只读、零副作用、不触发扫描/图谱构建。
+
+    传入 project_path 时额外返回派生产物新鲜度快报（各产物生成时间、是否
+    早于代码最后修改、建议刷新方式），供调用方判断是否要先重跑再引用结论。
     """
     from core.mcp_server import PKG_VERSION
-    return json.dumps({
+    out = {
         "status": "completed",
         "tool": "coderef_version",
         "name": "coderef-ai",
         "version": PKG_VERSION,
-    }, ensure_ascii=False)
+    }
+    pp = a.get("project_path")
+    if pp:
+        try:
+            from core.artifact_freshness import report
+            out["artifacts_report"] = report(pp)
+        except Exception as e:  # noqa: BLE001
+            # 快报是增强项：失败不影响版本探针本身
+            out["artifacts_report"] = {"error": str(e)}
+    return json.dumps(out, ensure_ascii=False)
 
 
 def _eval(a: dict) -> str:
