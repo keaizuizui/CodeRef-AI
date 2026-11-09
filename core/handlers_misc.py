@@ -73,6 +73,18 @@ def _scope(a: dict) -> str:
     return json.dumps(res, ensure_ascii=False)
 
 
+def _dispatch_metrics(a: dict) -> str:
+    """观测聚合（coderef_dispatch_metrics，5.19.5）。"""
+    from core.audit_log import metrics
+    try:
+        days = int(a.get("days", 7) or 7)
+    except (TypeError, ValueError):
+        days = 7
+    r = metrics(a["project_path"], days=days)
+    r["tool"] = "coderef_dispatch_metrics"
+    return json.dumps(r, ensure_ascii=False)
+
+
 def _scan_tool(a: dict) -> str:
     """运行单个审计维度（coderef_scan），返回结构化 JSON findings。
 

@@ -4,6 +4,16 @@
 
 ---
 
+### v5.19.5 — 观测层：审计日志 + 指标聚合 + 违规注入测试
+
+> 5.19.x 收尾。防退化：把防护点的命中/放行/绕过落盘，给 eval 扩展与对抗测试提供数据地基。
+
+- **新增 `core/audit_log.py`**：JSONL 按日轮转（`.coderef/audit_log/YYYYMMDD.jsonl`），记录 `tool` / `gate`（hit/pass/miss）/ `memory_digest` / `freshness` / `scope` / `blocked`，进程级 `session`；写入失败静默，绝不影响主流程。
+- **接入 `Server._run`**：闸门命中/放行、blocked 原因、记忆注入事实、信封 freshness、scope 规则数全部落盘；只读/轻量工具同样记录。
+- **新增 `coderef_dispatch_metrics`**（工具数 57→58）：聚合闸门命中率、阻断 Top 与原因、记忆命中率、新鲜度事件与刷新动作 Top、scope 生效次数、dispatcher 任务结局（completed/paused/failed）。
+- **违规注入测试集**：block 模式下未 recover 直接 audit → blocked 且日志可追溯 G-A；scope add 后实际排除；stale 查询带 `stale=true` + `sync_task_id`。
+- **验证**：新增 6 例回归；全量 pytest **371 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.19.4 — 形态 B：LLM 意图层（可选增强）
 
 > 5.19.x 层2 第二版。让不会选链的用户用自然语言表达目标；LLM 只做意图分类，不碰结论。

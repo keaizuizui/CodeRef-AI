@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.19.4** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.19.5** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -11,7 +11,7 @@
 
 ## 它是什么
 
-CodeRef-AI 通过 MCP 协议暴露 **57 个工具**，同时服务两类人：
+CodeRef-AI 通过 MCP 协议暴露 **58 个工具**，同时服务两类人：
 
 - **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险；编程 AI（或 CodeRabbit）给出论断时，还能用静态图谱做确定性核验，再决定采不采信。
 - **非编程人员的技术助理**：把代码变成通俗的健康仪表盘、Wiki 与流程确证。你只需定义「入口 A 应该依次经过步骤 B→C→D」，`coderef_flow_verify` 就会在调用链里给出确证 / 在管线 / 存疑 / 缺失四种状态——不用读代码，也能确认项目有没有按你的设想运转。
@@ -20,9 +20,9 @@ CodeRef-AI 通过 MCP 协议暴露 **57 个工具**，同时服务两类人：
 
 ---
 
-## 三条编排主线：57 个工具不是散件，而是一条主链
+## 三条编排主线：58 个工具不是散件，而是一条主链
 
-57 个工具虽多，但 CodeRef 把它们整理成**三条互补的编排主线（Skill）**，编程 AI 只需知道自己该在哪条链上；L1/L2/L3 之间用**编排 gate 强制转场**（命中条件才转，简单任务不被反复切链拖累），并由 `coderef-mcp` 的「顶层入口判定」在动身前先选对链：
+58 个工具虽多，但 CodeRef 把它们整理成**三条互补的编排主线（Skill）**，编程 AI 只需知道自己该在哪条链上；L1/L2/L3 之间用**编排 gate 强制转场**（命中条件才转，简单任务不被反复切链拖累），并由 `coderef-mcp` 的「顶层入口判定」在动身前先选对链：
 
 ```
 L1  coderef-probe      · 小阶段 · 变更驱动的轻量探查与防护（类 CodeRabbit）
@@ -99,12 +99,12 @@ CodeRef 不靠宣称，靠可复现的硬指标（完整方法见后文「可靠
 
 ### 调度层 coderef-dispatcher（v5.19.3 起，形态 A）
 
-编程 AI 从「编排 57 个工具」降级为「调用 4 个调度工具」，中间工具返回不再逐条进主 AI 上下文：
+编程 AI 从「编排 58 个工具」降级为「调用 4 个调度工具」，中间工具返回不再逐条进主 AI 上下文：
 
 - **`coderef_plan`**：意图（probe / single_audit / recover / governance / asset）→ 计划卡（步骤、预计工具数与时长、用户决策点），纯规划不执行。
 - **`coderef_execute`**：按计划或意图执行，逐步过前置闸门；缺 recover 先 recover、图旧先 sync（违规自动补齐），G-C 定标缺失等需用户决策的步骤**暂停浮出**，不替用户做治理决策；默认后台执行返回 `task_id`。
 - **`coderef_dispatch_status` / `coderef_dispatch_report`**：前者看当前步骤与闸门记录，后者取最终摘要信封（结论 + freshness + KL + `owner_actions` + 折叠的步骤索引 + 上下文节省比）。
-- **链定义**：`core/dispatch_chains.yaml` 是唯一事实源（L1/L2/L3 步骤、失败策略、决策点）。轨迹落盘 `.coderef/dispatch/<task_id>.json`；YAML 缺失/损坏时 `coderef_plan` 明确报错并给出裸工具回退建议，57 个工具照常可用。
+- **链定义**：`core/dispatch_chains.yaml` 是唯一事实源（L1/L2/L3 步骤、失败策略、决策点）。轨迹落盘 `.coderef/dispatch/<task_id>.json`；YAML 缺失/损坏时 `coderef_plan` 明确报错并给出裸工具回退建议，58 个工具照常可用。
 
 ### LLM 意图层（v5.19.4 起，形态 B，可选）
 
@@ -112,6 +112,12 @@ CodeRef 不靠宣称，靠可复现的硬指标（完整方法见后文「可靠
 - **无 Key 硬阻断**：未配置有效 API Key 时返回 `status=blocked` + `mode=rule`，提示改用 `intent` 枚举（形态 A），不猜不编。
 - **置信度不足不执行**：低于 0.6 或返回不可解析时 `status=needs_confirmation` + 候选意图，交由用户/主 AI 确认。
 - **确认门**：`coderef_execute` 不接受未确认的 `intent_text`——必须先 `coderef_plan(intent_text=...)` 拿计划卡，再 `coderef_execute(plan_id=...)`。
+
+### 观测层（v5.19.5 起）
+
+- **审计日志**：每次工具调用的防护判定落盘 `.coderef/audit_log/YYYYMMDD.jsonl`（按日轮转），字段含 `tool` / `gate{result: hit|pass|miss, hits, mode}` / `memory_digest{injected, available, items}` / `freshness{code_newer, stale_reason, refresh_action}` / `scope{rules}` / `blocked{gate, reason}`，同一 MCP 进程共享 `session`。
+- **`coderef_dispatch_metrics`**：聚合最近 N 天（默认 7）日志，输出闸门命中率、阻断 Top 与原因 Top、记忆注入命中率、新鲜度事件与刷新动作 Top、scope 生效次数、dispatcher 任务结局。只统计实际落盘记录，empty 就是 empty，不做推断补齐。
+- **违规注入测试**：block 模式下「未 recover 直接 audit」被 G-A 拦截且日志可追溯；scope add 后 audit 实际排除；stale 查询带 `stale=true` 与 `sync_task_id`。
 
 ---
 
@@ -279,7 +285,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 
 ---
 
-## 57 个 MCP 工具速查
+## 58 个 MCP 工具速查
 
 > 完整功能、参数与「意图 → 工具」路由见 `skills/` 各 Skill 与 `MCP_SETUP.md`。这里按引擎列出。
 
@@ -327,6 +333,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 | `coderef_execute` | dispatcher 执行链：逐步入闸门、违规自动补齐、需用户决策处暂停；默认后台返回 task_id | 否 |
 | `coderef_dispatch_status` | dispatcher 任务状态：当前步骤、闸门命中与补齐记录、暂停决策点 | 否 |
 | `coderef_dispatch_report` | dispatcher 最终摘要信封：结论 + freshness + KL + owner_actions + 折叠的步骤索引 | 否 |
+| `coderef_dispatch_metrics` | 观测聚合：闸门命中率 / 阻断 Top / 记忆命中率 / 新鲜度与刷新事件 / scope 生效 / dispatcher 结局（读 `.coderef/audit_log`） | 否 |
 | `coderef_task_status` | 后台任务状态查询 | 否 |
 | `coderef_task_cancel` | 后台任务取消（协作式收尾） | 否 |
 | `coderef_version` | 轻量版本探针（只读、零副作用）：秒级返回当前加载的版本号，无需 project_path，用于断言「进程加载版本 == 目标版本」，杜绝进程未重启导致的结果误判 | 否 |
@@ -430,7 +437,7 @@ CodeRef 会落很多文件，但**用户只需要看两个入口**。其余产�
 ```
 coderef-ai/
 ├── core/                             # 核心引擎
-│   ├── mcp_server.py                 # MCP Server 入口（57 个工具）
+│   ├── mcp_server.py                 # MCP Server 入口（58 个工具）
 │   ├── pipeline_runner.py            # 管线引擎（audit/architecture/docs + 知识图谱）
 │   ├── tool_registry.py              # 工具注册中心
 │   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
