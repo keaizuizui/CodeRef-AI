@@ -390,6 +390,7 @@ class InterpretationPlatform:
 
         # 4. 已审计 → 计算健康分并解读
         score = _compute_score(findings)
+        age_h = _scan_age_hours(data)  # 只解析一次，供下方两处复用
         high = [f for f in findings if str(f.get("tier") or f.get("severity") or "").lower() in ("high", "critical")]
         medium = [f for f in findings if str(f.get("tier") or f.get("severity") or "").lower() == "medium"]
         low = [f for f in findings if str(f.get("tier") or f.get("severity") or "").lower() == "low"]
@@ -420,10 +421,10 @@ class InterpretationPlatform:
             "top_risks": top_risks,
             "data_source": _describe_data_source(data),
             "scan_ts": data.get("scan_ts"),
-            # 结构化新鲜度：调用方（人和 AI）可据此决定是否重跑审计
-            "data_age_days": (round(_scan_age_hours(data) / 24, 1)
-                              if _scan_age_hours(data) is not None else None),
-            "data_stale": bool((_scan_age_hours(data) or 0) > _STALE_AUDIT_HOURS),
+            # 结构化新鲜度：调用方（人和 AI）可据此决定是否重跑审计。
+            # 三态：true=过期 / false=未过期 / null=年龄未知（不得当作新鲜）。
+            "data_age_days": round(age_h / 24, 1) if age_h is not None else None,
+            "data_stale": (None if age_h is None else age_h > _STALE_AUDIT_HOURS),
             "kg_stats": kg_stats,
             "prompt": prompt,
             "summary": summary,

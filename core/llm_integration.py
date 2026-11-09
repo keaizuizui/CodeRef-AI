@@ -114,28 +114,35 @@ def _load_llm_config_from_settings() -> LLMConfig:
             os.path.join(os.getcwd(), "config", "config.json"),
         ]
         for cfg_path in [p for p in config_paths if p]:
-            if os.path.exists(cfg_path):
+            if not os.path.exists(cfg_path):
+                continue
+            # 单个候选损坏不能终止后续查找：用户级配置写坏时，
+            # 工具仓/工作目录里仍可能有可用 key（外部复审 minor）。
+            try:
                 with open(cfg_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                api_key = data.get("llm_api_key", "") or data.get("api_key", "")
-                if api_key and api_key != "ollama":  # "ollama" 是占位符，不算有效 key
-                    provider_str = data.get("llm_provider", "deepseek")
-                    provider_map = {
-                        "deepseek": LLMProvider.DEEPSEEK,
-                        "openai": LLMProvider.OPENAI,
-                        "ollama": LLMProvider.OLLAMA,
-                        "custom": LLMProvider.CUSTOM,
-                    }
-                    return LLMConfig(
-                        provider=provider_map.get(provider_str, LLMProvider.DEEPSEEK),
-                        api_key=api_key,
-                        base_url=data.get("llm_base_url", data.get("base_url", "https://api.deepseek.com")),
-                        model=data.get("llm_model", data.get("model_name", "deepseek-flash")),
-                        temperature=float(data.get("llm_temperature", data.get("temperature", 0.7))),
-                        max_tokens=int(data.get("llm_max_tokens", data.get("max_tokens", 4096))),
-                    )
-                else:
-                    logger.debug(f"config.json 中 api_key 为占位符或空，跳过: {cfg_path}")
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"[llm] 读取配置失败，尝试下一个 {cfg_path}: {e}")
+                continue
+            api_key = data.get("llm_api_key", "") or data.get("api_key", "")
+            if api_key and api_key != "ollama":  # "ollama" 是占位符，不算有效 key
+                provider_str = data.get("llm_provider", "deepseek")
+                provider_map = {
+                    "deepseek": LLMProvider.DEEPSEEK,
+                    "openai": LLMProvider.OPENAI,
+                    "ollama": LLMProvider.OLLAMA,
+                    "custom": LLMProvider.CUSTOM,
+                }
+                return LLMConfig(
+                    provider=provider_map.get(provider_str, LLMProvider.DEEPSEEK),
+                    api_key=api_key,
+                    base_url=data.get("llm_base_url", data.get("base_url", "https://api.deepseek.com")),
+                    model=data.get("llm_model", data.get("model_name", "deepseek-flash")),
+                    temperature=float(data.get("llm_temperature", data.get("temperature", 0.7))),
+                    max_tokens=int(data.get("llm_max_tokens", data.get("max_tokens", 4096))),
+                )
+            else:
+                logger.debug(f"config.json 中 api_key 为占位符或空，跳过: {cfg_path}")
     except Exception as e:
         logger.debug(f"读取 config.json 失败: {e}")
 

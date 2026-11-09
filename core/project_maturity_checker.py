@@ -246,20 +246,39 @@ class ProjectMaturityChecker:
     # 内容扫描的硬上限（秒）：成熟度检查共 8 个维度、多次复用扫描，
     # 单一维度耗时不设上限会把整条 audit 管线拖死（外部实测 >30 分钟无响应）。
     _SCAN_DEADLINE_SEC = 25.0  # 整次 check() 内所有 _scan_content 合计预算
+    # 任意层级都排除：环境/工具产物/第三方包缓存
     _SKIP_DIRS = {"__pycache__", "node_modules", ".git", "venv", ".venv", "env",
-                  "Lib", "lib", "site-packages", "dist-packages", "cache", "data",
-                  "output", "dist", "build", ".ms-playwright", ".coderef"}
+                  "Lib", "site-packages", "dist-packages", ".ms-playwright",
+                  ".coderef"}
+    # 仅项目根排除：lib/data/cache 等可能是真实业务包名（src/data、app/cache），
+    # 任意层级跳过会让日志/健康检查/异常处理检查出现假缺失（外部复审 minor）。
+    _ROOT_ONLY_SKIP_DIRS = {"lib", "data", "cache", "output", "dist", "build"}
 
     def _scan_content(self, project_path: str, pattern: str, file_ext: str = ".py") -> bool:
         """扫描项目文件内容，检查是否包含某模式（带目录排除与总预算超时）。"""
         import time as _time
+        from core.pr_whitelist import whitelist_exclude_dirs, path_hits_excluded_dir
         rgx = re.compile(pattern, re.IGNORECASE)
+        excl_dirs = whitelist_exclude_dirs(project_path)
+        root_abs = os.path.abspath(project_path)
         if self._scan_deadline is None:
             self._scan_deadline = _time.monotonic() + self._SCAN_DEADLINE_SEC
         for root, dirs, files in os.walk(project_path):
-            dirs[:] = [d for d in dirs if not d.startswith(".")
-                       and d not in self._SKIP_DIRS
-                       and "backup" not in d.lower()]
+            at_root = os.path.abspath(root) == root_abs
+
+            def _keep(d: str) -> bool:
+                if d.startswith(".") or d in self._SKIP_DIRS:
+                    return False
+                if d in self._ROOT_ONLY_SKIP_DIRS and not at_root:
+                    return True  # 子目录同名包保留
+                if d in self._ROOT_ONLY_SKIP_DIRS:
+                    return False
+                if "backup" in d.lower():
+                    return False
+                rel = os.path.relpath(os.path.join(root, d), project_path)
+                return not path_hits_excluded_dir(rel, excl_dirs)
+
+            dirs[:] = [d for d in dirs if _keep(d)]
             for f in files:
                 if not f.endswith(file_ext):
                     continue

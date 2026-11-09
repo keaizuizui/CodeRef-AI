@@ -98,6 +98,72 @@ def _find_path(project_path: str, patterns: tuple):
     return hits
 
 
+def _artifact_item(key: str, name: str, patterns: tuple, stale_days: int,
+                   refresh: str, project_path: str, code_mtime) -> dict:
+    """单个产物的新鲜度条目（不存在时也返回条目，便于调用方看到应产出什么）。"""
+    candidates = _find_path(project_path, patterns)
+    if not candidates:
+        return {"key": key, "name": name, "exists": False,
+                "path": patterns[0], "refresh_hint": refresh}
+    # glob 命中多个：取修改时间最新的那个
+    best = None
+    for cand in candidates:
+        m, extra = _mtime_of(cand)
+        if m is None:
+            continue
+        if best is None or m > best[0]:
+            best = (m, cand, extra)
+    if best is None:
+        return {"key": key, "name": name, "exists": False,
+                "path": patterns[0], "refresh_hint": refresh}
+
+    mtime, path, extra = best
+    age_days = round((datetime.now().timestamp() - mtime) / 86400, 1)
+    item = {
+        "key": key,
+        "name": name,
+        "exists": True,
+        "path": os.path.relpath(path, project_path).replace(os.sep, "/"),
+        "modified_at": _iso(mtime),
+        "age_days": age_days,
+        "suggested_max_age_days": stale_days,
+        "stale_by_age": age_days > stale_days,
+        # 代码比产物更新 = 产物可能没覆盖最新代码（启发式，供调用方判断）
+        "code_newer": bool(code_mtime and mtime < code_mtime),
+        "refresh_hint": refresh,
+    }
+    if extra is not None:
+        item["md_count"] = extra
+    return item
+
+
+def _kg_item(project_path: str, code_mtime) -> dict:
+    """知识图谱条目（db 路径由 arch_audit 统一解析，缺失时给出刷新方式）。"""
+    try:
+        from core.arch_audit import locate_kg_db
+        kg_db = locate_kg_db(project_path)
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[freshness] 图谱定位失败: {e}")
+        kg_db = None
+    if not kg_db:
+        return {"key": "kg_db", "name": "知识图谱", "exists": False,
+                "path": "", "refresh_hint": "coderef_memory(action=sync)"}
+    mtime, _ = _mtime_of(kg_db)
+    if mtime is None:
+        return {"key": "kg_db", "name": "知识图谱", "exists": False,
+                "path": "", "refresh_hint": "coderef_memory(action=sync)"}
+    age_days = round((datetime.now().timestamp() - mtime) / 86400, 1)
+    return {
+        "key": "kg_db", "name": "知识图谱", "exists": True,
+        "path": os.path.relpath(kg_db, project_path).replace(os.sep, "/"),
+        "modified_at": _iso(mtime), "age_days": age_days,
+        "suggested_max_age_days": 7,
+        "stale_by_age": age_days > 7,
+        "code_newer": bool(code_mtime and mtime < code_mtime),
+        "refresh_hint": "coderef_memory(action=sync) 或重跑 coderef_audit",
+    }
+
+
 def report(project_path: str) -> dict:
     """盘点派生产物新鲜度（只读、秒级）。"""
     project_path = os.path.abspath(project_path)
@@ -106,68 +172,10 @@ def report(project_path: str) -> dict:
                 "artifacts": [],
                 "note": "项目路径不存在或不可读，未盘点任何产物"}
     code_mtime = _latest_code_mtime(project_path)
-    items = []
-
-    for key, name, patterns, stale_days, refresh in _ARTIFACTS:
-        candidates = _find_path(project_path, patterns)
-        if not candidates:
-            items.append({"key": key, "name": name, "exists": False,
-                          "path": patterns[0], "refresh_hint": refresh})
-            continue
-        # glob 命中多个：取修改时间最新的那个
-        best = None
-        for cand in candidates:
-            m, extra = _mtime_of(cand)
-            if m is None:
-                continue
-            if best is None or m > best[0]:
-                best = (m, cand, extra)
-        if best is None:
-            items.append({"key": key, "name": name, "exists": False,
-                          "path": patterns[0], "refresh_hint": refresh})
-            continue
-        mtime, path, extra = best
-        age_days = round((datetime.now().timestamp() - mtime) / 86400, 1)
-        # 代码比产物更新 = 产物可能没覆盖最新代码（启发式，供调用方判断）
-        outdated = bool(code_mtime and mtime < code_mtime)
-        item = {
-            "key": key,
-            "name": name,
-            "exists": True,
-            "path": os.path.relpath(path, project_path).replace(os.sep, "/"),
-            "modified_at": _iso(mtime),
-            "age_days": age_days,
-            "suggested_max_age_days": stale_days,
-            "stale_by_age": age_days > stale_days,
-            "code_newer": outdated,
-            "refresh_hint": refresh,
-        }
-        if extra is not None:
-            item["md_count"] = extra
-        items.append(item)
-
-    kg_db = None
-    try:
-        from core.arch_audit import locate_kg_db
-        kg_db = locate_kg_db(project_path)
-    except Exception as e:  # noqa: BLE001
-        logger.debug(f"[freshness] 图谱定位失败: {e}")
-    if kg_db:
-        mtime, _ = _mtime_of(kg_db)
-        if mtime is not None:
-            age_days = round((datetime.now().timestamp() - mtime) / 86400, 1)
-            items.append({
-                "key": "kg_db", "name": "知识图谱", "exists": True,
-                "path": os.path.relpath(kg_db, project_path).replace(os.sep, "/"),
-                "modified_at": _iso(mtime), "age_days": age_days,
-                "suggested_max_age_days": 7,
-                "stale_by_age": age_days > 7,
-                "code_newer": bool(code_mtime and mtime < code_mtime),
-                "refresh_hint": "coderef_memory(action=sync) 或重跑 coderef_audit",
-            })
-    else:
-        items.append({"key": "kg_db", "name": "知识图谱", "exists": False,
-                      "path": "", "refresh_hint": "coderef_memory(action=sync)"})
+    items = [_artifact_item(key, name, patterns, stale_days, refresh,
+                            project_path, code_mtime)
+             for key, name, patterns, stale_days, refresh in _ARTIFACTS]
+    items.append(_kg_item(project_path, code_mtime))
 
     return {
         "project_path": project_path,

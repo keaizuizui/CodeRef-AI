@@ -178,6 +178,6 @@ description: 治理主链场景化 Skill。把 CodeRef-AI 的 MCP 工具收敛�
    - `stale=true`（缺失比例 ≥ 50%）→ 停止后续 `arch_gap` / `arch_verify` 解读，先 `coderef_target_arch_set` 重新定标；
    - `specs_missing` 的具体路径写进回报，不要用"对齐度低"概括。
 2. **`role_boundary` 报"未配置 role_keywords"是诚实阻断**，不是"无问题"，也不是"工具坏了"；补 `role_keywords` 后再跑。
-3. **`interpret(health)` 先看 `data_stale`**：`true` 时先重跑 `coderef_audit`，否则会拿旧审计当现状。
+3. **`interpret(health)` 先看 `data_stale`**：`true` 先重跑 `coderef_audit`；`null` 表示年龄未知，同样先重跑；只有 `false` 可当现状引用。
 4. **`architecture` 的 `findings=0` 不能当审计结论**（见返回的 `findings_note`），代码 findings 走 `coderef_audit` / `coderef_scan`。
 5. **备份/镜像目录先 whitelist**：`_refactor_backup`、`backup_v*` 等用 `coderef_whitelist` 的 `dir` 条目排除，避免不同工具口径差异被误读成"工具互相矛盾"。
