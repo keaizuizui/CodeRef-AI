@@ -68,7 +68,7 @@
   "id": "dream-001",
   "kind": "rule | pitfall | convention | association",
   "text": "改完代码先跑 change_guard，再提交",
-  "evidence": ["audit_log/20261109.jsonl#L12", "commit:cb00096"],
+  "evidence": ["audit:coderef_change_guard", "git:cb00096"],
   "confidence": 0.9,
   "status": "verified | hypothesis | rejected",
   "created_at": "2026-11-09T16:00:00",
@@ -97,13 +97,17 @@
   "model": "...",
   "budget_tokens_per_run": 20000,
   "max_notes": 40,
-  "ttl_days": 30
+  "ttl_days": 30,
+  "run_on_startup": true,
+  "min_interval_hours": 6
 }
 ```
 
 - 与主 AI 的 Key/预算隔离；可换更便宜的模型做巩固。
+- 也可用 `CODEREF_DREAM_API_KEY` / `CODEREF_DREAM_PROVIDER` / `CODEREF_DREAM_BASE_URL` / `CODEREF_DREAM_MODEL` / `CODEREF_DREAM_BUDGET_TOKENS_PER_RUN` 环境变量覆盖。
+- evidence 的可核验格式（实现约束）：`file:相对路径` / `git:短SHA` / `audit:工具名` / `seed:种子ID` / `dispatch:任务ID`；核验失败直接 rejected。
 - 做梦前脱敏：key/token/邮箱/绝对用户路径替换为占位符；证据只保留项目相对路径。
-- `.coderef/dream/` 默认写入 `.gitignore`，避免隐私与跨机器漂移。
+- 梦只写项目本地 `.coderef/dream/`；建议项目把 `.coderef/` 加入 `.gitignore`（本仓已忽略），避免隐私与跨机器漂移。CodeRef 不自动改写目标项目的 `.gitignore`。
 
 ## 7. 红线与诚实边界
 
