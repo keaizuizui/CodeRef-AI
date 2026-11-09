@@ -1,9 +1,9 @@
-<!-- AI Summary: CodeRef-AI exposes 52 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. It covers audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, and prompt compliance — all pure static analysis that is reproducible with no LLM. LLM is only used for synthesis tasks (wiki, report, code review) and semantic evaluation (coderef_eval) and hard-blocks honestly without an API key. It ships three orchestration Skills (L1 probe / L2 governance / L3 asset) that turn the 52 tools into a compact chain. It builds a closed loop: deterministically verify LLM/CodeRabbit claims, govern legacy structure along a map→target→refactor→verify→health mainline, and solidify/replicate reusable design assets. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams that want AI that augments rather than hallucinates. -->
+<!-- AI Summary: CodeRef-AI exposes 59 MCP tools that give coding AI a deterministic "audit brain" and give non-programmers a readable view of their project. It covers audit, knowledge graph, architecture diagnosis, flow verification, change guard, OWASP, deterministic verification, and prompt compliance — all pure static analysis that is reproducible with no LLM. LLM is only used for synthesis tasks (wiki, report, code review) and semantic evaluation (coderef_eval) and hard-blocks honestly without an API key. It ships three orchestration Skills (L1 probe / L2 governance / L3 asset) that turn the 59 tools into a compact chain. It builds a closed loop: deterministically verify LLM/CodeRabbit claims, govern legacy structure along a map→target→refactor→verify→health mainline, and solidify/replicate reusable design assets. Best for: non-programmers who use a coding AI and want to confirm their project runs as intended, and teams that want AI that augments rather than hallucinates. -->
 [![MCP Badge](https://lobehub.com/badge/mcp/keaizuizui-coderef-ai?style=flat)](https://lobehub.com/mcp/keaizuizui-coderef-ai)
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.19.7** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.20.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -11,7 +11,7 @@
 
 ## 它是什么
 
-CodeRef-AI 通过 MCP 协议暴露 **58 个工具**，同时服务两类人：
+CodeRef-AI 通过 MCP 协议暴露 **59 个工具**，同时服务两类人：
 
 - **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险；编程 AI（或 CodeRabbit）给出论断时，还能用静态图谱做确定性核验，再决定采不采信。
 - **非编程人员的技术助理**：把代码变成通俗的健康仪表盘、Wiki 与流程确证。你只需定义「入口 A 应该依次经过步骤 B→C→D」，`coderef_flow_verify` 就会在调用链里给出确证 / 在管线 / 存疑 / 缺失四种状态——不用读代码，也能确认项目有没有按你的设想运转。
@@ -20,9 +20,9 @@ CodeRef-AI 通过 MCP 协议暴露 **58 个工具**，同时服务两类人：
 
 ---
 
-## 三条编排主线：58 个工具不是散件，而是一条主链
+## 三条编排主线：59 个工具不是散件，而是一条主链
 
-58 个工具虽多，但 CodeRef 把它们整理成**三条互补的编排主线（Skill）**，编程 AI 只需知道自己该在哪条链上；L1/L2/L3 之间用**编排 gate 强制转场**（命中条件才转，简单任务不被反复切链拖累），并由 `coderef-mcp` 的「顶层入口判定」在动身前先选对链：
+59 个工具虽多，但 CodeRef 把它们整理成**三条互补的编排主线（Skill）**，编程 AI 只需知道自己该在哪条链上；L1/L2/L3 之间用**编排 gate 强制转场**（命中条件才转，简单任务不被反复切链拖累），并由 `coderef-mcp` 的「顶层入口判定」在动身前先选对链：
 
 ```
 L1  coderef-probe      · 小阶段 · 变更驱动的轻量探查与防护（类 CodeRabbit）
@@ -99,13 +99,13 @@ CodeRef 不靠宣称，靠可复现的硬指标（完整方法见后文「可靠
 
 ### 调度层 coderef-dispatcher（v5.19.3 起，形态 A）
 
-编程 AI 从「编排 58 个工具」降级为「调用 4 个调度工具」，中间工具返回不再逐条进主 AI 上下文：
+编程 AI 从「编排 59 个工具」降级为「调用 4 个调度工具」，中间工具返回不再逐条进主 AI 上下文：
 
 - **`coderef_plan`**：意图（probe / single_audit / recover / governance / asset / remind）→ 计划卡（步骤、预计工具数与时长、用户决策点），纯规划不执行。
 - **`remind` 纪律复盘**：`coderef_execute(intent=remind)` 由 dispatcher 进程内检查「操作记忆是否恢复、变更守卫是否覆盖当前工作区、图谱是否落后、审计产物是否过期」，返回 `forgotten / passed / unknown` 三类事实——主 AI 不必靠上下文回忆自己漏了什么。
 - **`coderef_execute`**：按计划或意图执行，逐步过前置闸门；缺 recover 先 recover、图旧先 sync（违规自动补齐），G-C 定标缺失等需用户决策的步骤**暂停浮出**，不替用户做治理决策；默认后台执行返回 `task_id`。
 - **`coderef_dispatch_status` / `coderef_dispatch_report`**：前者看当前步骤与闸门记录，后者取最终摘要信封（结论 + freshness + KL + `owner_actions` + 折叠的步骤索引 + 上下文节省比）。
-- **链定义**：`core/dispatch_chains.yaml` 是唯一事实源（L1/L2/L3 步骤、失败策略、决策点）。轨迹落盘 `.coderef/dispatch/<task_id>.json`；YAML 缺失/损坏时 `coderef_plan` 明确报错并给出裸工具回退建议，58 个工具照常可用。
+- **链定义**：`core/dispatch_chains.yaml` 是唯一事实源（L1/L2/L3 步骤、失败策略、决策点）。轨迹落盘 `.coderef/dispatch/<task_id>.json`；YAML 缺失/损坏时 `coderef_plan` 明确报错并给出裸工具回退建议，59 个工具照常可用。
 
 ### LLM 意图层（v5.19.4 起，形态 B，可选）
 
@@ -119,6 +119,17 @@ CodeRef 不靠宣称，靠可复现的硬指标（完整方法见后文「可靠
 - **审计日志**：每次工具调用的防护判定落盘 `.coderef/audit_log/YYYYMMDD.jsonl`（按日轮转），字段含 `tool` / `gate{result: hit|pass|miss, hits, mode}` / `memory_digest{injected, available, items}` / `freshness{code_newer, stale_reason, refresh_action}` / `scope{rules}` / `blocked{gate, reason}`，同一 MCP 进程共享 `session`。
 - **`coderef_dispatch_metrics`**：聚合最近 N 天（默认 7）日志，输出闸门命中率、阻断 Top 与原因 Top、记忆注入命中率、新鲜度事件与刷新动作 Top、scope 生效次数、dispatcher 任务结局。只统计实际落盘记录，empty 就是 empty，不做推断补齐。
 - **违规注入测试**：block 模式下「未 recover 直接 audit」被 G-A 拦截且日志可追溯；scope add 后 audit 实际排除；stale 查询带 `stale=true` 与 `sync_task_id`。
+
+### 梦（v5.20.0 起）：编程 AI 的离线巩固层
+
+CodeRef 不只回答「现在是什么」，也在下次启动时替主 AI **补梦**——用**独立 LLM / 独立预算**把被阻断、失败、变更守卫退化与主 AI 显式 `seed` 的经历巩固成更少、更准的联想，写入项目本地 `.coderef/dream/`：
+
+- **`coderef_dream(action=status|seed|read|run)`**：`status` 看最近做梦时间、笔记数、预算与上次错误；`seed` 显式投喂一条显著事件（不读取主 AI 全量对话）；`read` 读 `DREAM.md` 或按 kind/关键词取笔记；`run` 手动补一轮（默认后台）。
+- **下次启动补梦**：首次带项目路径的工具调用在后台触发一次，不阻塞首响应；无 dream Key 时不启动空转线程。
+- **输出 `DREAM.md`（≤800 token）**：只保留五节——当前目标 / 已验证规则 / 坑 / 联想（当 X，先想到 Y）/ 未决问题；`notes.json` 保留证据与状态，`runs/` 留输入摘要与采纳/拒绝记录。
+- **LLM 提议 + 确定性核验**：每条笔记必须有 `evidence`（`file:` / `git:` / `audit:` / `seed:` / `dispatch:`）；核验失败直接 `rejected`，无法核验标 `hypothesis`，只有 verified 进入「已验证规则」。梦是假设，**不改写任何审计结论**。
+- **记忆摘要梦优先**：重工具首次返回的 `context.memory_digest` 先放梦的 verified 笔记，再补操作记忆；`remind` 复盘新增 `dream` 段，列出「梦里提醒过什么」。
+- **诚实边界**：无 Key / 预算耗尽 → `status=SKIP`，不产出占位内容；梦的视野仅限 CodeRef 被调用的范围，`unknown` / `SKIP` 如实呈现。
 
 ---
 
@@ -139,6 +150,8 @@ pip install -r requirements.txt
 ### 2. 配置 LLM（可选）
 
 > 审计、图谱、架构诊断、流程验证、变更守护、OWASP **不需要 LLM**，纯静态即可运行。仅 LLM 型工具（Wiki、业务报告、代码审查、Prompt 资产、创新识别、`coderef_eval` 产出物语义评估）需要 LLM；未配置 API Key 时这类工具被硬阻断并提示配置（`coderef_eval` 返回 status=SKIP），不产出降级/占位内容。
+>
+> **梦（可选，独立 Key）**：在 `config/config.json` 增加 `"dream": {"enabled": true, "api_key": "...", "model": "..."}`，或设 `CODEREF_DREAM_API_KEY`。梦的 Key/预算与主 AI 隔离；不配置时 `coderef_dream(action=run)` 返回 `SKIP`，不影响其他工具。
 
 **Windows：** 运行 `setup.bat`。
 

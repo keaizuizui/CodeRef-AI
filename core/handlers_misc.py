@@ -88,6 +88,33 @@ def _scope(a: dict) -> str:
     return json.dumps(res, ensure_ascii=False)
 
 
+def _dream(a: dict) -> str:
+    """梦（coderef_dream，5.20.0）：status / seed / read / run。"""
+    from core import dream
+    pp = a["project_path"]
+    act = str(a.get("action") or "status").strip().lower()
+    if act not in ("status", "seed", "read", "run"):
+        return json.dumps({
+            "status": "error", "tool": "coderef_dream",
+            "error": f"非法 action: {act!r}；允许 status/seed/read/run",
+        }, ensure_ascii=False)
+    if act == "seed":
+        res = dream.seed(pp, a.get("text", ""),
+                         kind=a.get("kind", "association"),
+                         source=a.get("source", "main_ai"))
+    elif act == "read":
+        res = dream.read(pp, kind=a.get("kind", ""),
+                         keyword=a.get("keyword", ""),
+                         include_hypothesis=bool(
+                             a.get("include_hypothesis", False)),
+                         limit=a.get("limit", 20))
+    elif act == "run":
+        res = dream.run(pp, trigger="manual")
+    else:
+        res = dream.status(pp)
+    return json.dumps(res, ensure_ascii=False)
+
+
 def _dispatch_metrics(a: dict) -> str:
     """观测聚合（coderef_dispatch_metrics，5.19.5）。"""
     from core.audit_log import metrics

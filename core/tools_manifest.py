@@ -1202,5 +1202,33 @@ BUILTIN_TOOLS: List[Dict] = [
                             "threshold": {"type": "number", "description": "断言阈值 0–1", "default": 0.7},
                             "background": {"type": "boolean", "description": "是否后台执行；coderef_eval 默认后台（返回 task_id 用 coderef_task_status 轮询），background=false 强制同步拿结果"},
                         }, "required": ["project_path", "metric", "text"]},
+                    },
+        {
+                        "name": "coderef_dream",
+                        "description": (
+                            "梦（5.20.0）—— 编程 AI 的离线巩固层。主 AI 醒着做事，CodeRef 在下次启动时"
+                            "用独立 LLM 补梦（不占用主 AI 的 Key/预算），把被阻断、失败、变更守卫退化与"
+                            "主 AI 显式 seed 的经历巩固成更少更准的联想，写入项目本地的 "
+                            ".coderef/dream/DREAM.md（≤800 token）。\n"
+                            "action=status（默认）：最近做梦时间、笔记数、预算、上次错误、是否该补梦；\n"
+                            "action=seed：主 AI 显式投喂一条显著事件（text/kind/source），不读取主 AI 全量对话；\n"
+                            "action=read：读 DREAM.md 或按 kind/keyword 取笔记，默认只返回 verified；\n"
+                            "action=run：手动补一轮梦（后台执行；无 Key → status=SKIP，不编造）。\n"
+                            "诚实边界：梦是假设不是审计结论；每条笔记必须有 evidence，核验失败直接 rejected。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "action": {"type": "string", "enum": ["status", "seed", "read", "run"],
+                                       "default": "status", "description": "status=状态；seed=投喂显著事件；read=读梦；run=手动补梦"},
+                            "text": {"type": "string", "description": "action=seed 时的显著事件文本"},
+                            "kind": {"type": "string", "enum": ["rule", "pitfall", "convention", "association"],
+                                     "description": "action=seed 时的事件类别；action=read 时的过滤类别"},
+                            "source": {"type": "string", "description": "action=seed 的事件来源（默认 main_ai）"},
+                            "keyword": {"type": "string", "description": "action=read 时按文本/证据模糊匹配"},
+                            "include_hypothesis": {"type": "boolean", "default": False,
+                                                   "description": "action=read 时是否包含未验证假设（默认只看 verified）"},
+                            "limit": {"type": "integer", "default": 20, "description": "action=read 返回条数上限"},
+                            "background": {"type": "boolean", "description": "action=run 默认后台；status/seed/read 保持同步"},
+                        }, "required": ["project_path"]},
                     }
 ]

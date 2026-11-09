@@ -4,6 +4,19 @@
 
 ---
 
+### v5.20.0 — 梦：CodeRef 成为编程 AI 的离线巩固层
+
+> 背景：主 AI 的上下文会随会话消散，重复踩坑与「上次怎么解决的」难以跨会话保留。本版把 CodeRef 做成编程 AI 的梦：不占用主 AI 的 LLM，在下次启动时用独立配置与独立预算补一轮梦，只留下一小片可核验的联想。
+
+- **新增 `core/dream.py`**：项目级 `.coderef/dream/`（`state.json` / `DREAM.md` / `seeds.jsonl` / `notes.json` / `runs/` / `archive/`）；下次启动补梦（首次带项目路径的工具调用触发后台线程，一次启动一轮，不常驻 daemon）。
+- **显著性筛选（零 LLM）**：只取被闸门 blocked 的调用、失败/暂停的 dispatcher 轨迹、`change_guard` 退化与主 AI 显式 `seed`；成功流水账不喂给模型。原料喂 LLM 前脱敏（Key/邮箱/绝对路径/项目根）。
+- **独立 LLM + 预算**：`config.json` 的 `dream` 段或 `CODEREF_DREAM_*` 环境变量；与主 AI 的 Key/预算隔离。无 Key / 无新原料 → `status=SKIP`，不写占位内容；做梦失败保留旧梦并记录 `last_error`。
+- **LLM 提议 + 确定性核验**：候选笔记必须有 `evidence`（`file:` / `git:` / `audit:` / `seed:` / `dispatch:`）；引用核验失败直接 `rejected`，无法本地核验标 `hypothesis`，只有 verified 进入 `DREAM.md` 的「已验证规则」。梦是假设，不改写任何审计结论。
+- **`DREAM.md` ≤800 token**：五节——当前目标 / 已验证规则 / 坑 / 联想（当 X，先想到 Y）/ 未决问题；`notes.json` 保留证据、置信度与 TTL，30 天未命中下沉 `archive/`。
+- **新增 `coderef_dream` 工具（58→59）**：`status` / `seed` / `read` / `run`；`status`/`seed`/`read` 同步，`run` 默认后台。
+- **接入现有链路**：`memory_digest` 梦优先（先放梦的 verified 笔记，再补操作记忆；操作记忆不可用时仍可注入梦）；`remind` 复盘新增 `dream` 段，列出「梦里提醒过什么」。
+- **验证**：新增 `tests/test_dream.py` 11 例（seed/无 Key SKIP/三态核验/预算/TTL/去重/digest/工具入口/启动一次）；全量 pytest **393 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.19.7 — dispatcher 新增 `remind`：由子代理回答「你忘了什么」
 
 > 背景：AGENTS.md 是上下文注入，主 AI 仍可能漏做 recover/change_guard。本版把「纪律复盘」做成 CodeRef 子代理的确定性检查步骤，而不是再写一条提醒文字。

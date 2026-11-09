@@ -148,9 +148,9 @@ from core.handlers_engine import (
     _replicate, _replicate_apply,
 )
 from core.handlers_misc import (
-    _advisor, _dispatch_metrics, _docs_read, _eval, _frontend, _query,
-    _report, _review, _scan_list, _scan_tool, _scope, _verify_findings,
-    _version, _wl,
+    _advisor, _dispatch_metrics, _docs_read, _dream, _eval, _frontend,
+    _query, _report, _review, _scan_list, _scan_tool, _scope,
+    _verify_findings, _version, _wl,
 )
 # 5.19.1 结果级新鲜度硬戳：信封统一挂 freshness 块（best-effort，失败不影响结论）
 from core.freshness_guard import attach_freshness as _env_with_freshness
@@ -182,7 +182,7 @@ __all__ = [
     "_dynamic_probe", "_gov_board", "_gov_workspace", "_gov_schedule",
     "_role_boundary", "_verify_findings", "_review", "_frontend",
     "_report", "_advisor", "_arch", "_wl", "_query", "_scope",
-    "_dispatch_metrics",
+    "_dispatch_metrics", "_dream",
     # arch 系辅助
     "_target_arch_path", "_load_target_arch", "_coerce_target_arch",
     "_validate_project_path",
@@ -389,6 +389,7 @@ class Server:
             "coderef_dispatch_status": self._dispatch_status,
             "coderef_dispatch_report": self._dispatch_report,
             "coderef_dispatch_metrics": self._dispatch_metrics,
+            "coderef_dream": self._dream,
             "coderef_architecture": self._arch,
             "coderef_docs_read": self._docs_read,
             "coderef_query": self._query,
@@ -471,6 +472,8 @@ class Server:
             "coderef_eval",
             # dispatcher 执行链：默认后台（返回 task_id 轮询），避免同步撞宿主超时
             "coderef_execute",
+            # 梦：action=run 会调独立 LLM，默认后台；status/seed/read 见 MERGE_SYNC_ACTIONS
+            "coderef_dream",
         }
 
         # ─── 合并工具内保持同步的轻量 action ───────────────────────────
@@ -481,6 +484,7 @@ class Server:
         self.MERGE_SYNC_ACTIONS = {
             "coderef_memory": {"query"},
             "coderef_operation_memory": {"query", "find", "status", "recover", "export"},
+            "coderef_dream": {"status", "seed", "read"},
         }
 
     def _should_background(self, n: str, a: Dict) -> bool:
@@ -847,6 +851,14 @@ class Server:
         if n not in ("coderef_scan_list", "coderef_gov_workspace", "coderef_version"):
             p = self._validate_project_path(n, p)
             a["project_path"] = p
+            # 5.20.0 下次启动补梦：首次带项目路径的调用触发后台线程，
+            # 不阻塞本次工具响应；每进程每项目只尝试一次。
+            if n != "coderef_dream":
+                try:
+                    from core.dream import trigger_if_due
+                    trigger_if_due(p)
+                except Exception:  # noqa: BLE001 —— 补梦失败不影响主流程
+                    pass
         logger.info(f"[{n}] {p}")
         if n == "coderef_audit":
             strat = a.get("strategy", "auto")
@@ -1033,6 +1045,9 @@ class Server:
 
     def _dispatch_metrics(self, a):
         return _dispatch_metrics(a)
+
+    def _dream(self, a):
+        return _dream(a)
 
     def _tsk(self, a) -> str:
         import time

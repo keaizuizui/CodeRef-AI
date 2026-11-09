@@ -88,6 +88,7 @@ def _empty_digest() -> dict:
         "items": [],
         "truncated": False,
         "error": "",
+        "dream": {},
     }
 
 
@@ -165,33 +166,27 @@ def _clean_text(value) -> str:
         return ""
 
 
-def build_digest(project_path: str, max_tokens: int = 800) -> dict:
-    """把 operation_memory.recover 的结果压成可注入摘要。
+def _dream_digest(project_path: str) -> Tuple[List[dict], dict]:
+    """读取梦的 verified 笔记（梦优先于操作记忆；失败不影响记忆摘要）。"""
+    try:
+        from core.dream import digest_items, digest_meta
+        return digest_items(project_path), digest_meta(project_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"[MemoryDigest] 读取梦失败: {exc}")
+        return [], {"available": False, "error": str(exc)}
 
-    任何异常都收敛为 available=False 的摘要，绝不向调用方抛出。
+
+def build_digest(project_path: str, max_tokens: int = 800) -> dict:
+    """把「梦（verified 笔记）+ operation_memory.recover」压成可注入摘要。
+
+    梦优先：先放 DREAM.md 的已验证笔记，再补操作记忆；任一部分缺失都如实
+    标注，不冒充「没有这项」。任何异常都收敛为 available=False 的摘要。
+
     truncated=True 表示因条数上限或字符预算丢弃 / 截短了内容。
     """
     digest = _empty_digest()
-    try:
-        data = operation_memory.recover(project_path, limit=RECOVER_LIMIT)
-    except Exception as exc:
-        logger.warning(f"[MemoryDigest] 读取操作记忆失败: {exc}")
-        digest["error"] = f"读取操作记忆失败: {exc}"
-        return digest
-
-    if not isinstance(data, dict):
-        logger.warning("[MemoryDigest] 操作记忆返回格式异常")
-        digest["error"] = "操作记忆返回格式异常"
-        return digest
-
-    if data.get("status") != "ok":
-        message = data.get("message") or "操作记忆未建立"
-        logger.debug(f"[MemoryDigest] 操作记忆不可用: {message}")
-        digest["error"] = str(message)
-        return digest
-
-    digest["recovered_from"] = "operation_memory"
-    digest["updated_at"] = str(data.get("last_sync") or "")
+    dream_items, dream_meta = _dream_digest(project_path)
+    digest["dream"] = dream_meta
 
     try:
         budget_tokens = int(max_tokens)
@@ -201,13 +196,16 @@ def build_digest(project_path: str, max_tokens: int = 800) -> dict:
 
     used = 0
     truncated = False
-    for kind, raw in _candidates(data):
+
+    def _add_item(kind: str, raw) -> bool:
+        """追加一条摘要；返回 False 表示预算/条数已满，需停止。"""
+        nonlocal used, truncated
         if len(digest["items"]) >= MAX_ITEMS:
             truncated = True
-            break
+            return False
         text = _clean_text(raw)
         if not text:
-            continue
+            return True
         clipped = False
         if len(text) > ITEM_MAX_CHARS:
             text = text[:ITEM_MAX_CHARS]
@@ -215,7 +213,7 @@ def build_digest(project_path: str, max_tokens: int = 800) -> dict:
         remaining = max_chars - used
         if remaining <= 0:
             truncated = True
-            break
+            return False
         if len(text) > remaining:
             text = text[:remaining]
             clipped = True
@@ -223,12 +221,47 @@ def build_digest(project_path: str, max_tokens: int = 800) -> dict:
             truncated = True
         digest["items"].append({"kind": kind, "text": text})
         used += len(text)
+        return True
+
+    # 1) 梦优先
+    for item in dream_items:
+        if not _add_item(str(item.get("kind") or "梦"), item.get("text")):
+            break
+
+    # 2) 操作记忆
+    op_error = ""
+    try:
+        data = operation_memory.recover(project_path, limit=RECOVER_LIMIT)
+    except Exception as exc:
+        logger.warning(f"[MemoryDigest] 读取操作记忆失败: {exc}")
+        data, op_error = None, f"读取操作记忆失败: {exc}"
+    if data is not None and not isinstance(data, dict):
+        logger.warning("[MemoryDigest] 操作记忆返回格式异常")
+        op_error = "操作记忆返回格式异常"
+    elif data is not None and data.get("status") != "ok":
+        message = data.get("message") or "操作记忆未建立"
+        logger.debug(f"[MemoryDigest] 操作记忆不可用: {message}")
+        op_error = str(message)
+
+    if data is not None and not op_error:
+        digest["recovered_from"] = ("dream+operation_memory" if dream_items
+                                    else "operation_memory")
+        digest["updated_at"] = str(data.get("last_sync") or "")
+        for kind, raw in _candidates(data):
+            if not _add_item(kind, raw):
+                break
+    elif dream_items:
+        digest["recovered_from"] = "dream"
+        digest["operation_memory_error"] = op_error
+    else:
+        digest["error"] = op_error
 
     digest["truncated"] = truncated
     if not digest["items"]:
-        digest["error"] = "操作记忆为空"
+        digest["error"] = op_error or "操作记忆为空"
         return digest
     digest["available"] = True
+    digest["error"] = ""
     return digest
 
 
