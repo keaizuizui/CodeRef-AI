@@ -33,6 +33,30 @@ def _resolve_cache_dir() -> str:
     )
 
 
+# 缓存有效性需要内容指纹：mtime+size 可被「同尺寸改写 + 恢复 mtime」绕过。
+# 小文件读全文，大文件只抽样首尾（成本有界，仍能识别绝大多数内容变化）。
+_HASH_FULL_LIMIT = 512 * 1024
+_HASH_SAMPLE_BYTES = 8192
+
+
+def _content_hash(path: str, size: int) -> str:
+    """文件内容指纹；读失败返回空串（调用方按快速路径处理）。"""
+    h = hashlib.sha1()
+    try:
+        with open(path, "rb") as f:
+            if size <= _HASH_FULL_LIMIT:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    h.update(chunk)
+            else:
+                h.update(f.read(_HASH_SAMPLE_BYTES))
+                f.seek(max(0, size - _HASH_SAMPLE_BYTES))
+                h.update(f.read(_HASH_SAMPLE_BYTES))
+                h.update(str(size).encode("ascii"))
+    except OSError:
+        return ""
+    return h.hexdigest()
+
+
 @dataclass
 class ProjectAnalysis:
     """项目分析结果"""
@@ -318,7 +342,8 @@ class CodeAnalyzer:
             try:
                 mtime = os.path.getmtime(fp)
                 size = os.path.getsize(fp)
-                snapshot[fp] = {"mtime": mtime, "size": size}
+                snapshot[fp] = {"mtime": mtime, "size": size,
+                                "hash": _content_hash(fp, size)}
             except OSError as e:
                 logger.warning(f"读取文件状态失败，跳过快照项 {fp}: {e}")
         return snapshot
@@ -347,6 +372,9 @@ class CodeAnalyzer:
                 return False
             if isinstance(old, dict):
                 if abs(old.get("mtime", 0) - cur["mtime"]) > 0.1 or old.get("size") != cur["size"]:
+                    return False
+                # 新快照带内容指纹；旧快照无 hash 时仍按 mtime+size 兼容读取。
+                if old.get("hash") and cur.get("hash") and old["hash"] != cur["hash"]:
                     return False
             else:
                 # 旧快照格式：仅存 mtime；非法条目（字符串/None 等）作废缓存
@@ -543,7 +571,7 @@ class CodeAnalyzer:
                     logger.warning(f"超大文件行数估算失败 {file_path}: {e}")
                 return code_file
             
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(file_path, 'r', encoding='utf-8-sig', errors='ignore') as f:
                 content = f.read()
             
             # 使用简化的解析方式（Tree-sitter完整解析较复杂，这里用正则）

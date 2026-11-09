@@ -10,7 +10,9 @@
 """
 
 import glob
+import hashlib
 import os
+import re
 from datetime import datetime
 
 from loguru import logger
@@ -99,9 +101,27 @@ def _find_path(project_path: str, patterns: tuple):
 
 
 def _artifact_item(key: str, name: str, patterns: tuple, stale_days: int,
-                   refresh: str, project_path: str, code_mtime) -> dict:
-    """单个产物的新鲜度条目（不存在时也返回条目，便于调用方看到应产出什么）。"""
+                   refresh: str, project_path: str, code_mtime,
+                   strict_hash: bool = False) -> dict:
+    """单个产物的新鲜度条目（不存在时也返回条目，便于调用方看到应产出什么）。
+
+    strict_hash=True 时，audit_findings 只认本项目哈希命名的产物，避免把其他
+    项目残留的 audit_findings_<旧哈希>.json 当成本项目产物（interpret 侧是精确
+    哈希归属，新鲜度侧必须同口径）。
+    """
     candidates = _find_path(project_path, patterns)
+    if strict_hash and key == "audit_findings" and candidates:
+        phash = hashlib.md5(project_path.encode()).hexdigest()[:12]
+        kept = []
+        for c in candidates:
+            m = re.match(r"^audit_findings_([0-9a-f]{12})\.json$",
+                         os.path.basename(c))
+            # 只排除「其他项目哈希」的产物；audit_findings.json 与手工命名的
+            # audit_findings_x.json 保持原有兼容语义。
+            if m and m.group(1) != phash:
+                continue
+            kept.append(c)
+        candidates = kept
     if not candidates:
         return {"key": key, "name": name, "exists": False,
                 "path": patterns[0], "refresh_hint": refresh}
@@ -173,7 +193,8 @@ def report(project_path: str) -> dict:
                 "note": "项目路径不存在或不可读，未盘点任何产物"}
     code_mtime = _latest_code_mtime(project_path)
     items = [_artifact_item(key, name, patterns, stale_days, refresh,
-                            project_path, code_mtime)
+                            project_path, code_mtime,
+                            strict_hash=(key == "audit_findings"))
              for key, name, patterns, stale_days, refresh in _ARTIFACTS]
     items.append(_kg_item(project_path, code_mtime))
 

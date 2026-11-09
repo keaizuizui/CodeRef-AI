@@ -194,7 +194,7 @@ class AstParser:
     def parse(self, file_path: str) -> Optional[AstFileResult]:
         """解析文件"""
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(file_path, 'r', encoding='utf-8-sig', errors='ignore') as f:
                 content = f.read()
             return self.parse_content(content, file_path)
         except Exception as e:

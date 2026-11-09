@@ -44,6 +44,23 @@ def _empty() -> dict:
     return {"version": SCOPE_VERSION, "rules": []}
 
 
+def _clean_rules(rules) -> List[dict]:
+    """清洗规则条目：只保留 kind 合法、pattern 非空的 dict，脏条目跳过。"""
+    out: List[dict] = []
+    for r in rules or []:
+        if not isinstance(r, dict):
+            continue
+        kind = str(r.get("kind") or "").strip()
+        pattern = str(r.get("pattern") or "").replace("\\", "/").strip().strip("/")
+        if kind not in KINDS or not pattern:
+            continue
+        item = dict(r)
+        item["kind"] = kind
+        item["pattern"] = pattern
+        out.append(item)
+    return out
+
+
 def load_scope(project_path: str) -> dict:
     """读取 scope.json（带 mtime 缓存；不存在/损坏时返回空规则，绝不抛异常）。"""
     path = scope_path(project_path)
@@ -67,7 +84,8 @@ def load_scope(project_path: str) -> dict:
     rules = data.get("rules")
     if not isinstance(rules, list):
         rules = []
-    data = {"version": data.get("version", SCOPE_VERSION), "rules": rules}
+    data = {"version": data.get("version", SCOPE_VERSION),
+            "rules": _clean_rules(rules)}
     with _cache_lock:
         _cache[key] = (mtime, data)
     return data
@@ -187,9 +205,13 @@ def is_excluded(project_path: str, path: str) -> bool:
         return False
     rules = load_scope(project_path).get("rules") or []
     for r in rules:
+        if not isinstance(r, dict):
+            continue
         if r.get("kind") == "include_override" and _matches(rel, r.get("pattern", "")):
             return False
     for r in rules:
+        if not isinstance(r, dict):
+            continue
         if r.get("kind") in ("exclude_glob", "ignore_lib") \
                 and _matches(rel, r.get("pattern", "")):
             return True

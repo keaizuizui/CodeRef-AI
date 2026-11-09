@@ -421,6 +421,25 @@ class InnovationReviewer:
         """
         project_path = os.path.abspath(project_path)
         subject = self._resolve_subject(project_path, canonical)
+        # 未知名/路径先快速失败：不生成 wiki、不调 LLM，避免未知主体拖成长任务。
+        if not (subject["asset"] or subject["workflow_sig"]
+                or subject["adopters"] or subject["entry_symbols"]):
+            return {
+                "ok": False,
+                "tool": "coderef_innovation_review",
+                "project_path": project_path,
+                "canonical": subject["canonical"],
+                "error": (f"未找到可排查的设计主体 {canonical!r}：既不是已登记资产/别名，"
+                          "也不是项目内 workflow 模块；未生成 wiki、未调用 LLM。"),
+                "subject": {
+                    "raw": subject["raw"],
+                    "description": subject["description"],
+                    "adopters": subject["adopters"],
+                    "workflow_module": None,
+                    "signature_count": subject["signature_count"],
+                },
+                "llm_available": self.llm.is_available(),
+            }
         pipeline = self._extract_pipeline(project_path, subject["entry_symbols"],
                                           subject["adopters"])
         llm_available = self.llm.is_available()

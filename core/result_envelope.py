@@ -64,7 +64,12 @@ def envelope(verdict: str, *, usable: bool = True,
              guardrails: Optional[List[str]] = None,
              limitations: Optional[List[str]] = None) -> dict:
     """构造结论信封（所有字段都有默认值，便于工具按需填充）。"""
-    lims = [i for i in (limitations or []) if i in _LIM_BY_ID]
+    raw_lims = limitations
+    if isinstance(raw_lims, str):
+        raw_lims = [raw_lims]
+    elif not isinstance(raw_lims, (list, tuple, set)):
+        raw_lims = []
+    lims = [i for i in raw_lims if isinstance(i, str) and i in _LIM_BY_ID]
     return {
         "verdict": verdict,
         "usable_for_decisions": bool(usable),
