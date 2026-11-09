@@ -149,7 +149,10 @@ def git_fingerprint(project_path: str) -> dict:
     if rc != 0:
         return dict(empty, error=err or "非 git 仓库或仓库尚无提交")
 
-    rc, status_out, err = _git(["status", "--porcelain"], project_path)
+    # --untracked-files=all：未跟踪目录展开到文件，_untracked_stamp 才能感知
+    # 目录内已有文件的二次编辑（默认只给 `?? dir/`，目录 mtime 不会变）。
+    rc, status_out, err = _git(
+        ["status", "--porcelain", "--untracked-files=all"], project_path)
     if rc != 0:
         return dict(empty, head=head, error=err or "git status 执行失败")
 
