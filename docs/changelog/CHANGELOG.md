@@ -15,7 +15,7 @@
 - **`DREAM.md` ≤800 token**：五节——当前目标 / 已验证规则 / 坑 / 联想（当 X，先想到 Y）/ 未决问题；`notes.json` 保留证据、置信度与 TTL，30 天未命中下沉 `archive/`。
 - **新增 `coderef_dream` 工具（58→59）**：`status` / `seed` / `read` / `run`；`status`/`seed`/`read` 同步，`run` 默认后台。
 - **接入现有链路**：`memory_digest` 梦优先（先放梦的 verified 笔记，再补操作记忆；操作记忆不可用时仍可注入梦）；`remind` 复盘新增 `dream` 段，列出「梦里提醒过什么」。
-- **验证**：新增 `tests/test_dream.py` 11 例（seed/无 Key SKIP/三态核验/预算/TTL/去重/digest/工具入口/启动一次）；全量 pytest **393 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+- **验证**：新增 `tests/test_dream.py` 12 例（seed/无 Key SKIP/三态核验/预算/TTL/去重/digest/工具入口/后台决策/启动一次）；全量 pytest **394 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
 
 ### v5.19.7 — dispatcher 新增 `remind`：由子代理回答「你忘了什么」
 
