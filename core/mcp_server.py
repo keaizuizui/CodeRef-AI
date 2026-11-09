@@ -775,7 +775,8 @@ class Server:
                     if audit is not None:
                         audit.record(p, {
                             "tool": n,
-                            "gate": _audit_gate(gate, checked=True),
+                            "gate": _audit_gate(
+                                gate, checked=bool(gate.get("checked"))),
                             "blocked": {
                                 "gate": (gate.get("blocking") or {}).get("id", ""),
                                 "reason": (gate.get("blocking") or {}).get("reason", "")},
@@ -789,7 +790,8 @@ class Server:
         raw = self._run_inner(n, a, progress_cb)
         if not p:
             return raw
-        entry = {"tool": n, "gate": _audit_gate(gate, checked=True),
+        entry = {"tool": n,
+                 "gate": _audit_gate(gate, checked=bool(gate.get("checked"))),
                  "scope": _audit_scope(p)}
         try:
             from core.session_guard import HEAVY_TOOLS, guard_if_needed
@@ -858,6 +860,12 @@ class Server:
             r = Pipe().audit(p, output_dir=o, progress_cb=progress_cb,
                              strategy=strat,
                              with_dashboard=bool(a.get("with_dashboard", False)))
+            # 审计刚写出 findings/kg：清空新鲜度盘点缓存，避免信封引用旧盘点（5.19.6）
+            try:
+                from core.freshness_guard import invalidate as _invalidate_freshness
+                _invalidate_freshness(p)
+            except Exception:  # noqa: BLE001
+                pass
             d = getattr(r, 'dashboard_path', '')
             from core.result_envelope import for_audit
             # 结构化返回：携带落盘路径与明细统计，避免调用方只看得到摘要
@@ -996,6 +1004,11 @@ class Server:
             }, ensure_ascii=False)
         card = (dispatcher.load_plan(pp, plan_id) if plan_id
                 else dispatcher.plan(a.get("intent") or "probe", pp))
+        if plan_id and card is None:
+            return json.dumps({
+                "status": "error", "tool": "coderef_execute",
+                "error": f"计划不存在或 ID 非法: {plan_id}",
+            }, ensure_ascii=False)
         if not isinstance(card, dict) or card.get("status") != "ok":
             return json.dumps(
                 card if isinstance(card, dict)

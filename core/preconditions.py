@@ -97,13 +97,21 @@ def _hit(gate_id: str, reason: str) -> dict:
 def evaluate(tool: str, project_path: str, args: Optional[dict] = None) -> dict:
     """评估一次调用的前置条件。
 
-    返回 {"mode": str, "hits": [...], "blocked": bool, "blocking": dict|None}。
-    任何内部异常都收敛为"无命中"，绝不因闸门自身故障拦住调用。
+    返回 {"mode": str, "hits": [...], "blocked": bool, "blocking": dict|None,
+          "checked": bool}。checked=False 表示该工具不适用任何闸门（只读/
+    未知工具/评估异常），审计日志应记为 miss 而不是 pass。
+    任何内部异常都收敛为"未检查且放行"，绝不因闸门自身故障拦住调用。
     """
     args = args or {}
-    result = {"mode": "warn", "hits": [], "blocked": False, "blocking": None}
+    result = {"mode": "warn", "hits": [], "blocked": False,
+              "blocking": None, "checked": False}
     if not tool or not project_path or tool in READONLY_TOOLS:
         return result
+    applicable = (tool in GATE_A_TOOLS or tool in GATE_B_TOOLS
+                  or tool in GATE_C_TOOLS or tool in GATE_D_TOOLS)
+    if not applicable:
+        return result
+    result["checked"] = True
     try:
         hits: List[dict] = []
 
@@ -151,7 +159,8 @@ def evaluate(tool: str, project_path: str, args: Optional[dict] = None) -> dict:
         return result
     except Exception as e:  # noqa: BLE001 —— 闸门自身故障不拦调用
         logger.debug(f"[preconditions] 闸门评估失败（放行）: {e}")
-        return result
+        return {"mode": "warn", "hits": [], "blocked": False,
+                "blocking": None, "checked": False}
 
 
 def blocked_result(tool: str, hit: dict) -> dict:

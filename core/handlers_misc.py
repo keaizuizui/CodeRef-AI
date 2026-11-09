@@ -25,6 +25,15 @@ def _env_with_freshness(envelope: dict, project_path: str, artifacts: list) -> d
         return envelope
 
 
+def _invalidate_freshness(project_path: str) -> None:
+    """产物写出后清空盘点缓存，避免信封引用旧盘点（5.19.6）。"""
+    try:
+        from core.freshness_guard import invalidate
+        invalidate(project_path)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _scope(a: dict) -> str:
     """统一范围层（coderef_scope，5.19.2）：add/remove/list/verify。"""
     from core import scope as scope_mod
@@ -60,7 +69,13 @@ def _scope(a: dict) -> str:
         res["verify"] = scope_mod.verify(pp)
         return json.dumps(res, ensure_ascii=False)
     if act == "remove":
-        res = scope_mod.remove_rule(pp, a.get("kind", ""), a.get("pattern", ""))
+        pattern = a.get("pattern", "")
+        if not str(pattern or "").strip():
+            return json.dumps({
+                "status": "error", "tool": "coderef_scope",
+                "error": "action=remove 需要 pattern（避免空条件清空全部规则）",
+            }, ensure_ascii=False)
+        res = scope_mod.remove_rule(pp, a.get("kind", ""), pattern)
         res.update({"status": "ok", "tool": "coderef_scope", "action": "remove"})
         res["verify"] = scope_mod.verify(pp)
         return json.dumps(res, ensure_ascii=False)
@@ -364,6 +379,7 @@ def _report(a) -> str:
         except Exception as e:  # noqa: BLE001
             hr["serve"] = {"ok": False, "error": str(e)}
     from core.result_envelope import for_report
+    _invalidate_freshness(pp)  # 报告/记分卡刚写出，刷新后再生成 freshness
     hr["envelope"] = _env_with_freshness(
         for_report(bool(hr.get("ok")), str(hr.get("error") or ""),
                    getattr(r, "errors", []) or []),

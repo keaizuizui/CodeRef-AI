@@ -435,10 +435,18 @@ class CodeKnowledgeGraph:
         self._init_schema()
         inc = incremental or {}
         only = None
+        go_full_rebuild = False
         if inc:
             only = {self._norm_path(f) for f in (inc.get("files") or []) if f}
             if only:
+                # 受影响文件含 .go 时，跨文件 CALLS 无法只靠文件级重建恢复：
+                # 未变 Go 调用方指向变更函数的边已在删节点时移除，且 Go 无 import
+                # 依赖信息（_dependents 找不到它们）。此时整体重建 go_func（5.19.6）。
+                go_full_rebuild = any(
+                    os.path.splitext(f)[1].lower() == ".go" for f in only)
                 self._delete_file_rows(only)
+                if go_full_rebuild:
+                    self._delete_go_rows()
             else:
                 self._clear()
         else:
@@ -455,7 +463,8 @@ class CodeKnowledgeGraph:
             if gitnexus_dir and os.path.isdir(gitnexus_dir):
                 self._build_from_gitnexus(gitnexus_dir, stats)
             # 扫描 Go 文件（含 Go 组件的项目流程断链检测补盲；纯 Python 项目零开销）
-            self._build_from_go(self.project_path, stats, only)
+            self._build_from_go(self.project_path, stats,
+                                None if go_full_rebuild else only)
         except Exception as e:
             stats["errors"].append(str(e))
             logger.error(f"[KG] 构建失败: {e}")
@@ -488,6 +497,19 @@ class CodeKnowledgeGraph:
         id_rows = self._conn.execute("SELECT id, file_path FROM nodes").fetchall()
         ids = [row["id"] for row in id_rows
                if self._norm_path(row["file_path"]) in files]
+        for start in range(0, len(ids), 400):
+            chunk = ids[start:start + 400]
+            marks = ",".join("?" * len(chunk))
+            self._conn.execute(
+                f"DELETE FROM edges WHERE source IN ({marks}) OR target IN ({marks})",
+                chunk + chunk)
+            self._conn.execute(f"DELETE FROM nodes WHERE id IN ({marks})", chunk)
+        self._conn.commit()
+
+    def _delete_go_rows(self) -> None:
+        """删除全部 go_func 节点及关联边（增量变更到 Go 文件时整体重建）。"""
+        ids = [r["id"] for r in self._conn.execute(
+            "SELECT id FROM nodes WHERE type='go_func'").fetchall()]
         for start in range(0, len(ids), 400):
             chunk = ids[start:start + 400]
             marks = ",".join("?" * len(chunk))

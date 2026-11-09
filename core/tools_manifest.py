@@ -12,6 +12,9 @@ CodeRef MCP 工具注册数据（tools_manifest）——BUILTIN_TOOLS 描述表�
 
 from typing import Dict, List
 
+# 调度意图枚举单一事实源（5.19.6）：plan/execute 的 schema enum 与规则层同源
+from core.dispatch_intents import INTENTS as _DISPATCH_INTENTS
+
 # 指标清单同源引用：coderef_eval 的 schema enum 与 core.output_evaluator.VALID_METRICS
 # 保持唯一真源（新增指标只改 output_evaluator 一处，schema 自动同步，防双处漂移）
 from core.output_evaluator import VALID_METRICS as _EVAL_METRICS
@@ -115,7 +118,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
-                            "intent": {"type": "string", "enum": ["probe", "single_audit", "recover", "governance", "asset"], "default": "probe"},
+                            "intent": {"type": "string", "enum": list(_DISPATCH_INTENTS), "default": "probe"},
                             "intent_text": {"type": "string", "description": "自然语言意图（可选；传了则走 LLM 意图层）"},
                         }, "required": ["project_path"]},
                     },
@@ -133,7 +136,7 @@ BUILTIN_TOOLS: List[Dict] = [
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
                             "plan_id": {"type": "string", "description": "coderef_plan 返回的计划 ID"},
-                            "intent": {"type": "string", "enum": ["probe", "single_audit", "recover", "governance", "asset"], "description": "未传 plan_id 时按意图生成默认链"},
+                            "intent": {"type": "string", "enum": list(_DISPATCH_INTENTS), "description": "未传 plan_id 时按意图生成默认链"},
                             "intent_text": {"type": "string", "description": "自然语言意图（仅用于确认门校验，需先 plan）"},
                             "wait": {"type": "boolean", "description": "阻塞等待任务完成，直接返回最终结果", "default": False},
                         }, "required": ["project_path"]},

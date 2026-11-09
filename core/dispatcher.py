@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""coderef-dispatcher 形态 A（5.19.3）——把「编排 53 个工具」降级为「调用 4 个调度工具」。
+"""coderef-dispatcher 形态 A（5.19.3）——把「编排 58 个工具」降级为「调用 4 个调度工具」。
 
 定位：零 LLM 的规则引擎。链定义来自 `core/dispatch_chains.yaml`（唯一事实源），
-状态机推进落盘 `.coderef/dispatch/<task_id>.json`，崩溃可恢复（复用后台任务
-模型）。与层1 的 blocked 语义不同：dispatcher 的执行器是自己人，跳步可以当场
-补齐（缺 recover 先 recover、图旧先 sync），主 AI 只收计划卡与最终摘要。
+执行轨迹落盘 `.coderef/dispatch/<task_id>.json` 供审计与排查；当前版本重新执行
+会从链首开始（不支持断点续跑）。与层1 的 blocked 语义不同：dispatcher 的执行器
+是自己人，跳步可以当场补齐（缺 recover 先 recover、图旧先 sync），主 AI 只收
+计划卡与最终摘要。
 
 公开 API：
   - plan(intent, project_path) -> dict 计划卡（纯规划，落盘 plan）
@@ -14,7 +15,7 @@
   - report(project_path, task_id) -> dict 最终摘要信封
 
 降级：YAML 缺失/损坏时 plan 返回 status=error + 回退建议（手工链或裸工具）；
-dispatcher 不可用不影响 53 个裸工具照常使用。
+dispatcher 不可用不影响 58 个裸工具照常使用。
 
 作者: CodeRef-AI Team
 版本: v1.0
@@ -22,10 +23,13 @@ dispatcher 不可用不影响 53 个裸工具照常使用。
 
 import json
 import os
+import re
 import time
 import uuid
 from datetime import datetime
 from typing import Callable, Dict, List, Optional
+
+from core.dispatch_intents import INTENTS
 
 
 CHAINS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -33,7 +37,8 @@ CHAINS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 DISPATCH_DIR = os.path.join(".coderef", "dispatch")
 PLANS_DIR = os.path.join(DISPATCH_DIR, "plans")
 
-INTENTS = ("probe", "single_audit", "recover", "governance", "asset")
+# id 只允许生成格式（uuid 片段/下划线/短横线），防止调用方拼出路径穿越
+_ID_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
 
 # 闸门命中时的自动补齐动作（G-C 需要用户给目标架构，无法自动补）
 REMEDY = {
@@ -51,13 +56,20 @@ def _dispatch_dir(project_path: str) -> str:
     return os.path.join(os.path.abspath(project_path), DISPATCH_DIR)
 
 
+def _safe_id(value: str) -> str:
+    """校验 task_id/plan_id 只含生成格式字符，防止路径穿越。"""
+    if not isinstance(value, str) or not _ID_RE.match(value):
+        raise ValueError(f"非法 id: {value!r}（只允许字母、数字、下划线、短横线）")
+    return value
+
+
 def _trace_path(project_path: str, task_id: str) -> str:
-    return os.path.join(_dispatch_dir(project_path), f"{task_id}.json")
+    return os.path.join(_dispatch_dir(project_path), f"{_safe_id(task_id)}.json")
 
 
 def _plan_path(project_path: str, plan_id: str) -> str:
     return os.path.join(os.path.abspath(project_path), PLANS_DIR,
-                        f"{plan_id}.json")
+                        f"{_safe_id(plan_id)}.json")
 
 
 def _write_json(path: str, data: dict) -> None:
@@ -138,6 +150,7 @@ def plan(intent: str, project_path: str, intent_text: str = "") -> dict:
             continue
         item = {"id": step.get("id") or step["tool"],
                 "tool": step["tool"],
+                "args": dict(step.get("args") or {}),
                 "fail": step.get("fail", "stop")}
         if step.get("requires_user"):
             item["requires_user"] = True
@@ -172,11 +185,15 @@ def plan(intent: str, project_path: str, intent_text: str = "") -> dict:
 
 
 def load_plan(project_path: str, plan_id: str) -> Optional[dict]:
-    return _read_json(_plan_path(project_path, plan_id))
+    try:
+        return _read_json(_plan_path(project_path, plan_id))
+    except ValueError:
+        return None  # 非法 id 与"不存在"同样返回 None，由调用方给结构化错误
 
 
 def _render_args(template: dict, project_path: str) -> dict:
-    out = {}
+    # 默认注入 project_path：即使链定义漏写占位符，也不会把空路径传给工具
+    out = {"project_path": os.path.abspath(project_path)}
     for k, v in (template or {}).items():
         if isinstance(v, str) and "{project_path}" in v:
             out[k] = v.replace("{project_path}", os.path.abspath(project_path))
@@ -272,6 +289,10 @@ def execute(plan_card: dict, runner: Callable, project_path: str,
     from core.preconditions import evaluate
 
     task_id = task_id or str(uuid.uuid4())[:8]
+    try:
+        _safe_id(task_id)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
     trace = {
         "task_id": task_id,
         "plan_id": plan_card.get("plan_id", ""),
@@ -302,8 +323,9 @@ def execute(plan_card: dict, runner: Callable, project_path: str,
             trace["steps"].append(entry)
             trace["status"] = "paused"
             trace["paused"] = {"step": sid, "decision": step.get("decision", ""),
-                               "owner_actions": ["请先完成该决策，再重新 "
-                                                 "coderef_execute(plan_id=...)"]}
+                               "owner_actions": [
+                                   "请先完成该决策；当前版本重新执行会从链首开始"
+                                   "（不支持断点续跑）"]}
             _write_json(_trace_path(project_path, task_id), trace)
             trace["finished_at"] = _now()
             _write_json(_trace_path(project_path, task_id), trace)
@@ -359,7 +381,11 @@ def execute(plan_card: dict, runner: Callable, project_path: str,
 
 
 def status(project_path: str, task_id: str) -> dict:
-    trace = _read_json(_trace_path(project_path, task_id))
+    try:
+        trace = _read_json(_trace_path(project_path, task_id))
+    except ValueError as e:
+        return {"status": "error", "tool": "coderef_dispatch_status",
+                "error": str(e)}
     if trace is None:
         return {"status": "error", "tool": "coderef_dispatch_status",
                 "error": f"不存在 dispatch 任务: {task_id}"}
@@ -387,7 +413,12 @@ def report(project_path: str, task_id: str) -> dict:
     """最终摘要信封：结论 + freshness + KL + owner_actions + 中间步骤索引。"""
     from core.result_envelope import envelope
 
-    trace = _read_json(_trace_path(project_path, task_id))
+    trace = None
+    try:
+        trace = _read_json(_trace_path(project_path, task_id))
+    except ValueError as e:
+        return {"status": "error", "tool": "coderef_dispatch_report",
+                "error": str(e)}
     if trace is None:
         return {"status": "error", "tool": "coderef_dispatch_report",
                 "error": f"不存在 dispatch 任务: {task_id}"}

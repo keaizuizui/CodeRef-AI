@@ -72,8 +72,9 @@ chains:
       - id: arch_gap
         tool: coderef_arch_gap
         args: {project_path: "{project_path}"}
-        requires_user: true
-        decision: "请确认目标架构（coderef_target_arch_set）后再继续治理；dispatcher 不替用户做治理决策"
+        # 定标是否缺失由 G-C 闸门判定：缺失时 dispatcher 暂停浮出用户决策，
+        # 已定标时直接执行，避免无条件暂停导致治理链永远走不到后续步骤。
+        fail: continue
       - id: arch_verify
         tool: coderef_arch_verify
         args: {project_path: "{project_path}"}
