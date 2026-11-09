@@ -2,7 +2,7 @@
 
 > 一句话：**CodeRef 是编程 AI 的梦境/潜意识。** 主 AI 负责醒着做事，CodeRef 在安静时替它补梦，醒来只给一小片。梦复用 CodeRef 主 LLM 配置，也不改写任何确定性结论。
 
-> **实施状态（5.21.0）**：MVP 已落地 `core/dream.py` + `coderef_dream` 工具 + 启动补梦 + `memory_digest` 梦优先 + `remind` 梦段。5.20.1 起取消 dream 独立 Key/预算，统一复用主 LLM 配置；5.21.0 起支持 `pitfall/recap/routing/triage` 四类 job 与 `DREAM.md` 六节结构。不在本期范围：四层 agent、Wiki 记忆树、常驻 daemon、跨项目共享梦。
+> **实施状态（5.21.1）**：MVP 已落地 `core/dream.py` + `coderef_dream` 工具 + 启动补梦 + `memory_digest` 梦优先 + `remind` 梦段。5.20.1 起取消 dream 独立 Key/预算，统一复用主 LLM 配置；5.21.0 起支持 `pitfall/recap/routing/triage` 与 `DREAM.md` 六节；5.21.1 补齐 `change_narrative/failure_postmortem` 与 P2 草稿 `review_draft/refactor_draft/asset_candidate/noise_proposal`（只写 `drafts/`，需用户确认）。不在本期范围：四层 agent、Wiki 记忆树、常驻 daemon、跨项目共享梦。
 
 ---
 

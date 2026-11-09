@@ -1,8 +1,8 @@
 # CodeRef 梦任务与工具面设计 v0.1
 
 > 定位：`docs/dream.md` 回答「梦是什么」；本文回答「梦还能接哪些活、Skill 怎么配合、MCP 对外暴露多少」。
-> 状态：**部分实现（5.21.0）**。已落地 Skill 梦协议、job 契约 `pitfall/recap/routing/triage`、`claim_type`、`DREAM.md` v2 六节、triage digest 优先、`CODEREF_TOOL_PROFILE=lite|full`；`change_narrative` / `failure_postmortem` / P2 草稿（`drafts/`）待 5.21.1。
-> 当前基线 5.21.0：59 个 MCP 工具，梦复用主 LLM 配置。
+> 状态：**已实现（5.21.1）**。Skill 梦协议、job 契约 `pitfall/recap/routing/triage/change_narrative/failure_postmortem`、P2 草稿 `review_draft/refactor_draft/asset_candidate/noise_proposal`（`drafts/` + 用户确认）、`claim_type`、`DREAM.md` v2 六节、triage digest 优先、`CODEREF_TOOL_PROFILE=lite|full` 均已落地。
+> 当前基线 5.21.1：59 个 MCP 工具，梦复用主 LLM 配置。
 
 ---
 
@@ -365,7 +365,7 @@ coderef_audit
 |---|---|---|
 | 5.20.2 | Skill 梦协议 + L1/L2/L3 钩子（纯文档） | 已并入 5.21.0 |
 | 5.21.0 | `job` 契约 + `recap` / `routing` / `triage` + `DREAM.md` v2 + `CODEREF_TOOL_PROFILE` | 已实现 |
-| 5.21.1 | `failure_postmortem` / `change_narrative` + `drafts/` + P2 草稿 job | 待实现 |
+| 5.21.1 | `failure_postmortem` / `change_narrative` + `drafts/` + P2 草稿 job | 已实现 |
 
 排序理由：先把“主 AI 怎么用梦”写进 Skill，再扩梦的任务，最后收工具面；避免工具面先收导致 Skill 引用了不可见工具。
 

@@ -1210,25 +1210,34 @@ BUILTIN_TOOLS: List[Dict] = [
                             "用主 LLM 配置补梦（与其他 LLM 工具同一套 Key/预算），把被阻断、失败、变更守卫退化与"
                             "主 AI 显式 seed 的经历巩固成更少更准的联想，写入项目本地的 "
                             ".coderef/dream/DREAM.md（≤800 token）。\n"
-                            "action=status（默认）：最近做梦时间、笔记数、主 LLM 状态、上次错误、是否该补梦；\n"
+                            "action=status（默认）：最近做梦时间、笔记数、草稿数、主 LLM 状态、上次错误、是否该补梦；\n"
                             "action=seed：主 AI 显式投喂一条显著事件（text/kind/source），不读取主 AI 全量对话；\n"
                             "action=read：读 DREAM.md 或按 job/kind/keyword 取笔记，默认只返回 verified；\n"
-                            "action=run：手动补一轮梦（后台执行；job 可选 pitfall/recap/routing/triage，"
-                            "主 LLM 无 Key → status=SKIP，不编造）。\n"
+                            "action=run：手动补一轮梦（后台执行）。记忆/叙事类 job 写 notes.json + DREAM.md；"
+                            "草稿类 job（review_draft/refactor_draft/asset_candidate/noise_proposal）只写 "
+                            ".coderef/dream/drafts/，返回 requires_confirmation=true，必须用户确认后才能应用。"
+                            "主 LLM 无 Key → status=SKIP，不编造；\n"
+                            "action=drafts：读草稿摘要（可按 job 过滤）或按 draft_id 读草稿全文。\n"
                             "诚实边界：梦是假设不是审计结论；每条笔记必须有 evidence，核验失败直接 rejected；"
-                            "claim_type=advice 的建议永远是假设，不会被标成 verified。"
+                            "claim_type=advice 的建议永远是假设，不会被标成 verified；草稿永不自动进入治理库。"
                         ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
-                            "action": {"type": "string", "enum": ["status", "seed", "read", "run"],
-                                       "default": "status", "description": "status=状态；seed=投喂显著事件；read=读梦；run=手动补梦"},
+                            "action": {"type": "string", "enum": ["status", "seed", "read", "run", "drafts"],
+                                       "default": "status", "description": "status=状态；seed=投喂显著事件；read=读梦；run=手动补梦；drafts=读草稿"},
                             "job": {"type": "string",
-                                    "enum": ["pitfall", "recap", "routing", "triage"],
+                                    "enum": ["pitfall", "recap", "routing", "triage",
+                                             "change_narrative", "failure_postmortem",
+                                             "review_draft", "refactor_draft",
+                                             "asset_candidate", "noise_proposal"],
                                     "default": "pitfall",
                                     "description": ("action=run 的梦任务：pitfall=坑与规则（默认）；"
                                                     "recap=续接当前目标与开工建议；routing=「当 X，先用 Y」联想；"
-                                                    "triage=「先看什么」排序。advice 永远是假设。"
-                                                    "action=read 时可用来按 job 过滤")},
+                                                    "triage=「先看什么」排序；change_narrative=上次改了什么（事实）；"
+                                                    "failure_postmortem=失败根因假设；以上写 notes。"
+                                                    "review_draft/refactor_draft/asset_candidate/noise_proposal "
+                                                    "是草稿类，只写 drafts/ 且必须用户确认。"
+                                                    "action=read 时按 job 过滤笔记；action=drafts 时按 job 过滤草稿")},
                             "text": {"type": "string", "description": "action=seed 时的显著事件文本"},
                             "kind": {"type": "string", "enum": ["rule", "pitfall", "convention", "association", "context"],
                                      "description": "action=seed 时的事件类别；action=read 时的过滤类别"},
@@ -1236,8 +1245,9 @@ BUILTIN_TOOLS: List[Dict] = [
                             "keyword": {"type": "string", "description": "action=read 时按文本/证据模糊匹配"},
                             "include_hypothesis": {"type": "boolean", "default": False,
                                                    "description": "action=read 时是否包含未验证假设（默认只看 verified）"},
-                            "limit": {"type": "integer", "default": 20, "description": "action=read 返回条数上限"},
-                            "background": {"type": "boolean", "description": "action=run 默认后台；status/seed/read 保持同步"},
+                            "draft_id": {"type": "string", "description": "action=drafts 时按草稿 ID 读全文（只允许 [0-9A-Za-z_-]，最长 120）"},
+                            "limit": {"type": "integer", "default": 20, "description": "action=read 的笔记条数上限；action=drafts 的草稿条数上限（默认 10）"},
+                            "background": {"type": "boolean", "description": "action=run 默认后台；status/seed/read/drafts 保持同步"},
                         }, "required": ["project_path"]},
                     }
 ]

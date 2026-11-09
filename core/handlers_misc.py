@@ -89,14 +89,14 @@ def _scope(a: dict) -> str:
 
 
 def _dream(a: dict) -> str:
-    """梦（coderef_dream，5.20.0）：status / seed / read / run。"""
+    """梦（coderef_dream，5.21.x）：status / seed / read / run / drafts。"""
     from core import dream
     pp = a["project_path"]
     act = str(a.get("action") or "status").strip().lower()
-    if act not in ("status", "seed", "read", "run"):
+    if act not in ("status", "seed", "read", "run", "drafts"):
         return json.dumps({
             "status": "error", "tool": "coderef_dream",
-            "error": f"非法 action: {act!r}；允许 status/seed/read/run",
+            "error": f"非法 action: {act!r}；允许 status/seed/read/run/drafts",
         }, ensure_ascii=False)
     if act == "seed":
         res = dream.seed(pp, a.get("text", ""),
@@ -111,6 +111,10 @@ def _dream(a: dict) -> str:
                          job=a.get("job", ""))
     elif act == "run":
         res = dream.run(pp, trigger="manual", job=a.get("job", "pitfall"))
+    elif act == "drafts":
+        res = dream.list_drafts(pp, job=a.get("job", ""),
+                                limit=a.get("limit", 10),
+                                draft_id=a.get("draft_id", ""))
     else:
         res = dream.status(pp)
     return json.dumps(res, ensure_ascii=False)

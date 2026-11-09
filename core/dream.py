@@ -15,7 +15,10 @@ llm_* 与主 LLM 调用预算）。`dream` 段只保留行为开关（是否启�
   - seed(project_path, text, ...) -> dict 主 AI 显式投喂一条显著事件
   - read(project_path, ...) -> dict       读 DREAM.md / 按 job、kind 或关键词取笔记
   - run(project_path, trigger=..., job=...) -> dict  手动或启动时补一轮梦
-      job ∈ pitfall（默认）/ recap / routing / triage
+      job ∈ pitfall（默认）/ recap / routing / triage（记忆类）
+            / change_narrative / failure_postmortem（叙事类，写 notes）
+            / review_draft / refactor_draft / asset_candidate / noise_proposal（草稿类，只写 drafts/）
+  - list_drafts(project_path, ...) -> dict 读草稿（action=drafts）
   - trigger_if_due(project_path) -> bool  进程内一次启动补梦（后台线程）
   - digest_items(project_path) -> list    供 memory_digest 优先注入的梦条目
 
@@ -50,11 +53,27 @@ SEEDS_FILE = "seeds.jsonl"
 NOTES_FILE = "notes.json"
 RUNS_DIR = "runs"
 ARCHIVE_DIR = "archive"
+DRAFTS_DIR = "drafts"
 SCHEMA_VERSION = 1
 
 # ── 梦的形态边界 ────────────────────────────────────────────────
+# 记忆类：巩固成 notes.json / DREAM.md
 JOBS = ("pitfall", "recap", "routing", "triage")
+# 叙事类：P1，同样写 notes.json / DREAM.md（fact 可 verified，advice 永远假设）
+NOTE_JOBS = JOBS + ("change_narrative", "failure_postmortem")
+# 草稿类：P2，只写 drafts/，必须用户确认，不进入 notes / DREAM.md
+DRAFT_JOBS = ("review_draft", "refactor_draft", "asset_candidate",
+              "noise_proposal")
+ALL_JOBS = NOTE_JOBS + DRAFT_JOBS
 DEFAULT_JOB = "pitfall"
+
+# 草稿类 job → 后续确定性闸门（服务端固定，忽略 LLM 返回的 next_tools）
+DRAFT_NEXT_TOOLS = {
+    "review_draft": ["coderef_review", "coderef_verify_findings"],
+    "refactor_draft": ["coderef_arch_verify", "coderef_target_adopt"],
+    "asset_candidate": ["coderef_asset", "coderef_registry"],
+    "noise_proposal": ["coderef_scope", "coderef_whitelist"],
+}
 CLAIM_TYPES = ("fact", "advice")
 KINDS = ("rule", "pitfall", "convention", "association", "context")
 STATUSES = ("verified", "hypothesis", "rejected", "decayed")
@@ -70,6 +89,7 @@ MAX_SEEDS = 20
 MAX_AUDIT_EVENTS = 30
 MAX_DISPATCH_EVENTS = 10
 MAX_GIT_COMMITS = 10
+MAX_CHANGED_FILES = 20
 AUDIT_DAYS = 7
 GIT_TIMEOUT = 10
 # 单次补梦的输入/输出硬上限（防止一次做梦把主 LLM 上下文撑爆；不是独立预算）
@@ -412,6 +432,60 @@ def seed(project_path: str, text: str, kind: str = "association",
             "note": "已入梦料；下次补梦时才会被巩固"}
 
 
+def _draft_files(project_path: str, job: str = "") -> List[str]:
+    """drafts/ 下的草稿文件（不含 .tmp）；job 非空时按 `<job>-` 前缀过滤。"""
+    base = _path(project_path, DRAFTS_DIR)
+    if not os.path.isdir(base):
+        return []
+    prefix = (job + "-") if job else ""
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return []
+    out = []
+    for name in names:
+        if not name.endswith(".json") or name.endswith(".json.tmp"):
+            continue
+        if prefix and not name.startswith(prefix):
+            continue
+        out.append(os.path.join(base, name))
+    return out
+
+
+def _draft_summary(path: str) -> Optional[dict]:
+    data = _read_json(path, {})
+    if not isinstance(data, dict):
+        return None
+    draft_id = os.path.basename(path)[:-5]
+    return {
+        "draft_id": draft_id,
+        "job": str(data.get("job") or draft_id.split("-")[0]),
+        "generated_at": str(data.get("generated_at") or ""),
+        "items": len(data.get("items") or []),
+        "rejected": len(data.get("rejected") or []),
+        "requires_confirmation": bool(data.get("requires_confirmation")),
+        "next_tools": list(data.get("next_tools") or []),
+        "path": path,
+    }
+
+
+def _draft_summaries(project_path: str, job: str = "") -> List[dict]:
+    paths = _draft_files(project_path, job)
+
+    def _mtime(path: str) -> float:
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0.0
+
+    out = []
+    for path in sorted(paths, key=_mtime, reverse=True):
+        summary = _draft_summary(path)
+        if summary:
+            out.append(summary)
+    return out
+
+
 def status(project_path: str) -> dict:
     """梦的诚实状态：时间、笔记数、主 LLM 状态、上次错误。"""
     pp = os.path.abspath(project_path)
@@ -427,6 +501,8 @@ def status(project_path: str) -> dict:
     llm_cfg = getattr(llm, "config", None)
     provider = getattr(llm_cfg, "provider", None)
     seeds = _read_seeds(pp)
+    drafts = _draft_summaries(pp)
+    draft_by_job = Counter(str(d.get("job") or "unknown") for d in drafts)
     return {
         "status": "ok",
         "tool": "coderef_dream",
@@ -449,6 +525,8 @@ def status(project_path: str) -> dict:
         "last_error": state.get("last_error", ""),
         "last_job": state.get("last_job", ""),
         "jobs": list(JOBS),
+        "note_jobs": list(NOTE_JOBS),
+        "draft_jobs": list(DRAFT_JOBS),
         "default_job": DEFAULT_JOB,
         "due": _is_due(state, cfg),
         "notes": {
@@ -456,6 +534,11 @@ def status(project_path: str) -> dict:
             "by_status": dict(by_status),
             "by_kind": dict(by_kind),
             "by_job": dict(by_job),
+        },
+        "drafts": {
+            "total": len(drafts),
+            "by_job": dict(draft_by_job),
+            "last_at": drafts[0].get("generated_at", "") if drafts else "",
         },
         "seeds": {"total": len(seeds),
                   "pending": max(0, len(seeds) - int(
@@ -563,6 +646,55 @@ def read(project_path: str, kind: str = "", keyword: str = "",
     }
 
 
+_DRAFT_ID_RE = re.compile(r"^[0-9A-Za-z_-]{1,120}$")
+
+
+def list_drafts(project_path: str, job: str = "", limit: int = 10,
+                draft_id: str = "") -> dict:
+    """读草稿（action=drafts）：摘要列表或按 draft_id 读全文。
+
+    草稿只存在于 `.coderef/dream/drafts/`，不进入 notes / DREAM.md。
+    """
+    pp = os.path.abspath(project_path)
+    job = str(job or "").strip().lower()
+    draft_id = str(draft_id or "").strip()
+    try:
+        limit = max(1, min(100, int(limit)))
+    except (TypeError, ValueError):
+        limit = 10
+
+    if job and job not in DRAFT_JOBS:
+        return {"status": "error", "tool": "coderef_dream", "action": "drafts",
+                "error": (f"非法 draft job: {job!r}；"
+                          f"支持 {'/'.join(DRAFT_JOBS)}")}
+
+    if draft_id:
+        if not _DRAFT_ID_RE.fullmatch(draft_id):
+            return {"status": "error", "tool": "coderef_dream",
+                    "action": "drafts",
+                    "error": "非法 draft_id：只允许 [0-9A-Za-z_-]，最长 120"}
+        path = _path(pp, os.path.join(DRAFTS_DIR, draft_id + ".json"))
+        if not os.path.isfile(path):
+            return {"status": "error", "tool": "coderef_dream",
+                    "action": "drafts", "draft_id": draft_id,
+                    "error": f"草稿不存在: {draft_id}"}
+        data = _read_json(path, {})
+        if not isinstance(data, dict) or not data:
+            return {"status": "error", "tool": "coderef_dream",
+                    "action": "drafts", "draft_id": draft_id,
+                    "error": "草稿内容不是合法 JSON 对象"}
+        return {"status": "ok", "tool": "coderef_dream", "action": "drafts",
+                "project_path": pp, "available": True, "draft_id": draft_id,
+                "draft": data, "drafts": [data]}
+
+    drafts = _draft_summaries(pp, job)[:limit]
+    return {"status": "ok", "tool": "coderef_dream", "action": "drafts",
+            "project_path": pp, "available": bool(drafts),
+            "filter": {"job": job}, "drafts": drafts,
+            "guardrail": ("草稿是建议不是结论；应用前必须用户确认，"
+                          "并走 next_tools 里的确定性工具")}
+
+
 # ═══════════════════════════════════════════════════════════════
 # 原料收集与显著性筛选（零 LLM）
 # ═══════════════════════════════════════════════════════════════
@@ -629,7 +761,7 @@ def _collect_git(project_path: str) -> dict:
     rc, head, err = _git(["rev-parse", "HEAD"], project_path)
     if rc != 0:
         return {"available": False, "head": "", "commits": [],
-                "error": err or "非 git 仓库"}
+                "changed_files": [], "error": err or "非 git 仓库"}
     rc, out, _ = _git(["log", "-n", str(MAX_GIT_COMMITS),
                        "--pretty=format:%h|%s"], project_path)
     commits = []
@@ -638,7 +770,19 @@ def _collect_git(project_path: str) -> dict:
             if "|" in line:
                 h, s = line.split("|", 1)
                 commits.append({"commit": h.strip(), "subject": s.strip()[:160]})
-    return {"available": True, "head": head, "commits": commits, "error": ""}
+    # 未提交的变更文件（草稿类 job 的输入之一）；只取路径，不读内容
+    changed_files: List[str] = []
+    rc, out, _ = _git(["status", "--porcelain"], project_path)
+    if rc == 0:
+        for line in out.splitlines()[:MAX_CHANGED_FILES]:
+            path = line[3:] if len(line) > 3 else line
+            if " -> " in path:  # 重命名行：只保留新路径
+                path = path.split(" -> ", 1)[1]
+            path = path.strip().strip('"')
+            if path:
+                changed_files.append(path.replace("\\", "/")[:200])
+    return {"available": True, "head": head, "commits": commits,
+            "changed_files": changed_files, "error": ""}
 
 
 def _collect(project_path: str, state: dict, new_seeds: List[dict]) -> dict:
@@ -686,6 +830,19 @@ def _salient_count(materials: dict) -> int:
     return count
 
 
+def _has_context(materials: dict, existing_notes: List[dict]) -> bool:
+    """草稿类允许 salient==0，但必须至少有一种可起草的上下文。"""
+    git = materials.get("git") or {}
+    if git.get("commits") or git.get("changed_files"):
+        return True
+    if existing_notes:
+        return True
+    guard = materials.get("last_guard") or {}
+    if guard.get("findings"):
+        return True
+    return bool(materials.get("facts"))
+
+
 # ═══════════════════════════════════════════════════════════════
 # 脱敏与提示词
 # ═══════════════════════════════════════════════════════════════
@@ -729,6 +886,7 @@ def _prompt_materials(materials: dict, project_path: str,
         },
         "上下文": {
             "最近提交": (materials.get("git") or {}).get("commits") or [],
+            "变更文件": (materials.get("git") or {}).get("changed_files") or [],
             "git_available": (materials.get("git") or {}).get("available", False),
             "会话事实": materials.get("facts") or {},
         },
@@ -844,6 +1002,139 @@ _TRIAGE_PROMPT = """本次 job=triage（开工排序）：只排序「先看什�
 4. 不要重复「已有笔记」；只依据原料，不假装知道未记录的经历。
 """
 
+_CHANGE_NARRATIVE_PROMPT = """本次 job=change_narrative（叙事）：只复述「上次改了什么 / 结果如何 / 下一步」，全部是事实。
+请输出 JSON：
+{
+  "goal": "当前目标（一句话，可为空串）",
+  "notes": [
+    {
+      "claim_type": "fact",
+      "kind": "context",
+      "text": "上次改了什么 / 结果如何 / 下一步（<=120字）",
+      "evidence": ["git:短SHA", "audit:工具名", "dispatch:任务ID"],
+      "confidence": 0.0
+    }
+  ],
+  "open_questions": ["尚未确认的下一步问题（<=3条）"]
+}
+
+硬约束：
+1. 最多 3 条 notes；每条 claim_type 必须为 "fact"，kind 必须为 "context"。
+2. 只复述原料里确实发生的改动与结果；不推测原因、不写建议。
+3. evidence 只用 git: / audit: / dispatch: 三种格式；不要编造不存在的 SHA/工具/ID。
+4. 不要重复「已有笔记」；不假装知道未记录的经历。
+"""
+
+_FAILURE_POSTMORTEM_PROMPT = """本次 job=failure_postmortem（复盘）：只产出根因假设与下次如何避免，它们是建议，不是结论。
+请输出 JSON：
+{
+  "notes": [
+    {
+      "claim_type": "advice",
+      "kind": "pitfall",
+      "text": "根因假设 / 下次怎么避免（<=120字）",
+      "evidence": ["dispatch:任务ID", "audit:工具名", "seed:种子ID"],
+      "confidence": 0.0
+    }
+  ],
+  "open_questions": ["需要下次验证的根因（<=3条）"]
+}
+
+硬约束：
+1. 最多 3 条 notes；每条 claim_type 必须为 "advice"，kind 必须为 "pitfall"。
+2. 根因只能是假设，不得写成已验证结论；不确定就放进 open_questions。
+3. evidence 只用 dispatch: / audit: / seed: 三种格式；不要编造不存在的 ID。
+4. 不要重复「已有笔记」；不假装知道未记录的经历。
+"""
+
+_REVIEW_DRAFT_PROMPT = """本次 job=review_draft（草稿）：产出「变更审查清单」草稿。
+草稿只写 drafts/，必须由用户确认后才能调用确定性工具，不得声称问题已确认。
+请输出 JSON：
+{
+  "items": [
+    {
+      "text": "建议检查的点 / 疑似问题（<=120字）",
+      "evidence": ["file:相对路径", "audit:工具名"],
+      "confidence": 0.0
+    }
+  ],
+  "open_questions": ["尚未确认的问题（<=3条）"],
+  "next_tools": []
+}
+
+硬约束：
+1. 最多 5 条 items；只依据原料，不假装读过未列出的文件。
+2. 每条 item 必须有 evidence，只用 file: / audit: / dispatch: / git: 格式；不要编造路径/ID。
+3. 这是草稿不是结论；不要输出修复代码，不要声称已定论。
+4. next_tools 由服务端固定，留空即可。
+"""
+
+_REFACTOR_DRAFT_PROMPT = """本次 job=refactor_draft（草稿）：产出「重构步骤与风险」草稿。
+草稿只写 drafts/，必须由用户确认后走 coderef_arch_verify / coderef_target_adopt，不得自动改代码。
+请输出 JSON：
+{
+  "items": [
+    {
+      "text": "建议的重构步骤 / 风险（<=120字）",
+      "evidence": ["file:相对路径", "audit:工具名", "dispatch:任务ID"],
+      "confidence": 0.0
+    }
+  ],
+  "open_questions": ["需先确认的结构问题（<=3条）"],
+  "next_tools": []
+}
+
+硬约束：
+1. 最多 5 条 items；只依据原料，不假装读过未列出的文件。
+2. 每条 item 必须有 evidence，只用 file: / audit: / dispatch: / git: 格式；不要编造路径/ID。
+3. 这是草稿不是结论；不输出具体代码改动，不声称架构已验证。
+4. next_tools 由服务端固定，留空即可。
+"""
+
+_ASSET_CANDIDATE_PROMPT = """本次 job=asset_candidate（草稿）：产出「可复用设计候选」草稿。
+草稿只写 drafts/，必须由用户确认后走 coderef_asset / coderef_registry 的门槛。
+请输出 JSON：
+{
+  "items": [
+    {
+      "text": "可复用设计候选与复用条件（<=120字）",
+      "evidence": ["file:相对路径", "audit:工具名", "seed:种子ID"],
+      "confidence": 0.0
+    }
+  ],
+  "open_questions": ["采用前需确认的问题（<=3条）"],
+  "next_tools": []
+}
+
+硬约束：
+1. 最多 5 条 items；只依据原料，不假装读过未列出的文件。
+2. 每条 item 必须有 evidence，只用 file: / audit: / seed: / dispatch: 格式；不要编造路径/ID。
+3. 这是候选不是已登记资产；不要声称资产已可复用。
+4. next_tools 由服务端固定，留空即可。
+"""
+
+_NOISE_PROPOSAL_PROMPT = """本次 job=noise_proposal（草稿）：产出「降噪建议」草稿（scope / whitelist 方向）。
+草稿只写 drafts/，必须由用户确认后调用 coderef_scope / coderef_whitelist，不得直接改规则。
+请输出 JSON：
+{
+  "items": [
+    {
+      "text": "疑似误报 / 建议排除范围及理由（<=120字）",
+      "evidence": ["audit:工具名", "file:相对路径", "dispatch:任务ID"],
+      "confidence": 0.0
+    }
+  ],
+  "open_questions": ["需要用户拍板的排除范围（<=3条）"],
+  "next_tools": []
+}
+
+硬约束：
+1. 最多 5 条 items；只依据原料，不假装读过未列出的文件。
+2. 每条 item 必须有 evidence，只用 audit: / file: / dispatch: / seed: 格式；不要编造路径/ID。
+3. 这是建议不是已生效规则；不得声称误报已被确认。
+4. next_tools 由服务端固定，留空即可。
+"""
+
 # job → 输出契约（共用同一段原料头，只换这部分）
 _USER_PROMPT = _PROMPT_HEAD + _PITFALL_PROMPT
 _JOB_BODIES = {
@@ -851,10 +1142,22 @@ _JOB_BODIES = {
     "recap": _RECAP_PROMPT,
     "routing": _ROUTING_PROMPT,
     "triage": _TRIAGE_PROMPT,
+    "change_narrative": _CHANGE_NARRATIVE_PROMPT,
+    "failure_postmortem": _FAILURE_POSTMORTEM_PROMPT,
+}
+
+# 草稿类 job 的提示词（只写 drafts/，不进入 notes）
+_DRAFT_PROMPTS = {
+    "review_draft": _REVIEW_DRAFT_PROMPT,
+    "refactor_draft": _REFACTOR_DRAFT_PROMPT,
+    "asset_candidate": _ASSET_CANDIDATE_PROMPT,
+    "noise_proposal": _NOISE_PROPOSAL_PROMPT,
 }
 
 # 各 job 的 notes 条数上限（与提示词里的硬约束一致，服务端再兜一层）
-_JOB_MAX_NOTES = {"pitfall": 5, "recap": 5, "routing": 5, "triage": 3}
+_JOB_MAX_NOTES = {"pitfall": 5, "recap": 5, "routing": 5, "triage": 3,
+                  "change_narrative": 3, "failure_postmortem": 3}
+MAX_DRAFT_ITEMS = 5
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -926,6 +1229,13 @@ def _normalize_candidate(raw: dict, ctx: dict,
     if job in ("routing", "triage"):
         claim_type = "advice"
         kind = "association"
+    # 叙事类：change_narrative 只复述事实（上下文），failure_postmortem 只产假设坑
+    if job == "change_narrative":
+        claim_type = "fact"
+        kind = "context"
+    elif job == "failure_postmortem":
+        claim_type = "advice"
+        kind = "pitfall"
     if kind not in KINDS:
         return {
             "id": "dream-" + uuid.uuid4().hex[:8],
@@ -985,6 +1295,49 @@ def _normalize_candidate(raw: dict, ctx: dict,
         "checks": checks,
         "created_at": _now(),
         "last_hit_at": "",
+    }
+
+
+def _normalize_draft_item(raw: dict, ctx: dict, job: str) -> Optional[dict]:
+    """草稿条目：统一 advice + hypothesis；证据核验失败 → rejected。"""
+    if not isinstance(raw, dict):
+        return None
+    text = _clean_text(raw.get("text"))
+    if not text:
+        return None
+    evidence = raw.get("evidence")
+    if isinstance(evidence, str):
+        evidence = [evidence]
+    if not isinstance(evidence, list):
+        evidence = []
+    evidence = list(dict.fromkeys(
+        _clean_text(e) for e in evidence if _clean_text(e)))[:MAX_EVIDENCE]
+    try:
+        confidence = max(0.0, min(1.0, float(raw.get("confidence", 0.5))))
+    except (TypeError, ValueError):
+        confidence = 0.5
+
+    checks = []
+    has_fail = False
+    for ref in evidence:
+        ok, detail = _check_ref(ref, ctx)
+        checks.append({"ref": ref, "ok": ok, "detail": detail})
+        if ok is False:
+            has_fail = True
+
+    rejected = has_fail
+    return {
+        "id": "draft-" + uuid.uuid4().hex[:8],
+        "job": job,
+        "claim_type": "advice",
+        "text": text[:MAX_NOTE_CHARS],
+        "evidence": evidence,
+        "confidence": confidence,
+        "status": "rejected" if rejected else "hypothesis",
+        "reason": ("证据引用核验失败" if rejected
+                   else "草稿条目：建议只能是假设，需用户确认后才能执行"),
+        "checks": checks,
+        "created_at": _now(),
     }
 
 
@@ -1229,13 +1582,14 @@ def run(project_path: str, trigger: str = "manual", llm=None,
         job: str = DEFAULT_JOB) -> dict:
     """补一轮梦：收集 → 筛显著 → 主 LLM 提议 → 确定性核验 → 写梦。
 
-    job ∈ JOBS；不同 job 只换提示词与 notes 条数上限，核验/写盘/TTL 共用。
+    job ∈ ALL_JOBS；记忆/叙事类写 notes.json + DREAM.md，
+    草稿类只写 drafts/，两者共用核验、脱敏与 runs/ 记录。
     """
     pp = os.path.abspath(project_path)
     job = str(job or DEFAULT_JOB).strip().lower()
-    if job not in JOBS:
+    if job not in ALL_JOBS:
         return {"status": "error", "tool": "coderef_dream", "action": "run",
-                "error": f"未知 job: {job!r}；支持 {'/'.join(JOBS)}"}
+                "error": f"未知 job: {job!r}；支持 {'/'.join(ALL_JOBS)}"}
     if not os.path.isdir(pp):
         return {"status": "error", "tool": "coderef_dream", "action": "run",
                 "error": f"项目目录不存在: {pp}"}
@@ -1256,11 +1610,27 @@ def run(project_path: str, trigger: str = "manual", llm=None,
     new_seeds = seeds[consumed:consumed + MAX_SEEDS]
     materials = _collect(pp, state, new_seeds)
     salient = _salient_count(materials)
-    if salient == 0:
+    existing = _load_notes(pp)
+    if job in DRAFT_JOBS:
+        # 草稿类允许 salient==0，但必须有可起草的上下文
+        if salient == 0 and not _has_context(materials, existing):
+            return _skip(
+                pp, state, cfg,
+                "没有可起草的上下文（无 git 变更 / 已有笔记 / 变更守卫 / 会话事实）",
+                trigger, {"materials": {"salient": 0}}, job=job)
+        return _run_draft(pp, cfg, state, trigger, job, llm, materials,
+                          existing, seeds, salient)
+    if job == "change_narrative":
+        # 变更叙事只需要「有变更可讲」；没有 blocked/失败时也允许基于 git 记录成文
+        if salient == 0 and not _has_context(materials, existing):
+            return _skip(
+                pp, state, cfg,
+                "没有可叙事的上下文（无 git 提交/变更、已有笔记、变更守卫或会话事实）",
+                trigger, {"materials": {"salient": 0}}, job=job)
+    elif salient == 0:
         return _skip(pp, state, cfg, "没有新的显著原料（成功流水账不入梦）",
                      trigger, {"materials": {"salient": 0}}, job=job)
 
-    existing = _load_notes(pp)
     material_text = _prompt_materials(materials, pp, existing)
     # 单次上下文/输出硬上限（防止撑爆主 LLM，不是 dream 独立预算）
     max_input_chars = MAX_PROMPT_CHARS
@@ -1410,6 +1780,159 @@ def run(project_path: str, trigger: str = "manual", llm=None,
         "dream_md_path": _path(pp, DREAM_MD), "dream_md_chars": md_chars,
         "notes_path": _path(pp, NOTES_FILE), "run_path": run_path,
         "llm": record["llm"], "limits": record["limits"],
+        "envelope": env,
+    }
+
+
+def _run_draft(pp: str, cfg: dict, state: dict, trigger: str, job: str,
+               llm, materials: dict, existing: List[dict],
+               seeds: List[dict], salient: int) -> dict:
+    """草稿类 job：只写 `.coderef/dream/drafts/`，不碰 notes.json / DREAM.md。"""
+    material_text = _prompt_materials(materials, pp, existing)
+    # 单次上下文/输出硬上限（防止撑爆主 LLM，不是 dream 独立预算）
+    max_input_chars = MAX_PROMPT_CHARS
+    if len(material_text) > max_input_chars:
+        material_text = material_text[:max_input_chars] + "\n…（原料已按上下文上限截断）"
+    llm_cfg = getattr(llm, "config", None)
+    out_tokens = min(MAX_OUTPUT_TOKENS, max(
+        256, _as_int(getattr(llm_cfg, "max_tokens", MAX_OUTPUT_TOKENS),
+                     MAX_OUTPUT_TOKENS, minimum=256)))
+    messages = [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": _PROMPT_HEAD.format(
+            project=os.path.basename(pp), now=_now(),
+            materials=material_text) + _DRAFT_PROMPTS[job]},
+    ]
+
+    try:
+        response = llm.chat_completion(
+            messages, temperature=0.2, max_tokens=out_tokens,
+            response_format={"type": "json_object"})
+    except Exception as e:  # noqa: BLE001
+        return _fail(pp, state, cfg, trigger, f"LLM 调用异常: {e}", materials,
+                     job=job)
+
+    from core.llm_integration import LLMIntegration
+    if LLMIntegration.is_error_response(response):
+        return _fail(pp, state, cfg, trigger, response, materials, job=job)
+    data = LLMIntegration.parse_json_response(response)
+    if data is None:
+        return _fail(pp, state, cfg, trigger,
+                     "LLM 返回内容无法解析为 JSON（草稿未写入）", materials,
+                     response=response, job=job)
+    if isinstance(data, list):
+        data = {"items": data}
+    if not isinstance(data, dict):
+        return _fail(pp, state, cfg, trigger, "LLM 返回结构不是对象", materials,
+                     job=job)
+
+    raw_items = data.get("items")
+    if not isinstance(raw_items, list):
+        raw_items = []
+    open_questions = [str(q)[:200] for q in (data.get("open_questions") or [])
+                      if str(q).strip()][:5]
+    ctx = {
+        "project_path": pp,
+        "audit_tools": {str(e.get("tool") or "")
+                        for e in materials.get("audit_all") or []},
+        "seed_ids": {str(s.get("id")) for s in seeds},
+    }
+    normalized = [c for c in (_normalize_draft_item(n, ctx, job)
+                              for n in raw_items[:MAX_DRAFT_ITEMS]) if c]
+    items = [n for n in normalized if n.get("status") != "rejected"]
+    rejected = [{"text": n.get("text", ""), "reason": n.get("reason", ""),
+                 "evidence": list(n.get("evidence") or [])}
+                for n in normalized if n.get("status") == "rejected"]
+    # 服务端固定后续确定性闸门，忽略 LLM 返回的 next_tools
+    next_tools = list(DRAFT_NEXT_TOOLS[job])
+
+    now = _now()
+    est_tokens = round((len(material_text) + len(response)) / CHARS_PER_TOKEN)
+    limits = {"max_prompt_chars": max_input_chars,
+              "max_output_tokens": out_tokens,
+              "estimated_tokens": est_tokens}
+    draft_id = (job + "-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+                + "-" + uuid.uuid4().hex[:4])
+    draft_path = _path(pp, os.path.join(DRAFTS_DIR, draft_id + ".json"))
+    draft = {
+        "schema_version": SCHEMA_VERSION,
+        "job": job,
+        "generated_at": now,
+        "project_path": pp,
+        "items": items,
+        "rejected": rejected,
+        "open_questions": open_questions,
+        "requires_confirmation": True,
+        "next_tools": next_tools,
+        "materials": {
+            "salient": salient,
+            "audit_events": len(materials.get("audit") or []),
+            "dispatch_events": len(materials.get("dispatch") or []),
+            "seeds": len(materials.get("seeds") or []),
+            "git_commits": len((materials.get("git") or {}).get("commits") or []),
+            "changed_files": len((materials.get("git") or {}).get("changed_files") or []),
+            "notes_total": len(existing),
+        },
+        "limits": limits,
+    }
+    err = _write_json(draft_path, draft)
+    if err:
+        return _fail(pp, state, cfg, trigger, f"草稿写入失败: {err}", materials,
+                     job=job)
+
+    state.update({
+        "last_attempt_at": now,
+        "last_status": "ok",
+        "last_error": "",
+        "last_job": job,
+        "last_run_tokens": est_tokens,
+        "runs": int(state.get("runs") or 0) + 1,
+    })
+    _save_state(pp, state)
+
+    llm_provider = getattr(llm_cfg, "provider", None)
+    record = {
+        "ts": now, "trigger": trigger, "job": job, "status": "ok",
+        "draft_path": draft_path,
+        "llm": {"available": True, "source": "主 LLM 配置",
+                "provider": getattr(llm_provider, "value",
+                                    str(llm_provider or "")),
+                "model": str(getattr(llm_cfg, "model", "") or "")},
+        "materials": draft["materials"],
+        "items": [{"text": n.get("text", ""),
+                   "status": n.get("status", ""),
+                   "evidence": list(n.get("evidence") or [])}
+                  for n in items],
+        "rejected": rejected,
+        "open_questions": open_questions,
+        "requires_confirmation": True,
+        "next_tools": next_tools,
+        "limits": limits,
+    }
+    run_path = _write_run(pp, record)
+
+    from core.result_envelope import envelope
+    consumer_actions = list(next_tools) + ["请人工确认草稿后再执行上述确定性工具"]
+    env = envelope(
+        f"草稿已生成（{job}）：{len(items)} 条建议、{len(rejected)} 条被拒；"
+        "必须用户确认后才能应用",
+        usable=False,
+        blocked_by=[{"id": "draft_requires_confirmation", "owner": "consumer",
+                     "human": "草稿是建议不是结论，需人工确认后走确定性工具"}],
+        owner_actions={"consumer": consumer_actions},
+        cannot_conclude=["草稿中的任何结论（未经确定性工具确认）",
+                         "草稿是否应被采纳"],
+        guardrails=["草稿只写 drafts/，不进入 notes.json / DREAM.md",
+                    "应用草稿必须走 next_tools + 用户确认"],
+    )
+    return {
+        "status": "ok", "tool": "coderef_dream", "action": "run",
+        "project_path": pp, "trigger": trigger, "job": job,
+        "draft_id": draft_id, "draft_path": draft_path,
+        "items": len(items), "rejected": len(rejected),
+        "requires_confirmation": True, "next_tools": next_tools,
+        "open_questions": open_questions,
+        "run_path": run_path, "limits": limits, "llm": record["llm"],
         "envelope": env,
     }
 
