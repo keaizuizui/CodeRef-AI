@@ -92,6 +92,13 @@ def _operation_memory(a: dict) -> str:
         r = operation_memory.status(pp)
     elif act == "recover":
         r = operation_memory.recover(pp, limit=int(a.get("limit", 8)))
+        # G-A 的事实来源：recover 成功即视为本次会话已恢复操作记忆
+        if isinstance(r, dict) and r.get("status") == "ok":
+            try:
+                from core.session_guard import mark_fact
+                mark_fact(pp, "memory_recovered_at")
+            except Exception:  # noqa: BLE001
+                pass
     elif act == "export":
         r = operation_memory.export_markdown(pp, output_path=a.get("output_path", ""))
     else:
