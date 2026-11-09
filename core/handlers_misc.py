@@ -66,7 +66,7 @@ def _scan_tool(a: dict) -> str:
             "elapsed": r.elapsed,
         },
         "errors": r.errors,
-        "envelope": for_scan(len(r.findings), tool),
+        "envelope": for_scan(len(r.findings), tool, r.errors),
     }, ensure_ascii=False)
 
 
@@ -293,7 +293,8 @@ def _report(a) -> str:
         except Exception as e:  # noqa: BLE001
             hr["serve"] = {"ok": False, "error": str(e)}
     from core.result_envelope import for_report
-    hr["envelope"] = for_report(bool(hr.get("ok")), str(hr.get("error") or ""))
+    hr["envelope"] = for_report(bool(hr.get("ok")), str(hr.get("error") or ""),
+                                getattr(r, "errors", []) or [])
     return json.dumps(hr, ensure_ascii=False)
 
 

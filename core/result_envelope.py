@@ -104,20 +104,39 @@ def for_audit(findings: int, errors: Optional[List[str]] = None) -> dict:
     )
 
 
-def for_scan(findings: int, dimension: str) -> dict:
+def for_scan(findings: int, dimension: str,
+             errors: Optional[List[str]] = None) -> dict:
+    errs = list(errors or [])
     return envelope(
-        f"单维度扫描完成（{dimension}）：{findings} 条发现",
+        f"单维度扫描完成（{dimension}）：{findings} 条发现"
+        + ("（存在执行错误，结论不完整）" if errs else ""),
+        usable=not errs,
+        blocked_by=([_blocked("scan_errors", "coderef",
+                              "该维度执行失败，结果不完整；请把 errors 原样反馈给工具方")]
+                    if errs else []),
         cannot_conclude=["其他未被扫描的维度", "修复状态"],
         guardrails=["单维度结果不能当全量审计结论"],
         limitations=["KL-03"],
     )
 
 
-def for_report(ok: bool, error: str = "") -> dict:
+def for_report(ok: bool, error: str = "",
+               errors: Optional[List[str]] = None) -> dict:
+    errs = list(errors or [])
+    usable = bool(ok) and not errs
+    if ok:
+        verdict = "评估台已生成" + ("（存在渲染/聚合错误，部分内容可能缺失）" if errs else "")
+        blocked = ([_blocked("report_errors", "coderef",
+                             "报告渲染存在错误，部分内容不可用；请把 errors 反馈给工具方")]
+                   if errs else [])
+    else:
+        verdict = f"评估台生成失败：{error or '未知错误'}"
+        blocked = [_blocked("report_failed", "coderef",
+                            error or "报告渲染失败")]
     return envelope(
-        "评估台已生成" if ok else f"评估台生成失败：{error}",
-        usable=bool(ok),
-        blocked_by=([_blocked("report_failed", "coderef", error or "报告渲染失败")] if not ok else []),
+        verdict,
+        usable=usable,
+        blocked_by=blocked,
         cannot_conclude=["页面中标注『证据不足』的维度", "iframe 未打开时的画布内容"],
         guardrails=["证据不足的维度不计分，也不能当 0 分", "总分只在有证据的维度内加权"],
         limitations=["KL-06", "KL-04"],
@@ -125,7 +144,21 @@ def for_report(ok: bool, error: str = "") -> dict:
 
 
 def for_arch_gap(result: dict) -> dict:
-    th = (result or {}).get("target_health") or {}
+    res = result or {}
+    # 无图谱/无目标架构时 analyze_gap 返回空 alignment，不能当"分析完成"
+    if not res.get("alignment"):
+        msg = res.get("summary") or "未产出对齐度（缺少知识图谱或目标架构）"
+        return envelope(
+            f"差距分析未执行：{msg}",
+            usable=False,
+            blocked_by=[_blocked("gap_not_run", "consumer", msg)],
+            owner_actions={"consumer": ["coderef_memory(action=sync)",
+                                        "coderef_target_arch_set"]},
+            cannot_conclude=["对齐度", "覆盖率", "差距条数"],
+            guardrails=["没有知识图谱/目标架构时不存在可用的差距分析"],
+            limitations=["KL-01"],
+        )
+    th = res.get("target_health") or {}
     if th.get("stale"):
         warn = th.get("warning") or "target_arch 已过期，请先重新定标"
         return envelope(
@@ -145,9 +178,21 @@ def for_arch_gap(result: dict) -> dict:
 
 
 def for_arch_verify(result: dict) -> dict:
-    th = (result or {}).get("target_health") or {}
-    if th.get("stale") or (result or {}).get("score_status") == "stale_target":
-        warn = (result or {}).get("score_note") or th.get("warning") or "定标过期"
+    res = result or {}
+    if res.get("ok") is False:
+        msg = res.get("message") or "架构对齐验证未执行"
+        return envelope(
+            f"架构对齐验证未执行：{msg}",
+            usable=False,
+            blocked_by=[_blocked("verify_not_run", "consumer", msg)],
+            owner_actions={"consumer": ["coderef_memory(action=sync)",
+                                        "coderef_target_arch_set"]},
+            cannot_conclude=["对齐分", "维度得分"],
+            guardrails=["score=0 在未执行时不是评分结果"],
+        )
+    th = res.get("target_health") or {}
+    if th.get("stale") or res.get("score_status") == "stale_target":
+        warn = res.get("score_note") or th.get("warning") or "定标过期"
         return envelope(
             "定标过期：本轮对齐分不可用，不是代码问题",
             usable=False,

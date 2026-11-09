@@ -269,9 +269,9 @@ class ProjectMaturityChecker:
             def _keep(d: str) -> bool:
                 if d.startswith(".") or d in self._SKIP_DIRS:
                     return False
-                if d in self._ROOT_ONLY_SKIP_DIRS and not at_root:
-                    return True  # 子目录同名包保留
-                if d in self._ROOT_ONLY_SKIP_DIRS:
+                # 通用名只在项目根排除；子目录同名包继续走备份与 whitelist 判定，
+                # 否则 src/build 这类白名单目录会被提前放行（外部复审 minor）。
+                if d in self._ROOT_ONLY_SKIP_DIRS and at_root:
                     return False
                 if "backup" in d.lower():
                     return False

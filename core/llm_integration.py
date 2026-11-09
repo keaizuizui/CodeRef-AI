@@ -124,6 +124,9 @@ def _load_llm_config_from_settings() -> LLMConfig:
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"[llm] 读取配置失败，尝试下一个 {cfg_path}: {e}")
                 continue
+            if not isinstance(data, dict):
+                logger.debug(f"[llm] 配置根节点不是对象，尝试下一个 {cfg_path}")
+                continue
             api_key = data.get("llm_api_key", "") or data.get("api_key", "")
             if api_key and api_key != "ollama":  # "ollama" 是占位符，不算有效 key
                 provider_str = data.get("llm_provider", "deepseek")
@@ -138,8 +141,11 @@ def _load_llm_config_from_settings() -> LLMConfig:
                     api_key=api_key,
                     base_url=data.get("llm_base_url", data.get("base_url", "https://api.deepseek.com")),
                     model=data.get("llm_model", data.get("model_name", "deepseek-flash")),
-                    temperature=float(data.get("llm_temperature", data.get("temperature", 0.7))),
-                    max_tokens=int(data.get("llm_max_tokens", data.get("max_tokens", 4096))),
+                    # 非法数值不能让整个候选链中断（用安全转换回退默认值）
+                    temperature=_safe_float(
+                        data.get("llm_temperature", data.get("temperature")), 0.7),
+                    max_tokens=_safe_int(
+                        data.get("llm_max_tokens", data.get("max_tokens")), 4096),
                 )
             else:
                 logger.debug(f"config.json 中 api_key 为占位符或空，跳过: {cfg_path}")

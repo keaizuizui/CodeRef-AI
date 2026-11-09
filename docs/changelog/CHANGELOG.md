@@ -4,6 +4,16 @@
 
 ---
 
+### v5.18.13 — CodeRabbit 复审 4 条：信封错误态与配置容错
+
+> 复审范围 `f4db7f5..HEAD`（5.18.10–5.18.12）。4 条全部成立，无假阳。
+
+- **信封把“没跑成”当成“可用”（major）**：`for_arch_verify` 现在先判 `ok=false`（无图谱/无定标）→ `usable=false`、`blocked_by.verify_not_run`；`for_arch_gap` 对空 `alignment` 同样标不可用、给出 `gap_not_run` 与需重跑的动作。`score=0` 不再被当评分结果。
+- **`for_scan` / `for_report` 忽略执行错误**：签名新增 `errors`；扫描/报告存在 errors 时 `usable=false` 并在 verdict 中注明“结论不完整”；空错误串不再产生“失败：”空原因。
+- **成熟度扫描 whitelist 被绕过**：`_ROOT_ONLY_SKIP_DIRS` 命中子目录时不再提前 `return True`，继续走备份与 whitelist 判定（`src/build` 等白名单目录可正确排除）。
+- **LLM 配置数值异常中断候选链**：配置根不是对象时跳过；`temperature/max_tokens` 改用 `_safe_float/_safe_int`，非法值回退默认值，不再让后续候选失效。
+- **验证**：新增 6 例回归；全量 pytest **313 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.18.12 — 结论信封：让调用方 AI 能安全转述给非技术用户
 
 > 背景：对方用户不懂代码，真正读结论的是对方的 AI；各工具各自返回分数/字段，容易把「输入过期」说成「工具坏了」。本版不改分析逻辑，只统一结论包装。
