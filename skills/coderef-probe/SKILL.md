@@ -34,6 +34,14 @@ description: L1 小阶段治理编排 Skill（类 CodeRabbit，变更驱动）�
 
 **闭环判定**：增量回归 = 0（`change_guard` 无退化 + `flow_verify` 期望链路无 `outside` 新增）+ 白名单收敛（同误报不重复报）。三者满足即本轮 L1 探查闭环。
 
+### 梦钩子
+
+- **改前看梦**：开工 / 改码前先读 `context.memory_digest.dream` 或 `coderef_dream(action=read, limit=5)`，优先看与本次改动相关的 `pitfall` / `routing`，只当线索，不当结论。
+- **核验后 seed**：`coderef_change_guard` 拦截到回归、`coderef_verify_findings` 推翻了某个论断，或确认某条误报 / 误判后，seed 1–3 条（每条 ≤200 字），写清“哪里错了、下次怎么避免”。
+- **不自动补梦**：本链不调用 `coderef_dream(action=run)`，补梦由用户要求或 `dream.run_on_startup=true` 触发。
+
+> 工具面：本 Skill 默认按 `full` profile 编写；启用 `lite` 时，未暴露的探查工具请通过 `coderef_plan/execute` 链调用，或临时切回 `full`。
+
 ## 典型场景编排
 
 ### 场景 A · 提交前快速探查（编程 AI 每次改完代码）

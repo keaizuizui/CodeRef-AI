@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.20.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.21.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -120,16 +120,26 @@ CodeRef 不靠宣称，靠可复现的硬指标（完整方法见后文「可靠
 - **`coderef_dispatch_metrics`**：聚合最近 N 天（默认 7）日志，输出闸门命中率、阻断 Top 与原因 Top、记忆注入命中率、新鲜度事件与刷新动作 Top、scope 生效次数、dispatcher 任务结局。只统计实际落盘记录，empty 就是 empty，不做推断补齐。
 - **违规注入测试**：block 模式下「未 recover 直接 audit」被 G-A 拦截且日志可追溯；scope add 后 audit 实际排除；stale 查询带 `stale=true` 与 `sync_task_id`。
 
-### 梦（v5.20.0 起）：编程 AI 的离线巩固层
+### 梦（v5.20.0 起，v5.21.0 扩 job）：编程 AI 的离线巩固层
 
 CodeRef 不只回答「现在是什么」，也在安静时替主 AI **补梦**——复用 CodeRef 的**主 LLM 配置**（与其他 LLM 工具同一套 Key/预算），把被阻断、失败、变更守卫退化与主 AI 显式 `seed` 的经历巩固成更少、更准的联想，写入项目本地 `.coderef/dream/`：
 
-- **`coderef_dream(action=status|seed|read|run)`**：`status` 看最近做梦时间、笔记数、主 LLM 状态与上次错误；`seed` 显式投喂一条显著事件（不读取主 AI 全量对话）；`read` 读 `DREAM.md` 或按 kind/关键词取笔记；`run` 手动补一轮（默认后台）。
+- **`coderef_dream(action=status|seed|read|run)`**：`status` 看最近做梦时间、笔记数、主 LLM 状态、支持的 job 与上次错误；`seed` 显式投喂一条显著事件（不读取主 AI 全量对话）；`read` 读 `DREAM.md` 或按 job/kind/关键词取笔记；`run` 手动补一轮（默认后台）。
+- **job 契约（v5.21.0）**：`pitfall`（默认）/ `recap`（续接目标与上次进度）/ `routing`（当 X，先用 Y）/ `triage`（先看什么）。`recap` 的事实进「当前目标」，`triage` 建议进「本次开工建议」；`claim_type=advice` 永远只能是假设，不会进「已验证规则」。
 - **启动补梦（显式开启）**：`dream.run_on_startup=true` 后，首次带项目路径的工具调用会在后台触发一次，不阻塞首响应；默认关闭，避免在不知情时消耗主 LLM 额度。
-- **输出 `DREAM.md`（≤800 token）**：只保留五节——当前目标 / 已验证规则 / 坑 / 联想（当 X，先想到 Y）/ 未决问题；`notes.json` 保留证据与状态，`runs/` 留输入摘要与采纳/拒绝记录。
-- **LLM 提议 + 确定性核验**：每条笔记必须有 `evidence`（`file:` / `git:` / `audit:` / `seed:` / `dispatch:`）；核验失败直接 `rejected`，无法核验标 `hypothesis`，只有 verified 进入「已验证规则」。梦是假设，**不改写任何审计结论**。
-- **记忆摘要梦优先**：重工具首次返回的 `context.memory_digest` 先放梦的 verified 笔记，再补操作记忆；`remind` 复盘新增 `dream` 段，列出「梦里提醒过什么」。
+- **输出 `DREAM.md`（≤800 token）**：六节——当前目标 / 本次开工建议 / 已验证规则 / 坑 / 联想（当 X，先想到 Y）/ 未决问题；`notes.json` 保留证据、job、claim_type 与状态，`runs/` 留输入摘要与采纳/拒绝记录。
+- **LLM 提议 + 确定性核验**：每条笔记必须有 `evidence`（`file:` / `git:` / `audit:` / `seed:` / `dispatch:`）；核验失败直接 `rejected`，无法核验标 `hypothesis`，只有 verified 事实进入「已验证规则」。梦是假设，**不改写任何审计结论**。
+- **记忆摘要梦优先**：重工具首次返回的 `context.memory_digest` 先放 triage 的「开工建议」，再放 verified 笔记，最后补操作记忆；`remind` 复盘新增 `dream` 段，列出「梦里提醒过什么」。
 - **诚实边界**：主 LLM 无 Key → `status=SKIP`，不产出占位内容；梦的视野仅限 CodeRef 被调用的范围，`unknown` / `SKIP` 如实呈现。
+
+### 工具面 profile（v5.21.0 起）
+
+59 个工具不必每次全暴露给主 AI。`CODEREF_TOOL_PROFILE` 控制 `tools/list` 的暴露面：
+
+- `full`（默认）：59 个工具全开，适合 CI / 高级用户。
+- `lite`：只暴露 12 个入口——`version` / `plan` / `execute` / `dispatch_status` / `dispatch_report` / `dream` / `task_status` / `scope` / `operation_memory` / `verify_findings` / `change_guard` / `audit`，适合日常 AI 使用。
+- **隐藏不等于移除**：handler 全部保留，隐藏工具仍可按名直接调用；`coderef_version` 返回 `tool_profile{profile, source, tools_exposed, tools_hidden}`，非法值回退 `full` 并如实报错。
+- Skill 的「梦协议」与主链工具引用按 `lite` 编写；需要 full-only 工具时显式标注。
 
 ---
 
@@ -152,6 +162,8 @@ pip install -r requirements.txt
 > 审计、图谱、架构诊断、流程验证、变更守护、OWASP **不需要 LLM**，纯静态即可运行。仅 LLM 型工具（Wiki、业务报告、代码审查、Prompt 资产、创新识别、`coderef_eval` 产出物语义评估）需要 LLM；未配置 API Key 时这类工具被硬阻断并提示配置（`coderef_eval` 返回 status=SKIP），不产出降级/占位内容。
 >
 > **梦（可选，复用主 LLM）**：梦不单独配置 Key，直接用上面的主 LLM 配置。要开启启动补梦，在 `config/config.json` 增加 `"dream": {"enabled": true, "run_on_startup": true}`；不配置时仍可手动 `coderef_dream(action=run)`。主 LLM 无 Key 时补梦返回 `SKIP`，不影响其他工具。
+>
+> **工具面（可选）**：在 `config/config.json` 设 `"tool_profile": "lite"`，或设 `CODEREF_TOOL_PROFILE=lite`，只向主 AI 暴露 12 个入口；默认 `full`（59 个）。
 
 **Windows：** 运行 `setup.bat`。
 

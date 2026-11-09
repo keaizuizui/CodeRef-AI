@@ -23,6 +23,15 @@ description: L3 资产沉淀编排 Skill。把治理/开发产出的高价值设
 铺排 → 核验 → 落地                          （复用链：资产 → 新项目）
 ```
 
+### 梦钩子
+
+- **先看梦再看候选**：开工前读 `context.memory_digest.dream` 或 `coderef_dream(action=read, limit=5)`，看梦提过的资产候选与上次拒绝原因。
+- **梦只提候选**：梦最多给出 `asset_candidate` 草稿；是否值得沉淀、是否过门槛、命名归一仍由确定性工具决定，梦不写 registry / 资产库。
+- **采用或拒绝后 seed**：决定采用 / 拒绝某个资产，或复刻踩坑后，seed 1–3 条（每条 ≤200 字）写清理由，供下次判断。
+- **不自动补梦**：本链不调用 `coderef_dream(action=run)`。
+
+> 工具面：本 Skill 默认按 `full` profile 编写；启用 `lite` 时，未暴露的资产工具请通过 `coderef_plan/execute` 链调用，或临时切回 `full`。
+
 ### 沉淀链 · 治理成果 → 资产
 
 | 步骤 | 工具 | 说明 |
