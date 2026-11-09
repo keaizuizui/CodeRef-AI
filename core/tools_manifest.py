@@ -1206,22 +1206,31 @@ BUILTIN_TOOLS: List[Dict] = [
         {
                         "name": "coderef_dream",
                         "description": (
-                            "梦（5.20.x）—— 编程 AI 的离线巩固层。主 AI 醒着做事，CodeRef 在安静时"
+                            "梦（5.21.x）—— 编程 AI 的离线巩固层。主 AI 醒着做事，CodeRef 在安静时"
                             "用主 LLM 配置补梦（与其他 LLM 工具同一套 Key/预算），把被阻断、失败、变更守卫退化与"
                             "主 AI 显式 seed 的经历巩固成更少更准的联想，写入项目本地的 "
                             ".coderef/dream/DREAM.md（≤800 token）。\n"
                             "action=status（默认）：最近做梦时间、笔记数、主 LLM 状态、上次错误、是否该补梦；\n"
                             "action=seed：主 AI 显式投喂一条显著事件（text/kind/source），不读取主 AI 全量对话；\n"
-                            "action=read：读 DREAM.md 或按 kind/keyword 取笔记，默认只返回 verified；\n"
-                            "action=run：手动补一轮梦（后台执行；主 LLM 无 Key → status=SKIP，不编造）。\n"
-                            "诚实边界：梦是假设不是审计结论；每条笔记必须有 evidence，核验失败直接 rejected。"
+                            "action=read：读 DREAM.md 或按 job/kind/keyword 取笔记，默认只返回 verified；\n"
+                            "action=run：手动补一轮梦（后台执行；job 可选 pitfall/recap/routing/triage，"
+                            "主 LLM 无 Key → status=SKIP，不编造）。\n"
+                            "诚实边界：梦是假设不是审计结论；每条笔记必须有 evidence，核验失败直接 rejected；"
+                            "claim_type=advice 的建议永远是假设，不会被标成 verified。"
                         ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
                             "action": {"type": "string", "enum": ["status", "seed", "read", "run"],
                                        "default": "status", "description": "status=状态；seed=投喂显著事件；read=读梦；run=手动补梦"},
+                            "job": {"type": "string",
+                                    "enum": ["pitfall", "recap", "routing", "triage"],
+                                    "default": "pitfall",
+                                    "description": ("action=run 的梦任务：pitfall=坑与规则（默认）；"
+                                                    "recap=续接当前目标与开工建议；routing=「当 X，先用 Y」联想；"
+                                                    "triage=「先看什么」排序。advice 永远是假设。"
+                                                    "action=read 时可用来按 job 过滤")},
                             "text": {"type": "string", "description": "action=seed 时的显著事件文本"},
-                            "kind": {"type": "string", "enum": ["rule", "pitfall", "convention", "association"],
+                            "kind": {"type": "string", "enum": ["rule", "pitfall", "convention", "association", "context"],
                                      "description": "action=seed 时的事件类别；action=read 时的过滤类别"},
                             "source": {"type": "string", "description": "action=seed 的事件来源（默认 main_ai）"},
                             "keyword": {"type": "string", "description": "action=read 时按文本/证据模糊匹配"},

@@ -107,9 +107,10 @@ def _dream(a: dict) -> str:
                          keyword=a.get("keyword", ""),
                          include_hypothesis=bool(
                              a.get("include_hypothesis", False)),
-                         limit=a.get("limit", 20))
+                         limit=a.get("limit", 20),
+                         job=a.get("job", ""))
     elif act == "run":
-        res = dream.run(pp, trigger="manual")
+        res = dream.run(pp, trigger="manual", job=a.get("job", "pitfall"))
     else:
         res = dream.status(pp)
     return json.dumps(res, ensure_ascii=False)
