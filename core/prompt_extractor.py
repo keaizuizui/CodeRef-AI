@@ -133,10 +133,18 @@ class PromptExtractor:
         # 治理缺陷：知识包/提示词库等纯文本指令内容文件（如项目的
         # knowledge_pack/*.txt）也是 prompt 资产，只扫 .py/.md 会漏检其内容污染。
         txt_files = list(Path(project_path).rglob("*.txt"))
-        _SKIP = ('__pycache__', '.venv', 'venv', 'node_modules', '.git')
+        _SKIP = ('__pycache__', '.venv', 'venv', 'node_modules', '.git',
+                 '.coderef', '.gitnexus', 'coderef-report', 'coderef-wiki',
+                 '.ms-playwright')
+        # whitelist 的 dir 条目同样生效：备份/镜像目录（如 _refactor_backup）
+        # 里的 prompt 不是当前项目资产，扫进来会制造"陈旧内容当现状"的 finding
+        from core.pr_whitelist import whitelist_exclude_dirs, path_hits_excluded_dir
+        excl_dirs = whitelist_exclude_dirs(project_path)
         scan_files = [
             f for f in (py_files + md_files + txt_files)
             if not any(skip in str(f) for skip in _SKIP)
+            and not path_hits_excluded_dir(
+                os.path.relpath(str(f), project_path), excl_dirs)
         ]
         result.total_files_scanned = len(scan_files)
 
