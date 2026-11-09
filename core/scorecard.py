@@ -343,8 +343,18 @@ def _dim_alignment(project_path: str) -> dict:
     gaps = r.get("gaps") or []
     high = sum(1 for g in gaps
                if str(g.get("severity") or "").lower() == "high")
+    th = r.get("target_health") or {}
     raw = {"module_assigned": round(ma, 2), "role_coverage": round(rc, 2),
-           "gaps": len(gaps), "high_gaps": high}
+           "gaps": len(gaps), "high_gaps": high,
+           "target_stale": bool(th.get("stale")),
+           "specs_missing": th.get("specs_missing", 0),
+           "specs_total": th.get("specs_total", 0)}
+    # 定标过期时，"对齐度 1 分"是拿旧目标量今天的代码，不是代码问题 → 不给分
+    if th.get("stale"):
+        return _unknown(
+            "alignment",
+            th.get("warning") or "target_arch 已过期，请先重新定标后再评估对齐度",
+            raw, [".coderef/target_arch.json"])
     return _dim("alignment", (ma * 0.6 + rc * 0.4) * 100, "ok", raw,
                 [".coderef/target_arch.json"])
 
@@ -404,6 +414,13 @@ def _dim_findings(project_path: str) -> dict:
     for f in findings:
         if not isinstance(f, dict) or str(f.get("kind") or "") == "advice":
             continue
+        # 运行时/第三方产物里的发现不计入健康分：旧快照可能把它们算进分母
+        # （外部实测证据锚点前三条全是 .ms-playwright 的 Chromium 脚本）
+        fp = str(f.get("file_path") or "").replace("\\", "/")
+        if any(seg in fp for seg in (".ms-playwright", ".coderef/", "cache/",
+                                     ".venv/", "site-packages/",
+                                     "_refactor_backup/")):
+            continue
         tier = str(f.get("tier") or "low").lower()
         if tier == "high":
             h += 1
@@ -435,10 +452,12 @@ def _dim_governance(project_path: str) -> dict:
     if not os.path.exists(db):
         return _unknown("governance", "未建立治理库，请先运行 coderef_gov_start")
     store = None
+    counts = {}
     try:
         store = GovernanceStore(project_path)
         issues = store.list_issues(view="open", limit=500)
         overdue = store.list_issues(view="overdue", limit=500)
+        counts = store.status_counts()
     except Exception as e:
         return _unknown("governance", f"治理库读取失败: {e}")
     finally:
@@ -446,16 +465,40 @@ def _dim_governance(project_path: str) -> dict:
             store.close()
     high = sum(1 for i in issues if str(i.get("severity") or "").lower() == "high")
     score = max(0, 100 - high * 10 - (len(issues) - high) * 3 - len(overdue) * 2)
-    raw = {"open": len(issues), "high": high, "overdue": len(overdue)}
+
+    # 治理库是否可信：全部为人工驳回 = 没有闭环成果；长期未更新 = 历史快照。
+    # 两种情况下 0 open 都不代表"治理满分"（外部审计实测 24 条全 Rejected 被读成 100）。
+    total = sum(counts.values())
+    archived = counts.get("Archived", 0)
+    rejected = counts.get("Rejected", 0)
+    try:
+        age_days = (datetime.now() -
+                    datetime.fromtimestamp(os.path.getmtime(db))).days
+    except OSError:
+        age_days = 0
+    raw = {"open": len(issues), "high": high, "overdue": len(overdue),
+           "archived": archived, "rejected": rejected,
+           "db_age_days": age_days}
+    if total and archived == 0 and rejected == total:
+        return _unknown(
+            "governance",
+            "治理库条目全部为人工驳回（没有有效闭环），不能据此给出闭环分",
+            raw, [_rel(project_path, db)])
+    if age_days > 30:
+        return _unknown(
+            "governance",
+            f"治理库已过期（最后更新 {age_days} 天前），请重跑 coderef_gov_report 后再评分",
+            raw, [_rel(project_path, db)])
     return _dim("governance", score, "ok", raw, [_rel(project_path, db)])
 
 
 def _dim_docs(project_path: str, module_total: int) -> dict:
-    from core.pr_whitelist import count_md, detect_wiki_dir
+    from core.pr_whitelist import count_md, detect_wiki_output_dir
 
-    wiki_dir = detect_wiki_dir(project_path)
+    # 只看真正的 Wiki 产物目录，不回退到通用 docs/（避免把用户文档算成 Wiki 覆盖）
+    wiki_dir = detect_wiki_output_dir(project_path)
     if not wiki_dir:
-        return _unknown("docs", "未生成 Wiki 文档，请先运行 coderef_docs")
+        return _unknown("docs", "未生成 Wiki 文档（未发现 docs/wiki 或 .coderef/wiki），请先运行 coderef_docs")
     md = count_md(wiki_dir)
     if md <= 0:
         return _unknown("docs", "Wiki 目录存在但没有 Markdown 文档")

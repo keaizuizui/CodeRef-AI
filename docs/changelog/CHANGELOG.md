@@ -4,6 +4,18 @@
 
 ---
 
+### v5.18.7 — 外部审计第二轮：实体层补全、假边收敛与读数诚实化
+
+> 来源：外部 AI 在 `d:\kuajingdianshang` 用 v5.18.6 复跑后的第二轮报告（D-21~D-26 + UI 复审）。结论是「索引的实体层准确，关系层仍不可用；评估台版式合格，但 5 个读数里 4 个输入有误」。
+
+- **D-25 模块级私有函数入图谱（高）**：`ca_parse._fill_funcs_classes_from_ast` 不再跳过所有 `_` 前缀符号，只跳过「私有方法在 `all_functions` 里的重复副本」与 dunder（正则回退同步）。外部逐文件核对：600 个模块级私有函数收录 0 个，`web_gui.py` 顶层 67 个函数只进 21 个，导致 `flow_verify` / `query callers` 把真实存在的 `_run_capability_job` 判成 `missing`。
+- **D-24 CALLS 假边收敛（高）**：`_find_node_by_name` 删除「点号调用按短名精确匹配裸名节点」的兜底（`params.get` → `tool_base.py::get`、`json.dump` → `buyer_intel.py::dump` 即由此产生），点号调用只接受「点号边界唯一后缀」；并把 `check`/`get`/`dump`/`load`/`execute`/`commit` 等容器、DB、IO 通用属性名列为永不吸边。复跑实测 `check` 入边 7,799 + `get` 5,730（占全部 CALLS 66.4%）的成因被移除；`self.` / `cls.` 与实例化调用仍按作用域精确解析，宁可漏边不建假边。
+- **记分卡读数诚实化（高）**：`scorecard` 三维不再拿历史快照冒充现状——治理库「全部 Rejected」或最后更新 >30 天 → `unknown`（不再读成 100 分）；文档覆盖只认 `docs/wiki`、`.coderef/wiki`、`coderef-wiki`，不回退通用 `docs/`；架构对齐读 `arch_gap.target_health`，定标过期 → `unknown`（不再拿 v1 定标给出 1 分）；审计发现排除 `.ms-playwright` / `.coderef` / `cache/` 等运行时目录。
+- **架构 Tab 旧画布（高）**：`report_renderer._latest_html_link` 统一按文件名时间戳取最新，且只接受 7 天内产物（2026-09-18 的旧业务树不再冒充当前架构）；业务流程视图兼容独立 `flow_canvas_*`。
+- **audit 成熟度卡住（高）**：`project_maturity_checker._scan_content` 排除 `output` / `.ms-playwright` / `.coderef` / 备份目录，跳过 >2MB 文件，并设 20 秒硬超时；外部实测 `coderef_audit(strategy=full)` 卡在 12/14「项目成熟度」超过 30 分钟的问题不再复现。
+- **D-23 索引产物默认忽略（中）**：首次产出报告 / findings 时自动创建 `<project>/.coderef/.gitignore`（已存在不覆盖），忽略 `report/`、`kg/`、`wiki/`、`*.html`、`scorecard.json`、`audit_findings_*.json`、`governance.db`；`target_arch.json` / whitelist / eval_config 属设计配置，刻意保留以便随项目提交。
+- **验证**：新增 8 例外审回归（私有顶层函数收录、`params.get`/`json.dump` 不建边、治理全驳回/超期 unknown、定标过期 unknown、旧画布不链接、新画布可链接、`.coderef/.gitignore` 只建不覆盖）；全量 pytest **282 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.18.6 — 外部审计反馈：关系层解析、诚实标签与口径统一
 
 > 来源：外部 AI 在 `d:\kuajingdianshang` 使用 v5.18.5 的完整报告（两份，含逐条证据）。本批修复工具侧缺陷；调用方用法问题另在 skill 中加防线。

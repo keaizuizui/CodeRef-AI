@@ -26,6 +26,7 @@ HtmlReportRenderer -- 把审计报告 / 知识图谱 / Wiki 文档统一渲染�
 import json
 import os
 import re
+import time
 import html as _html
 from dataclasses import dataclass
 from datetime import datetime
@@ -50,6 +51,34 @@ def default_report_root(project_path: str) -> str:
 def default_report_dir(project_path: str) -> str:
     """评估台 index.html 所在目录（`<project>/.coderef/report/html`）。"""
     return os.path.join(default_report_root(project_path), "html")
+
+
+# 工具运行时产物的忽略清单（相对 .coderef/）；target_arch / whitelist / eval_config
+# 属于设计/配置，刻意不忽略，便于随项目提交。
+_CODEREF_IGNORE_LINES = (
+    "# CodeRef-AI 运行时产物（自动生成，可删除本文件以改为自行管理）",
+    "report/", "kg/", "wiki/", "*.html",
+    "scorecard.json", "product_fit.json", "ux_fit.json",
+    "business_semantics.json", "audit_findings_*.json", "governance.db",
+)
+
+
+def ensure_coderef_gitignore(project_path: str) -> None:
+    """确保 `<project>/.coderef/.gitignore` 覆盖运行时产物（已存在则不覆盖）。
+
+    外部审计反馈：`.coderef/report/`、`arch_layout_*.html` 等产物默认可被 git
+    跟踪，使用者会困惑该提交还是忽略。以“只在缺失时创建”的方式给出默认口径。
+    """
+    d = os.path.join(os.path.abspath(project_path), ".coderef")
+    fp = os.path.join(d, ".gitignore")
+    if os.path.isfile(fp):
+        return
+    try:
+        os.makedirs(d, exist_ok=True)
+        with open(fp, "w", encoding="utf-8") as f:
+            f.write("\n".join(_CODEREF_IGNORE_LINES) + "\n")
+    except OSError:
+        pass
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -541,7 +570,7 @@ class HtmlReportRenderer:
             pipe_result: PipeResult（含 findings / report / errors / 统计）
             kg_stats: CodeKnowledgeGraph.get_stats() 返回值（可选）
             wiki_dir: Wiki .md 输出目录（可选，存在则渲染 wiki.html）
-            output_dir: 报告输出目录；默认 {项目上级}/coderef-report/html
+            output_dir: 报告输出目录；默认 `<project>/.coderef/report/html`
             dimension_states: 各维度（audit/kg/wiki）执行状态，用于透明化展示
                               （未执行的维度标注"未执行"而非静默为空/全 0）
             scorecard: 记分卡数据（可选）。缺省读 <project>/.coderef/scorecard.json 快照；
@@ -551,6 +580,7 @@ class HtmlReportRenderer:
             {"ok": bool, "index": 绝对路径, "files": [..], "error": str?}
         """
         out = output_dir or default_report_dir(self.project_path)
+        ensure_coderef_gitignore(self.project_path)
         os.makedirs(out, exist_ok=True)
 
         results = {}
@@ -610,40 +640,51 @@ class HtmlReportRenderer:
 
     def _latest_arch_link(self, out_dir: str) -> str:
         """定位最新一张业务架构画布，返回相对 index.html 的链接（无则空串）。"""
-        d = os.path.join(self.project_path, ".coderef")
-        try:
-            files = sorted(f for f in os.listdir(d)
-                           if f.startswith("arch_canvas_") and f.endswith(".html"))
-        except Exception:  # noqa: BLE001
-            return ""
-        if not files:
-            return ""
-        try:
-            rel = os.path.relpath(os.path.join(d, files[-1]), out_dir)
-            return rel.replace(os.sep, "/")
-        except Exception:  # noqa: BLE001
-            return ""
+        return self._latest_html_link("arch_canvas_", out_dir)
 
     def _latest_layout_link(self, out_dir: str) -> str:
         """定位最新的技术分区图（canvas_generator 的 arch_layout_*，面向技术）。"""
         return self._latest_html_link("arch_layout_", out_dir)
 
     def _latest_flow_link(self, out_dir: str) -> str:
-        """定位最新的业务流程泳道画布（arch_flow_*）。"""
-        return self._latest_html_link("arch_flow_", out_dir)
+        """定位最新的业务流程泳道画布（arch_flow_ 或独立 flow_canvas_）。"""
+        return self._latest_html_link(("arch_flow_", "flow_canvas_"), out_dir)
 
-    def _latest_html_link(self, prefix: str, out_dir: str) -> str:
-        """在 `<project>/.coderef/` 下取指定前缀的最新产物并转成相对链接。"""
+    def _latest_html_link(self, prefix, out_dir: str,
+                          max_age_days: int = 7) -> str:
+        """取指定前缀的最新画布，只接受 7 天内的产物。
+
+        旧产物不冒充当前视图：外部 UI 复审发现概览把 2026-09-18 的业务树当
+        "当前架构"展示。文件名中的 `YYYYMMDD_HHMMSS` 优先于 mtime 排序。
+        """
+        prefixes = (prefix,) if isinstance(prefix, str) else tuple(prefix)
         d = os.path.join(self.project_path, ".coderef")
         try:
-            files = sorted(f for f in os.listdir(d)
-                           if f.startswith(prefix) and f.endswith(".html"))
+            files = [f for f in os.listdir(d)
+                     if f.startswith(prefixes) and f.endswith(".html")]
         except Exception:  # noqa: BLE001
             return ""
         if not files:
             return ""
+
+        def _key(fname: str):
+            m = re.search(r"(\d{8})_(\d{6})", fname)
+            stamp = f"{m.group(1)}{m.group(2)}" if m else ""
+            try:
+                mtime = os.path.getmtime(os.path.join(d, fname))
+            except OSError:
+                mtime = 0.0
+            return (stamp, mtime)
+
+        latest = max(files, key=_key)
+        fp = os.path.join(d, latest)
         try:
-            rel = os.path.relpath(os.path.join(d, files[-1]), out_dir)
+            if time.time() - os.path.getmtime(fp) > max_age_days * 86400:
+                return ""
+        except OSError:
+            return ""
+        try:
+            rel = os.path.relpath(fp, out_dir)
             return rel.replace(os.sep, "/")
         except Exception:  # noqa: BLE001
             return ""

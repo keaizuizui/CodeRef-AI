@@ -25,6 +25,8 @@ from typing import Dict, List
 from dataclasses import dataclass, field
 from collections import defaultdict
 
+from loguru import logger
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 数据结构
@@ -241,19 +243,32 @@ class ProjectMaturityChecker:
         except (OSError, IOError):
             return False
 
+    # 单次内容扫描的硬上限（秒）：成熟度检查不阻塞整条 audit 管线
+    _SCAN_DEADLINE_SEC = 20.0
+    _SKIP_DIRS = {"__pycache__", "node_modules", ".git", "venv", ".venv", "env",
+                  "Lib", "lib", "site-packages", "dist-packages", "cache", "data",
+                  "output", "dist", "build", ".ms-playwright", ".coderef"}
+
     def _scan_content(self, project_path: str, pattern: str, file_ext: str = ".py") -> bool:
-        """扫描项目文件内容，检查是否包含某模式"""
+        """扫描项目文件内容，检查是否包含某模式（带目录排除与硬超时）。"""
+        import time as _time
         rgx = re.compile(pattern, re.IGNORECASE)
+        deadline = _time.monotonic() + self._SCAN_DEADLINE_SEC
         for root, dirs, files in os.walk(project_path):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
-                "__pycache__", "node_modules", ".git", "venv", ".venv", "env",
-                "Lib", "lib", "site-packages", "dist-packages", "cache", "data",
-            )]
+            dirs[:] = [d for d in dirs if not d.startswith(".")
+                       and d not in self._SKIP_DIRS
+                       and "backup" not in d.lower()]
             for f in files:
                 if not f.endswith(file_ext):
                     continue
+                if _time.monotonic() > deadline:
+                    logger.warning("[matu] 内容扫描超时，返回未命中（避免阻塞审计管线）")
+                    return False
+                fp = os.path.join(root, f)
                 try:
-                    with open(os.path.join(root, f), "r", encoding="utf-8", errors="ignore") as fh:
+                    if os.path.getsize(fp) > 2 * 1024 * 1024:
+                        continue
+                    with open(fp, "r", encoding="utf-8", errors="ignore") as fh:
                         if rgx.search(fh.read(50000)):
                             return True
                 except (OSError, IOError):

@@ -141,6 +141,24 @@ def _detect_wiki_dir(project_path: str) -> Optional[str]:
             return c
     return None
 
+
+def detect_wiki_output_dir(project_path: str) -> Optional[str]:
+    """只认真正的 Wiki 产物目录（用于覆盖率评分）。
+
+    与 `_detect_wiki_dir` 的区别：不回退到通用 `docs/` / `txt/`——那里是用户
+    自己的文档，把它算成「Wiki 覆盖率」会出现「仓库里随便几个 .md 就得 2 分」
+    这种无法复核的读数（外部审计 UI 复审 P0-3）。
+    """
+    candidates = [
+        os.path.join(project_path, "docs", "wiki"),
+        os.path.join(project_path, ".coderef", "wiki"),
+        os.path.join(project_path, "coderef-wiki"),
+    ]
+    for c in candidates:
+        if os.path.isdir(c):
+            return c
+    return None
+
 def docs_read(project_path: str, doc: Optional[str] = None,
               output_dir: Optional[str] = None,
               max_chars: int = 20000) -> dict:
