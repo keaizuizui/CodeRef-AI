@@ -13,8 +13,9 @@ llm_* 与主 LLM 调用预算）。`dream` 段只保留行为开关（是否启�
 公开 API：
   - status(project_path) -> dict          最近做梦时间 / 笔记数 / 主 LLM 状态 / 上次错误
   - seed(project_path, text, ...) -> dict 主 AI 显式投喂一条显著事件
-  - read(project_path, ...) -> dict       读 DREAM.md / 按 kind 或关键词取笔记
-  - run(project_path, trigger=...) -> dict 手动或启动时补一轮梦
+  - read(project_path, ...) -> dict       读 DREAM.md / 按 job、kind 或关键词取笔记
+  - run(project_path, trigger=..., job=...) -> dict  手动或启动时补一轮梦
+      job ∈ pitfall（默认）/ recap / routing / triage
   - trigger_if_due(project_path) -> bool  进程内一次启动补梦（后台线程）
   - digest_items(project_path) -> list    供 memory_digest 优先注入的梦条目
 
@@ -52,7 +53,10 @@ ARCHIVE_DIR = "archive"
 SCHEMA_VERSION = 1
 
 # ── 梦的形态边界 ────────────────────────────────────────────────
-KINDS = ("rule", "pitfall", "convention", "association")
+JOBS = ("pitfall", "recap", "routing", "triage")
+DEFAULT_JOB = "pitfall"
+CLAIM_TYPES = ("fact", "advice")
+KINDS = ("rule", "pitfall", "convention", "association", "context")
 STATUSES = ("verified", "hypothesis", "rejected", "decayed")
 
 # DREAM.md 上限 800 token；按 3 字符/token 粗略折算（与 memory_digest 同口径）
@@ -83,6 +87,7 @@ KIND_LABELS = {
     "convention": "约定",
     "pitfall": "坑",
     "association": "联想",
+    "context": "上下文",
 }
 
 # 只保留行为开关；LLM 的 provider/api_key/model/预算全部复用主 LLM 配置。
@@ -300,6 +305,7 @@ def _default_state() -> dict:
         "last_attempt_at": "",
         "last_status": "",
         "last_error": "",
+        "last_job": "",
         "goal": "",
         "cursor": {"audit_after": "", "seeds_consumed": 0, "git_head": ""},
         "last_run_tokens": 0,
@@ -329,7 +335,21 @@ def _load_notes(project_path: str) -> List[dict]:
     notes = data.get("notes") if isinstance(data, dict) else data
     if not isinstance(notes, list):
         return []
-    return [n for n in notes if isinstance(n, dict)]
+    out = []
+    for n in notes:
+        if not isinstance(n, dict):
+            continue
+        # 旧笔记兼容：缺 job / claim_type 时按 pitfall / fact 处理
+        if not str(n.get("job") or "").strip():
+            n["job"] = DEFAULT_JOB
+        claim_type = str(n.get("claim_type") or "").strip().lower()
+        if claim_type not in CLAIM_TYPES:
+            n["claim_type"] = "fact"
+        # advice 永远不是事实：历史数据即使写成 verified 也按 hypothesis 读
+        if n.get("claim_type") == "advice" and n.get("status") == "verified":
+            n["status"] = "hypothesis"
+        out.append(n)
+    return out
 
 
 def _save_notes(project_path: str, notes: List[dict]) -> str:
@@ -402,6 +422,7 @@ def status(project_path: str) -> dict:
     md = _read_text(md_path)
     by_status = Counter(str(n.get("status") or "unknown") for n in notes)
     by_kind = Counter(str(n.get("kind") or "unknown") for n in notes)
+    by_job = Counter(str(n.get("job") or DEFAULT_JOB) for n in notes)
     llm = _build_llm()
     llm_cfg = getattr(llm, "config", None)
     provider = getattr(llm_cfg, "provider", None)
@@ -426,11 +447,15 @@ def status(project_path: str) -> dict:
         "last_attempt_at": state.get("last_attempt_at", ""),
         "last_status": state.get("last_status", ""),
         "last_error": state.get("last_error", ""),
+        "last_job": state.get("last_job", ""),
+        "jobs": list(JOBS),
+        "default_job": DEFAULT_JOB,
         "due": _is_due(state, cfg),
         "notes": {
             "total": len(notes),
             "by_status": dict(by_status),
             "by_kind": dict(by_kind),
+            "by_job": dict(by_job),
         },
         "seeds": {"total": len(seeds),
                   "pending": max(0, len(seeds) - int(
@@ -482,10 +507,11 @@ def _mark_hit(project_path: str, note_ids: List[str]) -> None:
 
 def read(project_path: str, kind: str = "", keyword: str = "",
          include_hypothesis: bool = False, limit: int = 20,
-         mark_hit: bool = True) -> dict:
-    """读 DREAM.md 或按 kind/关键词取笔记；默认只返回 verified。"""
+         mark_hit: bool = True, job: str = "") -> dict:
+    """读 DREAM.md 或按 job/kind/关键词取笔记；默认只返回 verified。"""
     pp = os.path.abspath(project_path)
     kind = str(kind or "").strip().lower()
+    job = str(job or "").strip().lower()
     keyword = str(keyword or "").strip().lower()
     try:
         limit = max(1, min(100, int(limit)))
@@ -501,6 +527,8 @@ def read(project_path: str, kind: str = "", keyword: str = "",
             continue
         if kind and str(n.get("kind")) != kind:
             continue
+        if job and str(n.get("job") or DEFAULT_JOB) != job:
+            continue
         haystack = (str(n.get("text") or "") + " "
                     + " ".join(str(e) for e in (n.get("evidence") or []))).lower()
         if keyword and keyword not in haystack:
@@ -508,6 +536,8 @@ def read(project_path: str, kind: str = "", keyword: str = "",
         notes.append({
             "id": n.get("id", ""),
             "kind": n.get("kind", ""),
+            "job": n.get("job", DEFAULT_JOB),
+            "claim_type": n.get("claim_type", "fact"),
             "text": n.get("text", ""),
             "evidence": n.get("evidence") or [],
             "confidence": n.get("confidence", 0),
@@ -527,7 +557,7 @@ def read(project_path: str, kind: str = "", keyword: str = "",
         "dream_md": _read_text(md_path),
         "dream_md_path": md_path,
         "notes": notes,
-        "filter": {"kind": kind, "keyword": keyword,
+        "filter": {"kind": kind, "keyword": keyword, "job": job,
                    "include_hypothesis": bool(include_hypothesis)},
         "guardrail": "梦是假设；引用前先核验 evidence，不得当作审计结论转述",
     }
@@ -718,13 +748,15 @@ _SYSTEM_PROMPT = (
     "只输出合法 JSON，不要解释、前后缀或 Markdown 代码块。"
 )
 
-_USER_PROMPT = """项目：{project}
+_PROMPT_HEAD = """项目：{project}
 时间：{now}
 以下原料已按显著性筛选（被阻断 / 失败 / 显式 seed / 变更守卫退化），不是成功流水账。
 
 {materials}
 
-请输出 JSON：
+"""
+
+_PITFALL_PROMPT = """请输出 JSON：
 {{
   "goal": "一句话概括当前目标（可为空串）",
   "notes": [
@@ -744,6 +776,85 @@ _USER_PROMPT = """项目：{project}
 3. 不要重复「已有笔记」；梦是假设，不要把猜测写成事实。
 4. 只依据原料，不假装知道未记录的经历。
 """
+
+_RECAP_PROMPT = """本次 job=recap（续接）：让下次开工立刻知道「当前目标 / 上次停在哪 / 该先做什么」。
+请输出 JSON：
+{
+  "goal": "当前目标（一句话，可为空串）",
+  "notes": [
+    {
+      "claim_type": "fact|advice",
+      "kind": "context|rule|convention|pitfall",
+      "text": "一句话（<=120字）",
+      "evidence": ["file:相对路径", "git:短SHA", "audit:工具名", "seed:种子ID", "dispatch:任务ID"],
+      "confidence": 0.0
+    }
+  ],
+  "open_questions": ["未决问题（<=3条）"]
+}
+
+硬约束：
+1. 最多 5 条 notes；goal 与「上次停在哪」用 claim_type=fact + kind=context。
+2. 1–3 条开工建议必须 claim_type=advice；建议不是事实，只能是假设。
+3. 每条 note 必须有 evidence，且只使用上面五种格式；不要编造不存在的路径/SHA/ID。
+4. 不要重复「已有笔记」；只依据原料，不假装知道未记录的经历。
+"""
+
+_ROUTING_PROMPT = """本次 job=routing（联想）：把「当 X 发生，先用 Y」的工具/流程联想固化下来。
+请输出 JSON：
+{
+  "notes": [
+    {
+      "claim_type": "advice",
+      "kind": "association",
+      "text": "当 X，先用 Y（<=120字）",
+      "evidence": ["dispatch:任务ID", "audit:工具名", "seed:种子ID"],
+      "confidence": 0.0
+    }
+  ],
+  "open_questions": ["尚未验证的问题（<=3条）"]
+}
+
+硬约束：
+1. 最多 5 条 notes；每条 claim_type 必须为 "advice"，kind 必须为 "association"。
+2. text 必须是「当 X，先用 Y」形式；建议永远是假设，不得写成事实。
+3. evidence 只用 dispatch: / audit: / seed: 三种格式；不要编造不存在的 ID。
+4. 不要重复「已有笔记」；只依据原料，不假装知道未记录的经历。
+"""
+
+_TRIAGE_PROMPT = """本次 job=triage（开工排序）：只排序「先看什么」，不下确定性结论。
+请输出 JSON：
+{
+  "notes": [
+    {
+      "claim_type": "advice",
+      "kind": "association",
+      "text": "先看 X，因为 Y（<=120字）",
+      "evidence": ["file:相对路径", "audit:工具名", "dispatch:任务ID"],
+      "confidence": 0.0
+    }
+  ],
+  "open_questions": ["尚未验证的问题（<=3条）"]
+}
+
+硬约束：
+1. 最多 3 条 notes；每条 claim_type 必须为 "advice"，text 必须是「先看 X，因为 Y」形式。
+2. evidence 只用 file: / audit: / dispatch: 三种格式；不要编造不存在的路径/ID。
+3. advice 永远是假设，不得标成事实或验证结论。
+4. 不要重复「已有笔记」；只依据原料，不假装知道未记录的经历。
+"""
+
+# job → 输出契约（共用同一段原料头，只换这部分）
+_USER_PROMPT = _PROMPT_HEAD + _PITFALL_PROMPT
+_JOB_BODIES = {
+    "pitfall": _PITFALL_PROMPT,
+    "recap": _RECAP_PROMPT,
+    "routing": _ROUTING_PROMPT,
+    "triage": _TRIAGE_PROMPT,
+}
+
+# 各 job 的 notes 条数上限（与提示词里的硬约束一致，服务端再兜一层）
+_JOB_MAX_NOTES = {"pitfall": 5, "recap": 5, "routing": 5, "triage": 3}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -800,17 +911,27 @@ def _check_ref(ref: str, ctx: dict) -> Tuple[Optional[bool], str]:
     return None, "未知证据格式"
 
 
-def _normalize_candidate(raw: dict, ctx: dict) -> Optional[dict]:
+def _normalize_candidate(raw: dict, ctx: dict,
+                         job: str = DEFAULT_JOB) -> Optional[dict]:
     if not isinstance(raw, dict):
         return None
     text = _clean_text(raw.get("text"))
     if not text:
         return None
     kind = str(raw.get("kind") or "").strip().lower()
+    claim_type = str(raw.get("claim_type") or "fact").strip().lower()
+    if claim_type not in CLAIM_TYPES:
+        claim_type = "fact"
+    # job 契约兜底：routing/triage 的产出只能是建议，且统一归到「联想」
+    if job in ("routing", "triage"):
+        claim_type = "advice"
+        kind = "association"
     if kind not in KINDS:
         return {
             "id": "dream-" + uuid.uuid4().hex[:8],
-            "kind": kind or "unknown", "text": text[:MAX_NOTE_CHARS],
+            "kind": kind or "unknown", "job": job,
+            "claim_type": claim_type,
+            "text": text[:MAX_NOTE_CHARS],
             "evidence": [], "confidence": 0.0, "status": "rejected",
             "reason": f"非法 kind: {kind!r}",
             "created_at": _now(), "last_hit_at": "",
@@ -839,6 +960,11 @@ def _normalize_candidate(raw: dict, ctx: dict) -> Optional[dict]:
 
     if has_fail:
         status, reason = "rejected", "证据引用核验失败"
+    elif claim_type == "advice":
+        # 建议不是事实：无论有没有证据，都不允许 verified
+        status = "hypothesis"
+        reason = ("建议只能是假设（证据引用可核验，但仍非事实）" if has_ok
+                  else "建议只能是假设")
     elif not evidence:
         status, reason = "hypothesis", "无 evidence，只能作为假设"
     elif has_ok:
@@ -849,6 +975,8 @@ def _normalize_candidate(raw: dict, ctx: dict) -> Optional[dict]:
     return {
         "id": "dream-" + uuid.uuid4().hex[:8],
         "kind": kind,
+        "job": job,
+        "claim_type": claim_type,
         "text": text[:MAX_NOTE_CHARS],
         "evidence": evidence,
         "confidence": confidence,
@@ -882,6 +1010,11 @@ def _merge_notes(existing: List[dict], candidates: List[dict],
             ))[:MAX_EVIDENCE]
             old["confidence"] = max(float(old.get("confidence") or 0),
                                     float(cand.get("confidence") or 0))
+            # 同一文本的 advice 不能把已有 verified fact 降级/改写为建议
+            if (str(old.get("claim_type") or "fact") == "fact"
+                    and old.get("status") == "verified"
+                    and str(cand.get("claim_type") or "fact") == "advice"):
+                continue
             if (_STATUS_RANK.get(cand.get("status"), 9)
                     < _STATUS_RANK.get(str(old.get("status")), 9)):
                 old["status"] = cand["status"]
@@ -958,21 +1091,54 @@ def _fit_lines(lines: List[str], limit: int) -> str:
 
 
 def _render_md(goal: str, notes: List[dict], open_questions: List[str]) -> str:
-    verified = [n for n in notes if n.get("status") == "verified"]
-    rules = [n for n in verified if n.get("kind") in ("rule", "convention")]
-    pitfalls = [n for n in verified if n.get("kind") == "pitfall"]
-    associations = [n for n in verified if n.get("kind") == "association"]
-    hypotheses = [n for n in notes if n.get("status") == "hypothesis"]
+    def _evidence(n: dict) -> str:
+        return "、".join(str(e) for e in (n.get("evidence") or [])[:2])
 
-    def _bullets(items: List[dict]) -> List[str]:
+    def _bullets(items: List[dict], assumption: bool = False) -> List[str]:
         out = []
         for n in items:
-            ev = "、".join(str(e) for e in (n.get("evidence") or [])[:2])
             line = f"- {str(n.get('text') or '')[:MAX_NOTE_CHARS]}"
+            if assumption or n.get("claim_type") == "advice":
+                line += "（假设）"
+            ev = _evidence(n)
             if ev:
                 line += f"（证据：{ev}）"
             out.append(line)
         return out or ["- （暂无）"]
+
+    verified = [n for n in notes if n.get("status") == "verified"]
+    hypotheses = [n for n in notes if n.get("status") == "hypothesis"]
+
+    # 「当前目标」可附 kind=context 的 fact/advice（最多 3 条）；
+    # triage 的 advice 统一归 association，避免与「本次开工建议」重复渲染。
+    contexts = [n for n in notes
+                if n.get("kind") == "context"
+                and n.get("job") != "triage"
+                and n.get("status") in ("verified", "hypothesis")][:3]
+    # 「本次开工建议」只放 triage 的 advice（最多 3 条）
+    triage = [n for n in notes
+              if n.get("job") == "triage"
+              and n.get("claim_type") == "advice"
+              and n.get("status") in ("verified", "hypothesis")][:3]
+    rules = [n for n in verified if n.get("kind") in ("rule", "convention")]
+    pitfalls = [n for n in verified if n.get("kind") == "pitfall"]
+    associations = [n for n in verified if n.get("kind") == "association"]
+    routing = [n for n in hypotheses
+               if n.get("job") == "routing"
+               and n.get("kind") == "association"]
+
+    rendered = {id(n) for n in contexts + triage + routing}
+    rendered.update(id(n) for n in rules + pitfalls + associations)
+    others = [n for n in hypotheses if id(n) not in rendered]
+    routing_lines = _bullets(routing, assumption=True) if routing else []
+    association_lines = _bullets(associations) if associations else []
+    if not association_lines and not routing_lines:
+        association_lines = ["- （暂无）"]
+
+    goal_lines = [f"- {goal}"] if goal else []
+    context_lines = _bullets(contexts) if contexts else []
+    if not goal_lines and not context_lines:
+        goal_lines = ["- （未记录）"]
 
     lines = [
         "# Dream",
@@ -980,7 +1146,11 @@ def _render_md(goal: str, notes: List[dict], open_questions: List[str]) -> str:
         "不得当作审计结论转述 -->",
         "",
         "## 当前目标",
-        f"- {goal or '（未记录）'}",
+        *goal_lines,
+        *context_lines,
+        "",
+        "## 本次开工建议",
+        *_bullets(triage, assumption=True),
         "",
         "## 已验证规则",
         *_bullets(rules),
@@ -989,17 +1159,20 @@ def _render_md(goal: str, notes: List[dict], open_questions: List[str]) -> str:
         *_bullets(pitfalls),
         "",
         "## 联想（当 X，先想到 Y）",
-        *_bullets(associations),
+        *association_lines,
+        *routing_lines,
         "",
         "## 未决问题",
     ]
-    questions = list(open_questions)[:5]
-    for n in hypotheses[:5]:
-        questions.append(f"（假设，未验证）{n.get('text')}（证据："
-                         + "、".join(str(e) for e in (n.get("evidence") or [])[:2])
-                         + "）")
+    questions = [str(q)[:MAX_NOTE_CHARS] for q in list(open_questions)[:5]]
+    for n in others[:5]:
+        ev = _evidence(n)
+        line = f"（假设，未验证）{n.get('text')}"
+        if ev:
+            line += f"（证据：{ev}）"
+        questions.append(line)
     if questions:
-        lines.extend(f"- {str(q)[:MAX_NOTE_CHARS]}" for q in questions)
+        lines.extend(f"- {q}" for q in questions)
     else:
         lines.append("- （暂无）")
     return _fit_lines(lines, DREAM_MD_MAX_CHARS)
@@ -1016,14 +1189,16 @@ def _write_run(project_path: str, record: dict) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 def _skip(pp: str, state: dict, cfg: dict, reason: str, trigger: str,
-          run_extra: Optional[dict] = None) -> dict:
+          run_extra: Optional[dict] = None,
+          job: str = DEFAULT_JOB) -> dict:
     """诚实 SKIP：不写 DREAM.md / notes，不推进 cursor；只留运行痕迹。"""
     state["last_attempt_at"] = _now()
     state["last_status"] = "SKIP"
     state["last_error"] = reason
+    state["last_job"] = job
     state["runs"] = int(state.get("runs") or 0) + 1
     _save_state(pp, state)
-    record = {"ts": _now(), "trigger": trigger, "status": "SKIP",
+    record = {"ts": _now(), "trigger": trigger, "job": job, "status": "SKIP",
               "reason": reason,
               "llm": {"available": False, "source": "主 LLM 配置"},
               "limits": {"max_prompt_chars": MAX_PROMPT_CHARS,
@@ -1050,22 +1225,31 @@ def _skip(pp: str, state: dict, cfg: dict, reason: str, trigger: str,
             "envelope": env}
 
 
-def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
-    """补一轮梦：收集 → 筛显著 → 主 LLM 提议 → 确定性核验 → 写梦。"""
+def run(project_path: str, trigger: str = "manual", llm=None,
+        job: str = DEFAULT_JOB) -> dict:
+    """补一轮梦：收集 → 筛显著 → 主 LLM 提议 → 确定性核验 → 写梦。
+
+    job ∈ JOBS；不同 job 只换提示词与 notes 条数上限，核验/写盘/TTL 共用。
+    """
     pp = os.path.abspath(project_path)
+    job = str(job or DEFAULT_JOB).strip().lower()
+    if job not in JOBS:
+        return {"status": "error", "tool": "coderef_dream", "action": "run",
+                "error": f"未知 job: {job!r}；支持 {'/'.join(JOBS)}"}
     if not os.path.isdir(pp):
         return {"status": "error", "tool": "coderef_dream", "action": "run",
                 "error": f"项目目录不存在: {pp}"}
     cfg = load_config(pp)
     state = _load_state(pp)
     if not cfg["enabled"]:
-        return _skip(pp, state, cfg, "dream.enabled=false（梦已禁用）", trigger)
+        return _skip(pp, state, cfg, "dream.enabled=false（梦已禁用）", trigger,
+                     job=job)
 
     llm = llm if llm is not None else _build_llm()
     if not _llm_available(llm):
         return _skip(pp, state, cfg,
                      "未配置有效的主 LLM API Key（梦复用主 LLM 配置，无 Key 不编造）",
-                     trigger)
+                     trigger, job=job)
 
     seeds = _read_seeds(pp)
     consumed = _as_int((state.get("cursor") or {}).get("seeds_consumed"), 0)
@@ -1074,7 +1258,7 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
     salient = _salient_count(materials)
     if salient == 0:
         return _skip(pp, state, cfg, "没有新的显著原料（成功流水账不入梦）",
-                     trigger, {"materials": {"salient": 0}})
+                     trigger, {"materials": {"salient": 0}}, job=job)
 
     existing = _load_notes(pp)
     material_text = _prompt_materials(materials, pp, existing)
@@ -1088,9 +1272,9 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
                      MAX_OUTPUT_TOKENS, minimum=256)))
     messages = [
         {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": _USER_PROMPT.format(
+        {"role": "user", "content": _PROMPT_HEAD.format(
             project=os.path.basename(pp), now=_now(),
-            materials=material_text)},
+            materials=material_text) + _JOB_BODIES[job]},
     ]
 
     try:
@@ -1098,20 +1282,22 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
             messages, temperature=0.2, max_tokens=out_tokens,
             response_format={"type": "json_object"})
     except Exception as e:  # noqa: BLE001
-        return _fail(pp, state, cfg, trigger, f"LLM 调用异常: {e}", materials)
+        return _fail(pp, state, cfg, trigger, f"LLM 调用异常: {e}", materials,
+                     job=job)
 
     from core.llm_integration import LLMIntegration
     if LLMIntegration.is_error_response(response):
-        return _fail(pp, state, cfg, trigger, response, materials)
+        return _fail(pp, state, cfg, trigger, response, materials, job=job)
     data = LLMIntegration.parse_json_response(response)
     if data is None:
         return _fail(pp, state, cfg, trigger,
                      "LLM 返回内容无法解析为 JSON（旧梦保持不变）", materials,
-                     response=response)
+                     response=response, job=job)
     if isinstance(data, list):
         data = {"notes": data}
     if not isinstance(data, dict):
-        return _fail(pp, state, cfg, trigger, "LLM 返回结构不是对象", materials)
+        return _fail(pp, state, cfg, trigger, "LLM 返回结构不是对象", materials,
+                     job=job)
 
     goal = _clean_text(data.get("goal"))[:200]
     open_questions = [str(q)[:200] for q in (data.get("open_questions") or [])
@@ -1126,13 +1312,14 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
                         for e in materials.get("audit_all") or []},
         "seed_ids": {str(s.get("id")) for s in seeds},
     }
-    candidates = [c for c in (_normalize_candidate(n, ctx)
-                              for n in raw_notes[:8]) if c]
+    candidates = [c for c in (_normalize_candidate(n, ctx, job)
+                              for n in raw_notes[:_JOB_MAX_NOTES[job]]) if c]
     notes, added = _merge_notes(existing, candidates, cfg)
     notes, decayed = _decay_notes(pp, notes, cfg)
     notes, dropped = _cap_notes(notes, cfg["max_notes"])
     if _save_notes(pp, notes):
-        return _fail(pp, state, cfg, trigger, "notes.json 写入失败", materials)
+        return _fail(pp, state, cfg, trigger, "notes.json 写入失败", materials,
+                     job=job)
 
     verified = [n for n in notes if n.get("status") == "verified"]
     if goal or added:
@@ -1141,7 +1328,7 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
         err = _write_text(_path(pp, DREAM_MD), md)
         if err:
             return _fail(pp, state, cfg, trigger, f"DREAM.md 写入失败: {err}",
-                         materials)
+                         materials, job=job)
     md_chars = len(_read_text(_path(pp, DREAM_MD)))
 
     est_tokens = round((len(material_text) + len(response)) / CHARS_PER_TOKEN)
@@ -1154,6 +1341,7 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
         "last_attempt_at": now,
         "last_status": "ok",
         "last_error": "",
+        "last_job": job,
         "goal": goal or state.get("goal", ""),
         "last_run_tokens": est_tokens,
         "runs": int(state.get("runs") or 0) + 1,
@@ -1170,7 +1358,7 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
                 for n in candidates if n.get("status") == "rejected"]
     llm_provider = getattr(getattr(llm, "config", None), "provider", None)
     record = {
-        "ts": now, "trigger": trigger, "status": "ok",
+        "ts": now, "trigger": trigger, "job": job, "status": "ok",
         "llm": {"available": True, "source": "主 LLM 配置",
                 "provider": getattr(llm_provider, "value",
                                     str(llm_provider or "")),
@@ -1183,6 +1371,11 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
             "git_commits": len((materials.get("git") or {}).get("commits") or []),
         },
         "goal": goal,
+        "items": [{"text": n.get("text", ""), "kind": n.get("kind", ""),
+                   "claim_type": n.get("claim_type", "fact"),
+                   "status": n.get("status", ""),
+                   "evidence": list(n.get("evidence") or [])}
+                  for n in candidates],
         "candidates": candidates,
         "accepted": [n.get("id") for n in accepted],
         "rejected": rejected,
@@ -1209,7 +1402,7 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
                               "human": f"{len(rejected)} 条候选证据核验失败，已拒绝"}]
     return {
         "status": "ok", "tool": "coderef_dream", "action": "run",
-        "project_path": pp, "trigger": trigger,
+        "project_path": pp, "trigger": trigger, "job": job,
         "goal": goal,
         "notes": {"added": len(accepted), "verified": len(verified),
                   "rejected": len(rejected), "decayed": len(decayed),
@@ -1222,14 +1415,16 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
 
 
 def _fail(pp: str, state: dict, cfg: dict, trigger: str, error: str,
-          materials: dict, response: str = "") -> dict:
+          materials: dict, response: str = "",
+          job: str = DEFAULT_JOB) -> dict:
     """做梦失败：保留旧梦，只记录错误（不写 DREAM.md / notes）。"""
     state["last_attempt_at"] = _now()
     state["last_status"] = "error"
     state["last_error"] = error[:500]
+    state["last_job"] = job
     state["runs"] = int(state.get("runs") or 0) + 1
     _save_state(pp, state)
-    record = {"ts": _now(), "trigger": trigger, "status": "error",
+    record = {"ts": _now(), "trigger": trigger, "job": job, "status": "error",
               "error": error[:500], "response_preview": (response or "")[:500],
               "materials": {"salient": _salient_count(materials)},
               "limits": {"max_prompt_chars": MAX_PROMPT_CHARS,
@@ -1290,18 +1485,43 @@ def trigger_if_due(project_path: str) -> bool:
 
 
 def digest_items(project_path: str, limit: int = 6) -> List[dict]:
-    """把 verified 笔记压成可注入条目（梦优先于操作记忆）。"""
+    """把 triage 建议与 verified 笔记压成可注入条目（梦优先于操作记忆）。"""
     pp = os.path.abspath(project_path)
-    notes = [n for n in _load_notes(pp) if n.get("status") == "verified"]
+    notes = _load_notes(pp)
+    limit = max(1, _as_int(limit, 6, minimum=1))
+
+    out: List[dict] = []
+    seen = set()
+
+    def _add(kind: str, text: str) -> bool:
+        key = _norm_text(text)
+        if not key or key in seen:
+            return True
+        seen.add(key)
+        out.append({"kind": kind, "text": text})
+        return len(out) < limit
+
+    # 1) triage 的 advice 先占位（「先看什么」比规则更该在开工时被看到）
+    triage = [n for n in notes
+              if n.get("job") == "triage"
+              and n.get("claim_type") == "advice"
+              and n.get("status") in ("verified", "hypothesis")][:3]
+    for n in triage:
+        if not _add("梦·开工建议", _clean_text(n.get("text"))[:180]):
+            return out
+
+    # 2) verified 笔记（原有顺序：规则 → 约定 → 坑 → 联想）
     order = {"rule": 0, "convention": 1, "pitfall": 2, "association": 3}
-    notes.sort(key=lambda n: order.get(str(n.get("kind")), 9))
-    out = []
-    for n in notes[:max(1, int(limit))]:
+    verified = [n for n in notes if n.get("status") == "verified"]
+    verified.sort(key=lambda n: order.get(str(n.get("kind")), 9))
+    for n in verified:
+        if len(out) >= limit:
+            break
         text = _clean_text(n.get("text"))[:180]
         if not text:
             continue
-        out.append({"kind": "梦·" + KIND_LABELS.get(
-            str(n.get("kind")), "笔记"), "text": text})
+        if not _add("梦·" + KIND_LABELS.get(str(n.get("kind")), "笔记"), text):
+            break
     return out
 
 
@@ -1310,9 +1530,16 @@ def digest_meta(project_path: str) -> dict:
     state = _load_state(pp)
     notes = _load_notes(pp)
     verified = [n for n in notes if n.get("status") == "verified"]
+    triage_notes = [n for n in notes
+                    if n.get("job") == "triage"
+                    and n.get("claim_type") == "advice"
+                    and n.get("status") in ("verified", "hypothesis")]
+    jobs = sorted({str(n.get("job") or DEFAULT_JOB) for n in notes})
     return {
-        "available": bool(verified),
+        "available": bool(verified or triage_notes),
         "last_dream_at": state.get("last_dream_at", ""),
         "verified_notes": len(verified),
+        "triage_notes": len(triage_notes),
+        "jobs": jobs,
         "guardrail": "梦是假设；引用前先核验 evidence，不得当作审计结论",
     }
