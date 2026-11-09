@@ -121,10 +121,17 @@ def _fill_functions_and_classes(code_file: CodeFile, ast_result, content: str):
 
 
 def _fill_funcs_classes_from_ast(code_file: CodeFile, ast_result):
-    """从 AST 结果填充函数/类（all_functions = 顶层函数 + 类方法，方法也参与行数统计）"""
+    """从 AST 结果填充函数/类（all_functions = 顶层函数 + 类方法，方法也参与行数统计）。"""
+    # 私有方法仍会通过下面的 classes 分支注册；只跳过"私有方法在 all_functions
+    # 里的重复副本"，但**必须收录私有顶层函数**——否则 flow_verify / callers /
+    # impact 会把真实存在的 `_run_capability_job` 判成 missing（外部审计 D-25）。
+    method_keys = {(m.name, m.start_line)
+                   for cls in ast_result.classes for m in cls.methods}
     for func in ast_result.all_functions:
-        if func.name.startswith('_'):
-            continue  # 与旧正则行为一致：跳过私有函数/方法
+        if func.name.startswith('_') and (func.name, func.start_line) in method_keys:
+            continue
+        if func.name.startswith('__') and func.name.endswith('__'):
+            continue  # dunder 不是业务符号
         code_file.functions.append(CodeFunction(
             name=func.name,
             start_line=func.start_line,
@@ -159,7 +166,8 @@ def _fill_funcs_classes_from_regex(code_file: CodeFile, content: str):
     func_matches = list(re.finditer(func_pattern, content))
     for idx, match in enumerate(func_matches):
         func_name = match.group(1)
-        if not func_name.startswith('_'):  # 跳过私有函数
+        if not (func_name.startswith('__') and func_name.endswith('__')):
+            # 私有顶层函数也要收录（与 AST 路径一致）；仅跳过 dunder
             params = [p.strip() for p in match.group(2).split(',') if p.strip()]
             start_line = content[:match.start()].count('\n') + 1
             # 计算 end_line：下一个函数/类定义之前减1行，或文件末尾

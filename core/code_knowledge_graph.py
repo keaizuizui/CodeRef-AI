@@ -32,6 +32,13 @@ _BUILTIN_CALL_NAMES = {
     "ord", "chr", "hex", "oct", "bin", "frozenset", "property", "memoryview",
     "insert", "append", "extend", "split", "join", "strip", "lower", "upper",
     "warn", "warning", "resolve", "get", "put", "post", "read", "write",
+    # 容器/DB/IO 的通用属性名：外部复跑实测 `check` 入边 7,799 + `get` 5,730
+    # = 全部 CALLS 的 66.4%（`json.dump` 连到 buyer_intel.py::dump 等）→ 一律不吸边
+    "check", "dump", "dumps", "load", "loads", "exists", "keys", "values",
+    "items", "copy", "update", "add", "remove", "pop", "clear", "sort",
+    "count", "index", "encode", "decode", "replace", "startswith", "endswith",
+    "seek", "flush", "execute", "executemany", "fetchone", "fetchall",
+    "commit", "rollback", "close", "connect",
 }
 
 
@@ -577,9 +584,9 @@ class CodeKnowledgeGraph:
                             callee_id = mid
                 if not callee_id:
                     callee_id = self._resolve_instance_call(call, var_host, caller_id)
-                if not callee_id:
-                    callee_name = call.func_name.split(".")[-1]
-                    callee_id = self._find_node_by_name(callee_name)
+                # 不再按短名兜底：self/cls 已按作用域解析、实例调用已按宿主类解析，
+                # 其余点号调用（params.get / json.dump）按短名全局匹配会把大量调用
+                # 吸到同一个 helper 名（外部实测 check/get 占 CALLS 66.4%）。宁漏不假。
                 if callee_id and not self._node_exists(callee_id):
                     callee_id = None  # 悬空防御：不存在的 callee 不建边
                 if callee_id:
@@ -835,16 +842,18 @@ class CodeKnowledgeGraph:
         if row:
             return row["id"]
         short = name.rsplit(".", 1)[-1]
-        if not short or (short == name and short in _BUILTIN_CALL_NAMES):
+        if not short:
             return None
-        if short != name:
-            row = self._conn.execute(
-                "SELECT id FROM nodes WHERE name=? LIMIT 1", (short,)).fetchone()
-            if row:
-                return row["id"]
-        # 仅接受「点号边界」后缀：Cls.method / mod.func；不接受任意子串。
-        # 例：full_name=Bot.run_bot 可命中 name=Bot.run_bot（已被精确分支捕获），
-        # 或唯一命中 name=run_bot；而 warnings.warn 不会命中 browser_manager_warning_test。
+        if "." not in name:
+            # 裸名：精确匹配已失败，不再模糊（裸调用 foo() 只有在项目里真有
+            # 唯一同名符号时才可能建边；模糊会把内置名/常见词连到任意模块）
+            return None
+        if short in _BUILTIN_CALL_NAMES:
+            # 点号调用落到通用属性名（params.get / json.dump / Path.resolve）时，
+            # 全局裸名匹配会把 5,000+ 条调用吸到同一个 helper（外部实测 66.4%）。
+            return None
+        # 点号调用只接受「点号边界」后缀（node name 形如 Cls.method），
+        # 不做裸名/子串回退；无法确定作用域的调用宁可漏边，不可建假边。
         candidates = self._conn.execute(
             "SELECT id FROM nodes WHERE name LIKE ?", (f"%.{short}",)).fetchall()
         if len(candidates) == 1:

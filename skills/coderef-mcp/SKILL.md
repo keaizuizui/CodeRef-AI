@@ -197,11 +197,13 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 
 ## 输出解读铁律（v5.18.6 起）
 
-外部实测（`kuajingdianshang`，v5.18.5）出现过以下误读，按此解读可避免把工具缺陷或输入问题当成项目问题：
+外部实测（`kuajingdianshang`，v5.18.5 / v5.18.6）出现过以下误读，按此解读可避免把工具缺陷或输入问题当成项目问题：
 
 - **`verify_findings` 的 `file_exists_only` 不等于确证**：它只证明「论断提到的文件存在」，不能证明论断成立；`confirmed` 也不代表语义正确，必须回读代码。
 - **`coderef_architecture` 不产出代码 findings**：它只做结构分析（图谱/工作流/画布）；`summary.findings=0` 不是"无问题"，代码问题看 `coderef_audit` / `coderef_scan`（返回带 `findings_note`）。
 - **`interpret(action=health)` 必须看新鲜度**：先查 `data_source` / `scan_ts` / `data_stale`；`data_stale=true` 时不得当现状转述，先重跑 `coderef_audit`。
 - **`arch_gap` / `arch_verify` 先看 `target_health`**：`target_health.stale=true` 表示定标过期（超过一半 `target_modules` 不存在），此时 0% 覆盖/低分是输入问题，不是代码问题；先 `coderef_target_arch_set` 重新定标。
+- **`scorecard` 的 `unknown` 不是 0 分**：治理库全 Rejected / 超 30 天、Wiki 未生成、定标过期都会标 `unknown`（`score=None` + `reason`）。如实转述「这一维证据不足」，不要换算成低分或说成工具失败。
+- **关系层宁可漏边也不建假边**：点号调用（`params.get` / `json.dump`）不再按短名吸附同名 helper，因此 `query callers` / fan_in 可能偏少；低 fan_in 不等于「不重要」，关键调用链请用 `flow_verify` 验证。
 - **多工具口径不同不是"工具打架"**：`coderef_audit` / 图谱是权威扫描集；发现备份目录（`_refactor_backup` 等）被其他工具计入时，用 `coderef_whitelist` 的 `dir` 条目排除，不要据此否定审计结论。
 - **LLM 未配置是硬阻断而非降级**：`coderef_docs` / `innovation_review` / `eval` 会如实提示；不要伪造 LLM 产物。
