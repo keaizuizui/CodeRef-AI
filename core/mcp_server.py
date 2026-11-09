@@ -497,6 +497,9 @@ class Server:
             return True
         if explicit is False:
             return False
+        # 梦的默认 action 是 status（schema 默认值），只有 run 才需要后台
+        if n == "coderef_dream":
+            return str(a.get("action") or "status") == "run"
         if n in self.MERGE_SYNC_ACTIONS and a.get("action", "sync") in self.MERGE_SYNC_ACTIONS[n]:
             return False
         return n in self.HEAVY_TOOLS
