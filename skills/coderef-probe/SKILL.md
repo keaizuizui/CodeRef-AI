@@ -39,6 +39,7 @@ description: L1 小阶段治理编排 Skill（类 CodeRabbit，变更驱动）�
 - **改前看梦**：开工 / 改码前先读 `context.memory_digest.dream` 或 `coderef_dream(action=read, limit=5)`，优先看与本次改动相关的 `pitfall` / `routing`，只当线索，不当结论。
 - **核验后 seed**：`coderef_change_guard` 拦截到回归、`coderef_verify_findings` 推翻了某个论断，或确认某条误报 / 误判后，seed 1–3 条（每条 ≤200 字），写清“哪里错了、下次怎么避免”。
 - **不自动补梦**：本链不调用 `coderef_dream(action=run)`，补梦由用户要求或 `dream.run_on_startup=true` 触发。
+- **草稿需确认**：`review_draft` 草稿用 `coderef_dream(action=drafts)` 读取，应用前必须跑 `coderef_review` / `coderef_verify_findings` 并经用户确认。
 
 > 工具面：本 Skill 默认按 `full` profile 编写；启用 `lite` 时，未暴露的探查工具请通过 `coderef_plan/execute` 链调用，或临时切回 `full`。
 
