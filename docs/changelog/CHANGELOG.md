@@ -4,6 +4,16 @@
 
 ---
 
+### v5.19.7 — dispatcher 新增 `remind`：由子代理回答「你忘了什么」
+
+> 背景：AGENTS.md 是上下文注入，主 AI 仍可能漏做 recover/change_guard。本版把「纪律复盘」做成 CodeRef 子代理的确定性检查步骤，而不是再写一条提醒文字。
+
+- **新增 `core/discipline_recall.py`**：检查操作记忆（24h 内 `memory_recovered_at`）、变更守卫（当前 git 指纹 vs 最近守卫指纹；工作区干净视为已覆盖）、知识图谱陈旧度、审计产物过期；输出 `forgotten / passed / unknown` 三类事实与 `owner_actions`，附结论信封。
+- **dispatcher 新增 `remind` 链**：`coderef_plan(intent=remind)` → `coderef_execute(intent=remind)`；`check: discipline` 步骤在 dispatcher 进程内执行，不经 MCP 工具回环，轨迹照常落盘。
+- **意图枚举**：`core/dispatch_intents.py` 增加 `remind`，tools_manifest 的 schema enum 自动同步（单一事实源）。
+- **诚实边界**：非 git 仓库等无法判定的项进 `unknown`，不伪装成 forgotten 或 passed。
+- **验证**：新增 4 例回归（遗漏/补齐后通过/计划与执行/Server 入口）；全量 pytest **382 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.19.6 — 三路复审 9 条整改（CodeRabbit / Brooks-Lint / Code Review Report）
 
 > 复审范围 `c58cf32..af2ec77`（5.19.1–5.19.5）。三路共报 9 条确认缺陷（6 major / 3 minor），全部成立并修复。

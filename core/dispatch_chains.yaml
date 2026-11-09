@@ -55,6 +55,14 @@ chains:
         args: {project_path: "{project_path}", action: status}
         fail: continue
 
+  remind:
+    title: "纪律复盘（你忘了什么）"
+    estimate_seconds: 10
+    steps:
+      # check 步骤由 dispatcher 进程内执行，不经 MCP 工具调用
+      - id: recall
+        check: discipline
+
   governance:
     title: "L2 架构治理主链"
     estimate_seconds: 300
