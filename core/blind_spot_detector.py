@@ -85,6 +85,7 @@ class BlindSpotDetector:
         self._all_py_files: List[str] = []
         self._all_imports: Dict[str, Set[str]] = {}  # file_path -> set of imports
         self._all_module_names: Set[str] = set()
+        self._all_local_names: Set[str] = set()      # 文件 stem + 目录名
 
     def detect(self, project_path: str) -> str:
         """
@@ -132,27 +133,36 @@ class BlindSpotDetector:
     def _collect_project_info(self, project_path: str) -> None:
         """收集项目中所有 .py 文件和 import 信息"""
         from core.project_scope import ProjectScope
+        from core.pr_whitelist import whitelist_exclude_dirs, path_hits_excluded_dir
 
         self._all_py_files = []
         self._all_imports = {}
         self._all_module_names = set()
+        self._all_local_names = set()   # 文件 stem + 目录名（扁平/子工程导入解析）
 
         scope = ProjectScope(project_path)
         scope.analyze()
+        excl_dirs = whitelist_exclude_dirs(project_path)
 
         for root, dirs, files in os.walk(project_path):
             # 使用 ProjectScope 过滤目录
             dirs[:] = [d for d in dirs if scope.should_scan(os.path.join(root, d))]
             for f in files:
-                if f.endswith(".py"):
-                    fp = os.path.join(root, f)
-                    self._all_py_files.append(fp)
-                    rel = os.path.relpath(fp, project_path)
-                    self._all_module_names.add(rel.replace(os.sep, ".").replace(".py", ""))
+                if not f.endswith(".py"):
+                    continue
+                fp = os.path.join(root, f)
+                # whitelist dir（如 _refactor_backup）内的文件不是当前项目代码
+                if path_hits_excluded_dir(os.path.relpath(fp, project_path), excl_dirs):
+                    continue
+                self._all_py_files.append(fp)
+                rel = os.path.relpath(fp, project_path)
+                self._all_module_names.add(rel.replace(os.sep, ".").replace(".py", ""))
+                self._all_local_names.add(os.path.basename(fp)[:-3])
+                self._all_local_names.add(os.path.basename(root))
 
-                    # 提取 import 语句
-                    imports = self._extract_imports(fp)
-                    self._all_imports[fp] = imports
+                # 提取 import 语句
+                imports = self._extract_imports(fp)
+                self._all_imports[fp] = imports
 
         logger.info(f"[BlindSpotDetector] 收集到 {len(self._all_py_files)} 个 .py 文件")
 
@@ -271,7 +281,10 @@ class BlindSpotDetector:
         # 项目自身的顶层模块名（项目根下的顶层 .py 文件名 + 顶层目录名）：
         # `from config import settings`、`from core import tool_registry` 的
         # import 根名是项目自己的顶层包目录名，不是缺失的第三方依赖
-        local_roots = self._project_local_roots(project_path)
+        # 另并上"项目内任意层级的文件 stem / 目录名"：真实项目常把子目录加入
+        # sys.path 后扁平 import（如 `import web_gui`、`import citation_audit`），
+        # 只认顶层会把它们误报成缺失依赖（外部实测 450 条）。
+        local_roots = self._project_local_roots(project_path) | self._all_local_names
 
         all_imported: Set[str] = set()
         for imports in self._all_imports.values():

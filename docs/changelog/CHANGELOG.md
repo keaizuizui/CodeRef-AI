@@ -4,6 +4,17 @@
 
 ---
 
+### v5.18.8 — 老口径收尾：扫描范围统一、模块数口径显式化、导入解析修正
+
+> 承接外部审计第二轮遗留项。本批不改变分析能力，只把「同一项目不同工具扫到不同文件集 / 同一个词在不同工具里数字不同 / 子工程内导入被判缺失」这三类长期误读从根上收掉。
+
+- **扫描口径统一（D-12 家族）**：`pr_whitelist` 新增 `whitelist_exclude_dirs` / `path_hits_excluded_dir`（单段名按路径段、多段名按前缀匹配，`backup_service` 不会误伤 `_refactor_backup`）。`prompt_extractor`、`resource_gap_detector`、`blind_spot_detector` 的文件收集统一接入 whitelist 的 dir 条目，备份/镜像目录里的 prompt 与坏 import 不再计入当前项目。
+- **扁平/命名空间导入修正**：文件 stem 与目录名纳入本地模块解析。真实项目常把子目录加入 `sys.path` 后 `import web_gui`，或使用无 `__init__.py` 的命名空间包（`import 市场层.market_registry`），旧逻辑只认项目根，会误报 `missing_module` / `missing_dependency`。对方仓库实测：`blind_spot` 缺失依赖 **450 → 61**（剩余 61 条均为真实未安装/未声明的第三方）、`resgap` `missing_module` **5 → 1**（剩余 1 条是真实坏导入）。
+- **模块数口径显式化（D-9）**：`arch_audit.graph_stats` 新增 `modules_total`（图谱模块节点总数）与 `modules_in_call_graph`（参与调用关系的模块数，测试/无调用模块不计），并附 `scope_note`；`arch_gap.alignment` 新增 `modules_production`（排除测试模块后的模块数）。旧 `modules` 键保留兼容。四个数字的差异是统计口径不同，不是数据错。
+- **architecture 字段显式化（D-20）**：返回新增 `findings_applicable=false`，与 `findings_note` 一起标明「本工具只做结构分析，`findings=0` 不代表无问题」，避免只读数字字段再次误读。
+- **两条「不改」的结论（不是工具缺陷）**：D-4（定标 v1 的 41/41 缺失）是调用方输入陈旧，工具已用 `target_health.stale` 与 scorecard `unknown` 自检；D-8（IMPORTS 46.7% 零边）是按设计只为「项目内模块引用」建边，第三方/标准库 import 不建边。两者已写入感知口径，不再当作待修缺陷。
+- **验证**：新增 5 例外审回归（排除目录路径匹配、扁平/命名空间导入解析、prompt 扫描范围、模块数口径键）；全量 pytest **287 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.18.7 — 外部审计第二轮：实体层补全、假边收敛与读数诚实化
 
 > 来源：外部 AI 在 `d:\kuajingdianshang` 用 v5.18.6 复跑后的第二轮报告（D-21~D-26 + UI 复审）。结论是「索引的实体层准确，关系层仍不可用；评估台版式合格，但 5 个读数里 4 个输入有误」。

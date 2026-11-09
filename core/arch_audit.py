@@ -801,6 +801,14 @@ def audit(project_path: str, db_path: str = None,
 
     mod_adj, self_edges = build_module_graph(nodes, adj, project_path)
     result["graph_stats"]["modules"] = len(mod_adj)
+    # 口径显式化（外部审计 D-9）：同一项目在不同工具里出现 4 个「模块数」，
+    # 差异不是数据错，而是统计口径不同。把口径写进返回值，避免读者互相校对。
+    result["graph_stats"]["modules_in_call_graph"] = len(mod_adj)
+    result["graph_stats"]["modules_total"] = sum(
+        1 for n in nodes.values() if n.get("type") == "module")
+    result["graph_stats"]["scope_note"] = (
+        "modules_total=图谱中的模块节点总数；modules_in_call_graph=参与调用关系的模块数"
+        "（测试模块与无调用模块不计）；两者不同属正常口径差异")
 
     # 1) 循环依赖（模块级 SCC：模块间真循环 + 模块内自环分流，自环不扣健康分）
     module_cycles, self_loops, cycle_details = _find_cycles(mod_adj, self_edges, sc_min)

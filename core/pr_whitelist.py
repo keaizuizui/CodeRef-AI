@@ -159,6 +159,37 @@ def detect_wiki_output_dir(project_path: str) -> Optional[str]:
             return c
     return None
 
+
+def whitelist_exclude_dirs(project_path: str) -> list:
+    """读取 whitelist 的 dir 条目（目录级排除，供各扫描器统一口径）。
+
+    外部审计反复出现的「同一项目不同工具扫到不同文件集」根因之一：备份/镜像
+    目录（如 `_refactor_backup`）只在图谱链路被排除，文本类扫描仍会扫进去。
+    """
+    try:
+        return [e["dir"] for e in whitelist_list(project_path) if e.get("dir")]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def path_hits_excluded_dir(rel_path: str, exclude_dirs: list) -> bool:
+    """相对路径是否落在排除目录内（单段名按路径段匹配，多段名按前缀匹配）。"""
+    rel = (rel_path or "").replace("\\", "/").strip("/")
+    if not rel:
+        return False
+    parts = rel.split("/")
+    padded = "/" + rel + "/"
+    for d in exclude_dirs or []:
+        dn = str(d or "").replace("\\", "/").strip("/")
+        if not dn:
+            continue
+        if "/" in dn:
+            if f"/{dn}/" in padded:
+                return True
+        elif dn in parts:
+            return True
+    return False
+
 def docs_read(project_path: str, doc: Optional[str] = None,
               output_dir: Optional[str] = None,
               max_chars: int = 20000) -> dict:

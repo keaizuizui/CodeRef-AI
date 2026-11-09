@@ -745,16 +745,9 @@ def _domain_flow_model(nodes: Dict[str, dict], adj: Dict[str, List[str]],
 
 
 def _whitelist_exclude_dirs(project_path: str) -> List[str]:
-    """读取 whitelist 中的 dir 条目（目录级排除，备份/镜像目录不污染差距分析）。
-
-    延迟 import pipeline_runner 避免模块级循环依赖（pipeline_runner 不 import
-    arch_gap_analyzer，但保持函数内加载更稳妥）。
-    """
-    try:
-        from core.pipeline_runner import whitelist_list
-        return [e["dir"] for e in whitelist_list(project_path) if e.get("dir")]
-    except Exception:  # pragma: no cover
-        return []
+    """读取 whitelist 中的 dir 条目（统一实现在 pr_whitelist，保留本名供旧调用）。"""
+    from core.pr_whitelist import whitelist_exclude_dirs
+    return whitelist_exclude_dirs(project_path)
 
 
 def _build_assignment(roles: List[dict], nodes: dict, project_path: str,
@@ -914,7 +907,10 @@ def _build_alignment(roles: List[dict], role_has_impl: Dict[str, bool],
     alignment = {
         "role_coverage": round(impl_roles / total_roles, 2) if total_roles else 1.0,
         "module_assigned": module_assigned,
-        "note": "Phase 0 简化对齐度：role_coverage=已实现角色/总角色；module_assigned=已归属模块/总模块",
+        "modules_production": total_mods,
+        "note": "Phase 0 简化对齐度：role_coverage=已实现角色/总角色；"
+                "module_assigned=已归属模块/总模块（total_mods=排除测试模块后的模块数，"
+                "与图谱模块节点总数口径不同）",
     }
     return alignment, module_assigned
 

@@ -475,13 +475,19 @@ class ResourceGapDetector:
     # ─── 辅助：收集文件 ─────────────────────────────────────────────
 
     def _collect_py_files(self, project_path: str) -> List[str]:
-        """收集所有 .py 文件路径"""
+        """收集所有 .py 文件路径（排除 whitelist 的 dir 条目）。"""
+        from core.pr_whitelist import whitelist_exclude_dirs, path_hits_excluded_dir
+        excl_dirs = whitelist_exclude_dirs(project_path)
         py_files = []
         for root, dirs, files in os.walk(project_path):
             dirs[:] = [d for d in dirs if self._scope.should_scan(os.path.join(root, d))]
             for f in files:
-                if f.endswith(".py"):
-                    py_files.append(os.path.join(root, f))
+                if not f.endswith(".py"):
+                    continue
+                fp = os.path.join(root, f)
+                if path_hits_excluded_dir(os.path.relpath(fp, project_path), excl_dirs):
+                    continue
+                py_files.append(fp)
         return py_files
 
     def _collect_all_imports(self, project_path: str):
@@ -571,6 +577,15 @@ class ResourceGapDetector:
                 mod_path = rel[:-3]  # 去掉 .py
                 local_modules[mod_path.replace("/", ".")] = fpath
 
+        # 扁平/子工程导入：真实项目常把子目录加入 sys.path 后 `import web_gui`，
+        # 或使用没有 __init__.py 的命名空间包（`import 市场层.market_registry`）。
+        # 只按「根目录匹配」会把这些项目内模块误报 missing_module（外部实测 5 条）。
+        local_names = set(local_modules)
+        for fpath in self._all_py_files:
+            local_names.add(os.path.basename(fpath)[:-3] if fpath.endswith(".py")
+                            else os.path.basename(fpath))
+            local_names.add(os.path.basename(os.path.dirname(fpath)))
+
         # 检查每个 import
         checked_imports = set()
         for fpath, imports in self._all_imports_by_file.items():
@@ -600,7 +615,7 @@ class ResourceGapDetector:
                 # 检查本地是否匹配
                 found = False
                 # 同目录匹配
-                if root_module in local_modules:
+                if root_module in local_modules or root_module in local_names:
                     found = True
                 # 检查完整路径匹配
                 elif imp in local_modules:
