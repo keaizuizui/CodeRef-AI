@@ -4,6 +4,16 @@
 
 ---
 
+### v5.19.2 — 统一范围层 + precondition 四闸门
+
+> 5.19.x 层1 收尾。解决 P2（纪律是文字不是代码）、P3（记忆不读取的状态判定）与 P5（忽略意图无持久化载体）。
+
+- **新增 `core/scope.py` + `coderef_scope` 工具**（工具数 52→53）：`.coderef/scope.json` 作为项目边界单一事实源，支持 `exclude_glob` / `ignore_lib` / `include_override`，每条带 `added_by` / `added_at` / `reason`；`add` 后立即返回 `verify` 回执（排除数、按工具计数、同名可疑误伤），`remove` / `list` / `verify` 齐全。
+- **扫描收口**：`CodeAnalyzer._should_ignore` 与 `CodeKnowledgeGraph._is_excluded` 统一应用 scope，审计/图谱/SCA 共享同一项目边界；`apply_scope(files)` 作为扫描型工具的统一过滤入口。scope 不影响 `change_guard`（边界写入工具描述与 README）。
+- **新增 `core/preconditions.py`**：G-A 未 recover、G-B 图谱过期、G-C 定标缺失、G-D 审计产物超龄；默认 `warn`（`context.gate_warnings`），`preconditions.mode=block` 时返回 `status=blocked` + 信封 + `owner_actions`；只读工具永远放行，闸门自身故障一律放行。
+- **会话事实**（`core/session_guard.py`）：新增 `mark_fact/get_fact`，`recover` 成功与记忆摘要可用都写入 `memory_recovered_at`，作为 G-A 的可核查依据。
+- **验证**：新增 10 例回归（闸门 5 + 范围层 5）；全量 pytest **349 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.19.1 — 结果级新鲜度硬戳 + stale 感知查询 + 图谱文件级增量
 
 > 5.19.x 层1 第二版。解决 P1（引用陈旧产物）与 P4（图谱落后仍被查询）：新鲜度不再依赖 AI 主动查 version，查询结果自己带 `stale`。

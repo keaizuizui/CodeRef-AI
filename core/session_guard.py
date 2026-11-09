@@ -256,3 +256,49 @@ def guard_if_needed(project_path: str) -> Optional[Dict[str, Any]]:
             "summary": "",
             "at": at,
         }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 会话事实（precondition 闸门的判定依据，5.19.2）
+# ═══════════════════════════════════════════════════════════════════════
+
+def mark_fact(project_path: str, key: str, value: Any = None) -> None:
+    """记录一条会话事实（如 memory_recovered_at / kg_synced_at）。
+
+    写入 state["facts"][key] = {"at": ISO 时间, "value": value}；
+    任何失败静默，绝不影响主流程。
+    """
+    if not key:
+        return
+    try:
+        state = load_state(project_path)
+        facts = state.get("facts")
+        if not isinstance(facts, dict):
+            facts = {}
+        facts[key] = {"at": _now_iso(), "value": value}
+        state["facts"] = facts
+        save_state(project_path, state)
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[session_guard] 会话事实写入失败: {e}")
+
+
+def get_fact(project_path: str, key: str,
+             max_age_hours: Optional[float] = None) -> Optional[dict]:
+    """读取会话事实；不存在/已超龄/损坏时返回 None。"""
+    try:
+        facts = load_state(project_path).get("facts") or {}
+        item = facts.get(key)
+        if not isinstance(item, dict):
+            return None
+        if max_age_hours is not None:
+            at = item.get("at") or ""
+            try:
+                age = (datetime.now() - datetime.fromisoformat(at)).total_seconds()
+            except (TypeError, ValueError):
+                return None
+            if age > float(max_age_hours) * 3600:
+                return None
+        return item
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[session_guard] 会话事实读取失败: {e}")
+        return None

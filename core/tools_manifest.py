@@ -74,6 +74,35 @@ BUILTIN_TOOLS: List[Dict] = [
                         }, "required": ["project_path"]},
                     },
         {
+                        "name": "coderef_scope",
+                        "description": (
+                            "统一范围层（5.19.2）：项目边界的单一事实源 .coderef/scope.json。\n"
+                            "action=add → 新增忽略规则（exclude_glob 路径模式 / ignore_lib 第三方库名 / "
+                            "include_override 误伤找回），立即返回生效验证回执（排除文件数、按工具计数、可疑误伤）；\n"
+                            "action=remove → 删除匹配规则；action=list → 查看全部规则；action=verify → 重新验证生效范围。\n"
+                            "用户说「忽略 X」时调用一次即持久化，后续审计/图谱/SCA 自动生效，无需每次传参。\n"
+                            "【边界】scope 只作用于扫描与检索，不作用于 change_guard 的回归防护——"
+                            "忽略的是审计噪音，不是安全责任。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "action": {"type": "string", "enum": ["add", "remove", "list", "verify"], "default": "list"},
+                            "kind": {"type": "string", "enum": ["exclude_glob", "ignore_lib", "include_override"], "default": "exclude_glob"},
+                            "pattern": {"type": "string", "description": "路径模式或库名（action=add/remove 时用）"},
+                            "rules": {
+                                "type": "array", "items": {"type": "object",
+                                    "properties": {
+                                        "kind": {"type": "string", "enum": ["exclude_glob", "ignore_lib", "include_override"]},
+                                        "pattern": {"type": "string"},
+                                        "reason": {"type": "string"},
+                                    }},
+                                "description": "批量新增规则（action=add 可选，优先于单条 pattern）"
+                            },
+                            "reason": {"type": "string", "description": "忽略原因（可追溯）"},
+                            "added_by": {"type": "string", "description": "规则添加者（user/ai，默认 user）"},
+                        }, "required": ["project_path"]},
+                    },
+        {
                         "name": "coderef_audit",
                         "description": (
                                 "全维度代码审计 = 治理审计 + Agent安全 + 依赖扫描(CVE) + 技术债务 + "

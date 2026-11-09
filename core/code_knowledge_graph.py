@@ -514,8 +514,18 @@ class CodeKnowledgeGraph:
         self._conn.execute("DELETE FROM meta")
 
     def _is_excluded(self, rel: str) -> bool:
-        """判断相对路径是否位于排除目录下（复用模块级 _is_excluded_path）。"""
-        return _is_excluded_path(rel, self.project_path, self._exclude_dirs)
+        """判断相对路径是否位于排除目录下（复用模块级 _is_excluded_path）。
+
+        5.19.2：同时应用 .coderef/scope.json 的统一范围层（exclude_glob /
+        ignore_lib），保证图谱与审计共享同一项目边界。
+        """
+        if _is_excluded_path(rel, self.project_path, self._exclude_dirs):
+            return True
+        try:
+            from core.scope import is_excluded
+            return is_excluded(self.project_path, rel)
+        except Exception:  # noqa: BLE001 —— scope 故障不阻断建图
+            return False
 
     def _set_meta(self, key: str, value: str):
         self._conn.execute(

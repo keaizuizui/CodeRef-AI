@@ -429,6 +429,16 @@ class CodeAnalyzer:
                 if abs_path == skip_dir or abs_path.startswith(skip_dir + os.sep):
                     return True
 
+        # 1.6 统一范围层（5.19.2）：.coderef/scope.json 的 exclude_glob / ignore_lib
+        if not getattr(self, "_disable_scope", False):
+            try:
+                from core.scope import is_excluded
+                root_path = str(root) if root is not None else ""
+                if root_path and is_excluded(root_path, str(path)):
+                    return True
+            except Exception as e:  # noqa: BLE001 —— scope 故障不阻断扫描
+                logger.debug(f"[CodeAnalyzer] scope 判定失败（放行）: {e}")
+
         # 2. 检查文件名模式
         name = path.name
         

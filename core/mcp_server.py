@@ -149,7 +149,7 @@ from core.handlers_engine import (
 )
 from core.handlers_misc import (
     _advisor, _docs_read, _eval, _frontend, _query, _report, _review,
-    _scan_list, _scan_tool, _verify_findings, _version, _wl,
+    _scan_list, _scan_tool, _scope, _verify_findings, _version, _wl,
 )
 # 5.19.1 结果级新鲜度硬戳：信封统一挂 freshness 块（best-effort，失败不影响结论）
 from core.freshness_guard import attach_freshness as _env_with_freshness
@@ -180,7 +180,7 @@ __all__ = [
     "_gov_issues", "_gov_transition", "_gov_report", "_gov_pipeline",
     "_dynamic_probe", "_gov_board", "_gov_workspace", "_gov_schedule",
     "_role_boundary", "_verify_findings", "_review", "_frontend",
-    "_report", "_advisor", "_arch", "_wl", "_query",
+    "_report", "_advisor", "_arch", "_wl", "_query", "_scope",
     # arch 系辅助
     "_target_arch_path", "_load_target_arch", "_coerce_target_arch",
     "_validate_project_path",
@@ -341,6 +341,7 @@ class Server:
         # background 后台化逻辑。audit/docs 的 handler 额外接收 progress_cb 上报阶段进度。
         self._handlers = {
             "coderef_whitelist": self._wl,
+            "coderef_scope": self._scope,
             "coderef_architecture": self._arch,
             "coderef_docs_read": self._docs_read,
             "coderef_query": self._query,
@@ -698,15 +699,28 @@ class Server:
         return _validate_project_path(tool, p)
 
     def _run(self, n, a, progress_cb=None) -> str:
-        """工具执行入口：先跑原 _run_inner，再按需附加会话上下文。
+        """工具执行入口：precondition 闸门 → 执行 → 按需附加会话上下文。
 
-        5.19.x 地基：把「改完代码要跑变更守卫」「先恢复记忆」从 skill 文字
-        变成服务端自动行为——重工具返回体自带 `context.guard`（本次自动跑的
-        能力退化检查）与 `context.memory_digest`（进程内首次注入的操作记忆摘要）。
-        调用方不主动查也会拿到，避免“忘了/没读”导致的信息滞后。
+        5.19.x：把「改完代码要跑变更守卫」「先恢复记忆」「先 sync 图谱」从
+        skill 文字变成服务端自动行为——闸门命中按配置返回 blocked 或
+        gate_warnings；重工具返回体自带 `context.guard` 与
+        `context.memory_digest`。调用方不主动查也会拿到。
         """
-        raw = self._run_inner(n, a, progress_cb)
         p = a.get("project_path") or ""
+        gate = {}
+        if p:
+            try:
+                from core.preconditions import blocked_result, evaluate
+                gate = evaluate(n, p, a)
+                if gate.get("blocked"):
+                    return json.dumps(
+                        blocked_result(n, gate.get("blocking") or {}),
+                        ensure_ascii=False)
+            except Exception as e:  # noqa: BLE001 —— 闸门故障不拦调用
+                logger.debug(f"[preconditions] 闸门检查失败（放行）: {e}")
+                gate = {}
+
+        raw = self._run_inner(n, a, progress_cb)
         if not p:
             return raw
         try:
@@ -716,6 +730,8 @@ class Server:
         if n not in HEAVY_TOOLS:
             return raw
         ctx = {}
+        if gate.get("hits"):
+            ctx["gate_warnings"] = gate["hits"]
         try:
             guard = guard_if_needed(p)
             if guard:
@@ -727,6 +743,11 @@ class Server:
             digest = inject_once(p)
             if digest is not None:
                 ctx["memory_digest"] = digest
+                # G-A 的事实来源：记忆摘要可用 == 已完成 recover
+                if digest.get("available"):
+                    from core.session_guard import mark_fact
+                    mark_fact(p, "memory_recovered_at",
+                              {"items": len(digest.get("items") or [])})
         except Exception as e:  # noqa: BLE001
             logger.debug(f"[session] 记忆摘要注入失败: {e}")
         if not ctx:
@@ -863,6 +884,9 @@ class Server:
 
     def _wl(self, a):
         return _wl(a)
+
+    def _scope(self, a):
+        return _scope(a)
 
     def _tsk(self, a) -> str:
         import time

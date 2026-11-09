@@ -25,6 +25,54 @@ def _env_with_freshness(envelope: dict, project_path: str, artifacts: list) -> d
         return envelope
 
 
+def _scope(a: dict) -> str:
+    """统一范围层（coderef_scope，5.19.2）：add/remove/list/verify。"""
+    from core import scope as scope_mod
+    pp = a["project_path"]
+    act = a.get("action", "list")
+    if act not in ("add", "remove", "list", "verify"):
+        return json.dumps({
+            "status": "error", "tool": "coderef_scope",
+            "error": f"非法 action: {act!r}；允许 add/remove/list/verify",
+        }, ensure_ascii=False)
+    if act == "add":
+        rules = a.get("rules")
+        if not isinstance(rules, list) or not rules:
+            rules = [{"kind": a.get("kind", "exclude_glob"),
+                      "pattern": a.get("pattern", ""),
+                      "reason": a.get("reason", "")}]
+        try:
+            res = scope_mod.add_rules(pp, rules,
+                                     added_by=a.get("added_by", "user"))
+        except ValueError as e:
+            return json.dumps({"status": "error", "tool": "coderef_scope",
+                               "error": str(e)}, ensure_ascii=False)
+        res.update({"status": "ok", "tool": "coderef_scope", "action": "add"})
+        errs = [r.get("error") for r in res.get("results", []) if r.get("error")]
+        if errs and not res.get("added"):
+            return json.dumps({"status": "error", "tool": "coderef_scope",
+                               "error": "；".join(str(e) for e in errs)},
+                              ensure_ascii=False)
+        if errs:
+            res["errors"] = errs
+            res["status"] = "partial"
+        # 生效验证回执：add 后立即统计实际排除，避免「以为忽略了其实没生效」
+        res["verify"] = scope_mod.verify(pp)
+        return json.dumps(res, ensure_ascii=False)
+    if act == "remove":
+        res = scope_mod.remove_rule(pp, a.get("kind", ""), a.get("pattern", ""))
+        res.update({"status": "ok", "tool": "coderef_scope", "action": "remove"})
+        res["verify"] = scope_mod.verify(pp)
+        return json.dumps(res, ensure_ascii=False)
+    if act == "verify":
+        res = scope_mod.verify(pp)
+        res.update({"status": "ok", "tool": "coderef_scope", "action": "verify"})
+        return json.dumps(res, ensure_ascii=False)
+    res = scope_mod.list_scope(pp)
+    res.update({"status": "ok", "tool": "coderef_scope", "action": "list"})
+    return json.dumps(res, ensure_ascii=False)
+
+
 def _scan_tool(a: dict) -> str:
     """运行单个审计维度（coderef_scan），返回结构化 JSON findings。
 

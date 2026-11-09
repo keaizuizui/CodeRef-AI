@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.19.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.19.2** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -11,7 +11,7 @@
 
 ## 它是什么
 
-CodeRef-AI 通过 MCP 协议暴露 **52 个工具**，同时服务两类人：
+CodeRef-AI 通过 MCP 协议暴露 **53 个工具**，同时服务两类人：
 
 - **编程 AI 的治理外脑**：让 AI 不再逐文件读代码，而是像查数据库一样查询项目的结构、调用链与风险；编程 AI（或 CodeRabbit）给出论断时，还能用静态图谱做确定性核验，再决定采不采信。
 - **非编程人员的技术助理**：把代码变成通俗的健康仪表盘、Wiki 与流程确证。你只需定义「入口 A 应该依次经过步骤 B→C→D」，`coderef_flow_verify` 就会在调用链里给出确证 / 在管线 / 存疑 / 缺失四种状态——不用读代码，也能确认项目有没有按你的设想运转。
@@ -20,9 +20,9 @@ CodeRef-AI 通过 MCP 协议暴露 **52 个工具**，同时服务两类人：
 
 ---
 
-## 三条编排主线：52 个工具不是散件，而是一条主链
+## 三条编排主线：53 个工具不是散件，而是一条主链
 
-52 个工具虽多，但 CodeRef 把它们整理成**三条互补的编排主线（Skill）**，编程 AI 只需知道自己该在哪条链上；L1/L2/L3 之间用**编排 gate 强制转场**（命中条件才转，简单任务不被反复切链拖累），并由 `coderef-mcp` 的「顶层入口判定」在动身前先选对链：
+53 个工具虽多，但 CodeRef 把它们整理成**三条互补的编排主线（Skill）**，编程 AI 只需知道自己该在哪条链上；L1/L2/L3 之间用**编排 gate 强制转场**（命中条件才转，简单任务不被反复切链拖累），并由 `coderef-mcp` 的「顶层入口判定」在动身前先选对链：
 
 ```
 L1  coderef-probe      · 小阶段 · 变更驱动的轻量探查与防护（类 CodeRabbit）
@@ -90,6 +90,12 @@ CodeRef 不靠宣称，靠可复现的硬指标（完整方法见后文「可靠
 
 - **`coderef_query` stale 感知**：查询前比对代码 mtime 与图谱 `built_at`，代码更新超过阈值（默认 30 分钟或 3 个文件）时结果标 `stale=true`，并自动排入后台增量 `sync`，返回 `sync_task_id`；`<project>/.coderef/guard_config.json` 的 `query.mode=block` 可改为同步刷新后重查。
 - **图谱文件级增量**：`coderef_memory(action=sync, mode=incr)` 只重建变更/删除文件及其 import 依赖方的节点与边，并与全量重建结果逐行一致；无变更时不重建。
+
+### 统一范围层与前置闸门（v5.19.2 起）
+
+- **`.coderef/scope.json` 单一事实源**：新增 `coderef_scope` 工具（`add/remove/list/verify`）。`exclude_glob`（路径模式）、`ignore_lib`（第三方库名）、`include_override`（误伤找回）一次写入、后续审计/图谱/SCA 自动生效；`add` 立即返回生效验证回执（排除文件数、按工具计数、与保留文件同名的可疑误伤）。
+- **scope 边界**：只作用于扫描与检索，**不作用于 change_guard**——忽略的是审计噪音，不是安全责任。
+- **precondition 四闸门**：G-A 未 recover、G-B 图谱过期、G-C 定标缺失、G-D 审计产物超龄。默认 `warn`（返回体附 `context.gate_warnings`），`<project>/.coderef/guard_config.json` 设 `preconditions.mode=block` 后返回 `status=blocked` + `envelope.blocked_by.owner=consumer` + `owner_actions`；`coderef_version`/`task_status`/`scan_list`/`scope` 等只读工具永远放行。
 
 ---
 
@@ -257,7 +263,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 
 ---
 
-## 52 个 MCP 工具速查
+## 53 个 MCP 工具速查
 
 > 完整功能、参数与「意图 → 工具」路由见 `skills/` 各 Skill 与 `MCP_SETUP.md`。这里按引擎列出。
 
@@ -300,6 +306,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 | `coderef_report` | 聚合审计/图谱/Wiki 为自包含 HTML，`index.html` 即「项目评估台」（五 Tab：概览 / 架构 / 产品 / UX / 技术 + 健康记分卡；`open_server` 起回环服务） | 否 |
 | `coderef_audit_advisor` | 审计策略判定（增量/全量）+ 重点维度 | 可选 |
 | `coderef_whitelist` | 白名单管理 + 核心模块规则配置 | 否 |
+| `coderef_scope` | 统一范围层：`.coderef/scope.json` 持久化忽略规则（exclude_glob / ignore_lib / include_override），add 即返回生效验证回执；只作用于扫描检索，不影响 change_guard | 否 |
 | `coderef_task_status` | 后台任务状态查询 | 否 |
 | `coderef_task_cancel` | 后台任务取消（协作式收尾） | 否 |
 | `coderef_version` | 轻量版本探针（只读、零副作用）：秒级返回当前加载的版本号，无需 project_path，用于断言「进程加载版本 == 目标版本」，杜绝进程未重启导致的结果误判 | 否 |
@@ -403,7 +410,7 @@ CodeRef 会落很多文件，但**用户只需要看两个入口**。其余产�
 ```
 coderef-ai/
 ├── core/                             # 核心引擎
-│   ├── mcp_server.py                 # MCP Server 入口（52 个工具）
+│   ├── mcp_server.py                 # MCP Server 入口（53 个工具）
 │   ├── pipeline_runner.py            # 管线引擎（audit/architecture/docs + 知识图谱）
 │   ├── tool_registry.py              # 工具注册中心
 │   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
