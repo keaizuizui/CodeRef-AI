@@ -19,6 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # 指标清单同源引用：coderef_eval 的 schema enum 与 core.output_evaluator.VALID_METRICS
 # 保持唯一真源（新增指标只改 output_evaluator 一处，schema 自动同步，防双处漂移）
 from core.output_evaluator import VALID_METRICS as _EVAL_METRICS
+# 工具面 profile：只控制 tools/list 暴露面，不删工具与 handler
+from core.tool_profile import current_profile, filter_tools
 
 # 统一取包版本号，避免 serverInfo 与 __init__.py / README 版本漂移。
 # 版本号唯一真源在 core/version.py，直接 import 而非文本解析（解析易受格式漂移影响）。
@@ -522,17 +524,23 @@ class Server:
     def _handle(self, req: Dict) -> Dict:
         m, rid = req.get("method",""), req.get("id")
         if m == "initialize":
+            # 工具面 profile：full（默认）暴露全部工具，lite 只暴露 12 个入口
+            profile_info = self._tool_profile()
+            exposed = len(filter_tools(self._tools))
             return {"jsonrpc":"2.0","id":rid,"result":{
                 "protocolVersion":"2024-11-05","capabilities":{"tools":{}},
                 "serverInfo":{
                     "name":"coderef-ai","version":PKG_VERSION,
                     "reliability": RELIABILITY_GUIDE,
+                    "toolProfile": profile_info["profile"],
+                    "toolsExposed": exposed,
+                    "toolsHidden": len(self._tools) - exposed,
                 }}}
         if m == "notifications/initialized": return None
         if m == "tools/list":
-            # 在返回工具描述时追加可靠性/边界提示，供外层 LLM 选工具时判断
+            # profile 过滤在追加边界提示/wait 参数之前，保持 full 行为不变
             tools = []
-            for t in self._tools:
+            for t in filter_tools(self._tools):
                 note = TOOL_BOUNDARY_NOTES.get(t["name"], "")
                 if note:
                     t = dict(t)
@@ -628,8 +636,28 @@ class Server:
     def _scan_list(self):
         return _scan_list()
 
+    def _tool_profile(self) -> dict:
+        return current_profile()
+
     def _version(self, a: dict):
-        return _version(a)
+        raw = _version(a)
+        # 版本探针附加工具面 profile；解析失败时原样返回，不破坏探针
+        try:
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                return raw
+            info = self._tool_profile()
+            exposed = len(filter_tools(self._tools))
+            data["tool_profile"] = {
+                "profile": info.get("profile", "full"),
+                "source": info.get("source", "default"),
+                "error": info.get("error", ""),
+                "tools_exposed": exposed,
+                "tools_hidden": len(self._tools) - exposed,
+            }
+            return json.dumps(data, ensure_ascii=False)
+        except Exception:  # noqa: BLE001
+            return raw
 
     def _eval(self, a: dict):
         return _eval(a)
