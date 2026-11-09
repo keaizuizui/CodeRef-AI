@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.20.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.20.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -122,14 +122,14 @@ CodeRef 不靠宣称，靠可复现的硬指标（完整方法见后文「可靠
 
 ### 梦（v5.20.0 起）：编程 AI 的离线巩固层
 
-CodeRef 不只回答「现在是什么」，也在下次启动时替主 AI **补梦**——用**独立 LLM / 独立预算**把被阻断、失败、变更守卫退化与主 AI 显式 `seed` 的经历巩固成更少、更准的联想，写入项目本地 `.coderef/dream/`：
+CodeRef 不只回答「现在是什么」，也在安静时替主 AI **补梦**——复用 CodeRef 的**主 LLM 配置**（与其他 LLM 工具同一套 Key/预算），把被阻断、失败、变更守卫退化与主 AI 显式 `seed` 的经历巩固成更少、更准的联想，写入项目本地 `.coderef/dream/`：
 
-- **`coderef_dream(action=status|seed|read|run)`**：`status` 看最近做梦时间、笔记数、预算与上次错误；`seed` 显式投喂一条显著事件（不读取主 AI 全量对话）；`read` 读 `DREAM.md` 或按 kind/关键词取笔记；`run` 手动补一轮（默认后台）。
-- **下次启动补梦**：首次带项目路径的工具调用在后台触发一次，不阻塞首响应；无 dream Key 时不启动空转线程。
+- **`coderef_dream(action=status|seed|read|run)`**：`status` 看最近做梦时间、笔记数、主 LLM 状态与上次错误；`seed` 显式投喂一条显著事件（不读取主 AI 全量对话）；`read` 读 `DREAM.md` 或按 kind/关键词取笔记；`run` 手动补一轮（默认后台）。
+- **启动补梦（显式开启）**：`dream.run_on_startup=true` 后，首次带项目路径的工具调用会在后台触发一次，不阻塞首响应；默认关闭，避免在不知情时消耗主 LLM 额度。
 - **输出 `DREAM.md`（≤800 token）**：只保留五节——当前目标 / 已验证规则 / 坑 / 联想（当 X，先想到 Y）/ 未决问题；`notes.json` 保留证据与状态，`runs/` 留输入摘要与采纳/拒绝记录。
 - **LLM 提议 + 确定性核验**：每条笔记必须有 `evidence`（`file:` / `git:` / `audit:` / `seed:` / `dispatch:`）；核验失败直接 `rejected`，无法核验标 `hypothesis`，只有 verified 进入「已验证规则」。梦是假设，**不改写任何审计结论**。
 - **记忆摘要梦优先**：重工具首次返回的 `context.memory_digest` 先放梦的 verified 笔记，再补操作记忆；`remind` 复盘新增 `dream` 段，列出「梦里提醒过什么」。
-- **诚实边界**：无 Key / 预算耗尽 → `status=SKIP`，不产出占位内容；梦的视野仅限 CodeRef 被调用的范围，`unknown` / `SKIP` 如实呈现。
+- **诚实边界**：主 LLM 无 Key → `status=SKIP`，不产出占位内容；梦的视野仅限 CodeRef 被调用的范围，`unknown` / `SKIP` 如实呈现。
 
 ---
 
@@ -151,7 +151,7 @@ pip install -r requirements.txt
 
 > 审计、图谱、架构诊断、流程验证、变更守护、OWASP **不需要 LLM**，纯静态即可运行。仅 LLM 型工具（Wiki、业务报告、代码审查、Prompt 资产、创新识别、`coderef_eval` 产出物语义评估）需要 LLM；未配置 API Key 时这类工具被硬阻断并提示配置（`coderef_eval` 返回 status=SKIP），不产出降级/占位内容。
 >
-> **梦（可选，独立 Key）**：在 `config/config.json` 增加 `"dream": {"enabled": true, "api_key": "...", "model": "..."}`，或设 `CODEREF_DREAM_API_KEY`。梦的 Key/预算与主 AI 隔离；不配置时 `coderef_dream(action=run)` 返回 `SKIP`，不影响其他工具。
+> **梦（可选，复用主 LLM）**：梦不单独配置 Key，直接用上面的主 LLM 配置。要开启启动补梦，在 `config/config.json` 增加 `"dream": {"enabled": true, "run_on_startup": true}`；不配置时仍可手动 `coderef_dream(action=run)`。主 LLM 无 Key 时补梦返回 `SKIP`，不影响其他工具。
 
 **Windows：** 运行 `setup.bat`。
 

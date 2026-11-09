@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
-"""CodeRef 梦（Dream, 5.20.0）—— 编程 AI 的离线巩固层。
+"""CodeRef 梦（Dream, 5.20.x）—— 编程 AI 的离线巩固层。
 
-定位：主 AI 醒着做事，CodeRef 在下次启动时替它补梦（不占用主 AI 的 LLM）。
-梦只写 `<project>/.coderef/dream/`，不改任何确定性结论；LLM 只负责「提议」，
+定位：主 AI 醒着做事，CodeRef 在安静时替它补梦。梦只写
+`<project>/.coderef/dream/`，不改任何确定性结论；LLM 只负责「提议」，
 所有证据引用都经过本地确定性核验，核验失败直接 rejected。
 
+LLM 配置：5.20.1 起不再有 dream 独立 Key/预算，统一复用 CodeRef 主 LLM 配置
+（`core.llm_integration.LLMIntegration`，即 CODEREF_API_KEY / config.json 的
+llm_* 与主 LLM 调用预算）。`dream` 段只保留行为开关（是否启用、是否启动补梦、
+笔记上限、TTL、最小间隔）。
+
 公开 API：
-  - status(project_path) -> dict          最近做梦时间 / 笔记数 / 预算 / 上次错误
+  - status(project_path) -> dict          最近做梦时间 / 笔记数 / 主 LLM 状态 / 上次错误
   - seed(project_path, text, ...) -> dict 主 AI 显式投喂一条显著事件
   - read(project_path, ...) -> dict       读 DREAM.md / 按 kind 或关键词取笔记
   - run(project_path, trigger=...) -> dict 手动或启动时补一轮梦
@@ -14,13 +19,13 @@
   - digest_items(project_path) -> list    供 memory_digest 优先注入的梦条目
 
 诚实边界：
-  - 无 Key / 预算耗尽 → status="SKIP"，不产出占位内容；
+  - 主 LLM 无 Key / 调用失败 → status="SKIP" 或 error，不产出占位内容；
   - 梦是假设，DREAM.md 只收「证据引用可核验」的 verified 笔记，并明确标注
     「引用前先核验」，不得当成审计结论转述；
   - 做梦失败保留旧梦，只记录 last_error，不覆盖既有笔记。
 
 作者: CodeRef-AI Team
-版本: v1.0
+版本: v1.1
 """
 
 import json
@@ -63,6 +68,9 @@ MAX_DISPATCH_EVENTS = 10
 MAX_GIT_COMMITS = 10
 AUDIT_DAYS = 7
 GIT_TIMEOUT = 10
+# 单次补梦的输入/输出硬上限（防止一次做梦把主 LLM 上下文撑爆；不是独立预算）
+MAX_PROMPT_CHARS = 12000
+MAX_OUTPUT_TOKENS = 2048
 
 # 证据引用格式：kind:value（value 由本地确定性核验）
 _EVIDENCE_RE = re.compile(r"^(file|git|commit|audit|seed|dispatch|trace):(.+)$")
@@ -77,24 +85,15 @@ KIND_LABELS = {
     "association": "联想",
 }
 
+# 只保留行为开关；LLM 的 provider/api_key/model/预算全部复用主 LLM 配置。
+# run_on_startup 默认关闭：复用主 LLM 后没有独立预算，自动补梦需用户显式开启，
+# 避免在不知情时消耗主额度；手动 coderef_dream(action=run) 不受影响。
 DEFAULT_CONFIG = {
     "enabled": True,
-    "run_on_startup": True,
-    "provider": "deepseek",
-    "api_key": "",
-    "base_url": "",
-    "model": "",
-    "budget_tokens_per_run": 20000,
+    "run_on_startup": False,
     "max_notes": 40,
     "ttl_days": 30,
     "min_interval_hours": 6,
-}
-
-_LLM_DEFAULTS = {
-    "deepseek": ("https://api.deepseek.com", "deepseek-flash"),
-    "openai": ("https://api.openai.com/v1", "gpt-4o-mini"),
-    "ollama": ("http://localhost:11434/v1", "qwen2.5:7b"),
-    "custom": ("", ""),
 }
 
 # 进程内「本项目已尝试启动补梦」集合（一次启动一轮）
@@ -220,7 +219,7 @@ def _git(args: List[str], cwd: str) -> Tuple[int, str, str]:
 
 
 # ═══════════════════════════════════════════════════════════════
-# 配置：dream 段独立于主 AI 的 LLM 配置
+# 配置：dream 段只保留行为开关，LLM 统一复用主配置
 # ═══════════════════════════════════════════════════════════════
 
 def _config_candidates() -> List[str]:
@@ -233,12 +232,8 @@ def _config_candidates() -> List[str]:
     ]
 
 
-def _load_config_section() -> Tuple[dict, str, str]:
-    """读取 dream 段；返回 (section, 配置路径, 主配置里的 llm_model)。
-
-    dream 段缺失时返回空 dict（无 Key → SKIP），不回退主 AI 的 api_key，
-    保证梦的 Key / 预算与主 AI 隔离。
-    """
+def _load_config_section() -> Tuple[dict, str]:
+    """读取 dream 段（行为开关）；返回 (section, 配置路径)。"""
     for path in [p for p in _config_candidates() if p]:
         if not os.path.exists(path):
             continue
@@ -252,71 +247,36 @@ def _load_config_section() -> Tuple[dict, str, str]:
             continue
         section = data.get("dream")
         if isinstance(section, dict):
-            return dict(section), path, str(data.get("llm_model") or "")
-    return {}, "", ""
+            return dict(section), path
+    return {}, ""
 
 
 def load_config(project_path: str = "") -> dict:
-    """合并默认值 / 配置文件 dream 段 / 环境变量，返回收敛后的配置。"""
-    section, path, main_model = _load_config_section()
+    """合并默认值与 dream 段行为开关（LLM 配置不在此处读取）。"""
+    section, path = _load_config_section()
     cfg = dict(DEFAULT_CONFIG)
-    cfg.update({k: v for k, v in section.items() if v is not None})
-
-    # 环境变量优先（便于 CI / 临时换模型，不写盘）
-    env = os.environ
-    if env.get("CODEREF_DREAM_ENABLED"):
-        cfg["enabled"] = _as_bool(env["CODEREF_DREAM_ENABLED"], cfg["enabled"])
-    if env.get("CODEREF_DREAM_API_KEY"):
-        cfg["api_key"] = env["CODEREF_DREAM_API_KEY"]
-    if env.get("CODEREF_DREAM_PROVIDER"):
-        cfg["provider"] = env["CODEREF_DREAM_PROVIDER"]
-    if env.get("CODEREF_DREAM_BASE_URL"):
-        cfg["base_url"] = env["CODEREF_DREAM_BASE_URL"]
-    if env.get("CODEREF_DREAM_MODEL"):
-        cfg["model"] = env["CODEREF_DREAM_MODEL"]
-    if env.get("CODEREF_DREAM_BUDGET_TOKENS_PER_RUN"):
-        cfg["budget_tokens_per_run"] = env["CODEREF_DREAM_BUDGET_TOKENS_PER_RUN"]
-
-    provider = str(cfg.get("provider") or "deepseek").strip().lower()
-    if provider not in _LLM_DEFAULTS:
-        provider = "custom"
-    default_base, default_model = _LLM_DEFAULTS[provider]
-    cfg["provider"] = provider
-    cfg["api_key"] = str(cfg.get("api_key") or "").strip()
-    cfg["base_url"] = str(cfg.get("base_url") or "").strip() or default_base
-    # 模型名可回退主配置的 llm_model（只借名字，不借 Key）
-    cfg["model"] = (str(cfg.get("model") or "").strip()
-                    or main_model or default_model)
+    for key in cfg:
+        if key in section and section[key] is not None:
+            cfg[key] = section[key]
     cfg["enabled"] = _as_bool(cfg.get("enabled"), True)
-    cfg["run_on_startup"] = _as_bool(cfg.get("run_on_startup"), True)
-    cfg["budget_tokens_per_run"] = _as_int(
-        cfg.get("budget_tokens_per_run"), 20000, minimum=1000)
+    cfg["run_on_startup"] = _as_bool(cfg.get("run_on_startup"), False)
     cfg["max_notes"] = _as_int(cfg.get("max_notes"), 40, minimum=1)
     cfg["ttl_days"] = _as_int(cfg.get("ttl_days"), 30, minimum=1)
     cfg["min_interval_hours"] = _as_int(
         cfg.get("min_interval_hours"), 6, minimum=0)
-    cfg["config_source"] = path or "（未找到 dream 段：无 Key 时 SKIP）"
+    cfg["config_source"] = path or "（未找到 dream 段：默认不自动补梦）"
     return cfg
 
 
-def _build_llm(cfg: dict):
-    """按 dream 段构造独立 LLM 客户端（延迟 import，缺依赖时返回 None）。"""
+def _build_llm():
+    """复用主 LLM 配置构造客户端（延迟 import，缺依赖时返回 None）。
+
+    与其他 LLM 工具完全同源：CODEREF_API_KEY / config.json 的 llm_*、
+    同一套默认 provider/model、同一套调用预算与输出上限。
+    """
     try:
-        from core.llm_integration import LLMConfig, LLMIntegration, LLMProvider
-        provider = {
-            "deepseek": LLMProvider.DEEPSEEK,
-            "openai": LLMProvider.OPENAI,
-            "ollama": LLMProvider.OLLAMA,
-            "custom": LLMProvider.CUSTOM,
-        }.get(cfg.get("provider"), LLMProvider.CUSTOM)
-        return LLMIntegration(config=LLMConfig(
-            provider=provider,
-            api_key=cfg.get("api_key", ""),
-            base_url=cfg.get("base_url", ""),
-            model=cfg.get("model", ""),
-            temperature=0.2,
-            max_tokens=2048,
-        ))
+        from core.llm_integration import LLMIntegration
+        return LLMIntegration()
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[dream] LLM 初始化失败: {e}")
         return None
@@ -342,7 +302,7 @@ def _default_state() -> dict:
         "last_error": "",
         "goal": "",
         "cursor": {"audit_after": "", "seeds_consumed": 0, "git_head": ""},
-        "budget_used": 0,
+        "last_run_tokens": 0,
         "runs": 0,
     }
 
@@ -433,7 +393,7 @@ def seed(project_path: str, text: str, kind: str = "association",
 
 
 def status(project_path: str) -> dict:
-    """梦的诚实状态：时间、笔记数、预算、上次错误。"""
+    """梦的诚实状态：时间、笔记数、主 LLM 状态、上次错误。"""
     pp = os.path.abspath(project_path)
     cfg = load_config(pp)
     state = _load_state(pp)
@@ -442,7 +402,9 @@ def status(project_path: str) -> dict:
     md = _read_text(md_path)
     by_status = Counter(str(n.get("status") or "unknown") for n in notes)
     by_kind = Counter(str(n.get("kind") or "unknown") for n in notes)
-    llm = _build_llm(cfg)
+    llm = _build_llm()
+    llm_cfg = getattr(llm, "config", None)
+    provider = getattr(llm_cfg, "provider", None)
     seeds = _read_seeds(pp)
     return {
         "status": "ok",
@@ -453,11 +415,12 @@ def status(project_path: str) -> dict:
         "run_on_startup": cfg["run_on_startup"],
         "llm": {
             "available": _llm_available(llm),
-            "provider": cfg["provider"],
-            "model": cfg["model"],
-            "has_api_key": bool(cfg["api_key"]),
-            "config_source": cfg["config_source"],
-            "note": "dream 使用独立 Key/预算；无 Key 时补梦 SKIP，不编造",
+            "provider": getattr(provider, "value", str(provider or "")),
+            "model": str(getattr(llm_cfg, "model", "") or ""),
+            "source": "主 LLM 配置（与其他 LLM 工具同源）",
+            "call_budget": int(getattr(llm, "call_budget", 0) or 0),
+            "output_cap_chars": int(getattr(llm, "output_cap_chars", 0) or 0),
+            "note": "复用主 LLM Key/预算；无有效 Key 时补梦 SKIP，不编造",
         },
         "last_dream_at": state.get("last_dream_at", ""),
         "last_attempt_at": state.get("last_attempt_at", ""),
@@ -479,10 +442,13 @@ def status(project_path: str) -> dict:
             "token_estimate": round(len(md) / CHARS_PER_TOKEN),
             "token_budget": DREAM_MD_TOKEN_BUDGET,
         },
-        "budget": {
-            "limit_tokens_per_run": cfg["budget_tokens_per_run"],
-            "last_used_tokens": state.get("budget_used", 0),
+        "limits": {
+            "max_prompt_chars": MAX_PROMPT_CHARS,
+            "max_output_tokens": MAX_OUTPUT_TOKENS,
+            "last_run_tokens": state.get("last_run_tokens", 0),
+            "note": "单次补梦的上下文/输出上限，不是独立预算",
         },
+        "behavior_config": cfg["config_source"],
         "runs": state.get("runs", 0),
         "guardrail": "梦是假设，不是审计结论；引用前先核验 evidence",
     }
@@ -1058,9 +1024,10 @@ def _skip(pp: str, state: dict, cfg: dict, reason: str, trigger: str,
     state["runs"] = int(state.get("runs") or 0) + 1
     _save_state(pp, state)
     record = {"ts": _now(), "trigger": trigger, "status": "SKIP",
-              "reason": reason, "llm": {"available": False,
-                                        "provider": cfg.get("provider", "")},
-              "budget": {"limit_tokens_per_run": cfg["budget_tokens_per_run"]}}
+              "reason": reason,
+              "llm": {"available": False, "source": "主 LLM 配置"},
+              "limits": {"max_prompt_chars": MAX_PROMPT_CHARS,
+                         "max_output_tokens": MAX_OUTPUT_TOKENS}}
     if run_extra:
         record.update(run_extra)
     run_path = _write_run(pp, record)
@@ -1073,7 +1040,7 @@ def _skip(pp: str, state: dict, cfg: dict, reason: str, trigger: str,
                      "owner": "consumer" if no_key else "by_design",
                      "human": reason}],
         owner_actions={"consumer": (
-            ["在 config/config.json 的 dream 段配置独立 api_key"]
+            ["配置主 LLM API Key：CODEREF_API_KEY 或 config/config.json 的 llm_api_key"]
             if no_key else [])},
         cannot_conclude=["任何梦结论（本轮未产出）"],
         guardrails=["SKIP 是事实，不是失败；旧梦保持不变"],
@@ -1084,7 +1051,7 @@ def _skip(pp: str, state: dict, cfg: dict, reason: str, trigger: str,
 
 
 def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
-    """补一轮梦：收集 → 筛显著 → 独立 LLM 提议 → 确定性核验 → 写梦。"""
+    """补一轮梦：收集 → 筛显著 → 主 LLM 提议 → 确定性核验 → 写梦。"""
     pp = os.path.abspath(project_path)
     if not os.path.isdir(pp):
         return {"status": "error", "tool": "coderef_dream", "action": "run",
@@ -1094,10 +1061,10 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
     if not cfg["enabled"]:
         return _skip(pp, state, cfg, "dream.enabled=false（梦已禁用）", trigger)
 
-    llm = llm if llm is not None else _build_llm(cfg)
+    llm = llm if llm is not None else _build_llm()
     if not _llm_available(llm):
         return _skip(pp, state, cfg,
-                     "未配置有效的 dream API Key（独立预算，无 Key 不编造）",
+                     "未配置有效的主 LLM API Key（梦复用主 LLM 配置，无 Key 不编造）",
                      trigger)
 
     seeds = _read_seeds(pp)
@@ -1111,12 +1078,14 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
 
     existing = _load_notes(pp)
     material_text = _prompt_materials(materials, pp, existing)
-    budget = cfg["budget_tokens_per_run"]
-    # 输入预算：最多占本轮预算的 60%（其余留给输出）
-    max_input_chars = max(600, int(budget * 0.6 * CHARS_PER_TOKEN))
+    # 单次上下文/输出硬上限（防止撑爆主 LLM，不是 dream 独立预算）
+    max_input_chars = MAX_PROMPT_CHARS
     if len(material_text) > max_input_chars:
-        material_text = material_text[:max_input_chars] + "\n…（原料已按预算截断）"
-    out_tokens = max(256, min(2048, budget // 4))
+        material_text = material_text[:max_input_chars] + "\n…（原料已按上下文上限截断）"
+    llm_cfg = getattr(llm, "config", None)
+    out_tokens = min(MAX_OUTPUT_TOKENS, max(
+        256, _as_int(getattr(llm_cfg, "max_tokens", MAX_OUTPUT_TOKENS),
+                     MAX_OUTPUT_TOKENS, minimum=256)))
     messages = [
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": _USER_PROMPT.format(
@@ -1186,7 +1155,7 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
         "last_status": "ok",
         "last_error": "",
         "goal": goal or state.get("goal", ""),
-        "budget_used": est_tokens,
+        "last_run_tokens": est_tokens,
         "runs": int(state.get("runs") or 0) + 1,
     })
     state["cursor"] = {
@@ -1199,10 +1168,13 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
     accepted = [n for n in added if n.get("status") in ("verified", "hypothesis")]
     rejected = [{"text": n.get("text", ""), "reason": n.get("reason", "")}
                 for n in candidates if n.get("status") == "rejected"]
+    llm_provider = getattr(getattr(llm, "config", None), "provider", None)
     record = {
         "ts": now, "trigger": trigger, "status": "ok",
-        "llm": {"available": True, "provider": cfg["provider"],
-                "model": cfg["model"]},
+        "llm": {"available": True, "source": "主 LLM 配置",
+                "provider": getattr(llm_provider, "value",
+                                    str(llm_provider or "")),
+                "model": str(getattr(llm_cfg, "model", "") or "")},
         "materials": {
             "salient": salient,
             "audit_events": len(materials.get("audit") or []),
@@ -1217,7 +1189,8 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
         "decayed": len(decayed), "dropped": dropped,
         "notes_total": len(notes), "verified_total": len(verified),
         "dream_md_chars": md_chars,
-        "budget": {"limit_tokens_per_run": budget,
+        "limits": {"max_prompt_chars": max_input_chars,
+                   "max_output_tokens": out_tokens,
                    "estimated_tokens": est_tokens},
     }
     run_path = _write_run(pp, record)
@@ -1243,7 +1216,7 @@ def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
                   "dropped": dropped, "total": len(notes)},
         "dream_md_path": _path(pp, DREAM_MD), "dream_md_chars": md_chars,
         "notes_path": _path(pp, NOTES_FILE), "run_path": run_path,
-        "budget": record["budget"],
+        "llm": record["llm"], "limits": record["limits"],
         "envelope": env,
     }
 
@@ -1259,7 +1232,8 @@ def _fail(pp: str, state: dict, cfg: dict, trigger: str, error: str,
     record = {"ts": _now(), "trigger": trigger, "status": "error",
               "error": error[:500], "response_preview": (response or "")[:500],
               "materials": {"salient": _salient_count(materials)},
-              "budget": {"limit_tokens_per_run": cfg["budget_tokens_per_run"]}}
+              "limits": {"max_prompt_chars": MAX_PROMPT_CHARS,
+                         "max_output_tokens": MAX_OUTPUT_TOKENS}}
     run_path = _write_run(pp, record)
     from core.result_envelope import envelope
     env = envelope(
@@ -1301,9 +1275,9 @@ def trigger_if_due(project_path: str) -> bool:
         cfg = load_config(pp)
         if not cfg["enabled"] or not cfg["run_on_startup"]:
             return False
-        # 无独立 Key 时不启动后台线程：run() 会诚实 SKIP，启动补梦无需空转，
-        # 也避免在只读/测试场景留下无意义的运行痕迹。
-        if not _llm_available(_build_llm(cfg)):
+        # 主 LLM 无有效 Key 时不启动后台线程：run() 会诚实 SKIP，
+        # 启动补梦无需空转，也避免在只读/测试场景留下无意义的运行痕迹。
+        if not _llm_available(_build_llm()):
             return False
         if not _is_due(_load_state(pp), cfg):
             return False
