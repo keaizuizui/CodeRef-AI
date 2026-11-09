@@ -22,6 +22,7 @@
 版本: v1.0
 """
 
+import hashlib
 import json
 import os
 import subprocess
@@ -110,13 +111,37 @@ def _git(args: list, cwd: str) -> Tuple[int, str, str]:
         return -1, "", str(e)
 
 
+def _untracked_stamp(project_path: str, lines: list) -> str:
+    """未跟踪文件的 mtime/size 摘要片段。
+
+    `git diff HEAD` 不含 untracked 文件内容，若只看 status 行，未跟踪文件被二次
+    修改时指纹不变。这里补上 mtime/size（低成本、足以感知内容变化）。
+    """
+    parts = []
+    for line in lines:
+        if not line.startswith("??"):
+            continue
+        rel = line[3:].strip().strip('"')
+        if not rel:
+            continue
+        fp = rel if os.path.isabs(rel) else os.path.join(project_path, rel)
+        try:
+            st = os.stat(fp)
+            parts.append(f"{rel}:{st.st_mtime_ns}:{st.st_size}")
+        except OSError:
+            continue
+    return "|".join(sorted(parts))
+
+
 def git_fingerprint(project_path: str) -> dict:
     """生成项目工作区的轻量指纹。
 
-    返回 {"head": str, "dirty": bool, "changed_files": int, "error": str}。
+    返回 {"head": str, "dirty": bool, "changed_files": int, "digest": str,
+    "error": str}。digest 对 status + diff HEAD（+ 未跟踪文件 mtime/size）做
+    sha1，同一批已脏文件再被编辑时也能感知变化。
     非 git 仓库 / git 不可用时 head=""、dirty=False、changed_files=0，error 说明原因。
     """
-    empty = {"head": "", "dirty": False, "changed_files": 0}
+    empty = {"head": "", "dirty": False, "changed_files": 0, "digest": ""}
     if not os.path.isdir(project_path):
         return dict(empty, error=f"项目目录不存在: {project_path}")
 
@@ -129,21 +154,32 @@ def git_fingerprint(project_path: str) -> dict:
         return dict(empty, head=head, error=err or "git status 执行失败")
 
     lines = [line for line in status_out.splitlines() if line.strip()]
+    diff_rc, diff_out, _ = _git(["diff", "HEAD"], project_path)
+    digest_src = status_out + "\n" + (diff_out if diff_rc == 0 else "")
+    digest_src += "\n" + _untracked_stamp(project_path, lines)
+    digest = hashlib.sha1(digest_src.encode("utf-8", "replace")).hexdigest()
     return {
         "head": head,
         "dirty": bool(lines),
         "changed_files": len(lines),
+        "digest": digest,
         "error": "",
     }
 
 
 def _same_fingerprint(a: dict, b: dict) -> bool:
-    """两个指纹是否描述同一工作区状态（head / dirty / changed_files）。"""
+    """两个指纹是否描述同一工作区状态（head / dirty / changed_files / digest）。
+
+    旧会话状态没有 digest 时视为不同，触发一次守卫后自然补上 digest。
+    """
     if not isinstance(a, dict):
+        return False
+    if not a.get("digest"):
         return False
     return (a.get("head") == b.get("head")
             and bool(a.get("dirty")) == bool(b.get("dirty"))
-            and a.get("changed_files") == b.get("changed_files"))
+            and a.get("changed_files") == b.get("changed_files")
+            and a.get("digest") == b.get("digest"))
 
 
 def _needs_guard(fingerprint: dict, state: dict) -> bool:
