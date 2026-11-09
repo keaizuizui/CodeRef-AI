@@ -22,16 +22,9 @@ from typing import Optional
 
 from loguru import logger
 
+from core.dispatch_intents import INTENTS, INTENT_LABELS
 
-# 与 dispatcher.INTENTS 同源（此处不 import 避免潜在循环依赖）
-INTENTS = ("probe", "single_audit", "recover", "governance", "asset")
-INTENT_LABELS = {
-    "probe": "L1 变更探查（提交前快速自查）",
-    "single_audit": "单次全量审计",
-    "recover": "上下文恢复（找回工具位置与既有约定）",
-    "governance": "L2 架构治理（捋管线→诊断→定标→治理→验证→体检）",
-    "asset": "L3 资产沉淀（创新识别→登记→固化）",
-}
+
 CONFIDENCE_THRESHOLD = 0.6
 
 _SYSTEM_PROMPT = (

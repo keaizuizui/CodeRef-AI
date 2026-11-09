@@ -4,6 +4,22 @@
 
 ---
 
+### v5.19.6 — 三路复审 9 条整改（CodeRabbit / Brooks-Lint / Code Review Report）
+
+> 复审范围 `c58cf32..af2ec77`（5.19.1–5.19.5）。三路共报 9 条确认缺陷（6 major / 3 minor），全部成立并修复。
+
+- **dispatcher 计划卡携带 args（major）**：`plan()` 现在复制 `steps[].args`，`_render_args` 默认注入 `project_path`；修复除 version 外所有链步骤因空路径失败的问题。
+- **治理链不再无条件暂停（major）**：移除 `arch_gap.requires_user`，定标缺失改由 G-C 闸门在真缺失时暂停；模块文档如实写明「重新执行从链首开始，不支持断点续跑」。
+- **文件级 scope 真正生效（major）**：`scan_directory` 文件循环新增 `_scope_excluded`，`*_pb2.py` 等 `exclude_glob` 与目录规则同口径；verify 回执与审计事实一致。
+- **Go 增量重建补齐跨文件 CALLS（major）**：受影响文件含 `.go` 时删除并整体重建全部 `go_func`，增量与全量重建逐行一致；新增 Go 一致性回归。
+- **scope remove 拒绝空条件（major）**：`coderef_scope(action=remove)` 缺 `pattern` 时返回结构化错误，不再一次清空全部规则。
+- **dispatcher id 路径穿越防护（major）**：`task_id`/`plan_id` 增加 `^[0-9A-Za-z_-]{1,64}$` 白名单，非法值在 status/report/execute 返回结构化错误。
+- **freshness 缓存失效（minor）**：audit 与 report 写出产物后调用 `freshness_guard.invalidate`，信封不再刚跑完就报产物缺失/过期。
+- **gate miss 如实落盘（minor）**：`preconditions.evaluate` 返回 `checked`，只读/不适用/异常记 `miss`，metrics 的 checked 与 hit_rate 不再被稀释。
+- **意图枚举单一事实源（minor）**：新增 `core/dispatch_intents.py`，dispatcher / intent_router / tools_manifest 三处统一引用。
+- **文档计数**：MCP_SETUP 正文两处 53 → 58，与 README/CHANGELOG 一致。
+- **验证**：新增 7 例回归；全量 pytest **378 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.19.5 — 观测层：审计日志 + 指标聚合 + 违规注入测试
 
 > 5.19.x 收尾。防退化：把防护点的命中/放行/绕过落盘，给 eval 扩展与对抗测试提供数据地基。

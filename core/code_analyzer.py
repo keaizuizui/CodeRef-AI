@@ -430,14 +430,8 @@ class CodeAnalyzer:
                     return True
 
         # 1.6 统一范围层（5.19.2）：.coderef/scope.json 的 exclude_glob / ignore_lib
-        if not getattr(self, "_disable_scope", False):
-            try:
-                from core.scope import is_excluded
-                root_path = str(root) if root is not None else ""
-                if root_path and is_excluded(root_path, str(path)):
-                    return True
-            except Exception as e:  # noqa: BLE001 —— scope 故障不阻断扫描
-                logger.debug(f"[CodeAnalyzer] scope 判定失败（放行）: {e}")
+        if self._scope_excluded(path):
+            return True
 
         # 2. 检查文件名模式
         name = path.name
@@ -456,6 +450,23 @@ class CodeAnalyzer:
         
         return False
     
+    def _scope_excluded(self, path: Path) -> bool:
+        """统一范围层判定（5.19.6）：目录与文件都走同一入口。
+
+        scope 故障或未设置扫描根时放行，避免把扫描整体拦死。
+        """
+        if getattr(self, "_disable_scope", False):
+            return False
+        root = getattr(self, "_scan_root", None)
+        if root is None:
+            return False
+        try:
+            from core.scope import is_excluded
+            return is_excluded(str(root), str(path))
+        except Exception as e:  # noqa: BLE001 —— scope 故障不阻断扫描
+            logger.debug(f"[CodeAnalyzer] scope 判定失败（放行）: {e}")
+            return False
+
     def scan_directory(self, dir_path: str) -> List[str]:
         """扫描目录，获取所有代码文件路径（使用 os.walk 以容错处理损坏的符号链接）"""
         code_files = []
@@ -476,7 +487,10 @@ class CodeAnalyzer:
                 for file_name in files:
                     file_path = current_path / file_name
                     try:
-                        if self._detect_language(str(file_path)):
+                        # 文件级 scope 规则（如 *_pb2.py）必须与目录规则同一口径，
+                        # 否则 add 回执说已排除、审计仍会分析这些文件（5.19.6）。
+                        if (self._detect_language(str(file_path))
+                                and not self._scope_excluded(file_path)):
                             code_files.append(str(file_path))
                     except (PermissionError, FileNotFoundError, OSError):
                         continue
