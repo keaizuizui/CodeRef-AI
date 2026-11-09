@@ -4,6 +4,13 @@
 
 ---
 
+### v5.21.7 — 增量漂移补内容哈希
+
+> 背景：5.21.6 提交后 CodeRabbit 复核 `84febf9..HEAD` 再报 1 条 minor：`_snapshot_drift` 仍只看 mtime+size，`update_analysis` 的增量路径会漏掉「同尺寸改写 + 恢复 mtime」的漂移文件，U-60 在增量路径上未真正闭环。
+
+- **修复**：`_snapshot_drift` 在 mtime+size 相同且快照有 `hash` 时，补算当前内容哈希并比对；缺失 hash 的旧快照保持原语义。
+- **验证**：全量 pytest **437 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.21.6 — CodeRabbit 复审 paused 轨迹错误回传
 
 > 背景：5.21.5 提交后，用 WSL Ubuntu-24.04 的 CodeRabbit 0.9.3 复审 `84febf9..c33785b`，报 1 条 minor：`requires_user` 与 G-C 闸门两条 paused 返回路径忽略 `_write_trace` 的失败结果，调用方拿到 `trace_path` 却可能没有轨迹文件，且看不到失败原因。
