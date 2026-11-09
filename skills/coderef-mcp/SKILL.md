@@ -194,3 +194,14 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 - **没有 API Key 时的 LLM 工具**：`coderef_docs`(LLM 归纳部分)、`coderef_change_report`、`coderef_innovation_review`、`coderef_interpret action=wiki`、`coderef_eval` 会诚实提示需配置 Key（`coderef_eval` 返回 status=SKIP）。如实告诉用户，不要伪造产物。
 - **工具定位/约定类操作必须先查操作记忆（强制）**：需要 git/python/coderabbit 等工具位置，或涉及 push/CodeRabbit/Release 等约定时，先 `coderef_operation_memory (action=recover)`（一次拿全），再按需 `coderef_operation_memory (action=find)` / `coderef_operation_memory (action=query, query_type=tool)` 取定位，别满 PATH 找、也别直接抓外部连接器。coderabbit 等 CLI 常装在 WSL 的 `~/.local/bin`，不在 Windows PATH——`where` / `Get-Command` 找不到**不代表不存在**，不代表没装。
 - **所有工具都要传 `project_path`**：这是必填参数，指向被测项目路径。
+
+## 输出解读铁律（v5.18.6 起）
+
+外部实测（`kuajingdianshang`，v5.18.5）出现过以下误读，按此解读可避免把工具缺陷或输入问题当成项目问题：
+
+- **`verify_findings` 的 `file_exists_only` 不等于确证**：它只证明「论断提到的文件存在」，不能证明论断成立；`confirmed` 也不代表语义正确，必须回读代码。
+- **`coderef_architecture` 不产出代码 findings**：它只做结构分析（图谱/工作流/画布）；`summary.findings=0` 不是"无问题"，代码问题看 `coderef_audit` / `coderef_scan`（返回带 `findings_note`）。
+- **`interpret(action=health)` 必须看新鲜度**：先查 `data_source` / `scan_ts` / `data_stale`；`data_stale=true` 时不得当现状转述，先重跑 `coderef_audit`。
+- **`arch_gap` / `arch_verify` 先看 `target_health`**：`target_health.stale=true` 表示定标过期（超过一半 `target_modules` 不存在），此时 0% 覆盖/低分是输入问题，不是代码问题；先 `coderef_target_arch_set` 重新定标。
+- **多工具口径不同不是"工具打架"**：`coderef_audit` / 图谱是权威扫描集；发现备份目录（`_refactor_backup` 等）被其他工具计入时，用 `coderef_whitelist` 的 `dir` 条目排除，不要据此否定审计结论。
+- **LLM 未配置是硬阻断而非降级**：`coderef_docs` / `innovation_review` / `eval` 会如实提示；不要伪造 LLM 产物。
