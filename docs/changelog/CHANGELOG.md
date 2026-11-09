@@ -4,6 +4,16 @@
 
 ---
 
+### v5.20.1 — 梦复用主 LLM 配置，取消独立 Key/预算
+
+> 用户决策：不再为 dream 维护独立 Key/预算，和其他 LLM 工具接在一起。
+
+- **统一 LLM 配置**：`core/dream.py` 不再读取 `dream.api_key/provider/base_url/model/budget_tokens_per_run`，统一构造 `LLMIntegration()`（与 Wiki、报告、`coderef_eval` 等同一套 `CODEREF_API_KEY` / `config.json` 的 `llm_*` 与调用预算）。`dream` 段只保留 `enabled` / `run_on_startup` / `max_notes` / `ttl_days` / `min_interval_hours`。
+- **启动补梦默认关闭**：复用主 LLM 后自动补梦会消耗主额度，`run_on_startup` 默认改为 `false`；手动 `coderef_dream(action=run)` 不受影响。要恢复启动补梦，显式设 `run_on_startup: true`。
+- **保留单次安全上限**：`MAX_PROMPT_CHARS` / `MAX_OUTPUT_TOKENS` 只防止一次做梦撑爆主 LLM 上下文，不是独立预算。
+- **状态与落盘对齐**：`status` 展示主 LLM 的 provider/model/call_budget，移除 dream 独立预算字段；`state.json` 的 `budget_used` 改为 `last_run_tokens`。
+- **验证**：新增「复用主 LLM 配置」回归用例；全量 pytest **395 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.20.0 — 梦：CodeRef 成为编程 AI 的离线巩固层
 
 > 背景：主 AI 的上下文会随会话消散，重复踩坑与「上次怎么解决的」难以跨会话保留。本版把 CodeRef 做成编程 AI 的梦：不占用主 AI 的 LLM，在下次启动时用独立配置与独立预算补一轮梦，只留下一小片可核验的联想。

@@ -472,7 +472,7 @@ class Server:
             "coderef_eval",
             # dispatcher 执行链：默认后台（返回 task_id 轮询），避免同步撞宿主超时
             "coderef_execute",
-            # 梦：action=run 会调独立 LLM，默认后台；status/seed/read 见 MERGE_SYNC_ACTIONS
+            # 梦：action=run 会调主 LLM，默认后台；status/seed/read 见 MERGE_SYNC_ACTIONS
             "coderef_dream",
         }
 

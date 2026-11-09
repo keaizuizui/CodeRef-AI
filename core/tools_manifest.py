@@ -1206,14 +1206,14 @@ BUILTIN_TOOLS: List[Dict] = [
         {
                         "name": "coderef_dream",
                         "description": (
-                            "梦（5.20.0）—— 编程 AI 的离线巩固层。主 AI 醒着做事，CodeRef 在下次启动时"
-                            "用独立 LLM 补梦（不占用主 AI 的 Key/预算），把被阻断、失败、变更守卫退化与"
+                            "梦（5.20.x）—— 编程 AI 的离线巩固层。主 AI 醒着做事，CodeRef 在安静时"
+                            "用主 LLM 配置补梦（与其他 LLM 工具同一套 Key/预算），把被阻断、失败、变更守卫退化与"
                             "主 AI 显式 seed 的经历巩固成更少更准的联想，写入项目本地的 "
                             ".coderef/dream/DREAM.md（≤800 token）。\n"
-                            "action=status（默认）：最近做梦时间、笔记数、预算、上次错误、是否该补梦；\n"
+                            "action=status（默认）：最近做梦时间、笔记数、主 LLM 状态、上次错误、是否该补梦；\n"
                             "action=seed：主 AI 显式投喂一条显著事件（text/kind/source），不读取主 AI 全量对话；\n"
                             "action=read：读 DREAM.md 或按 kind/keyword 取笔记，默认只返回 verified；\n"
-                            "action=run：手动补一轮梦（后台执行；无 Key → status=SKIP，不编造）。\n"
+                            "action=run：手动补一轮梦（后台执行；主 LLM 无 Key → status=SKIP，不编造）。\n"
                             "诚实边界：梦是假设不是审计结论；每条笔记必须有 evidence，核验失败直接 rejected。"
                         ),
                         "inputSchema": {"type": "object", "properties": {
