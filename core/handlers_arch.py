@@ -401,6 +401,8 @@ def _arch_gap(a: dict) -> str:
     r = analyze_gap(pp, ta, max_unassigned=max_unassigned)
     r["tool"] = "coderef_arch_gap"
     r["project_path"] = pp
+    from core.result_envelope import for_arch_gap
+    r["envelope"] = for_arch_gap(r)
     return json.dumps(r, ensure_ascii=False)
 
 
@@ -514,6 +516,8 @@ def _arch_verify(a: dict) -> str:
                                        changed_files=changed_files)
     r["tool"] = "coderef_arch_verify"
     r["project_path"] = pp
+    from core.result_envelope import for_arch_verify
+    r["envelope"] = for_arch_verify(r)
     return json.dumps(r, ensure_ascii=False)
 
 

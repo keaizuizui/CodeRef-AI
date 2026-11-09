@@ -4,6 +4,16 @@
 
 ---
 
+### v5.18.12 — 结论信封：让调用方 AI 能安全转述给非技术用户
+
+> 背景：对方用户不懂代码，真正读结论的是对方的 AI；各工具各自返回分数/字段，容易把「输入过期」说成「工具坏了」。本版不改分析逻辑，只统一结论包装。
+
+- **新增 `core/result_envelope.py`**：统一信封字段 `verdict`（一句话人话结论）/ `usable_for_decisions` / `blocked_by`（含 `owner=coderef/consumer/by_design`）/ `owner_actions` / `cannot_conclude` / `guardrails` / `limitations`。
+- **接入 6 个高频工具**：`coderef_audit`、`coderef_scan`、`coderef_report`、`coderef_arch_gap`、`coderef_arch_verify`、`coderef_interpret(action=health)` 的返回顶层新增 `envelope`。例如定标过期时：`usable=false`、`blocked_by.owner=consumer`、`consumer` 动作=`coderef_target_arch_set`、`cannot_conclude=["对齐度","覆盖率",…]`。
+- **已知限制登记表（KL-01~KL-09）**：定标过期、IMPORTS 只建内部边、CALLS 按 import 作用域、模块数多口径、architecture 不产 findings、过期产物 unknown、备份需 whitelist、动态调用不覆盖、文档只认 Wiki 目录。每条带 `owner` 与解释，对方再报同一件事时引用编号即可。
+- **握手契约**：`coderef_version` 新增 `consumer_contract`（3 条必读 + KL 全表 + 信封字段说明），不依赖对方加载本仓 skill。
+- **验证**：新增 5 例信封回归；全量 pytest **307 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.18.11 — CALLS 改为 import 作用域解析；评估台 iframe / 口径说明修正
 
 > 来源：外部 AI 用 v5.18.10 对 `d:\kuajingdianshang` 的第三轮复审（4 高 / 3 中 / 3 低）。本轮重点解决「同名函数吸走全仓调用」与「评估台画布 404」。
