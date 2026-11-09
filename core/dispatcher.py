@@ -349,9 +349,12 @@ def execute(plan_card: dict, runner: Callable, project_path: str,
             trace["finished_at"] = _now()
             _write_trace(project_path, task_id, trace)
             progress.step(sid, "pending_user")
-            return {"status": "paused", "task_id": task_id,
-                    "paused": trace["paused"], "trace_path":
-                    _trace_path(project_path, task_id)}
+            result = {"status": "paused", "task_id": task_id,
+                      "paused": trace["paused"], "trace_path":
+                      _trace_path(project_path, task_id)}
+            if trace.get("trace_error"):
+                result["trace_error"] = trace["trace_error"]
+            return result
 
         # 内部检查步骤（如 discipline 复盘）：进程内执行，不经 MCP 工具调用
         if step.get("check"):
@@ -394,9 +397,12 @@ def execute(plan_card: dict, runner: Callable, project_path: str,
                 trace["finished_at"] = _now()
                 _write_trace(project_path, task_id, trace)
                 progress.step(sid, "pending_user")
-                return {"status": "paused", "task_id": task_id,
-                        "paused": trace["paused"], "trace_path":
-                        _trace_path(project_path, task_id)}
+                result = {"status": "paused", "task_id": task_id,
+                          "paused": trace["paused"], "trace_path":
+                          _trace_path(project_path, task_id)}
+                if trace.get("trace_error"):
+                    result["trace_error"] = trace["trace_error"]
+                return result
 
             raw = runner(step.get("tool", ""), args)
             summary = _summarize(raw)
