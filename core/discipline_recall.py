@@ -49,6 +49,26 @@ def _guard_state(project_path: str) -> Dict[str, str]:
     return "forgotten", "工作区在最近一次 change_guard 之后又发生了变化"
 
 
+def _dream_recall(project_path: str) -> dict:
+    """梦里提醒过什么（5.20.0）：只读 verified 笔记，不把梦当事实。"""
+    try:
+        from core.dream import digest_meta, read
+        meta = digest_meta(project_path)
+        if not meta.get("available"):
+            return {"available": False, "last_dream_at": meta.get("last_dream_at", ""),
+                    "notes": [], "reason": "尚无已验证的梦"}
+        data = read(project_path, limit=5, mark_hit=False)
+        return {
+            "available": True,
+            "last_dream_at": meta.get("last_dream_at", ""),
+            "notes": [{"kind": n.get("kind"), "text": n.get("text")}
+                      for n in data.get("notes") or []],
+            "guardrail": "梦是假设，不是事实；引用前先核验 evidence",
+        }
+    except Exception as e:  # noqa: BLE001 —— 梦不可用不影响纪律复盘
+        return {"available": False, "error": str(e), "notes": []}
+
+
 def recall(project_path: str) -> dict:
     """执行纪律复盘，返回 forgotten / passed / unknown 三类事实。"""
     project_path = os.path.abspath(project_path)
@@ -133,6 +153,7 @@ def recall(project_path: str) -> dict:
         "forgotten": forgotten,
         "passed": passed,
         "unknown": unknown,
+        "dream": _dream_recall(project_path),
         "envelope": env,
         "note": "确定性复盘：forgotten=有事实依据的遗漏；unknown=无法判定，不美化",
     }

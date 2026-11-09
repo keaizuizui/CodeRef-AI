@@ -1,0 +1,1344 @@
+# -*- coding: utf-8 -*-
+"""CodeRef 梦（Dream, 5.20.0）—— 编程 AI 的离线巩固层。
+
+定位：主 AI 醒着做事，CodeRef 在下次启动时替它补梦（不占用主 AI 的 LLM）。
+梦只写 `<project>/.coderef/dream/`，不改任何确定性结论；LLM 只负责「提议」，
+所有证据引用都经过本地确定性核验，核验失败直接 rejected。
+
+公开 API：
+  - status(project_path) -> dict          最近做梦时间 / 笔记数 / 预算 / 上次错误
+  - seed(project_path, text, ...) -> dict 主 AI 显式投喂一条显著事件
+  - read(project_path, ...) -> dict       读 DREAM.md / 按 kind 或关键词取笔记
+  - run(project_path, trigger=...) -> dict 手动或启动时补一轮梦
+  - trigger_if_due(project_path) -> bool  进程内一次启动补梦（后台线程）
+  - digest_items(project_path) -> list    供 memory_digest 优先注入的梦条目
+
+诚实边界：
+  - 无 Key / 预算耗尽 → status="SKIP"，不产出占位内容；
+  - 梦是假设，DREAM.md 只收「证据引用可核验」的 verified 笔记，并明确标注
+    「引用前先核验」，不得当成审计结论转述；
+  - 做梦失败保留旧梦，只记录 last_error，不覆盖既有笔记。
+
+作者: CodeRef-AI Team
+版本: v1.0
+"""
+
+import json
+import os
+import re
+import subprocess
+import threading
+import uuid
+from collections import Counter
+from datetime import datetime, timedelta
+from typing import Any, List, Optional, Tuple
+
+from loguru import logger
+
+
+# ── 存储布局（项目级、本地） ────────────────────────────────────
+DREAM_DIR = os.path.join(".coderef", "dream")
+STATE_FILE = "state.json"
+DREAM_MD = "DREAM.md"
+SEEDS_FILE = "seeds.jsonl"
+NOTES_FILE = "notes.json"
+RUNS_DIR = "runs"
+ARCHIVE_DIR = "archive"
+SCHEMA_VERSION = 1
+
+# ── 梦的形态边界 ────────────────────────────────────────────────
+KINDS = ("rule", "pitfall", "convention", "association")
+STATUSES = ("verified", "hypothesis", "rejected", "decayed")
+
+# DREAM.md 上限 800 token；按 3 字符/token 粗略折算（与 memory_digest 同口径）
+DREAM_MD_TOKEN_BUDGET = 800
+CHARS_PER_TOKEN = 3
+DREAM_MD_MAX_CHARS = DREAM_MD_TOKEN_BUDGET * CHARS_PER_TOKEN
+
+MAX_NOTE_CHARS = 300
+MAX_EVIDENCE = 8
+MAX_SEEDS = 20
+MAX_AUDIT_EVENTS = 30
+MAX_DISPATCH_EVENTS = 10
+MAX_GIT_COMMITS = 10
+AUDIT_DAYS = 7
+GIT_TIMEOUT = 10
+
+# 证据引用格式：kind:value（value 由本地确定性核验）
+_EVIDENCE_RE = re.compile(r"^(file|git|commit|audit|seed|dispatch|trace):(.+)$")
+_ID_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
+_SHA_RE = re.compile(r"^[0-9a-fA-F]{4,40}$")
+
+# 笔记类别 → DREAM.md 分组标签
+KIND_LABELS = {
+    "rule": "规则",
+    "convention": "约定",
+    "pitfall": "坑",
+    "association": "联想",
+}
+
+DEFAULT_CONFIG = {
+    "enabled": True,
+    "run_on_startup": True,
+    "provider": "deepseek",
+    "api_key": "",
+    "base_url": "",
+    "model": "",
+    "budget_tokens_per_run": 20000,
+    "max_notes": 40,
+    "ttl_days": 30,
+    "min_interval_hours": 6,
+}
+
+_LLM_DEFAULTS = {
+    "deepseek": ("https://api.deepseek.com", "deepseek-flash"),
+    "openai": ("https://api.openai.com/v1", "gpt-4o-mini"),
+    "ollama": ("http://localhost:11434/v1", "qwen2.5:7b"),
+    "custom": ("", ""),
+}
+
+# 进程内「本项目已尝试启动补梦」集合（一次启动一轮）
+_started = set()
+_start_lock = threading.Lock()
+
+
+# ═══════════════════════════════════════════════════════════════
+# 基础工具
+# ═══════════════════════════════════════════════════════════════
+
+def _now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _norm(project_path: str) -> str:
+    try:
+        return os.path.normcase(os.path.abspath(str(project_path)))
+    except Exception:  # noqa: BLE001
+        return str(project_path)
+
+
+def _dream_dir(project_path: str) -> str:
+    return os.path.join(os.path.abspath(project_path), DREAM_DIR)
+
+
+def _path(project_path: str, name: str) -> str:
+    return os.path.join(_dream_dir(project_path), name)
+
+
+def _read_text(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _read_json(path: str, default: Any) -> Any:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, type(default)) else default
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def _write_json(path: str, data: Any) -> str:
+    """原子写 JSON；返回空串表示成功，否则返回错误文本。"""
+    tmp = path + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+        return ""
+    except Exception as e:  # noqa: BLE001
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        return str(e)
+
+
+def _write_text(path: str, text: str) -> str:
+    tmp = path + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+        return ""
+    except Exception as e:  # noqa: BLE001
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        return str(e)
+
+
+def _as_bool(value, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def _as_int(value, default: int, minimum: int = 0) -> int:
+    try:
+        return max(minimum, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _clean_text(value) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _norm_text(value) -> str:
+    return re.sub(r"\s+", "", str(value or "")).lower()
+
+
+def _git(args: List[str], cwd: str) -> Tuple[int, str, str]:
+    """执行 git 命令，返回 (rc, stdout, stderr)；异常统一 rc=-1。"""
+    try:
+        r = subprocess.run(
+            ["git"] + list(args), cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=GIT_TIMEOUT,
+            stdin=subprocess.DEVNULL,
+        )
+        return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
+    except Exception as e:  # noqa: BLE001 —— git 不可用统一降级
+        logger.debug(f"[dream] git 执行失败: {args} → {e}")
+        return -1, "", str(e)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 配置：dream 段独立于主 AI 的 LLM 配置
+# ═══════════════════════════════════════════════════════════════
+
+def _config_candidates() -> List[str]:
+    return [
+        os.environ.get("CODEREF_CONFIG_PATH", ""),
+        os.path.join(os.path.expanduser("~"), ".coderef", "config.json"),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "config", "config.json"),
+        os.path.join(os.getcwd(), "config", "config.json"),
+    ]
+
+
+def _load_config_section() -> Tuple[dict, str, str]:
+    """读取 dream 段；返回 (section, 配置路径, 主配置里的 llm_model)。
+
+    dream 段缺失时返回空 dict（无 Key → SKIP），不回退主 AI 的 api_key，
+    保证梦的 Key / 预算与主 AI 隔离。
+    """
+    for path in [p for p in _config_candidates() if p]:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[dream] 配置读取失败 {path}: {e}")
+            continue
+        if not isinstance(data, dict):
+            continue
+        section = data.get("dream")
+        if isinstance(section, dict):
+            return dict(section), path, str(data.get("llm_model") or "")
+    return {}, "", ""
+
+
+def load_config(project_path: str = "") -> dict:
+    """合并默认值 / 配置文件 dream 段 / 环境变量，返回收敛后的配置。"""
+    section, path, main_model = _load_config_section()
+    cfg = dict(DEFAULT_CONFIG)
+    cfg.update({k: v for k, v in section.items() if v is not None})
+
+    # 环境变量优先（便于 CI / 临时换模型，不写盘）
+    env = os.environ
+    if env.get("CODEREF_DREAM_ENABLED"):
+        cfg["enabled"] = _as_bool(env["CODEREF_DREAM_ENABLED"], cfg["enabled"])
+    if env.get("CODEREF_DREAM_API_KEY"):
+        cfg["api_key"] = env["CODEREF_DREAM_API_KEY"]
+    if env.get("CODEREF_DREAM_PROVIDER"):
+        cfg["provider"] = env["CODEREF_DREAM_PROVIDER"]
+    if env.get("CODEREF_DREAM_BASE_URL"):
+        cfg["base_url"] = env["CODEREF_DREAM_BASE_URL"]
+    if env.get("CODEREF_DREAM_MODEL"):
+        cfg["model"] = env["CODEREF_DREAM_MODEL"]
+    if env.get("CODEREF_DREAM_BUDGET_TOKENS_PER_RUN"):
+        cfg["budget_tokens_per_run"] = env["CODEREF_DREAM_BUDGET_TOKENS_PER_RUN"]
+
+    provider = str(cfg.get("provider") or "deepseek").strip().lower()
+    if provider not in _LLM_DEFAULTS:
+        provider = "custom"
+    default_base, default_model = _LLM_DEFAULTS[provider]
+    cfg["provider"] = provider
+    cfg["api_key"] = str(cfg.get("api_key") or "").strip()
+    cfg["base_url"] = str(cfg.get("base_url") or "").strip() or default_base
+    # 模型名可回退主配置的 llm_model（只借名字，不借 Key）
+    cfg["model"] = (str(cfg.get("model") or "").strip()
+                    or main_model or default_model)
+    cfg["enabled"] = _as_bool(cfg.get("enabled"), True)
+    cfg["run_on_startup"] = _as_bool(cfg.get("run_on_startup"), True)
+    cfg["budget_tokens_per_run"] = _as_int(
+        cfg.get("budget_tokens_per_run"), 20000, minimum=1000)
+    cfg["max_notes"] = _as_int(cfg.get("max_notes"), 40, minimum=1)
+    cfg["ttl_days"] = _as_int(cfg.get("ttl_days"), 30, minimum=1)
+    cfg["min_interval_hours"] = _as_int(
+        cfg.get("min_interval_hours"), 6, minimum=0)
+    cfg["config_source"] = path or "（未找到 dream 段：无 Key 时 SKIP）"
+    return cfg
+
+
+def _build_llm(cfg: dict):
+    """按 dream 段构造独立 LLM 客户端（延迟 import，缺依赖时返回 None）。"""
+    try:
+        from core.llm_integration import LLMConfig, LLMIntegration, LLMProvider
+        provider = {
+            "deepseek": LLMProvider.DEEPSEEK,
+            "openai": LLMProvider.OPENAI,
+            "ollama": LLMProvider.OLLAMA,
+            "custom": LLMProvider.CUSTOM,
+        }.get(cfg.get("provider"), LLMProvider.CUSTOM)
+        return LLMIntegration(config=LLMConfig(
+            provider=provider,
+            api_key=cfg.get("api_key", ""),
+            base_url=cfg.get("base_url", ""),
+            model=cfg.get("model", ""),
+            temperature=0.2,
+            max_tokens=2048,
+        ))
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[dream] LLM 初始化失败: {e}")
+        return None
+
+
+def _llm_available(llm) -> bool:
+    try:
+        return bool(llm is not None and llm.is_available())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# ═══════════════════════════════════════════════════════════════
+# 状态 / 笔记 / seed
+# ═══════════════════════════════════════════════════════════════
+
+def _default_state() -> dict:
+    return {
+        "version": SCHEMA_VERSION,
+        "last_dream_at": "",
+        "last_attempt_at": "",
+        "last_status": "",
+        "last_error": "",
+        "goal": "",
+        "cursor": {"audit_after": "", "seeds_consumed": 0, "git_head": ""},
+        "budget_used": 0,
+        "runs": 0,
+    }
+
+
+def _load_state(project_path: str) -> dict:
+    state = _read_json(_path(project_path, STATE_FILE), {})
+    out = _default_state()
+    if isinstance(state, dict):
+        for key in out:
+            if key in state:
+                out[key] = state[key]
+        cursor = state.get("cursor")
+        if isinstance(cursor, dict):
+            out["cursor"].update(cursor)
+    return out
+
+
+def _save_state(project_path: str, state: dict) -> str:
+    return _write_json(_path(project_path, STATE_FILE), state)
+
+
+def _load_notes(project_path: str) -> List[dict]:
+    data = _read_json(_path(project_path, NOTES_FILE), {})
+    notes = data.get("notes") if isinstance(data, dict) else data
+    if not isinstance(notes, list):
+        return []
+    return [n for n in notes if isinstance(n, dict)]
+
+
+def _save_notes(project_path: str, notes: List[dict]) -> str:
+    return _write_json(_path(project_path, NOTES_FILE), {
+        "version": SCHEMA_VERSION,
+        "updated_at": _now(),
+        "notes": notes,
+    })
+
+
+def _read_seeds(project_path: str) -> List[dict]:
+    path = _path(project_path, SEEDS_FILE)
+    out: List[dict] = []
+    if not os.path.exists(path):
+        return out
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except Exception:  # noqa: BLE001
+                    continue
+                if isinstance(item, dict) and item.get("text"):
+                    out.append(item)
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[dream] seed 读取失败: {e}")
+    return out
+
+
+def seed(project_path: str, text: str, kind: str = "association",
+         source: str = "main_ai") -> dict:
+    """主 AI 显式投喂一条显著事件（不读取主 AI 全量对话）。"""
+    pp = os.path.abspath(project_path)
+    if not os.path.isdir(pp):
+        return {"status": "error", "tool": "coderef_dream", "action": "seed",
+                "error": f"项目目录不存在: {pp}"}
+    body = _clean_text(text)[:2000]
+    if not body:
+        return {"status": "error", "tool": "coderef_dream", "action": "seed",
+                "error": "text 不能为空"}
+    kind = str(kind or "association").strip().lower()
+    if kind not in KINDS:
+        return {"status": "error", "tool": "coderef_dream", "action": "seed",
+                "error": f"非法 kind: {kind!r}；允许 {'/'.join(KINDS)}"}
+    item = {"id": "seed-" + uuid.uuid4().hex[:8], "ts": _now(),
+            "kind": kind, "text": body, "source": _clean_text(source)[:120]}
+    path = _path(pp, SEEDS_FILE)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "tool": "coderef_dream", "action": "seed",
+                "error": f"seed 写入失败: {e}"}
+    return {"status": "ok", "tool": "coderef_dream", "action": "seed",
+            "seed": item, "seeds_total": len(_read_seeds(pp)),
+            "note": "已入梦料；下次补梦时才会被巩固"}
+
+
+def status(project_path: str) -> dict:
+    """梦的诚实状态：时间、笔记数、预算、上次错误。"""
+    pp = os.path.abspath(project_path)
+    cfg = load_config(pp)
+    state = _load_state(pp)
+    notes = _load_notes(pp)
+    md_path = _path(pp, DREAM_MD)
+    md = _read_text(md_path)
+    by_status = Counter(str(n.get("status") or "unknown") for n in notes)
+    by_kind = Counter(str(n.get("kind") or "unknown") for n in notes)
+    llm = _build_llm(cfg)
+    seeds = _read_seeds(pp)
+    return {
+        "status": "ok",
+        "tool": "coderef_dream",
+        "action": "status",
+        "project_path": pp,
+        "enabled": cfg["enabled"],
+        "run_on_startup": cfg["run_on_startup"],
+        "llm": {
+            "available": _llm_available(llm),
+            "provider": cfg["provider"],
+            "model": cfg["model"],
+            "has_api_key": bool(cfg["api_key"]),
+            "config_source": cfg["config_source"],
+            "note": "dream 使用独立 Key/预算；无 Key 时补梦 SKIP，不编造",
+        },
+        "last_dream_at": state.get("last_dream_at", ""),
+        "last_attempt_at": state.get("last_attempt_at", ""),
+        "last_status": state.get("last_status", ""),
+        "last_error": state.get("last_error", ""),
+        "due": _is_due(state, cfg),
+        "notes": {
+            "total": len(notes),
+            "by_status": dict(by_status),
+            "by_kind": dict(by_kind),
+        },
+        "seeds": {"total": len(seeds),
+                  "pending": max(0, len(seeds) - int(
+                      (state.get("cursor") or {}).get("seeds_consumed") or 0))},
+        "dream_md": {
+            "exists": bool(md),
+            "path": md_path,
+            "chars": len(md),
+            "token_estimate": round(len(md) / CHARS_PER_TOKEN),
+            "token_budget": DREAM_MD_TOKEN_BUDGET,
+        },
+        "budget": {
+            "limit_tokens_per_run": cfg["budget_tokens_per_run"],
+            "last_used_tokens": state.get("budget_used", 0),
+        },
+        "runs": state.get("runs", 0),
+        "guardrail": "梦是假设，不是审计结论；引用前先核验 evidence",
+    }
+
+
+def _is_due(state: dict, cfg: dict) -> bool:
+    last = str(state.get("last_dream_at") or "")
+    if not last:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(last)
+    except (TypeError, ValueError):
+        return True
+    return datetime.now() - last_dt >= timedelta(hours=cfg["min_interval_hours"])
+
+
+def _mark_hit(project_path: str, note_ids: List[str]) -> None:
+    if not note_ids:
+        return
+    wanted = set(note_ids)
+    notes = _load_notes(project_path)
+    changed = False
+    now = _now()
+    for n in notes:
+        if n.get("id") in wanted:
+            n["last_hit_at"] = now
+            changed = True
+    if changed:
+        _save_notes(project_path, notes)
+
+
+def read(project_path: str, kind: str = "", keyword: str = "",
+         include_hypothesis: bool = False, limit: int = 20,
+         mark_hit: bool = True) -> dict:
+    """读 DREAM.md 或按 kind/关键词取笔记；默认只返回 verified。"""
+    pp = os.path.abspath(project_path)
+    kind = str(kind or "").strip().lower()
+    keyword = str(keyword or "").strip().lower()
+    try:
+        limit = max(1, min(100, int(limit)))
+    except (TypeError, ValueError):
+        limit = 20
+
+    allowed = {"verified"}
+    if include_hypothesis:
+        allowed.add("hypothesis")
+    notes = []
+    for n in _load_notes(pp):
+        if str(n.get("status")) not in allowed:
+            continue
+        if kind and str(n.get("kind")) != kind:
+            continue
+        haystack = (str(n.get("text") or "") + " "
+                    + " ".join(str(e) for e in (n.get("evidence") or []))).lower()
+        if keyword and keyword not in haystack:
+            continue
+        notes.append({
+            "id": n.get("id", ""),
+            "kind": n.get("kind", ""),
+            "text": n.get("text", ""),
+            "evidence": n.get("evidence") or [],
+            "confidence": n.get("confidence", 0),
+            "status": n.get("status", ""),
+            "created_at": n.get("created_at", ""),
+            "last_hit_at": n.get("last_hit_at", ""),
+        })
+    notes = notes[-limit:][::-1]
+    if mark_hit:
+        _mark_hit(pp, [n["id"] for n in notes if n["id"]])
+    md_path = _path(pp, DREAM_MD)
+    return {
+        "status": "ok",
+        "tool": "coderef_dream",
+        "action": "read",
+        "project_path": pp,
+        "dream_md": _read_text(md_path),
+        "dream_md_path": md_path,
+        "notes": notes,
+        "filter": {"kind": kind, "keyword": keyword,
+                   "include_hypothesis": bool(include_hypothesis)},
+        "guardrail": "梦是假设；引用前先核验 evidence，不得当作审计结论转述",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# 原料收集与显著性筛选（零 LLM）
+# ═══════════════════════════════════════════════════════════════
+
+def _collect_audit(project_path: str, audit_after: str) -> Tuple[List[dict], List[dict]]:
+    """返回 (全部审计条目, 显著事件)。显著 = blocked；成功流水账不喂给模型。"""
+    try:
+        from core import audit_log
+        entries = audit_log.read(project_path, days=AUDIT_DAYS)
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[dream] 审计日志读取失败: {e}")
+        return [], []
+    salient: List[dict] = []
+    for e in entries:
+        ts = str(e.get("ts") or "")
+        if audit_after and ts and ts <= audit_after:
+            continue
+        blocked = e.get("blocked")
+        if isinstance(blocked, dict) and blocked:
+            salient.append({"ts": ts, "kind": "blocked",
+                            "tool": str(e.get("tool") or ""),
+                            "gate": str(blocked.get("gate") or ""),
+                            "reason": str(blocked.get("reason") or "")[:200]})
+    salient.sort(key=lambda x: x.get("ts", ""))
+    return entries, salient[-MAX_AUDIT_EVENTS:]
+
+
+def _collect_dispatch(project_path: str) -> List[dict]:
+    """只取失败/暂停的调度轨迹（成功轨迹是流水账）。"""
+    base = os.path.join(os.path.abspath(project_path), ".coderef", "dispatch")
+    out: List[dict] = []
+    if not os.path.isdir(base):
+        return out
+    try:
+        names = [n for n in os.listdir(base) if n.endswith(".json")]
+    except OSError:
+        return out
+    for name in names:
+        path = os.path.join(base, name)
+        data = _read_json(path, {})
+        if not isinstance(data, dict):
+            continue
+        st = str(data.get("status") or "")
+        if st not in ("failed", "paused"):
+            continue
+        out.append({
+            "task_id": str(data.get("task_id") or name[:-5]),
+            "intent": str(data.get("intent") or ""),
+            "status": st,
+            "current_step": str(data.get("current_step") or ""),
+            "failed_steps": [
+                {"id": str(s.get("id") or ""),
+                 "error": str(s.get("error") or "")[:160]}
+                for s in (data.get("steps") or [])
+                if isinstance(s, dict) and s.get("status") == "failed"
+            ][:6],
+        })
+        if len(out) >= MAX_DISPATCH_EVENTS:
+            break
+    return out
+
+
+def _collect_git(project_path: str) -> dict:
+    rc, head, err = _git(["rev-parse", "HEAD"], project_path)
+    if rc != 0:
+        return {"available": False, "head": "", "commits": [],
+                "error": err or "非 git 仓库"}
+    rc, out, _ = _git(["log", "-n", str(MAX_GIT_COMMITS),
+                       "--pretty=format:%h|%s"], project_path)
+    commits = []
+    if rc == 0:
+        for line in out.splitlines():
+            if "|" in line:
+                h, s = line.split("|", 1)
+                commits.append({"commit": h.strip(), "subject": s.strip()[:160]})
+    return {"available": True, "head": head, "commits": commits, "error": ""}
+
+
+def _collect(project_path: str, state: dict, new_seeds: List[dict]) -> dict:
+    cursor = state.get("cursor") or {}
+    audit_all, audit_events = _collect_audit(
+        project_path, str(cursor.get("audit_after") or ""))
+    dispatch = _collect_dispatch(project_path)
+    git = _collect_git(project_path)
+    session = {}
+    try:
+        from core.session_guard import load_state
+        session = load_state(project_path)
+    except Exception:  # noqa: BLE001
+        session = {}
+    last_guard = session.get("last_guard") if isinstance(
+        session.get("last_guard"), dict) else {}
+    facts = {}
+    if isinstance(session.get("facts"), dict):
+        for key, item in session["facts"].items():
+            if isinstance(item, dict):
+                facts[str(key)] = str(item.get("at") or "")
+    return {
+        "audit_all": audit_all,
+        "audit": audit_events,
+        "dispatch": dispatch,
+        "git": git,
+        "seeds": new_seeds,
+        "facts": facts,
+        "last_guard": {
+            "at": str(last_guard.get("at") or ""),
+            "findings": int(last_guard.get("findings") or 0),
+            "high": int(last_guard.get("high") or 0),
+            "summary": str(last_guard.get("summary") or "")[:200],
+        },
+    }
+
+
+def _salient_count(materials: dict) -> int:
+    count = len(materials.get("audit") or [])
+    count += len(materials.get("dispatch") or [])
+    count += len(materials.get("seeds") or [])
+    guard = materials.get("last_guard") or {}
+    if guard.get("findings"):
+        count += 1
+    return count
+
+
+# ═══════════════════════════════════════════════════════════════
+# 脱敏与提示词
+# ═══════════════════════════════════════════════════════════════
+
+_SECRET_RE = re.compile(r"(?i)\b(sk-[A-Za-z0-9_-]{8,}|"
+                        r"(?:api[_-]?key|token|secret)\s*[=:]\s*\S+)")
+_EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
+_WIN_PATH_RE = re.compile(r"\b[A-Za-z]:\\[^\s\"']+")
+_POSIX_HOME_RE = re.compile(r"/(?:home|Users)/[^/\s\"']+")
+
+
+def _sanitize(text: str, project_path: str) -> str:
+    """脱敏后再喂 LLM：密钥 / 邮箱 / 绝对路径 / 项目根。"""
+    value = str(text or "")
+    for variant in {project_path, os.path.abspath(project_path),
+                    _norm(project_path)}:
+        if variant:
+            value = value.replace(variant, "<project>")
+    home = os.path.expanduser("~")
+    if home and home not in ("~", "/"):
+        value = value.replace(home, "~")
+    value = _SECRET_RE.sub("***", value)
+    value = _EMAIL_RE.sub("***@***", value)
+    value = _WIN_PATH_RE.sub("<abs_path>", value)
+    value = _POSIX_HOME_RE.sub("~", value)
+    return value
+
+
+def _prompt_materials(materials: dict, project_path: str,
+                      existing_notes: List[dict]) -> str:
+    compact = {
+        "显著事件": {
+            "被阻断的调用": materials.get("audit") or [],
+            "失败的调度": materials.get("dispatch") or [],
+            "显式 seed": [
+                {"id": s.get("id"), "kind": s.get("kind"),
+                 "text": s.get("text"), "source": s.get("source")}
+                for s in materials.get("seeds") or []
+            ],
+            "变更守卫": materials.get("last_guard") or {},
+        },
+        "上下文": {
+            "最近提交": (materials.get("git") or {}).get("commits") or [],
+            "git_available": (materials.get("git") or {}).get("available", False),
+            "会话事实": materials.get("facts") or {},
+        },
+        "已有笔记（不要重复）": [
+            {"kind": n.get("kind"), "text": n.get("text")}
+            for n in existing_notes
+            if n.get("status") in ("verified", "hypothesis")
+        ][:20],
+    }
+    raw = json.dumps(compact, ensure_ascii=False, indent=1)
+    return _sanitize(raw, project_path)
+
+
+_SYSTEM_PROMPT = (
+    "你是 CodeRef 的离线巩固层（做梦）。主 AI 醒着做事，你只在安静时把"
+    "「值得下次先想到的经验」巩固成更少、更准的联想。\n"
+    "只输出合法 JSON，不要解释、前后缀或 Markdown 代码块。"
+)
+
+_USER_PROMPT = """项目：{project}
+时间：{now}
+以下原料已按显著性筛选（被阻断 / 失败 / 显式 seed / 变更守卫退化），不是成功流水账。
+
+{materials}
+
+请输出 JSON：
+{{
+  "goal": "一句话概括当前目标（可为空串）",
+  "notes": [
+    {{
+      "kind": "rule|pitfall|convention|association",
+      "text": "一条可被下次直接想起的经验（<=120字）",
+      "evidence": ["file:相对路径", "git:短SHA", "audit:工具名", "seed:种子ID", "dispatch:任务ID"],
+      "confidence": 0.0
+    }}
+  ],
+  "open_questions": ["尚未验证、需要下次留意的问题（<=3条）"]
+}}
+
+硬约束：
+1. 最多 5 条 notes；没有可靠经验就返回空数组，不要凑数。
+2. 每条 note 必须有 evidence，且只使用上面五种格式；不要编造不存在的路径/SHA/ID。
+3. 不要重复「已有笔记」；梦是假设，不要把猜测写成事实。
+4. 只依据原料，不假装知道未记录的经历。
+"""
+
+
+# ═══════════════════════════════════════════════════════════════
+# 确定性核验
+# ═══════════════════════════════════════════════════════════════
+
+def _check_ref(ref: str, ctx: dict) -> Tuple[Optional[bool], str]:
+    """核验一条 evidence：True=存在，False=明确失败，None=无法核验。"""
+    text = str(ref or "").strip()
+    m = _EVIDENCE_RE.match(text)
+    if not m:
+        return None, "未知证据格式"
+    kind, value = m.group(1), m.group(2).strip()
+    pp = ctx["project_path"]
+
+    if kind == "file":
+        rel = value.replace("\\", "/")
+        while rel.startswith("./"):
+            rel = rel[2:]
+        if (not rel or rel.startswith("/") or re.match(r"^[A-Za-z]:", rel)
+                or ".." in rel.split("/")):
+            return False, "文件路径越界"
+        full = os.path.normpath(os.path.join(pp, rel))
+        root = os.path.normpath(pp)
+        if not (full == root or full.startswith(root + os.sep)):
+            return False, "文件路径越界"
+        return (os.path.isfile(full),
+                "文件存在" if os.path.isfile(full) else "文件不存在")
+
+    if kind in ("git", "commit"):
+        if not _SHA_RE.fullmatch(value):
+            return False, "非法 commit SHA"
+        rc, _, err = _git(["rev-parse", "--verify", "--quiet",
+                           value + "^{commit}"], pp)
+        if rc == -1:
+            return None, f"git 不可用: {err}"
+        return rc == 0, ("commit 存在" if rc == 0 else "commit 不存在")
+
+    if kind == "audit":
+        return (value in ctx["audit_tools"],
+                "审计记录存在" if value in ctx["audit_tools"] else "无该工具审计记录")
+
+    if kind == "seed":
+        return (value in ctx["seed_ids"],
+                "seed 存在" if value in ctx["seed_ids"] else "seed 不存在")
+
+    if kind in ("dispatch", "trace"):
+        if not _ID_RE.fullmatch(value):
+            return False, "非法 task_id"
+        path = os.path.join(pp, ".coderef", "dispatch", value + ".json")
+        return os.path.isfile(path), ("轨迹存在" if os.path.isfile(path)
+                                      else "轨迹不存在")
+
+    return None, "未知证据格式"
+
+
+def _normalize_candidate(raw: dict, ctx: dict) -> Optional[dict]:
+    if not isinstance(raw, dict):
+        return None
+    text = _clean_text(raw.get("text"))
+    if not text:
+        return None
+    kind = str(raw.get("kind") or "").strip().lower()
+    if kind not in KINDS:
+        return {
+            "id": "dream-" + uuid.uuid4().hex[:8],
+            "kind": kind or "unknown", "text": text[:MAX_NOTE_CHARS],
+            "evidence": [], "confidence": 0.0, "status": "rejected",
+            "reason": f"非法 kind: {kind!r}",
+            "created_at": _now(), "last_hit_at": "",
+        }
+    evidence = raw.get("evidence")
+    if isinstance(evidence, str):
+        evidence = [evidence]
+    if not isinstance(evidence, list):
+        evidence = []
+    evidence = list(dict.fromkeys(
+        _clean_text(e) for e in evidence if _clean_text(e)))[:MAX_EVIDENCE]
+    try:
+        confidence = max(0.0, min(1.0, float(raw.get("confidence", 0.5))))
+    except (TypeError, ValueError):
+        confidence = 0.5
+
+    checks = []
+    has_fail = has_ok = False
+    for ref in evidence:
+        ok, detail = _check_ref(ref, ctx)
+        checks.append({"ref": ref, "ok": ok, "detail": detail})
+        if ok is False:
+            has_fail = True
+        elif ok is True:
+            has_ok = True
+
+    if has_fail:
+        status, reason = "rejected", "证据引用核验失败"
+    elif not evidence:
+        status, reason = "hypothesis", "无 evidence，只能作为假设"
+    elif has_ok:
+        status, reason = "verified", "证据引用可核验（存在性核验，非语义真值）"
+    else:
+        status, reason = "hypothesis", "证据引用无法本地核验"
+
+    return {
+        "id": "dream-" + uuid.uuid4().hex[:8],
+        "kind": kind,
+        "text": text[:MAX_NOTE_CHARS],
+        "evidence": evidence,
+        "confidence": confidence,
+        "status": status,
+        "reason": reason,
+        "checks": checks,
+        "created_at": _now(),
+        "last_hit_at": "",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# 合并 / 衰减 / 写梦
+# ═══════════════════════════════════════════════════════════════
+
+_STATUS_RANK = {"verified": 0, "hypothesis": 1, "rejected": 2, "decayed": 3}
+
+
+def _merge_notes(existing: List[dict], candidates: List[dict],
+                 cfg: dict) -> Tuple[List[dict], List[dict]]:
+    """按归一化文本去重合并；返回 (全部笔记, 新增笔记)。"""
+    by_text = {_norm_text(n.get("text")): n for n in existing
+               if n.get("text")}
+    added = []
+    for cand in candidates:
+        key = _norm_text(cand.get("text"))
+        old = by_text.get(key)
+        if old is not None:
+            old["evidence"] = list(dict.fromkeys(
+                list(old.get("evidence") or []) + list(cand.get("evidence") or [])
+            ))[:MAX_EVIDENCE]
+            old["confidence"] = max(float(old.get("confidence") or 0),
+                                    float(cand.get("confidence") or 0))
+            if (_STATUS_RANK.get(cand.get("status"), 9)
+                    < _STATUS_RANK.get(str(old.get("status")), 9)):
+                old["status"] = cand["status"]
+                old["reason"] = cand.get("reason", "")
+            continue
+        cand["ttl_days"] = cfg["ttl_days"]
+        existing.append(cand)
+        by_text[key] = cand
+        added.append(cand)
+    return existing, added
+
+
+def _decay_notes(project_path: str, notes: List[dict], cfg: dict
+                 ) -> Tuple[List[dict], List[dict]]:
+    """TTL：长期未命中的笔记下沉到 archive/，返回 (活跃笔记, 下沉笔记)。"""
+    now = datetime.now()
+    keep, decayed = [], []
+    for n in notes:
+        base = str(n.get("last_hit_at") or n.get("created_at") or "")
+        try:
+            age = now - datetime.fromisoformat(base)
+        except (TypeError, ValueError):
+            keep.append(n)
+            continue
+        ttl = _as_int(n.get("ttl_days"), cfg["ttl_days"], minimum=1)
+        if age > timedelta(days=ttl):
+            n["status"] = "decayed"
+            n["decayed_at"] = _now()
+            decayed.append(n)
+        else:
+            keep.append(n)
+    if decayed:
+        path = _path(project_path, os.path.join(
+            ARCHIVE_DIR, f"notes-{datetime.now().strftime('%Y%m%d')}.json"))
+        old = _read_json(path, {})
+        old_notes = old.get("notes") if isinstance(old, dict) else []
+        if not isinstance(old_notes, list):
+            old_notes = []
+        _write_json(path, {"version": SCHEMA_VERSION, "updated_at": _now(),
+                           "notes": old_notes + decayed})
+    return keep, decayed
+
+
+def _created_desc(n: dict) -> float:
+    """排序辅助：同状态下新笔记优先保留。"""
+    try:
+        return -datetime.fromisoformat(str(n.get("created_at") or "")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _cap_notes(notes: List[dict], max_notes: int) -> Tuple[List[dict], int]:
+    if len(notes) <= max_notes:
+        return notes, 0
+    ranked = sorted(
+        notes,
+        key=lambda n: (_STATUS_RANK.get(str(n.get("status")), 9),
+                       _created_desc(n)),
+    )
+    kept = ranked[:max_notes]
+    return kept, len(notes) - len(kept)
+
+
+def _fit_lines(lines: List[str], limit: int) -> str:
+    out: List[str] = []
+    used = 0
+    for line in lines:
+        if used + len(line) + 1 > limit:
+            out.append("<!-- truncated: 超过 800 token 预算 -->")
+            break
+        out.append(line)
+        used += len(line) + 1
+    return "\n".join(out) + "\n"
+
+
+def _render_md(goal: str, notes: List[dict], open_questions: List[str]) -> str:
+    verified = [n for n in notes if n.get("status") == "verified"]
+    rules = [n for n in verified if n.get("kind") in ("rule", "convention")]
+    pitfalls = [n for n in verified if n.get("kind") == "pitfall"]
+    associations = [n for n in verified if n.get("kind") == "association"]
+    hypotheses = [n for n in notes if n.get("status") == "hypothesis"]
+
+    def _bullets(items: List[dict]) -> List[str]:
+        out = []
+        for n in items:
+            ev = "、".join(str(e) for e in (n.get("evidence") or [])[:2])
+            line = f"- {str(n.get('text') or '')[:MAX_NOTE_CHARS]}"
+            if ev:
+                line += f"（证据：{ev}）"
+            out.append(line)
+        return out or ["- （暂无）"]
+
+    lines = [
+        "# Dream",
+        f"<!-- 生成于 {_now()}；梦是假设：引用前先核验 evidence，"
+        "不得当作审计结论转述 -->",
+        "",
+        "## 当前目标",
+        f"- {goal or '（未记录）'}",
+        "",
+        "## 已验证规则",
+        *_bullets(rules),
+        "",
+        "## 坑",
+        *_bullets(pitfalls),
+        "",
+        "## 联想（当 X，先想到 Y）",
+        *_bullets(associations),
+        "",
+        "## 未决问题",
+    ]
+    questions = list(open_questions)[:5]
+    for n in hypotheses[:5]:
+        questions.append(f"（假设，未验证）{n.get('text')}（证据："
+                         + "、".join(str(e) for e in (n.get("evidence") or [])[:2])
+                         + "）")
+    if questions:
+        lines.extend(f"- {str(q)[:MAX_NOTE_CHARS]}" for q in questions)
+    else:
+        lines.append("- （暂无）")
+    return _fit_lines(lines, DREAM_MD_MAX_CHARS)
+
+
+def _write_run(project_path: str, record: dict) -> str:
+    name = (datetime.now().strftime("%Y%m%d-%H%M%S")
+            + "-" + uuid.uuid4().hex[:4] + ".json")
+    return _write_json(_path(project_path, os.path.join(RUNS_DIR, name)), record)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 做梦主流程
+# ═══════════════════════════════════════════════════════════════
+
+def _skip(pp: str, state: dict, cfg: dict, reason: str, trigger: str,
+          run_extra: Optional[dict] = None) -> dict:
+    """诚实 SKIP：不写 DREAM.md / notes，不推进 cursor；只留运行痕迹。"""
+    state["last_attempt_at"] = _now()
+    state["last_status"] = "SKIP"
+    state["last_error"] = reason
+    state["runs"] = int(state.get("runs") or 0) + 1
+    _save_state(pp, state)
+    record = {"ts": _now(), "trigger": trigger, "status": "SKIP",
+              "reason": reason, "llm": {"available": False,
+                                        "provider": cfg.get("provider", "")},
+              "budget": {"limit_tokens_per_run": cfg["budget_tokens_per_run"]}}
+    if run_extra:
+        record.update(run_extra)
+    run_path = _write_run(pp, record)
+    from core.result_envelope import envelope
+    no_key = "Key" in reason
+    env = envelope(
+        f"本次补梦 SKIP：{reason}",
+        usable=False,
+        blocked_by=[{"id": "dream_unavailable",
+                     "owner": "consumer" if no_key else "by_design",
+                     "human": reason}],
+        owner_actions={"consumer": (
+            ["在 config/config.json 的 dream 段配置独立 api_key"]
+            if no_key else [])},
+        cannot_conclude=["任何梦结论（本轮未产出）"],
+        guardrails=["SKIP 是事实，不是失败；旧梦保持不变"],
+    )
+    return {"status": "SKIP", "tool": "coderef_dream", "action": "run",
+            "project_path": pp, "reason": reason, "run_path": run_path,
+            "envelope": env}
+
+
+def run(project_path: str, trigger: str = "manual", llm=None) -> dict:
+    """补一轮梦：收集 → 筛显著 → 独立 LLM 提议 → 确定性核验 → 写梦。"""
+    pp = os.path.abspath(project_path)
+    if not os.path.isdir(pp):
+        return {"status": "error", "tool": "coderef_dream", "action": "run",
+                "error": f"项目目录不存在: {pp}"}
+    cfg = load_config(pp)
+    state = _load_state(pp)
+    if not cfg["enabled"]:
+        return _skip(pp, state, cfg, "dream.enabled=false（梦已禁用）", trigger)
+
+    llm = llm if llm is not None else _build_llm(cfg)
+    if not _llm_available(llm):
+        return _skip(pp, state, cfg,
+                     "未配置有效的 dream API Key（独立预算，无 Key 不编造）",
+                     trigger)
+
+    seeds = _read_seeds(pp)
+    consumed = _as_int((state.get("cursor") or {}).get("seeds_consumed"), 0)
+    new_seeds = seeds[consumed:consumed + MAX_SEEDS]
+    materials = _collect(pp, state, new_seeds)
+    salient = _salient_count(materials)
+    if salient == 0:
+        return _skip(pp, state, cfg, "没有新的显著原料（成功流水账不入梦）",
+                     trigger, {"materials": {"salient": 0}})
+
+    existing = _load_notes(pp)
+    material_text = _prompt_materials(materials, pp, existing)
+    budget = cfg["budget_tokens_per_run"]
+    # 输入预算：最多占本轮预算的 60%（其余留给输出）
+    max_input_chars = max(600, int(budget * 0.6 * CHARS_PER_TOKEN))
+    if len(material_text) > max_input_chars:
+        material_text = material_text[:max_input_chars] + "\n…（原料已按预算截断）"
+    out_tokens = max(256, min(2048, budget // 4))
+    messages = [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": _USER_PROMPT.format(
+            project=os.path.basename(pp), now=_now(),
+            materials=material_text)},
+    ]
+
+    try:
+        response = llm.chat_completion(
+            messages, temperature=0.2, max_tokens=out_tokens,
+            response_format={"type": "json_object"})
+    except Exception as e:  # noqa: BLE001
+        return _fail(pp, state, cfg, trigger, f"LLM 调用异常: {e}", materials)
+
+    from core.llm_integration import LLMIntegration
+    if LLMIntegration.is_error_response(response):
+        return _fail(pp, state, cfg, trigger, response, materials)
+    data = LLMIntegration.parse_json_response(response)
+    if data is None:
+        return _fail(pp, state, cfg, trigger,
+                     "LLM 返回内容无法解析为 JSON（旧梦保持不变）", materials,
+                     response=response)
+    if isinstance(data, list):
+        data = {"notes": data}
+    if not isinstance(data, dict):
+        return _fail(pp, state, cfg, trigger, "LLM 返回结构不是对象", materials)
+
+    goal = _clean_text(data.get("goal"))[:200]
+    open_questions = [str(q)[:200] for q in (data.get("open_questions") or [])
+                      if str(q).strip()][:5]
+    raw_notes = data.get("notes")
+    if not isinstance(raw_notes, list):
+        raw_notes = []
+
+    ctx = {
+        "project_path": pp,
+        "audit_tools": {str(e.get("tool") or "")
+                        for e in materials.get("audit_all") or []},
+        "seed_ids": {str(s.get("id")) for s in seeds},
+    }
+    candidates = [c for c in (_normalize_candidate(n, ctx)
+                              for n in raw_notes[:8]) if c]
+    notes, added = _merge_notes(existing, candidates, cfg)
+    notes, decayed = _decay_notes(pp, notes, cfg)
+    notes, dropped = _cap_notes(notes, cfg["max_notes"])
+    if _save_notes(pp, notes):
+        return _fail(pp, state, cfg, trigger, "notes.json 写入失败", materials)
+
+    verified = [n for n in notes if n.get("status") == "verified"]
+    if goal or added:
+        md = _render_md(goal or str(state.get("goal") or ""), notes,
+                        open_questions)
+        err = _write_text(_path(pp, DREAM_MD), md)
+        if err:
+            return _fail(pp, state, cfg, trigger, f"DREAM.md 写入失败: {err}",
+                         materials)
+    md_chars = len(_read_text(_path(pp, DREAM_MD)))
+
+    est_tokens = round((len(material_text) + len(response)) / CHARS_PER_TOKEN)
+    now = _now()
+    last_audit = ""
+    if materials.get("audit"):
+        last_audit = str(materials["audit"][-1].get("ts") or "")
+    state.update({
+        "last_dream_at": now,
+        "last_attempt_at": now,
+        "last_status": "ok",
+        "last_error": "",
+        "goal": goal or state.get("goal", ""),
+        "budget_used": est_tokens,
+        "runs": int(state.get("runs") or 0) + 1,
+    })
+    state["cursor"] = {
+        "audit_after": last_audit or (state.get("cursor") or {}).get("audit_after", ""),
+        "seeds_consumed": len(seeds),
+        "git_head": (materials.get("git") or {}).get("head", ""),
+    }
+    _save_state(pp, state)
+
+    accepted = [n for n in added if n.get("status") in ("verified", "hypothesis")]
+    rejected = [{"text": n.get("text", ""), "reason": n.get("reason", "")}
+                for n in candidates if n.get("status") == "rejected"]
+    record = {
+        "ts": now, "trigger": trigger, "status": "ok",
+        "llm": {"available": True, "provider": cfg["provider"],
+                "model": cfg["model"]},
+        "materials": {
+            "salient": salient,
+            "audit_events": len(materials.get("audit") or []),
+            "dispatch_events": len(materials.get("dispatch") or []),
+            "seeds": len(new_seeds),
+            "git_commits": len((materials.get("git") or {}).get("commits") or []),
+        },
+        "goal": goal,
+        "candidates": candidates,
+        "accepted": [n.get("id") for n in accepted],
+        "rejected": rejected,
+        "decayed": len(decayed), "dropped": dropped,
+        "notes_total": len(notes), "verified_total": len(verified),
+        "dream_md_chars": md_chars,
+        "budget": {"limit_tokens_per_run": budget,
+                   "estimated_tokens": est_tokens},
+    }
+    run_path = _write_run(pp, record)
+
+    from core.result_envelope import envelope
+    env = envelope(
+        f"本次补梦完成：新增 {len(accepted)} 条笔记"
+        f"（已验证 {len(verified)} 条，拒绝 {len(rejected)} 条）",
+        usable=bool(accepted),
+        cannot_conclude=["梦条目的语义真值（仅做了证据存在性核验）",
+                         "未记录的经历"],
+        guardrails=["梦是假设：引用前先核验 evidence，不得当作审计结论转述"],
+    )
+    if rejected:
+        env["blocked_by"] = [{"id": "dream_rejected", "owner": "coderef",
+                              "human": f"{len(rejected)} 条候选证据核验失败，已拒绝"}]
+    return {
+        "status": "ok", "tool": "coderef_dream", "action": "run",
+        "project_path": pp, "trigger": trigger,
+        "goal": goal,
+        "notes": {"added": len(accepted), "verified": len(verified),
+                  "rejected": len(rejected), "decayed": len(decayed),
+                  "dropped": dropped, "total": len(notes)},
+        "dream_md_path": _path(pp, DREAM_MD), "dream_md_chars": md_chars,
+        "notes_path": _path(pp, NOTES_FILE), "run_path": run_path,
+        "budget": record["budget"],
+        "envelope": env,
+    }
+
+
+def _fail(pp: str, state: dict, cfg: dict, trigger: str, error: str,
+          materials: dict, response: str = "") -> dict:
+    """做梦失败：保留旧梦，只记录错误（不写 DREAM.md / notes）。"""
+    state["last_attempt_at"] = _now()
+    state["last_status"] = "error"
+    state["last_error"] = error[:500]
+    state["runs"] = int(state.get("runs") or 0) + 1
+    _save_state(pp, state)
+    record = {"ts": _now(), "trigger": trigger, "status": "error",
+              "error": error[:500], "response_preview": (response or "")[:500],
+              "materials": {"salient": _salient_count(materials)},
+              "budget": {"limit_tokens_per_run": cfg["budget_tokens_per_run"]}}
+    run_path = _write_run(pp, record)
+    from core.result_envelope import envelope
+    env = envelope(
+        f"本次补梦失败：{error[:160]}",
+        usable=False,
+        blocked_by=[{"id": "dream_failed", "owner": "coderef",
+                     "human": "补梦执行失败；旧梦保持不变，详见 run 记录"}],
+        cannot_conclude=["本轮任何梦结论"],
+        guardrails=["失败不覆盖旧梦；last_error 是事实，不是新梦"],
+    )
+    return {"status": "error", "tool": "coderef_dream", "action": "run",
+            "project_path": pp, "error": error[:500], "run_path": run_path,
+            "envelope": env}
+
+
+# ═══════════════════════════════════════════════════════════════
+# 启动补梦 / 供 memory_digest 注入
+# ═══════════════════════════════════════════════════════════════
+
+def _safe_run(pp: str) -> None:
+    try:
+        run(pp, trigger="startup")
+    except Exception as e:  # noqa: BLE001 —— 后台补梦失败不能影响主流程
+        logger.warning(f"[dream] 启动补梦失败: {e}")
+
+
+def trigger_if_due(project_path: str) -> bool:
+    """首次工具调用时启动后台补梦（每进程每项目一次，不阻塞首响应）。"""
+    try:
+        key = _norm(project_path)
+        # 先占位再检查：之后的高频工具调用只做一次 set 查询，不重复读配置。
+        with _start_lock:
+            if key in _started:
+                return False
+            _started.add(key)
+        pp = os.path.abspath(project_path)
+        if not os.path.isdir(pp):
+            return False
+        cfg = load_config(pp)
+        if not cfg["enabled"] or not cfg["run_on_startup"]:
+            return False
+        # 无独立 Key 时不启动后台线程：run() 会诚实 SKIP，启动补梦无需空转，
+        # 也避免在只读/测试场景留下无意义的运行痕迹。
+        if not _llm_available(_build_llm(cfg)):
+            return False
+        if not _is_due(_load_state(pp), cfg):
+            return False
+        threading.Thread(target=_safe_run, args=(pp,), daemon=True,
+                         name="coderef-dream").start()
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[dream] 启动补梦检查失败: {e}")
+        return False
+
+
+def digest_items(project_path: str, limit: int = 6) -> List[dict]:
+    """把 verified 笔记压成可注入条目（梦优先于操作记忆）。"""
+    pp = os.path.abspath(project_path)
+    notes = [n for n in _load_notes(pp) if n.get("status") == "verified"]
+    order = {"rule": 0, "convention": 1, "pitfall": 2, "association": 3}
+    notes.sort(key=lambda n: order.get(str(n.get("kind")), 9))
+    out = []
+    for n in notes[:max(1, int(limit))]:
+        text = _clean_text(n.get("text"))[:180]
+        if not text:
+            continue
+        out.append({"kind": "梦·" + KIND_LABELS.get(
+            str(n.get("kind")), "笔记"), "text": text})
+    return out
+
+
+def digest_meta(project_path: str) -> dict:
+    pp = os.path.abspath(project_path)
+    state = _load_state(pp)
+    notes = _load_notes(pp)
+    verified = [n for n in notes if n.get("status") == "verified"]
+    return {
+        "available": bool(verified),
+        "last_dream_at": state.get("last_dream_at", ""),
+        "verified_notes": len(verified),
+        "guardrail": "梦是假设；引用前先核验 evidence，不得当作审计结论",
+    }
