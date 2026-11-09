@@ -1217,19 +1217,24 @@ BUILTIN_TOOLS: List[Dict] = [
                             "草稿类 job（review_draft/refactor_draft/asset_candidate/noise_proposal）只写 "
                             ".coderef/dream/drafts/，返回 requires_confirmation=true，必须用户确认后才能应用。"
                             "主 LLM 无 Key → status=SKIP，不编造；\n"
-                            "action=drafts：读草稿摘要（可按 job 过滤）或按 draft_id 读草稿全文。\n"
+                            "action=drafts：读草稿摘要（可按 job 过滤）或按 draft_id 读草稿全文；\n"
+                            "action=evals：读评估回放摘要（可按 eval_id 读全文）。\n"
+                            "P3 维护类 job 需手动触发：false_memory_check 复核旧梦 evidence 是否仍存在"
+                            "（纯确定性，不需要 LLM），证据失效标 rejected；eval_replay 抽样评估历史 runs/notes/"
+                            "archive，默认只出确定性指标，有主 LLM 时追加软摘要并写 evals/。\n"
                             "诚实边界：梦是假设不是审计结论；每条笔记必须有 evidence，核验失败直接 rejected；"
                             "claim_type=advice 的建议永远是假设，不会被标成 verified；草稿永不自动进入治理库。"
                         ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
-                            "action": {"type": "string", "enum": ["status", "seed", "read", "run", "drafts"],
-                                       "default": "status", "description": "status=状态；seed=投喂显著事件；read=读梦；run=手动补梦；drafts=读草稿"},
+                            "action": {"type": "string", "enum": ["status", "seed", "read", "run", "drafts", "evals"],
+                                       "default": "status", "description": "status=状态；seed=投喂显著事件；read=读梦；run=手动补梦；drafts=读草稿；evals=读评估回放"},
                             "job": {"type": "string",
                                     "enum": ["pitfall", "recap", "routing", "triage",
                                              "change_narrative", "failure_postmortem",
                                              "review_draft", "refactor_draft",
-                                             "asset_candidate", "noise_proposal"],
+                                             "asset_candidate", "noise_proposal",
+                                             "false_memory_check", "eval_replay"],
                                     "default": "pitfall",
                                     "description": ("action=run 的梦任务：pitfall=坑与规则（默认）；"
                                                     "recap=续接当前目标与开工建议；routing=「当 X，先用 Y」联想；"
@@ -1237,6 +1242,9 @@ BUILTIN_TOOLS: List[Dict] = [
                                                     "failure_postmortem=失败根因假设；以上写 notes。"
                                                     "review_draft/refactor_draft/asset_candidate/noise_proposal "
                                                     "是草稿类，只写 drafts/ 且必须用户确认。"
+                                                    "false_memory_check（维护类）复核旧梦 evidence 是否仍存在，"
+                                                    "不需要主 LLM；eval_replay（维护类）抽样评估历史运行，"
+                                                    "默认确定性指标、可选 LLM 摘要。"
                                                     "action=read 时按 job 过滤笔记；action=drafts 时按 job 过滤草稿")},
                             "text": {"type": "string", "description": "action=seed 时的显著事件文本"},
                             "kind": {"type": "string", "enum": ["rule", "pitfall", "convention", "association", "context"],
@@ -1246,8 +1254,9 @@ BUILTIN_TOOLS: List[Dict] = [
                             "include_hypothesis": {"type": "boolean", "default": False,
                                                    "description": "action=read 时是否包含未验证假设（默认只看 verified）"},
                             "draft_id": {"type": "string", "description": "action=drafts 时按草稿 ID 读全文（只允许 [0-9A-Za-z_-]，最长 120）"},
-                            "limit": {"type": "integer", "default": 20, "description": "action=read 的笔记条数上限；action=drafts 的草稿条数上限（默认 10）"},
-                            "background": {"type": "boolean", "description": "action=run 默认后台；status/seed/read/drafts 保持同步"},
+                            "eval_id": {"type": "string", "description": "action=evals 时按评估 ID 读全文（只允许 [0-9A-Za-z_-]，最长 120）"},
+                            "limit": {"type": "integer", "default": 20, "description": "action=read 的笔记条数上限；action=drafts 的草稿条数上限（默认 10）；action=evals 的评估条数上限（默认 10）"},
+                            "background": {"type": "boolean", "description": "action=run 默认后台；status/seed/read/drafts/evals 保持同步"},
                         }, "required": ["project_path"]},
                     }
 ]

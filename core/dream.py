@@ -18,7 +18,10 @@ llm_* 与主 LLM 调用预算）。`dream` 段只保留行为开关（是否启�
       job ∈ pitfall（默认）/ recap / routing / triage（记忆类）
             / change_narrative / failure_postmortem（叙事类，写 notes）
             / review_draft / refactor_draft / asset_candidate / noise_proposal（草稿类，只写 drafts/）
+            / false_memory_check（维护类，确定性复核证据引用，不需要 LLM）
+            / eval_replay（维护类，默认确定性指标，可选 LLM 摘要，写 evals/）
   - list_drafts(project_path, ...) -> dict 读草稿（action=drafts）
+  - list_evals(project_path, ...) -> dict  读评估（action=evals）
   - trigger_if_due(project_path) -> bool  进程内一次启动补梦（后台线程）
   - digest_items(project_path) -> list    供 memory_digest 优先注入的梦条目
 
@@ -54,6 +57,7 @@ NOTES_FILE = "notes.json"
 RUNS_DIR = "runs"
 ARCHIVE_DIR = "archive"
 DRAFTS_DIR = "drafts"
+EVALS_DIR = "evals"
 SCHEMA_VERSION = 1
 
 # ── 梦的形态边界 ────────────────────────────────────────────────
@@ -64,7 +68,10 @@ NOTE_JOBS = JOBS + ("change_narrative", "failure_postmortem")
 # 草稿类：P2，只写 drafts/，必须用户确认，不进入 notes / DREAM.md
 DRAFT_JOBS = ("review_draft", "refactor_draft", "asset_candidate",
               "noise_proposal")
-ALL_JOBS = NOTE_JOBS + DRAFT_JOBS
+# 维护类：P3，手动触发。false_memory_check 纯确定性（不需要主 LLM）；
+# eval_replay 默认确定性指标，有 LLM 时追加语义摘要。
+MAINT_JOBS = ("false_memory_check", "eval_replay")
+ALL_JOBS = NOTE_JOBS + DRAFT_JOBS + MAINT_JOBS
 DEFAULT_JOB = "pitfall"
 
 # 草稿类 job → 后续确定性闸门（服务端固定，忽略 LLM 返回的 next_tools）
@@ -327,6 +334,7 @@ def _default_state() -> dict:
         "last_error": "",
         "last_job": "",
         "goal": "",
+        "open_questions": [],
         "cursor": {"audit_after": "", "seeds_consumed": 0, "git_head": ""},
         "last_run_tokens": 0,
         "runs": 0,
@@ -343,6 +351,8 @@ def _load_state(project_path: str) -> dict:
         cursor = state.get("cursor")
         if isinstance(cursor, dict):
             out["cursor"].update(cursor)
+    if not isinstance(out.get("open_questions"), list):
+        out["open_questions"] = []
     return out
 
 
@@ -486,6 +496,43 @@ def _draft_summaries(project_path: str, job: str = "") -> List[dict]:
     return out
 
 
+def _eval_files(project_path: str) -> List[str]:
+    """evals/ 下的评估文件（不含 .tmp）。"""
+    base = _path(project_path, EVALS_DIR)
+    if not os.path.isdir(base):
+        return []
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return []
+    return [os.path.join(base, n) for n in names
+            if n.endswith(".json") and not n.endswith(".json.tmp")]
+
+
+def _mtime(path: str) -> float:
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
+
+
+def _eval_summaries(project_path: str) -> List[dict]:
+    out = []
+    for path in sorted(_eval_files(project_path), key=_mtime, reverse=True):
+        data = _read_json(path, {})
+        if not isinstance(data, dict) or not data:
+            continue
+        out.append({
+            "eval_id": os.path.basename(path)[:-5],
+            "generated_at": str(data.get("generated_at") or ""),
+            "llm_available": bool(data.get("llm_available")),
+            "metrics": data.get("metrics") or {},
+            "summary": str(data.get("summary") or ""),
+            "path": path,
+        })
+    return out
+
+
 def status(project_path: str) -> dict:
     """梦的诚实状态：时间、笔记数、主 LLM 状态、上次错误。"""
     pp = os.path.abspath(project_path)
@@ -503,6 +550,7 @@ def status(project_path: str) -> dict:
     seeds = _read_seeds(pp)
     drafts = _draft_summaries(pp)
     draft_by_job = Counter(str(d.get("job") or "unknown") for d in drafts)
+    evals = _eval_summaries(pp)
     return {
         "status": "ok",
         "tool": "coderef_dream",
@@ -527,6 +575,7 @@ def status(project_path: str) -> dict:
         "jobs": list(JOBS),
         "note_jobs": list(NOTE_JOBS),
         "draft_jobs": list(DRAFT_JOBS),
+        "maintenance_jobs": list(MAINT_JOBS),
         "default_job": DEFAULT_JOB,
         "due": _is_due(state, cfg),
         "notes": {
@@ -539,6 +588,10 @@ def status(project_path: str) -> dict:
             "total": len(drafts),
             "by_job": dict(draft_by_job),
             "last_at": drafts[0].get("generated_at", "") if drafts else "",
+        },
+        "evals": {
+            "total": len(evals),
+            "last_at": evals[0].get("generated_at", "") if evals else "",
         },
         "seeds": {"total": len(seeds),
                   "pending": max(0, len(seeds) - int(
@@ -693,6 +746,49 @@ def list_drafts(project_path: str, job: str = "", limit: int = 10,
             "filter": {"job": job}, "drafts": drafts,
             "guardrail": ("草稿是建议不是结论；应用前必须用户确认，"
                           "并走 next_tools 里的确定性工具")}
+
+
+_EVAL_ID_RE = re.compile(r"^[0-9A-Za-z_-]{1,120}$")
+
+
+def list_evals(project_path: str, limit: int = 10,
+               eval_id: str = "") -> dict:
+    """读评估（action=evals）：摘要列表或按 eval_id 读全文。
+
+    评估只存在于 `.coderef/dream/evals/`；指标来自落盘 runs/notes/archive，
+    不进入 notes / DREAM.md，也不注入 digest。
+    """
+    pp = os.path.abspath(project_path)
+    eval_id = str(eval_id or "").strip()
+    try:
+        limit = max(1, min(100, int(limit)))
+    except (TypeError, ValueError):
+        limit = 10
+
+    if eval_id:
+        if not _EVAL_ID_RE.fullmatch(eval_id):
+            return {"status": "error", "tool": "coderef_dream",
+                    "action": "evals",
+                    "error": "非法 eval_id：只允许 [0-9A-Za-z_-]，最长 120"}
+        path = _path(pp, os.path.join(EVALS_DIR, eval_id + ".json"))
+        if not os.path.isfile(path):
+            return {"status": "error", "tool": "coderef_dream",
+                    "action": "evals", "eval_id": eval_id,
+                    "error": f"评估不存在: {eval_id}"}
+        data = _read_json(path, {})
+        if not isinstance(data, dict) or not data:
+            return {"status": "error", "tool": "coderef_dream",
+                    "action": "evals", "eval_id": eval_id,
+                    "error": "评估内容不是合法 JSON 对象"}
+        return {"status": "ok", "tool": "coderef_dream", "action": "evals",
+                "project_path": pp, "available": True, "eval_id": eval_id,
+                "eval": data, "evals": [data]}
+
+    evals = _eval_summaries(pp)[:limit]
+    return {"status": "ok", "tool": "coderef_dream", "action": "evals",
+            "project_path": pp, "available": bool(evals), "evals": evals,
+            "guardrail": ("评估指标来自落盘 runs/notes/archive，不补推断；"
+                          "LLM summary 是软判断，不是审计结论")}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1599,6 +1695,14 @@ def run(project_path: str, trigger: str = "manual", llm=None,
         return _skip(pp, state, cfg, "dream.enabled=false（梦已禁用）", trigger,
                      job=job)
 
+    # P3 维护类：手动触发，不走主 LLM 的 SKIP 闸门。
+    # false_memory_check 纯确定性核验，不需要主 LLM；
+    # eval_replay 默认确定性指标，有 LLM 时只追加软摘要。
+    if job == "false_memory_check":
+        return _run_false_memory_check(pp, cfg, state, trigger)
+    if job == "eval_replay":
+        return _run_eval_replay(pp, cfg, state, trigger, llm)
+
     llm = llm if llm is not None else _build_llm()
     if not _llm_available(llm):
         return _skip(pp, state, cfg,
@@ -1713,6 +1817,7 @@ def run(project_path: str, trigger: str = "manual", llm=None,
         "last_error": "",
         "last_job": job,
         "goal": goal or state.get("goal", ""),
+        "open_questions": open_questions,
         "last_run_tokens": est_tokens,
         "runs": int(state.get("runs") or 0) + 1,
     })
@@ -1933,6 +2038,291 @@ def _run_draft(pp: str, cfg: dict, state: dict, trigger: str, job: str,
         "requires_confirmation": True, "next_tools": next_tools,
         "open_questions": open_questions,
         "run_path": run_path, "limits": limits, "llm": record["llm"],
+        "envelope": env,
+    }
+
+
+def _run_false_memory_check(pp: str, cfg: dict, state: dict,
+                            trigger: str) -> dict:
+    """P3 自检：旧梦对照新证据，证据引用失效 → rejected（纯确定性，不调 LLM）。"""
+    notes = _load_notes(pp)
+    if not notes:
+        return _skip(pp, state, cfg, "没有可复核的笔记", trigger,
+                     job="false_memory_check")
+
+    try:
+        from core import audit_log
+        entries = audit_log.read(pp, days=AUDIT_DAYS)
+    except Exception:  # noqa: BLE001 —— 审计日志不可用 → audit: 引用无法核验
+        entries = []
+    ctx = {
+        "project_path": pp,
+        "audit_tools": {str(e.get("tool") or "") for e in entries
+                        if isinstance(e, dict)},
+        "seed_ids": {str(s.get("id")) for s in _read_seeds(pp)},
+    }
+
+    now = _now()
+    checked = kept = 0
+    rejected: List[dict] = []
+    for n in notes:
+        if str(n.get("status") or "") not in ("verified", "hypothesis"):
+            continue
+        checked += 1
+        n["checked_at"] = now
+        failed = []
+        for ref in n.get("evidence") or []:
+            ok, detail = _check_ref(ref, ctx)
+            if ok is False:
+                # 审计日志按日轮转，只有 7 天窗口；窗口外找不到 ≠ 证据失效。
+                if str(ref).startswith("audit:"):
+                    continue
+                failed.append({"ref": str(ref), "detail": detail})
+        if failed:
+            n["status"] = "rejected"
+            n["reason"] = "false_memory_check: 证据引用已失效"
+            rejected.append({
+                "id": n.get("id", ""),
+                "text": n.get("text", ""),
+                "status": "rejected",
+                "reason": n["reason"],
+                "evidence": list(n.get("evidence") or []),
+                "failed": failed,
+            })
+        else:
+            kept += 1
+
+    if _save_notes(pp, notes):
+        return _fail(pp, state, cfg, trigger, "notes.json 写入失败", {},
+                     job="false_memory_check")
+
+    goal = str(state.get("goal") or "")
+    open_questions = [str(q) for q in (state.get("open_questions") or [])
+                      if str(q).strip()]
+    md_path = _path(pp, DREAM_MD)
+    err = _write_text(md_path, _render_md(goal, notes, open_questions))
+    if err:
+        return _fail(pp, state, cfg, trigger, f"DREAM.md 写入失败: {err}", {},
+                     job="false_memory_check")
+
+    # 维护不是做梦：只更新 last_attempt_at，不动 last_dream_at。
+    state.update({
+        "last_attempt_at": now,
+        "last_status": "ok",
+        "last_error": "",
+        "last_job": "false_memory_check",
+        "runs": int(state.get("runs") or 0) + 1,
+    })
+    _save_state(pp, state)
+
+    limits = {"max_prompt_chars": 0, "max_output_tokens": 0,
+              "estimated_tokens": 0}
+    record = {
+        "ts": now, "trigger": trigger, "job": "false_memory_check",
+        "status": "ok",
+        "llm": {"available": False, "source": "确定性核验（不调用 LLM）"},
+        "checked": checked,
+        "rejected": rejected,
+        "kept": kept,
+        "limits": limits,
+    }
+    run_path = _write_run(pp, record)
+
+    from core.result_envelope import envelope
+    env = envelope(
+        f"复核 {checked} 条，拒绝 {len(rejected)} 条",
+        usable=True,
+        cannot_conclude=["笔记的语义真值（只核验证据引用是否仍存在）"],
+        guardrails=["false_memory_check 只核验证据引用是否仍存在，"
+                    "不判断语义真值"],
+    )
+    return {
+        "status": "ok", "tool": "coderef_dream", "action": "run",
+        "project_path": pp, "trigger": trigger, "job": "false_memory_check",
+        "checked": checked, "rejected": len(rejected), "kept": kept,
+        "dream_md_path": md_path, "notes_path": _path(pp, NOTES_FILE),
+        "run_path": run_path, "llm": record["llm"], "limits": limits,
+        "envelope": env,
+    }
+
+
+_EVAL_REPLAY_PROMPT = """本次 job=eval_replay（评估回放）：只对已落盘的梦指标做抽样评估。
+请只输出 JSON：
+{"summary": "一句话总体评价（<=200字）", "issues": ["值得留意的指标异常（<=5条）"]}
+
+硬约束：
+1. 只依据给出的指标与 DREAM.md 摘录，不推断未记录的事实。
+2. issues 最多 5 条；没有异常就返回空数组。
+3. summary 是软判断，不是审计结论。
+"""
+
+
+def _recent_run_records(project_path: str, limit: int = 100) -> List[dict]:
+    """最近 limit 个 runs/*.json（文件名为时间戳，倒序即最近优先）。"""
+    base = _path(project_path, RUNS_DIR)
+    if not os.path.isdir(base):
+        return []
+    try:
+        names = sorted((n for n in os.listdir(base)
+                        if n.endswith(".json")), reverse=True)
+    except OSError:
+        return []
+    out = []
+    for name in names[:limit]:
+        data = _read_json(os.path.join(base, name), {})
+        if isinstance(data, dict):
+            out.append(data)
+    return out
+
+
+def _decayed_count(project_path: str) -> int:
+    """统计 archive/notes-*.json 里 status=decayed 的条数。"""
+    base = _path(project_path, ARCHIVE_DIR)
+    if not os.path.isdir(base):
+        return 0
+    try:
+        names = [n for n in os.listdir(base)
+                 if n.startswith("notes-") and n.endswith(".json")]
+    except OSError:
+        return 0
+    total = 0
+    for name in names:
+        data = _read_json(os.path.join(base, name), {})
+        items = data.get("notes") if isinstance(data, dict) else []
+        if isinstance(items, list):
+            total += sum(1 for n in items
+                         if isinstance(n, dict)
+                         and n.get("status") == "decayed")
+    return total
+
+
+def _run_eval_replay(pp: str, cfg: dict, state: dict, trigger: str,
+                     llm=None) -> dict:
+    """P3 评估回放：默认确定性指标；有 LLM 时只追加软摘要，不阻断。"""
+    runs = _recent_run_records(pp)
+    notes = _load_notes(pp)
+    md = _read_text(_path(pp, DREAM_MD))
+
+    token_cost = 0
+    last_run_at = ""
+    for r in runs:
+        limits = r.get("limits") if isinstance(r.get("limits"), dict) else {}
+        token_cost += _as_int(limits.get("estimated_tokens"), 0)
+        ts = str(r.get("ts") or "")
+        if ts > last_run_at:
+            last_run_at = ts
+
+    by_status = Counter(str(n.get("status") or "unknown") for n in notes)
+    metrics = {
+        "runs_total": len(runs),
+        "token_cost": token_cost,
+        "last_run_at": last_run_at,
+        "notes_total": len(notes),
+        "verified": by_status.get("verified", 0),
+        "hypothesis": by_status.get("hypothesis", 0),
+        "rejected": by_status.get("rejected", 0),
+        "dream_hit": sum(1 for n in notes if str(n.get("last_hit_at") or "")),
+        "false_memory": by_status.get("rejected", 0),
+        "decayed": _decayed_count(pp),
+        "dream_md_chars": len(md),
+        "dream_md_tokens": round(len(md) / CHARS_PER_TOKEN),
+    }
+
+    llm = llm if llm is not None else _build_llm()
+    llm_available = _llm_available(llm)
+    summary: str = ""
+    issues: List[str] = []
+    est_tokens = 0
+    max_input_chars = MAX_PROMPT_CHARS
+    out_tokens = min(1024, MAX_OUTPUT_TOKENS)
+    if llm_available:
+        payload = json.dumps({
+            "metrics": metrics,
+            "dream_md_excerpt": _sanitize(md[:4000], pp),
+        }, ensure_ascii=False, indent=1)
+        if len(payload) > max_input_chars:
+            payload = payload[:max_input_chars]
+        messages = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": payload + "\n\n" + _EVAL_REPLAY_PROMPT},
+        ]
+        try:
+            response = llm.chat_completion(
+                messages, temperature=0.2, max_tokens=out_tokens,
+                response_format={"type": "json_object"})
+            est_tokens = round((len(payload) + len(response or ""))
+                               / CHARS_PER_TOKEN)
+            from core.llm_integration import LLMIntegration
+            if not LLMIntegration.is_error_response(response):
+                data = LLMIntegration.parse_json_response(response)
+                if isinstance(data, dict):
+                    summary = _clean_text(data.get("summary"))[:600]
+                    issues = [str(x)[:200] for x in (data.get("issues") or [])
+                              if str(x).strip()][:10]
+        except Exception as e:  # noqa: BLE001 —— 软摘要失败不阻断评估
+            logger.debug(f"[dream] eval_replay LLM 摘要失败: {e}")
+
+    now = _now()
+    eval_id = (datetime.now().strftime("%Y%m%d-%H%M%S")
+               + "-" + uuid.uuid4().hex[:4])
+    eval_path = _path(pp, os.path.join(EVALS_DIR, eval_id + ".json"))
+    limits = {"max_prompt_chars": max_input_chars,
+              "max_output_tokens": out_tokens,
+              "estimated_tokens": est_tokens}
+    err = _write_json(eval_path, {
+        "schema_version": SCHEMA_VERSION,
+        "job": "eval_replay",
+        "generated_at": now,
+        "project_path": pp,
+        "llm_available": llm_available,
+        "metrics": metrics,
+        "summary": summary,
+        "issues": issues,
+        "limits": limits,
+    })
+    if err:
+        return _fail(pp, state, cfg, trigger, f"评估写入失败: {err}", {},
+                     job="eval_replay")
+
+    # 维护不是做梦：只更新 last_attempt_at，不动 last_dream_at。
+    state.update({
+        "last_attempt_at": now,
+        "last_status": "ok",
+        "last_error": "",
+        "last_job": "eval_replay",
+        "last_run_tokens": est_tokens,
+        "runs": int(state.get("runs") or 0) + 1,
+    })
+    _save_state(pp, state)
+
+    record = {
+        "ts": now, "trigger": trigger, "job": "eval_replay", "status": "ok",
+        "eval_id": eval_id, "eval_path": eval_path,
+        "llm": {"available": llm_available,
+                "source": ("主 LLM 配置" if llm_available
+                           else "未配置有效主 LLM Key，仅确定性指标")},
+        "metrics": metrics, "summary": summary, "issues": issues,
+        "limits": limits,
+    }
+    run_path = _write_run(pp, record)
+
+    from core.result_envelope import envelope
+    env = envelope(
+        f"评估回放完成：{metrics['runs_total']} 次运行、"
+        f"{metrics['notes_total']} 条笔记"
+        + ("" if llm_available else "（无 LLM，仅确定性指标）"),
+        usable=True,
+        cannot_conclude=["笔记的语义真值", "指标之外的历史行为"],
+        guardrails=["指标来自落盘 runs/notes/archive，不补推断；"
+                    "LLM summary 是软判断"],
+    )
+    return {
+        "status": "ok", "tool": "coderef_dream", "action": "run",
+        "project_path": pp, "trigger": trigger, "job": "eval_replay",
+        "eval_id": eval_id, "eval_path": eval_path,
+        "metrics": metrics, "summary": summary, "issues": issues,
+        "llm_available": llm_available,
+        "run_path": run_path, "limits": limits,
         "envelope": env,
     }
 

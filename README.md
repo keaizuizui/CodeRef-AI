@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.21.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.21.2** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -120,13 +120,14 @@ CodeRef 不靠宣称，靠可复现的硬指标（完整方法见后文「可靠
 - **`coderef_dispatch_metrics`**：聚合最近 N 天（默认 7）日志，输出闸门命中率、阻断 Top 与原因 Top、记忆注入命中率、新鲜度事件与刷新动作 Top、scope 生效次数、dispatcher 任务结局。只统计实际落盘记录，empty 就是 empty，不做推断补齐。
 - **违规注入测试**：block 模式下「未 recover 直接 audit」被 G-A 拦截且日志可追溯；scope add 后 audit 实际排除；stale 查询带 `stale=true` 与 `sync_task_id`。
 
-### 梦（v5.20.0 起，v5.21.1 扩 job 与草稿）：编程 AI 的离线巩固层
+### 梦（v5.20.0 起，v5.21.2 扩 job / 草稿 / P3）：编程 AI 的离线巩固层
 
 CodeRef 不只回答「现在是什么」，也在安静时替主 AI **补梦**——复用 CodeRef 的**主 LLM 配置**（与其他 LLM 工具同一套 Key/预算），把被阻断、失败、变更守卫退化与主 AI 显式 `seed` 的经历巩固成更少、更准的联想，写入项目本地 `.coderef/dream/`：
 
-- **`coderef_dream(action=status|seed|read|run|drafts)`**：`status` 看最近做梦时间、笔记数、草稿数、主 LLM 状态、支持的 job 与上次错误；`seed` 显式投喂一条显著事件（不读取主 AI 全量对话）；`read` 读 `DREAM.md` 或按 job/kind/关键词取笔记；`run` 手动补一轮（默认后台）；`drafts` 读草稿摘要或按 `draft_id` 读全文。
+- **`coderef_dream(action=status|seed|read|run|drafts|evals)`**：`status` 看最近做梦时间、笔记数、草稿/评估数、主 LLM 状态、支持的 job 与上次错误；`seed` 显式投喂一条显著事件（不读取主 AI 全量对话）；`read` 读 `DREAM.md` 或按 job/kind/关键词取笔记；`run` 手动补一轮（默认后台）；`drafts` 读草稿摘要或按 `draft_id` 读全文；`evals` 读评估摘要或按 `eval_id` 读全文。
 - **job 契约（v5.21.1）**：记忆/叙事类 `pitfall`（默认）/ `recap`（续接目标与上次进度）/ `routing`（当 X，先用 Y）/ `triage`（先看什么）/ `change_narrative`（上次改了什么）/ `failure_postmortem`（失败根因假设）。`recap` 的事实进「当前目标」，`triage` 建议进「本次开工建议」；`claim_type=advice` 永远只能是假设，不会进「已验证规则」。
 - **草稿链（v5.21.1）**：`review_draft` / `refactor_draft` / `asset_candidate` / `noise_proposal` 只写 `.coderef/dream/drafts/`，返回 `requires_confirmation=true` 与服务端固定的 `next_tools`；用 `coderef_dream(action=drafts)` 读取，用户确认后走 `review/arch_verify/asset/scope` 等确定性工具，**永不自动应用**。
+- **P3 维护/评估（v5.21.2）**：`false_memory_check` 纯确定性复核旧梦证据（失效 → rejected，审计日志窗口外不算失效）；`eval_replay` 从 `runs/notes/archive` 汇总 `token_cost / dream_hit / false_memory / decay_count`，无 LLM 也出确定性指标，有 LLM 追加软摘要；报告写 `.coderef/dream/evals/`，用 `coderef_dream(action=evals)` 读取。两者都手动触发，不自动跑。
 - **启动补梦（显式开启）**：`dream.run_on_startup=true` 后，首次带项目路径的工具调用会在后台触发一次，不阻塞首响应；默认关闭，避免在不知情时消耗主 LLM 额度。
 - **输出 `DREAM.md`（≤800 token）**：六节——当前目标 / 本次开工建议 / 已验证规则 / 坑 / 联想（当 X，先想到 Y）/ 未决问题；`notes.json` 保留证据、job、claim_type 与状态，`runs/` 留输入摘要与采纳/拒绝记录。
 - **LLM 提议 + 确定性核验**：每条笔记必须有 `evidence`（`file:` / `git:` / `audit:` / `seed:` / `dispatch:`）；核验失败直接 `rejected`，无法核验标 `hypothesis`，只有 verified 事实进入「已验证规则」。梦是假设，**不改写任何审计结论**。

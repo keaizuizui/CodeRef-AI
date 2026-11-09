@@ -4,6 +4,16 @@
 
 ---
 
+### v5.21.2 — 梦 P3：旧梦复核与评估回放
+
+> 背景：梦会随时间产生旧笔记，证据可能失效；也需要一套可回放的指标看梦是否真的有用。本版补齐 P3 两个维护/评估 job，手动触发，不默认跑。
+
+- **`false_memory_check`（纯确定性，不调用 LLM）**：逐条重核 verified/hypothesis 笔记的 evidence；`file/git/seed/dispatch` 引用失效 → `rejected`；`audit:` 受 7 天日志窗口限制，窗口外找不到不算失效；重渲染 DREAM.md；只更新 `last_attempt_at/last_job/runs`，不动 `last_dream_at`。
+- **`eval_replay`（默认确定性，LLM 可选）**：从最近 100 个 `runs/`、`notes.json`、`archive/` 汇总 `runs_total / token_cost / last_run_at / notes_total / verified / hypothesis / rejected / dream_hit / false_memory / decay_count / dream_md_chars / dream_md_tokens`；无主 LLM 也出确定性指标，有 LLM 时追加一次软摘要（解析失败不阻断）。
+- **新增 `.coderef/dream/evals/` 与 `coderef_dream(action=evals)`**：按摘要列表或 `eval_id` 读全文；非法/不存在结构化报错。
+- **状态**：`status` 增加 `maintenance_jobs` 与 `evals{total,last_at}`；`state.json` 增加 `open_questions`，供维护类重渲染 DREAM.md 时不丢未决问题。
+- **验证**：新增 6 个 dream 用例；全量 pytest **424 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.21.1 — 梦补齐 P1 叙事与 P2 草稿链
 
 > 背景：5.21.0 的梦只有 pitfall/recap/routing/triage 四类记忆 job；本版补齐「变更叙事、失败复盘」与 review/refactor/asset/noise 四类草稿，让梦能离线铺排但不自动执行。
