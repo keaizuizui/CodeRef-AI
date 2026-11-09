@@ -162,6 +162,18 @@ BUILTIN_TOOLS: List[Dict] = [
                         }, "required": ["project_path", "task_id"]},
                     },
         {
+                        "name": "coderef_dispatch_metrics",
+                        "description": (
+                            "观测聚合（5.19.5）：读取 .coderef/audit_log 的 JSONL 记录，输出闸门命中率、"
+                            "违约/阻断 Top、记忆注入命中率、新鲜度事件与刷新动作 Top、scope 生效次数、"
+                            "dispatcher 任务结局。只统计实际落盘记录，missing/unknown 如实呈现。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "days": {"type": "integer", "description": "统计最近 N 天（默认 7）", "default": 7},
+                        }, "required": ["project_path"]},
+                    },
+        {
                         "name": "coderef_audit",
                         "description": (
                                 "全维度代码审计 = 治理审计 + Agent安全 + 依赖扫描(CVE) + 技术债务 + "

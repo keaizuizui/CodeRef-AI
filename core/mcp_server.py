@@ -148,8 +148,9 @@ from core.handlers_engine import (
     _replicate, _replicate_apply,
 )
 from core.handlers_misc import (
-    _advisor, _docs_read, _eval, _frontend, _query, _report, _review,
-    _scan_list, _scan_tool, _scope, _verify_findings, _version, _wl,
+    _advisor, _dispatch_metrics, _docs_read, _eval, _frontend, _query,
+    _report, _review, _scan_list, _scan_tool, _scope, _verify_findings,
+    _version, _wl,
 )
 # 5.19.1 结果级新鲜度硬戳：信封统一挂 freshness 块（best-effort，失败不影响结论）
 from core.freshness_guard import attach_freshness as _env_with_freshness
@@ -181,6 +182,7 @@ __all__ = [
     "_dynamic_probe", "_gov_board", "_gov_workspace", "_gov_schedule",
     "_role_boundary", "_verify_findings", "_review", "_frontend",
     "_report", "_advisor", "_arch", "_wl", "_query", "_scope",
+    "_dispatch_metrics",
     # arch 系辅助
     "_target_arch_path", "_load_target_arch", "_coerce_target_arch",
     "_validate_project_path",
@@ -309,6 +311,46 @@ def _merge_session_context(raw: str, ctx: dict) -> str:
         return raw
 
 
+# ─── 5.19.5 观测：从工具返回与会话事实提取审计字段（best-effort） ───
+
+def _audit_gate(gate: dict, checked: bool) -> dict:
+    """闸门判定：hit（命中）/pass（检查且放行）/miss（未检查）。"""
+    hits = [h.get("id") for h in (gate.get("hits") or []) if h.get("id")]
+    if hits:
+        return {"result": "hit", "hits": hits,
+                "mode": gate.get("mode", "warn")}
+    return {"result": "pass" if checked else "miss", "hits": [],
+            "mode": gate.get("mode", "")}
+
+
+def _audit_freshness(raw: str) -> dict:
+    """从返回体提取 freshness 判定（信封内或 query 顶层）。"""
+    try:
+        data = json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    fresh = data.get("freshness")
+    if not isinstance(fresh, dict):
+        env = data.get("envelope")
+        fresh = env.get("freshness") if isinstance(env, dict) else None
+    if not isinstance(fresh, dict):
+        return {}
+    return {"code_newer": bool(fresh.get("code_newer")),
+            "stale_reason": str(fresh.get("stale_reason") or "")[:200],
+            "refresh_action": str(fresh.get("refresh_action") or "")[:200]}
+
+
+def _audit_scope(project_path: str) -> dict:
+    try:
+        from core.scope import load_scope
+        rules = load_scope(project_path).get("rules") or []
+        return {"rules": len(rules)} if rules else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 class Server:
 
     def __init__(self):
@@ -346,6 +388,7 @@ class Server:
             "coderef_execute": self._dispatch_execute,
             "coderef_dispatch_status": self._dispatch_status,
             "coderef_dispatch_report": self._dispatch_report,
+            "coderef_dispatch_metrics": self._dispatch_metrics,
             "coderef_architecture": self._arch,
             "coderef_docs_read": self._docs_read,
             "coderef_query": self._query,
@@ -713,18 +756,32 @@ class Server:
         5.19.x：把「改完代码要跑变更守卫」「先恢复记忆」「先 sync 图谱」从
         skill 文字变成服务端自动行为——闸门命中按配置返回 blocked 或
         gate_warnings；重工具返回体自带 `context.guard` 与
-        `context.memory_digest`。调用方不主动查也会拿到。
+        `context.memory_digest`。5.19.5 起各防护点判定落盘 audit_log。
         """
         p = a.get("project_path") or ""
         gate = {}
+        audit = None
+        if p:
+            try:
+                from core import audit_log as audit
+            except Exception:  # noqa: BLE001
+                audit = None
         if p:
             try:
                 from core.preconditions import blocked_result, evaluate
                 gate = evaluate(n, p, a)
                 if gate.get("blocked"):
-                    return json.dumps(
-                        blocked_result(n, gate.get("blocking") or {}),
-                        ensure_ascii=False)
+                    blocked = blocked_result(n, gate.get("blocking") or {})
+                    if audit is not None:
+                        audit.record(p, {
+                            "tool": n,
+                            "gate": _audit_gate(gate, checked=True),
+                            "blocked": {
+                                "gate": (gate.get("blocking") or {}).get("id", ""),
+                                "reason": (gate.get("blocking") or {}).get("reason", "")},
+                            "scope": _audit_scope(p),
+                        })
+                    return json.dumps(blocked, ensure_ascii=False)
             except Exception as e:  # noqa: BLE001 —— 闸门故障不拦调用
                 logger.debug(f"[preconditions] 闸门检查失败（放行）: {e}")
                 gate = {}
@@ -732,11 +789,18 @@ class Server:
         raw = self._run_inner(n, a, progress_cb)
         if not p:
             return raw
+        entry = {"tool": n, "gate": _audit_gate(gate, checked=True),
+                 "scope": _audit_scope(p)}
         try:
             from core.session_guard import HEAVY_TOOLS, guard_if_needed
         except Exception:  # noqa: BLE001
+            if audit is not None:
+                audit.record(p, entry)
             return raw
         if n not in HEAVY_TOOLS:
+            entry["freshness"] = _audit_freshness(raw)
+            if audit is not None:
+                audit.record(p, entry)
             return raw
         ctx = {}
         if gate.get("hits"):
@@ -752,6 +816,11 @@ class Server:
             digest = inject_once(p)
             if digest is not None:
                 ctx["memory_digest"] = digest
+                entry["memory_digest"] = {
+                    "injected": True,
+                    "available": bool(digest.get("available")),
+                    "items": len(digest.get("items") or []),
+                }
                 # G-A 的事实来源：记忆摘要可用 == 已完成 recover
                 if digest.get("available"):
                     from core.session_guard import mark_fact
@@ -759,6 +828,9 @@ class Server:
                               {"items": len(digest.get("items") or [])})
         except Exception as e:  # noqa: BLE001
             logger.debug(f"[session] 记忆摘要注入失败: {e}")
+        entry["freshness"] = _audit_freshness(raw)
+        if audit is not None:
+            audit.record(p, entry)
         if not ctx:
             return raw
         return _merge_session_context(raw, ctx)
@@ -945,6 +1017,9 @@ class Server:
         return json.dumps(
             dispatcher.report(a["project_path"], a.get("task_id", "")),
             ensure_ascii=False)
+
+    def _dispatch_metrics(self, a):
+        return _dispatch_metrics(a)
 
     def _tsk(self, a) -> str:
         import time
