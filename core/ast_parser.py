@@ -74,6 +74,8 @@ class AstCodeImport:
     is_from_import: bool  # True=from X import Y, False=import X
     line: int
     category: str = "unknown"  # stdlib / third_party / project / relative
+    # from X import name as alias：原名字 → 别名（供调用作用域解析还原真实符号）
+    asnames: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -291,13 +293,15 @@ class AstParser:
         else:
             category = self._classify_import(module)
 
-        names = [alias.asname or alias.name for alias in node.names]
+        names = [alias.name for alias in node.names]
+        asnames = {alias.name: alias.asname for alias in node.names if alias.asname}
         imp = AstCodeImport(
             module=module,
             names=names,
             is_from_import=True,
             line=node.lineno,
             category=category,
+            asnames=asnames,
         )
         (result.local_imports if local else result.imports).append(imp)
 

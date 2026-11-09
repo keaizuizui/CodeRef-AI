@@ -310,6 +310,8 @@ def _dim_structure(project_path: str) -> dict:
     s = a.get("summary") or {}
     raw = {
         "modules": gs.get("modules", 0),
+        # 全量模块数：与 modules（参与调用图）区分，供 UI 解释口径差异（外部 D-6）
+        "modules_total": gs.get("modules_total", 0),
         "cycles": s.get("cycles", 0),
         "god_modules": s.get("god_modules", 0),
         "layer_violations": s.get("layer_violations", 0),

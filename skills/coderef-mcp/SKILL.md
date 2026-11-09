@@ -202,9 +202,9 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 - **`verify_findings` 的 `file_exists_only` 不等于确证**：它只证明「论断提到的文件存在」，不能证明论断成立；`confirmed` 也不代表语义正确，必须回读代码。
 - **`coderef_architecture` 不产出代码 findings**：它只做结构分析（图谱/工作流/画布）；`summary.findings=0` 不是"无问题"，代码问题看 `coderef_audit` / `coderef_scan`（返回带 `findings_note`）。
 - **`interpret(action=health)` 必须看新鲜度**：先查 `data_source` / `scan_ts` / `data_stale`；`true` 表示过期，`null` 表示年龄未知（按需重跑，不得当新鲜），`false` 才可当现状引用。
-- **`arch_gap` / `arch_verify` 先看 `target_health`**：`target_health.stale=true` 表示定标过期（超过一半 `target_modules` 不存在），此时 0% 覆盖/低分是输入问题，不是代码问题；先 `coderef_target_arch_set` 重新定标。
+- **`arch_gap` / `arch_verify` 先看 `target_health`**：`target_health.stale=true` 表示定标过期（超过一半 `target_modules` 不存在），此时 `arch_verify.score_status=stale_target`，0% 覆盖/低分是输入问题，不是代码问题；先 `coderef_target_arch_set` 重新定标。
 - **引用任何历史产物/报告前先跑 `coderef_version(project_path)`（强制）**：返回里的 `artifacts_report` 列出 target_arch / 治理库 / audit findings / scorecard / 图谱 / 评估台 / Wiki / 产品与 UX 评估的生成时间、约定时效，以及 `code_newer`（代码最后修改晚于产物）。`code_newer=true` 或 `stale_by_age=true` 时，先按 `refresh_hint` 重跑再引用数字；对方自己写的旧报告同样要先核对日期，不要当现状转述。
 - **`scorecard` 的 `unknown` 不是 0 分**：治理库全 Rejected / 超 30 天、Wiki 未生成、定标过期都会标 `unknown`（`score=None` + `reason`）。如实转述「这一维证据不足」，不要换算成低分或说成工具失败。
-- **关系层宁可漏边也不建假边**：点号调用（`params.get` / `json.dump`）不再按短名吸附同名 helper，因此 `query callers` / fan_in 可能偏少；低 fan_in 不等于「不重要」，关键调用链请用 `flow_verify` 验证。
+- **关系层按 import 作用域解析（v5.18.11 起）**：只有「本模块内定义」或「确实被本文件 import」的调用才建 CALLS 边；同名但未 import 的调用（全仓多个 `check(...)`）、`datetime.now` 这类属性链一律不建边。因此 `query callers` / fan_in 会偏少，低 fan_in 不等于「不重要」，关键调用链请用 `flow_verify` 并回读代码确认。
 - **多工具口径不同不是"工具打架"**：`coderef_audit` / 图谱是权威扫描集；发现备份目录（`_refactor_backup` 等）被其他工具计入时，用 `coderef_whitelist` 的 `dir` 条目排除，不要据此否定审计结论。
 - **LLM 未配置是硬阻断而非降级**：`coderef_docs` / `innovation_review` / `eval` 会如实提示；不要伪造 LLM 产物。

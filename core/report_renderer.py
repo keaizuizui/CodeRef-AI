@@ -26,6 +26,7 @@ HtmlReportRenderer -- 把审计报告 / 知识图谱 / Wiki 文档统一渲染�
 import json
 import os
 import re
+import shutil
 import time
 import html as _html
 from dataclasses import dataclass
@@ -647,6 +648,32 @@ class HtmlReportRenderer:
                 return ""
         except OSError:
             return ""
+        # 画布在 `.coderef/` 下、index.html 在 `.coderef/report/html/` 下：
+        # file:// 用 ../../ 可打开，但 open_server 的静态根是 html/，../../ 会越界 404。
+        # 统一复制到报告目录并用同目录相对名，两种打开方式都能命中（外部 UI P0-1）。
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            target = os.path.join(out_dir, latest)
+            need_copy = True
+            if os.path.isfile(target):
+                try:
+                    need_copy = (os.path.getsize(target) != os.path.getsize(fp)
+                                 or os.path.getmtime(target) < os.path.getmtime(fp))
+                except OSError:
+                    need_copy = True
+            if need_copy:
+                shutil.copy2(fp, target)
+            # 清理同前缀旧副本，避免 html/ 随每次渲染无限累积
+            for old in os.listdir(out_dir):
+                if (old != latest and old.startswith(prefixes)
+                        and old.endswith(".html")):
+                    try:
+                        os.remove(os.path.join(out_dir, old))
+                    except OSError:
+                        pass
+            return latest
+        except OSError:
+            pass
         try:
             rel = os.path.relpath(fp, out_dir)
             return rel.replace(os.sep, "/")
@@ -782,9 +809,13 @@ class HtmlReportRenderer:
             secs.append(f'<div class="subcard"><h3>Wiki 文档 <span class="badge badge-missing">未执行</span></h3>'
                         f'<p class="empty">{_esc(wiki_d.get("hint", "尚未生成 Wiki，请先运行 coderef_docs"))}</p></div>')
 
-        # 统计口径透明化：披露各维度时间，避免旧产物被当作本次结果
+        # 统计口径透明化：披露各维度时间，避免旧产物被当作本次结果。
+        # 图谱构建时间优先取本次加载的 kg_stats（真实 meta.built_at），
+        # 旧 findings JSON 里的 kg_built_at 只是上次审计快照，不能覆盖当前值。
         ts = getattr(pr, "scan_ts", "") or ""
-        kgt = getattr(pr, "kg_built_at", "") or kg_d.get("ts", "") or (kg_stats or {}).get("built_at", "")
+        kgt = ((kg_stats or {}).get("built_at")
+               or getattr(pr, "kg_built_at", "")
+               or kg_d.get("ts", ""))
         scope = getattr(pr, "scope_text", "") or ""
         note = "<section><h2>统计口径</h2>"
         note += f"<p>本次扫描时间：<code>{_esc(ts or '未记录')}</code></p>"
@@ -932,10 +963,24 @@ class HtmlReportRenderer:
                 f'<td>{_esc(d.get("source_tool", ""))}</td></tr>')
         notes = "".join(f'<p class="sc-note">{_esc(n)}</p>' for n in card.get("notes") or [])
         coverage = float(card.get("coverage") or 0)
-        # 低覆盖时"A 级"极易被误读成整体健康：显式给出限定语
-        low_cov = (overall is not None and coverage < 0.5)
-        cov_warn = (f'<p class="warn-line">证据覆盖仅 {int(round(coverage * 100))}%：'
-                    f'该等级只代表已知维度，不代表项目整体健康。</p>' if low_cov else '')
+        dims = card.get("dimensions") or []
+        known_n = sum(1 for d in dims if d.get("score") is not None)
+        unknown_n = len(dims) - known_n
+        # 只要存在证据不足的维度就说明总分覆盖面，避免「15 分」被读成全局健康
+        cov_warn = (
+            f'<p class="warn-line">本次仅 {known_n}/{len(dims)} 个维度有证据'
+            f'（权重覆盖 {int(round(coverage * 100))}%）：总分只代表这些维度，'
+            f'不代表项目整体健康，不能当全局分汇报。</p>'
+            if (overall is not None and unknown_n) else '')
+        # 结构健康的 modules 是「参与调用图」口径，与图谱全量模块数不同，需显式解释
+        sd = next((d for d in dims if d.get("id") == "structure"), None)
+        sraw = (sd or {}).get("raw") or {}
+        scope_note = (
+            f'<p class="sc-note">结构健康的模块分母是「参与调用图的模块 '
+            f'{_esc(str(sraw.get("modules")))}」；图谱全量模块 '
+            f'{_esc(str(sraw.get("modules_total")))}，差额为测试/无调用模块，不是漏扫。</p>'
+            if (sraw.get("modules_total")
+                and sraw.get("modules_total") != sraw.get("modules")) else '')
         return (
             '<section><h2>健康记分卡 <span class="badge badge-ok">确定性聚合</span></h2>'
             '<div class="sc-hero">'
@@ -948,7 +993,7 @@ class HtmlReportRenderer:
             '<button class="tab-btn" onclick="scRefresh()">重新评估</button>'
             '<span class="sc-note" id="sc-status">离线快照（重新评估需经 coderef_report open_server 打开）</span>'
             '</div>'
-            + cov_warn +
+            + cov_warn + scope_note +
             '<div class="scroll-x"><table style="margin-top:18px"><thead><tr>'
             '<th>维度</th><th>权重</th><th>得分</th><th>来源工具</th>'
             '</tr></thead><tbody id="sc-rows">' + "".join(rows) + '</tbody></table></div>'

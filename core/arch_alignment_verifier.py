@@ -92,6 +92,14 @@ class ArchAlignmentVerifier:
             "mode": "incremental" if changed_files else "full",
             "changed_files": changed_files or [],
             "score": total,
+            # 定标健康度：stale 时对齐分是「拿旧目标量今天的代码」，不能当代码问题。
+            # 外部审计多次把 0.28 分读成代码不合格，这里显式给出机器可读状态。
+            "target_health": gap_result.get("target_health") or {},
+            "score_status": ("stale_target"
+                             if (gap_result.get("target_health") or {}).get("stale")
+                             else "ok"),
+            "score_note": ((gap_result.get("target_health") or {}).get("warning")
+                           or ""),
             "dimensions": dimensions,
             "gaps": gaps,
             "remaining": {
