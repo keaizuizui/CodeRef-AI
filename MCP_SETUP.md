@@ -51,6 +51,14 @@ $env:CODEREF_BASE_URL="https://api.deepseek.com"
 $env:CODEREF_MODEL="deepseek-flash"
 ```
 
+> 只对当前窗口生效。若要让**所有 MCP 客户端/所有项目**共用同一 Key，写进用户级环境变量（永久生效，重启终端与 MCP 服务后读取）：
+
+```powershell
+setx CODEREF_API_KEY "your-api-key"
+setx CODEREF_PROVIDER "deepseek"
+setx CODEREF_MODEL "deepseek-flash"
+```
+
 ### 方式二：交互式配置（Windows）
 
 ```bash
