@@ -74,6 +74,7 @@ description: 治理主链场景化 Skill。把 CodeRef-AI 的 MCP 工具收敛�
 - **梦只出草稿**：梦最多提供 `target` / `refactor` 草稿（`hypothesis`）；定标、差距分析、验证结论仍必须走确定性工具，不得把梦的草稿当已确认的目标架构。
 - **关键决策后 seed**：定标方向、真身收敛取舍、`coderef_verify_findings` 的验证结论等影响后续的决策落定后，seed 1–3 条（每条 ≤200 字）。
 - **不自动补梦**：本链不调用 `coderef_dream(action=run)`。
+- **草稿需确认**：`refactor_draft` 草稿用 `coderef_dream(action=drafts)` 读取，应用前必须走 `coderef_arch_verify` / `coderef_target_adopt` 并经用户确认。
 
 > 工具面：本 Skill 默认按 `full` profile 编写；启用 `lite` 时，未暴露的治理工具请通过 `coderef_plan/execute` 链调用，或临时切回 `full`。
 

@@ -4,6 +4,21 @@
 
 ---
 
+### v5.21.1 — 梦补齐 P1 叙事与 P2 草稿链
+
+> 背景：5.21.0 的梦只有 pitfall/recap/routing/triage 四类记忆 job；本版补齐「变更叙事、失败复盘」与 review/refactor/asset/noise 四类草稿，让梦能离线铺排但不自动执行。
+
+- **P1 叙事 job**：`change_narrative` 只复述事实（`claim_type=fact`、`kind=context`，最多 3 条），进 DREAM.md 的「当前目标」；`failure_postmortem` 只产根因假设（`advice`、`kind=pitfall`），永远 hypothesis，进「未决问题」。
+- **P2 草稿 job**：`review_draft` / `refactor_draft` / `asset_candidate` / `noise_proposal` 只写 `.coderef/dream/drafts/<job>-<ts>-<4hex>.json`，**不碰 notes.json / DREAM.md**；返回 `requires_confirmation=true`，`next_tools` 由服务端固定（忽略 LLM 返回）：
+  - review_draft → `coderef_review` / `coderef_verify_findings`
+  - refactor_draft → `coderef_arch_verify` / `coderef_target_adopt`
+  - asset_candidate → `coderef_asset` / `coderef_registry`
+  - noise_proposal → `coderef_scope` / `coderef_whitelist`
+- **新增 `coderef_dream(action=drafts)`**：按 job 过滤草稿摘要，或按 `draft_id` 读全文；非法 job / draft_id 结构化报错。
+- **草稿输入**：`_collect_git` 增加未提交变更文件清单（前 20 条路径，不读内容）；草稿类允许无显著原料，但必须有 git 变更/已有笔记/变更守卫/会话事实之一，否则 SKIP。
+- **诚实边界**：草稿条目统一 `advice + hypothesis`，证据核验失败只进 `rejected`；草稿永不自动进入治理库，必须用户确认后走 `next_tools` 确定性工具。
+- **验证**：新增 7 个 dream 用例；全量 pytest **418 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.21.0 — 梦 job 契约 + 工具面 profile + Skill 梦协议
 
 > 背景：梦在 5.20.x 只会做「踩坑/规则」一件事；主 AI 仍要面对 59 个工具。本版把梦扩成 4 类可复用 job，并给 MCP 工具面加 lite/full 两档，同时把「怎么用梦」写进 Skill。
