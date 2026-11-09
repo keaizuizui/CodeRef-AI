@@ -209,7 +209,13 @@ def _kg_built_ts(kg_db: str) -> Optional[float]:
 
 
 def _code_mtimes(project_path: str) -> List[float]:
-    """项目代码文件 mtime 列表（复用 CodeAnalyzer 的统一扫描范围）。"""
+    """项目代码文件 mtime 列表（复用 CodeAnalyzer 的统一扫描范围，30s 缓存）。"""
+    key = _norm(project_path)
+    now = time.time()
+    with _cache_lock:
+        hit = _mtimes_cache.get(key)
+        if hit and now - hit[0] <= _STALE_TTL:
+            return hit[1]
     try:
         from core.code_analyzer import CodeAnalyzer
         files = CodeAnalyzer().scan_directory(project_path)
@@ -222,12 +228,48 @@ def _code_mtimes(project_path: str) -> List[float]:
             out.append(os.path.getmtime(fp))
         except OSError:
             continue
+    with _cache_lock:
+        _mtimes_cache[key] = (now, out)
     return out
 
 
+def invalidate(project_path: str) -> None:
+    """清空某项目的盘点/陈旧度缓存（同步完成后调用，让下一次判定看到新图）。"""
+    key = _norm(project_path)
+    with _cache_lock:
+        _report_cache.pop(key, None)
+        _stale_cache.pop(key, None)
+        _mtimes_cache.pop(key, None)
+
+
+_mtimes_cache: Dict[str, tuple] = {}
+
+
 def query_staleness(project_path: str) -> dict:
-    """判断知识图谱是否落后于代码（查询类工具执行前调用）。"""
+    """判断知识图谱是否落后于代码（查询类工具执行前调用）。
+
+    结果带 30 秒进程内缓存：query 本身是轻量工具，每次调用都全量 walk 会把
+    它变成重工具；缓存在同一轮「判定 + 标注」两次调用间复用。
+    """
     project_path = os.path.abspath(project_path)
+    key = _norm(project_path)
+    now = time.time()
+    with _cache_lock:
+        hit = _stale_cache.get(key)
+        if hit and now - hit[0] <= _STALE_TTL:
+            return dict(hit[1])
+    info = _compute_staleness(project_path)
+    with _cache_lock:
+        _stale_cache[key] = (now, dict(info))
+    return info
+
+
+# 图谱 stale 判定缓存（秒）
+_STALE_TTL = 30
+_stale_cache: Dict[str, tuple] = {}
+
+
+def _compute_staleness(project_path: str) -> dict:
     cfg = guard_config(project_path)["query"]
     kg_db = _kg_db_path(project_path)
     built_ts = _kg_built_ts(kg_db)

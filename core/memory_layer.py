@@ -544,6 +544,12 @@ class MemoryLayer:
         else:
             kg_stats = self._update_knowledge_graph(project_path, analysis,
                                                     ast_results, incremental)
+        # 图谱更新后清空新鲜度缓存，让紧随其后的 query 立刻看到新图（5.19.1）
+        try:
+            from core.freshness_guard import invalidate
+            invalidate(project_path)
+        except Exception:  # noqa: BLE001
+            pass
 
         # 更新语义知识库（语义记忆，Ollama 缺失自动降级）
         kb_status = self._index_kb(project_path)
