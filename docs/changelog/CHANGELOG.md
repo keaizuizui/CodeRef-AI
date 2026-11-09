@@ -4,6 +4,22 @@
 
 ---
 
+### v5.18.6 — 外部审计反馈：关系层解析、诚实标签与口径统一
+
+> 来源：外部 AI 在 `d:\kuajingdianshang` 使用 v5.18.5 的完整报告（两份，含逐条证据）。本批修复工具侧缺陷；调用方用法问题另在 skill 中加防线。
+
+- **CALLS 边解析（高）**：`_find_node_by_name` 不再做任意子串回退（`LIKE '%bool%'`），改为「精确 → 点号边界后缀（唯一）」，并对内置函数/常用属性名直接丢弃。消除 `bool → *_boolean_choice_test`、`max → chapter_max_tokens_test` 一类假边（外部实测占可核验边 14.77%），避免污染 SCC / fan_in / arch_gap。
+- **verify_findings 标签（高）**：新增 `file_exists_only`（中文「仅文件存在」）。只有文件存在、无符号可核验时不再返回 `confirmed`；tally 与 summary 同步新增该计数。
+- **interpret 数据源（高）**：`_load_audit_findings` 的候选加入 `<project>/.coderef/audit_findings_<hash>.json`（U-51 写入端），避免继续读旧 `coderef-report/` 导致「2 个月前数据当现状」；`health` 输出新增 `data_age_days` / `data_stale`，过期提示不再只限旧版全局缓存。
+- **gov_issues(view=open)（高）**：`open` 改为真正的「未终结」过滤（排除 Archived / Rejected），不再等价于不过滤。
+- **change_guard（高）**：diff 单元只处理 `.py/.pyi`，纯文档提交不再产出 `capability_missing` 等误报。
+- **frontend 范围（高）**：`TOOL_OUTPUT_DIRS` 补 `.coderef`，自家生成的画布/评估台 HTML 不再计入按钮与 findings。
+- **architecture 产物目录**：默认落 `<project>/.coderef/report`（与 audit/report/docs 同源），不再写旧共享 `coderef-report/`；返回新增 `findings_note`，明确「本工具不产出代码审计 findings」。
+- **扫描范围**：`.ms-playwright`（Playwright 浏览器缓存）加入忽略集合，第三方 Chromium JS 不再进图谱。
+- **arch_gap 定标匹配**：`target_modules` 支持「子工程前缀」唯一后缀匹配（`入口/web_gui` ↔ `chonggou/入口/web_gui`），仍禁止多候选歧义匹配。
+- **LLM Key 共享**：配置查找新增 `CODEREF_CONFIG_PATH` 与 `~/.coderef/config.json`，多副本/多项目共用同一 Key（发布包不含 `config/config.json` 时不再断供）。
+- **验证**：新增 5 例外审回归用例（verify 标签、change_guard 文档过滤、frontend 产物排除、interpret 新落点、用户级 Key）；全量 pytest **274 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.18.5 — CodeRabbit 复审：扫描口径修正
 
 > 承接对 5.18.1–5.18.4 的复审（2 条 finding，均落在扫描口径）。

@@ -211,6 +211,8 @@ class CodeAnalyzer:
         'vendor', 'bundle', 'node_modules/.store',
         # CodeRef 自身运行时产物目录（分析它们只会把报告当代码审）
         '.coderef', '.gitnexus', 'coderef-report', 'coderef-wiki',
+        # 浏览器二进制缓存（Playwright 自带 Chromium 脚本，非项目代码）
+        '.ms-playwright',
     }
 
     # 仅在项目根出现时才忽略的运行时目录：同名子包（如 src/cache、app/cache）

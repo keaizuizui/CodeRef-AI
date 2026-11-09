@@ -169,3 +169,15 @@ description: 治理主链场景化 Skill。把 CodeRef-AI 的 MCP 工具收敛�
 - **不要只靠可达性判真身**：双孪生入口 flow_verify 结果同构，必须叠加 fan_in（who-calls-me）判定。
 - **不要动 git 库/备份**：治理动作前确认目标不在 git 库范围内（项目硬约束）。
 - **所有工具都要传 `project_path`**：必填参数，指向被测项目路径。
+
+## 定标前置体检（② define-target 必做，v5.18.6 起）
+
+外部实测（`kuajingdianshang`）直接沿用 2 个月前的 v1 `target_arch`，得到 0% 角色覆盖、0.29 对齐度，然后把这些数字当成代码问题。按以下顺序做前置体检：
+
+1. **先读 `arch_gap` 的 `target_health`**：
+   - `stale=true`（缺失比例 ≥ 50%）→ 停止后续 `arch_gap` / `arch_verify` 解读，先 `coderef_target_arch_set` 重新定标；
+   - `specs_missing` 的具体路径写进回报，不要用"对齐度低"概括。
+2. **`role_boundary` 报"未配置 role_keywords"是诚实阻断**，不是"无问题"，也不是"工具坏了"；补 `role_keywords` 后再跑。
+3. **`interpret(health)` 先看 `data_stale`**：`true` 时先重跑 `coderef_audit`，否则会拿旧审计当现状。
+4. **`architecture` 的 `findings=0` 不能当审计结论**（见返回的 `findings_note`），代码 findings 走 `coderef_audit` / `coderef_scan`。
+5. **备份/镜像目录先 whitelist**：`_refactor_backup`、`backup_v*` 等用 `coderef_whitelist` 的 `dir` 条目排除，避免不同工具口径差异被误读成"工具互相矛盾"。

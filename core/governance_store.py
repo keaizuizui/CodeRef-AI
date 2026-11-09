@@ -442,8 +442,12 @@ class GovernanceStore:
         if status:
             sql += " AND status=?"
             args.append(status)
-        elif view in ("open", "all"):
+        elif view == "all":
             pass
+        elif view == "open":
+            # open = 尚未终结（Archived / Rejected 之外的都算），不是"不过滤"
+            sql += " AND status NOT IN (?,?)"
+            args += [STATUS_ARCHIVED, STATUS_REJECTED]
         elif view == "rejected":
             sql += " AND status=?"
             args.append(STATUS_REJECTED)

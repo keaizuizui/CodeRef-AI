@@ -825,7 +825,10 @@ class Pipe:
         r = PipeResult(project_path=project_path)
         # 报告默认落 project_path/coderef-report/（对齐 audit/docs），不再落 MCP 进程 cwd：
         # 避免真实多项目/跨仓协作时把 coderef_arch_*.md 写进对方主仓（r6 红线段落）
-        out = output_dir or os.path.join(project_path, "coderef-report")
+        # 与 audit/report/docs 同源：默认落项目侧 .coderef/report（U-51 隔离），
+        # 不再写旧共享目录 coderef-report/（否则多项目 last-writer-wins）
+        from core.report_renderer import default_report_root
+        out = output_dir or default_report_root(project_path)
 
         try:
             tf, tl, analysis = self._scan(project_path)

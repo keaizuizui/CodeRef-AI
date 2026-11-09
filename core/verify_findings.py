@@ -46,11 +46,13 @@ VERDICT_CONFIRMED = "confirmed"            # 确证：论断引用的代码目�
 VERDICT_REFUTED = "refuted"                # 证伪：论断引用的代码目标在项目中不存在
 VERDICT_PARTIAL = "partially_confirmed"    # 部分确证：部分符号存在
 VERDICT_UNVERIFIABLE = "unverifiable"      # 无法核验：无引用/图谱缺失/静态查不到
+VERDICT_FILE_ONLY = "file_exists_only"     # 仅文件存在：无可核验符号，不代表论断成立
 
 VERDICT_LABEL_ZH = {
     VERDICT_CONFIRMED: "确证",
     VERDICT_REFUTED: "证伪",
     VERDICT_PARTIAL: "部分确证",
+    VERDICT_FILE_ONLY: "仅文件存在",
     VERDICT_UNVERIFIABLE: "存疑",
 }
 
@@ -112,8 +114,9 @@ class EvidenceLabeler:
                 return VERDICT_PARTIAL, "论断所指文件存在，但代码符号未能在静态图谱中核验到（图谱可能不完整，不代表符号不存在）"
             return VERDICT_UNVERIFIABLE, "未能找到论断所指的代码符号（静态图谱可能不完整，不代表一定不存在）"
         else:
-            # 只有文件引用且文件存在，无符号可核验
-            return VERDICT_CONFIRMED, "论断所指文件在项目中存在，但未提取到可进一步核验的符号"
+            # 只有文件引用且文件存在、无符号可核验：只能证明"文件存在"，
+            # 不能证明论断成立（外部审计把 3 条误报当成 confirmed 即此语义）。
+            return VERDICT_FILE_ONLY, "论断所指文件在项目中存在，但未提取到可核验的符号（仅可证明文件存在）"
 
         if in_pipeline is not None and not in_pipeline:
             entry_name = entry or "指定入口"
@@ -459,6 +462,7 @@ class FindingsVerifier:
         n_refuted = sum(1 for r in results if r["verdict"] == VERDICT_REFUTED)
         n_partial = sum(1 for r in results if r["verdict"] == VERDICT_PARTIAL)
         n_unverifiable = sum(1 for r in results if r["verdict"] == VERDICT_UNVERIFIABLE)
+        n_file_only = sum(1 for r in results if r["verdict"] == VERDICT_FILE_ONLY)
         return {
             "ok": True,
             "graph_stats": {"has_kg": True, "db": self.db_path},
@@ -467,12 +471,13 @@ class FindingsVerifier:
                 "confirmed": n_confirmed,
                 "refuted": n_refuted,
                 "partially_confirmed": n_partial,
+                "file_exists_only": n_file_only,
                 "unverifiable": n_unverifiable,
             },
             "results": results,
             "summary": (
                 f"共核验 {len(results)} 条论断：确证 {n_confirmed}，证伪 {n_refuted}，"
-                f"部分确证 {n_partial}，无法核验 {n_unverifiable}。"
+                f"部分确证 {n_partial}，仅文件存在 {n_file_only}，无法核验 {n_unverifiable}。"
                 f"确证仅代表论断引用的代码目标真实存在，不代表语义结论正确。"
             ),
         }

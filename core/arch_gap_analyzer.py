@@ -173,13 +173,14 @@ def _match_module_ids(nodes: Dict[str, dict], project_path: str,
         # 含路径分隔符的 spec（模板展开出的模块级路径，如 domain/models）必须精确
         # 匹配整条相对路径；仅纯 basename spec（legacy）保留 basename 宽松兜底。
         # 否则 domain/models 的 basename 会误配到无关的 other/models（CodeRabbit）。
+        spec_ids: Set[str] = set()
         for nid, t in by_rel.get(ns, ()):
             if t == "module":
-                matched.add(nid)
+                spec_ids.add(nid)
         if "/" not in ns:
             for nid, t in by_base.get(ns, ()):
                 if t == "module":
-                    matched.add(nid)
+                    spec_ids.add(nid)
         # 目录 spec 自动展开：by_dir 只登记「确有模块位于该目录前缀下」的 key，
         # 且 O(1) 查索引而非逐 spec 全扫 by_rel（CodeRabbit 性能 major）。
         # 原始 spec 以 .py 结尾视为文件路径，跳过展开——否则 foo/bar.py 归一化后
@@ -187,7 +188,17 @@ def _match_module_ids(nodes: Dict[str, dict], project_path: str,
         if not raw.endswith(".py"):
             for nid, t in by_dir.get(ns, ()):
                 if t == "module":
-                    matched.add(nid)
+                    spec_ids.add(nid)
+        # 子工程前缀容错：多工程仓库的图谱模块常带顶层目录（chonggou/入口/web_gui），
+        # 而 target_arch 按业务目录写（入口/web_gui）。仅当后缀候选唯一时匹配，
+        # 避免 domain/models 同时存在于两个子工程时误归属。
+        if "/" in ns and not spec_ids:
+            suffix_keys = [k for k in by_rel if k.endswith("/" + ns)]
+            if len(suffix_keys) == 1:
+                for nid, t in by_rel[suffix_keys[0]]:
+                    if t == "module":
+                        spec_ids.add(nid)
+        matched |= spec_ids
     return matched
 
 
@@ -1052,6 +1063,29 @@ def analyze_gap(project_path: str, target_arch: Dict[str, Any],
     alignment, module_assigned = _build_alignment(
         roles, role_has_impl, nodes, assigned_ids, project_path)
     result["alignment"] = alignment
+
+    # 定标健康度：target_arch 声明的模块有多少在项目里真的存在。
+    # 外部审计用过期 v1 定标得到 0% 覆盖，把"定标过期"误读成"代码不合格"；
+    # 这里提前给出可判读的证据（缺失比例 + 明确提示）。
+    specs_total = 0
+    specs_missing = 0
+    for role in roles:
+        for spec in role.get("target_modules") or []:
+            specs_total += 1
+            if not _module_exists(project_path, spec, nodes, idx=mod_index):
+                specs_missing += 1
+    missing_ratio = (specs_missing / specs_total) if specs_total else 0.0
+    target_health = {
+        "specs_total": specs_total,
+        "specs_missing": specs_missing,
+        "missing_ratio": round(missing_ratio, 3),
+        "stale": bool(specs_total and missing_ratio >= 0.5),
+        "warning": ("target_arch 中超过一半的 target_modules 在项目中不存在，"
+                    "定标可能已过期；0% 覆盖度不一定是代码问题，"
+                    "请先用 coderef_target_arch_set 重新定标"
+                    if (specs_total and missing_ratio >= 0.5) else ""),
+    }
+    result["target_health"] = target_health
 
     # 域间业务流量透视（②）：domain_flow 三层 + flow_suggestions 兼容简表
     flow_scope = (target_arch.get("business_flow") or {}).get("scope") or {}

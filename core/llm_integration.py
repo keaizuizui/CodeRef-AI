@@ -102,14 +102,18 @@ def _load_llm_config_from_settings() -> LLMConfig:
             max_tokens=_safe_int(os.environ.get("CODEREF_MAX_TOKENS"), 4096),
         )
 
-    # ── 优先级 2：config/config.json（旧版配置文件，兼容） ──
+    # ── 优先级 2：用户级配置 + config/config.json（旧版配置文件，兼容） ──
     try:
         config_paths = [
+            # 用户级共享配置：多份 CodeRef 副本（工作仓 / 测试仓 / 发布包）共用同一 key。
+            # 发布包里通常不含 config/config.json（密钥不入库），这是唯一稳定落点。
+            os.environ.get("CODEREF_CONFIG_PATH", ""),
+            os.path.join(os.path.expanduser("~"), ".coderef", "config.json"),
             os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "config.json"),
             # 支持从项目根目录查找
             os.path.join(os.getcwd(), "config", "config.json"),
         ]
-        for cfg_path in config_paths:
+        for cfg_path in [p for p in config_paths if p]:
             if os.path.exists(cfg_path):
                 with open(cfg_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)

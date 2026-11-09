@@ -59,6 +59,28 @@ setup.bat
 
 按提示填写 API 信息，配置将保存到 `config/config.json`（已加入 `.gitignore`）。
 
+### 方式三：用户级共享配置（多副本 / 多项目共用同一 Key，推荐）
+
+CodeRef 会按以下顺序查找 LLM 配置，命中即用：
+
+1. 环境变量 `CODEREF_API_KEY`
+2. 环境变量 `CODEREF_CONFIG_PATH` 指向的文件
+3. **`~/.coderef/config.json`（用户级共享配置）**
+4. 安装目录的 `config/config.json`
+5. 当前工作目录的 `config/config.json`
+
+发布包通常不含 `config/config.json`（密钥不入库），因此同一台机器上的多个 CodeRef 副本（工作仓 / 测试仓 / MCP 安装目录）建议把配置放到用户级路径：
+
+```bash
+mkdir -p ~/.coderef && cp config/config.json ~/.coderef/config.json   # Linux / macOS
+```
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$HOME\.coderef"; Copy-Item config\config.json "$HOME\.coderef\config.json"
+```
+
+这样无论 MCP 服务从哪个项目目录启动，都能读到同一份 Key。
+
 ### 使用本地 Ollama（免费，无需 API Key）
 
 先确保 Ollama 已安装并运行，然后设置：
@@ -361,7 +383,7 @@ print(client.models.list())
 ```
 AI 编程助手 (Trae / Claude Desktop / Cursor)
    │
-   └── coderef-ai MCP Server (v5.18.5, 52 个工具)
+   └── coderef-ai MCP Server (v5.18.6, 52 个工具)
           │
           ├── coderef_audit ─── 11 检测器管线
           │      ├── 治理审计 (governance_audit)

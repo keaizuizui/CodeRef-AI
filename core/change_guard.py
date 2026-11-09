@@ -561,6 +561,10 @@ class ChangeGuard:
                 continue
             # ：去掉 a/ b/ 前缀并解码 UTF-8 字节转义，输出可读相对路径
             file_rel = self._clean_diff_path(file_rel)
+            # 只对代码文件判退化：.md/文档里的 validate/retry 字样不是代码能力，
+            # 否则纯文档提交会产出 HIGH/MEDIUM 误报（外部审计实测 6 条全落 .md）
+            if not file_rel.lower().endswith((".py", ".pyi")):
+                continue
             abs_path = os.path.join(project_path, file_rel)
             new_content = _read_file_content(abs_path)
 

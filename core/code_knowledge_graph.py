@@ -20,6 +20,20 @@ from typing import Dict, List, Optional, Tuple, Any
 
 from loguru import logger
 
+# 内置函数/常用属性名：它们不是项目符号，按名字匹配会把 bool/max/split/warn
+# 连到任意含该子串的模块或方法（外部审计实测 14.77% CALLS 假边）。
+_BUILTIN_CALL_NAMES = {
+    "bool", "int", "str", "float", "list", "dict", "set", "tuple", "bytes",
+    "len", "max", "min", "sum", "abs", "round", "pow", "divmod", "complex",
+    "print", "open", "input", "range", "enumerate", "zip", "map", "filter",
+    "sorted", "reversed", "isinstance", "issubclass", "getattr", "setattr",
+    "hasattr", "delattr", "super", "type", "id", "hash", "repr", "format",
+    "any", "all", "iter", "next", "vars", "dir", "callable", "slice",
+    "ord", "chr", "hex", "oct", "bin", "frozenset", "property", "memoryview",
+    "insert", "append", "extend", "split", "join", "strip", "lower", "upper",
+    "warn", "warning", "resolve", "get", "put", "post", "read", "write",
+}
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 数据结构
@@ -807,15 +821,32 @@ class CodeKnowledgeGraph:
              json.dumps(edge.props, ensure_ascii=False)))
 
     def _find_node_by_name(self, name: str) -> Optional[str]:
+        """按符号名解析目标节点：精确优先，其次点号边界后缀，禁止任意子串。
+
+        外部审计实测：旧实现用 `name LIKE '%bool%'` 之类的全局子串回退，
+        会把内置调用 `bool` 连到 `*_boolean_choice_test`、把 `max` 连到
+        `chapter_max_tokens_test`，造成 14.77% 假 CALLS 边并污染 SCC / fan_in。
+        """
+        name = (name or "").strip()
+        if not name:
+            return None
         row = self._conn.execute(
             "SELECT id FROM nodes WHERE name=? LIMIT 1", (name,)).fetchone()
         if row:
             return row["id"]
-        # 模糊回退 ：方法调用侧 name 常带类/模块前缀（如 Bot.run_bot），
-        # 精确匹配 name='run_bot' 会失败而漏建 CALLS 边。仅当 LIKE 候选唯一时
-        # 选中，避免多类同名方法跨类误归属；多候选则放弃。
+        short = name.rsplit(".", 1)[-1]
+        if not short or (short == name and short in _BUILTIN_CALL_NAMES):
+            return None
+        if short != name:
+            row = self._conn.execute(
+                "SELECT id FROM nodes WHERE name=? LIMIT 1", (short,)).fetchone()
+            if row:
+                return row["id"]
+        # 仅接受「点号边界」后缀：Cls.method / mod.func；不接受任意子串。
+        # 例：full_name=Bot.run_bot 可命中 name=Bot.run_bot（已被精确分支捕获），
+        # 或唯一命中 name=run_bot；而 warnings.warn 不会命中 browser_manager_warning_test。
         candidates = self._conn.execute(
-            "SELECT id FROM nodes WHERE name LIKE ?", (f"%{name}%",)).fetchall()
+            "SELECT id FROM nodes WHERE name LIKE ?", (f"%.{short}",)).fetchall()
         if len(candidates) == 1:
             return candidates[0]["id"]
         return None

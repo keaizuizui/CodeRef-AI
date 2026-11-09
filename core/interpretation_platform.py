@@ -177,12 +177,14 @@ def _describe_data_source(data: Optional[Dict]) -> str:
 
 
 def _stale_audit_note(data: Dict) -> str:
-    """兜底全局缓存 scan_ts 距今超过 48 小时 → 追加"审计数据较旧"警示；否则空串。"""
-    if data.get("_source_kind") != "fallback_global":
-        return ""
+    """审计快照距今超过 48 小时 → 追加"审计数据较旧"警示；否则空串。
+
+    不再只限旧版全局缓存：任何来源（含项目侧哈希文件）过期都可能被读成
+    "当前健康分"，外部审计实测 interpret 读到 2 个月前数据却按现状解读。
+    """
     age_h = _scan_age_hours(data)
     if age_h is not None and age_h > _STALE_AUDIT_HOURS:
-        return (f" 注意：审计数据较旧（来自旧版全局缓存，生成于 "
+        return (f" 注意：审计数据较旧（生成于 "
                 f"{data.get('scan_ts')}，距今约 {int(age_h)} 小时），"
                 f"建议重跑 coderef_audit 刷新。")
     return ""
@@ -238,6 +240,10 @@ def _load_audit_findings(project_path: str) -> Optional[Dict]:
     import hashlib
     phash = hashlib.md5(project_path.encode()).hexdigest()[:12]
     hashed_candidates = [
+        # v5.18 起的项目侧隔离落点（U-51 写入端）：必须优先读取，否则
+        # 新审计结论会被旧版 coderef-report/ 的历史快照掩盖（外部审计实测
+        # interpret(health) 读到 2 个月前的 scan_ts）。
+        os.path.join(project_path, ".coderef", f"audit_findings_{phash}.json"),
         os.path.join(project_path, "coderef-report",
                      f"audit_findings_{phash}.json"),
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -414,6 +420,10 @@ class InterpretationPlatform:
             "top_risks": top_risks,
             "data_source": _describe_data_source(data),
             "scan_ts": data.get("scan_ts"),
+            # 结构化新鲜度：调用方（人和 AI）可据此决定是否重跑审计
+            "data_age_days": (round(_scan_age_hours(data) / 24, 1)
+                              if _scan_age_hours(data) is not None else None),
+            "data_stale": bool((_scan_age_hours(data) or 0) > _STALE_AUDIT_HOURS),
             "kg_stats": kg_stats,
             "prompt": prompt,
             "summary": summary,

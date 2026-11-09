@@ -766,6 +766,10 @@ def _arch(a) -> str:
             "findings": len(r.findings),
             "elapsed": getattr(r, "elapsed", 0),
         },
+        # 诚实标注：本工具只做结构分析（图谱/工作流/画布），不产出代码审计 findings。
+        # 外部审计把 findings=0 误读成"无问题"，与 coderef_audit 的 687 条对比后质疑工具。
+        "findings_note": ("coderef_architecture 仅做结构分析，不产出代码审计 findings；"
+                          "代码问题请用 coderef_audit / coderef_scan 查看"),
         "errors": getattr(r, "errors", []),
     }, ensure_ascii=False)
 
