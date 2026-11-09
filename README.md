@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.19.6** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.19.7** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -101,7 +101,8 @@ CodeRef 不靠宣称，靠可复现的硬指标（完整方法见后文「可靠
 
 编程 AI 从「编排 58 个工具」降级为「调用 4 个调度工具」，中间工具返回不再逐条进主 AI 上下文：
 
-- **`coderef_plan`**：意图（probe / single_audit / recover / governance / asset）→ 计划卡（步骤、预计工具数与时长、用户决策点），纯规划不执行。
+- **`coderef_plan`**：意图（probe / single_audit / recover / governance / asset / remind）→ 计划卡（步骤、预计工具数与时长、用户决策点），纯规划不执行。
+- **`remind` 纪律复盘**：`coderef_execute(intent=remind)` 由 dispatcher 进程内检查「操作记忆是否恢复、变更守卫是否覆盖当前工作区、图谱是否落后、审计产物是否过期」，返回 `forgotten / passed / unknown` 三类事实——主 AI 不必靠上下文回忆自己漏了什么。
 - **`coderef_execute`**：按计划或意图执行，逐步过前置闸门；缺 recover 先 recover、图旧先 sync（违规自动补齐），G-C 定标缺失等需用户决策的步骤**暂停浮出**，不替用户做治理决策；默认后台执行返回 `task_id`。
 - **`coderef_dispatch_status` / `coderef_dispatch_report`**：前者看当前步骤与闸门记录，后者取最终摘要信封（结论 + freshness + KL + `owner_actions` + 折叠的步骤索引 + 上下文节省比）。
 - **链定义**：`core/dispatch_chains.yaml` 是唯一事实源（L1/L2/L3 步骤、失败策略、决策点）。轨迹落盘 `.coderef/dispatch/<task_id>.json`；YAML 缺失/损坏时 `coderef_plan` 明确报错并给出裸工具回退建议，58 个工具照常可用。

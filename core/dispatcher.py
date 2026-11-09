@@ -146,12 +146,14 @@ def plan(intent: str, project_path: str, intent_text: str = "") -> dict:
     steps = []
     decision_points = []
     for step in chain.get("steps") or []:
-        if not isinstance(step, dict) or not step.get("tool"):
+        if not isinstance(step, dict) or not (step.get("tool") or step.get("check")):
             continue
-        item = {"id": step.get("id") or step["tool"],
-                "tool": step["tool"],
+        item = {"id": step.get("id") or step.get("tool") or step.get("check"),
+                "tool": step.get("tool") or f"internal:{step['check']}",
                 "args": dict(step.get("args") or {}),
                 "fail": step.get("fail", "stop")}
+        if step.get("check"):
+            item["check"] = step["check"]
         if step.get("requires_user"):
             item["requires_user"] = True
             item["decision"] = step.get("decision", "")
@@ -217,6 +219,10 @@ def _summarize(raw: str) -> dict:
     for key in ("tool", "verdict", "total", "errors", "envelope"):
         if key in data:
             summary[key] = data.get(key)
+    # 纪律复盘的三类事实需要原样传递给 report，不能被摘要吞掉
+    for key in ("forgotten", "passed", "unknown"):
+        if isinstance(data.get(key), list):
+            summary[key] = data[key]
     if isinstance(data.get("findings"), list):
         summary["findings"] = len(data["findings"])
     if isinstance(data.get("summary"), dict):
@@ -312,7 +318,7 @@ def execute(plan_card: dict, runner: Callable, project_path: str,
     _write_json(_trace_path(project_path, task_id), trace)
 
     for step in steps:
-        sid = step.get("id") or step.get("tool")
+        sid = step.get("id") or step.get("tool") or step.get("check")
         trace["current_step"] = sid
         entry = {"id": sid, "tool": step.get("tool", ""),
                  "started_at": _now(), "elapsed": 0.0, "status": "running"}
@@ -333,6 +339,31 @@ def execute(plan_card: dict, runner: Callable, project_path: str,
             return {"status": "paused", "task_id": task_id,
                     "paused": trace["paused"], "trace_path":
                     _trace_path(project_path, task_id)}
+
+        # 内部检查步骤（如 discipline 复盘）：进程内执行，不经 MCP 工具调用
+        if step.get("check"):
+            t0 = time.time()
+            try:
+                if step["check"] == "discipline":
+                    from core.discipline_recall import recall
+                    raw = json.dumps(recall(project_path), ensure_ascii=False)
+                else:
+                    raise ValueError(f"未知检查步骤: {step['check']}")
+                summary = _summarize(raw)
+                trace["raw_chars_total"] += len(raw)
+                entry["status"] = "failed" if _failed(summary) else "completed"
+                entry["summary"] = summary
+            except Exception as e:  # noqa: BLE001 —— 检查失败按失败策略处理
+                entry["status"] = "failed"
+                entry["error"] = str(e)
+            entry["elapsed"] = round(time.time() - t0, 2)
+            trace["steps"].append(entry)
+            _write_json(_trace_path(project_path, task_id), trace)
+            progress.step(sid, entry["status"])
+            if entry["status"] == "failed" and step.get("fail", "stop") == "stop":
+                trace["status"] = "failed"
+                break
+            continue
 
         args = _render_args(step.get("args") or {}, project_path)
         t0 = time.time()
@@ -428,8 +459,19 @@ def report(project_path: str, task_id: str) -> dict:
     blocked: List[dict] = []
     owner_actions: Dict[str, List[str]] = {"coderef": [], "consumer": []}
     freshness = None
+    step_verdict = ""
+    forgotten: List[dict] = []
+    unknown: List[dict] = []
+    passed: List[dict] = []
     for s in trace.get("steps") or []:
-        env = (s.get("summary") or {}).get("envelope")
+        summary = s.get("summary") or {}
+        if summary.get("verdict"):
+            step_verdict = str(summary["verdict"])
+        for bucket, target in (("forgotten", forgotten), ("unknown", unknown),
+                               ("passed", passed)):
+            if isinstance(summary.get(bucket), list):
+                target.extend(summary[bucket])
+        env = summary.get("envelope")
         if not isinstance(env, dict):
             continue
         envs.append(env)
@@ -446,7 +488,7 @@ def report(project_path: str, task_id: str) -> dict:
 
     status_text = trace.get("status", "")
     usable = status_text == "completed" and not blocked
-    verdict = {
+    verdict = step_verdict or {
         "completed": f"调度完成：{trace.get('intent')} 链共 "
                      f"{len(trace.get('steps') or [])} 步",
         "paused": "调度暂停：存在需要用户决策的步骤，链未继续",
@@ -473,6 +515,10 @@ def report(project_path: str, task_id: str) -> dict:
         "envelope": env,
         "paused": trace.get("paused"),
         "gates": trace.get("gates") or [],
+        # remind 链的复盘事实提升到顶层，主 AI 不必展开 step_index
+        "forgotten": forgotten,
+        "unknown": unknown,
+        "passed": passed,
         "step_index": [
             {"id": s.get("id"), "tool": s.get("tool"),
              "status": s.get("status"), "elapsed": s.get("elapsed"),
