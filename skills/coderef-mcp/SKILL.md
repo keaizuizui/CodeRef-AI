@@ -18,6 +18,22 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
    - `coderef_eval` 的评分是 **AI 判断，非确定性事实，仅软门禁**；不要把它当确定性结论，也不要用它覆盖确定性工具结果。
    - 你持有一条 LLM/CodeRabbit 论断时，先 `coderef_verify_findings` 核验再采信，避免把未核验的语义论断当事实。
 
+## 梦协议（5.20.x / 5.21.x）
+
+> 梦（`coderef_dream`）是离线归约出的**假设**，不是第二个 agent：它不持有工具、不执行审计、不改代码，也不产出任何替代确定性工具的结论。以下是使用梦的强制协议。
+
+1. **开工前先看梦**：先看 `context.memory_digest.dream`；若没有，调用 `coderef_dream(action=read, limit=5)`。把梦当假设，不要当审计结论。
+2. **关键节点 seed**（最多 1–3 条，每条 ≤200 字）：
+   - 用户纠正了你的判断；
+   - 闸门 / 变更守卫拦截了问题（如 `coderef_change_guard` 报退化）；
+   - `coderef_verify_findings` 推翻了某个论断；
+   - 你做了一个会影响后续的决策。
+3. **不自动 `run`**：只有用户明确要求，或 `dream.run_on_startup=true` 时才后台补梦；不要自作主张调用 `coderef_dream(action=run)`。
+4. **引用梦必须标注假设**：写“这是梦里的假设，证据是 …”，不得转述为事实，也不得把 `hypothesis` 写进「已验证规则」。
+5. **冲突以工具为准**：梦与确定性工具冲突时，以工具结论为准，并 seed 一条“梦错了”的 pitfall。
+
+> 工具面提示：`CODEREF_TOOL_PROFILE=lite` 时只暴露 12 个入口；本文提到的 full-only 工具请通过 `coderef_plan/execute` 链调用，或临时切回 `full`。
+
 ## 工具速查（按引擎）
 
 ### 审计引擎 — 全维度体检 + 图谱 + 文档

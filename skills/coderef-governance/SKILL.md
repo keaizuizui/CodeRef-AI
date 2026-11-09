@@ -68,6 +68,15 @@ description: 治理主链场景化 Skill。把 CodeRef-AI 的 MCP 工具收敛�
 
 > ①/②/⑤ 由人工/测试（或负责人陪同 AI）执行以「捋对管线」；③ 由编程 AI 执行；④ 由编程 AI 自证 + 测试复核。
 
+### 梦钩子
+
+- **先看梦再定标**：进入主链前先读 `context.memory_digest.dream` 或 `coderef_dream(action=read, limit=5)`，只从中取「上次治理目标 / 未决问题 / pitfall」作为开工线索。
+- **梦只出草稿**：梦最多提供 `target` / `refactor` 草稿（`hypothesis`）；定标、差距分析、验证结论仍必须走确定性工具，不得把梦的草稿当已确认的目标架构。
+- **关键决策后 seed**：定标方向、真身收敛取舍、`coderef_verify_findings` 的验证结论等影响后续的决策落定后，seed 1–3 条（每条 ≤200 字）。
+- **不自动补梦**：本链不调用 `coderef_dream(action=run)`。
+
+> 工具面：本 Skill 默认按 `full` profile 编写；启用 `lite` 时，未暴露的治理工具请通过 `coderef_plan/execute` 链调用，或临时切回 `full`。
+
 ### 场景 ① map-pipeline · 捋管线（人工/测试）
 
 **目标**：用一个真实业务入口，理清它当下实际怎么走，产出人可确认的管线清单。

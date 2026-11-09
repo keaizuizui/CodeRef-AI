@@ -25,6 +25,15 @@ description: "治理主链「半自动确认版」。在 coderef-governance 五�
 3. **未确认不进下一阶段**：用户在门处未答复或选调整而未定稿前，**不得自动执行下一阶段动作**（纯读例外见上）。
 4. **工具失败诚实转述**：某工具被自身缺陷挡住（如 flow_canvas 特殊符号解析错误）时，如实说明原因与替代方案（如 flow_verify 补位），**不静默绕行**，并在交付物中标注。
 
+### 梦钩子
+
+- **先看梦再摸底**：开工前读 `context.memory_digest.dream` 或 `coderef_dream(action=read, limit=5)`，取上次治理目标与未决问题作为线索。
+- **梦只出草稿**：梦提供的 `target` / `refactor` 草稿只是假设，定标、差距、验证仍由确定性工具给出，不得把草稿当已确认结论。
+- **确认门带梦的未决问题**：M-FW / M2 / M3a 等确认门提问时，可把梦的 `open_questions` 一并交给用户判断，但必须标注“这是梦里的假设，证据是 …”。
+- **决策后 seed**：定标、治理范围、豁免等关键决策落定后，seed 1–3 条（每条 ≤200 字）；不自动调用 `coderef_dream(action=run)`。
+
+> 工具面：本 Skill 默认按 `full` profile 编写；启用 `lite` 时，未暴露的治理工具请通过 `coderef_plan/execute` 链调用，或临时切回 `full`。
+
 ## 五阶段 × 确认门（复用 governance 工具链）
 
 > 工具与编排细节与 `coderef-governance` 完全一致，本 SKILL 只标注每阶段尾的**确认门**。加载本 SKILL 前先读 `coderef-governance/SKILL.md` 获取工具参数与编排 gate（G1→L1 probe / G2→L3 asset / G3 回主链）全文，两版共享同一工具链。

@@ -4,6 +4,18 @@
 
 ---
 
+### v5.21.0 — 梦 job 契约 + 工具面 profile + Skill 梦协议
+
+> 背景：梦在 5.20.x 只会做「踩坑/规则」一件事；主 AI 仍要面对 59 个工具。本版把梦扩成 4 类可复用 job，并给 MCP 工具面加 lite/full 两档，同时把「怎么用梦」写进 Skill。
+
+- **梦 job 契约**：`coderef_dream(action=run, job=pitfall|recap|routing|triage)`。`pitfall` 默认保持旧行为；`recap` 产出当前目标/上次进度/开工建议；`routing` 产出「当 X，先用 Y」联想；`triage` 产出「先看什么」排序。
+- **claim_type 诚实边界**：笔记新增 `claim_type=fact|advice` 与 `job`。`advice` 永远只能是 `hypothesis`，即使证据可核验也不得标 `verified`；只有 verified 事实进入「已验证规则」。
+- **DREAM.md v2**：六节——当前目标 / 本次开工建议 / 已验证规则 / 坑 / 联想 / 未决问题；triage 建议最多 3 条、标「（假设）」，仍受 ≤800 token 预算约束。
+- **记忆摘要**：`memory_digest` 先注入 triage「梦·开工建议」，再放 verified 笔记，最后补操作记忆；`remind` 的 `dream` 段同步可读。
+- **工具面 profile**：新增 `core/tool_profile.py` 与 `CODEREF_TOOL_PROFILE=lite|full`。`full`（默认）59 个；`lite` 只暴露 12 个入口。只过滤 `tools/list`，不删 handler，隐藏工具仍可按名调用；`coderef_version` 报告 `tool_profile{profile,source,tools_exposed,tools_hidden}`，非法值回退 full 并如实报错。
+- **Skill 梦协议**：`coderef-mcp` 增加权威「梦协议」；`coderef-probe` / `coderef-governance` / `coderef-governance-semi` / `coderef-asset` 各加「梦钩子」——醒来看梦、关键节点 seed、不自动 run、引用标假设、冲突以工具为准。
+- **验证**：新增 dream job 7 例 + tool profile 6 例；全量 pytest **411 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.20.1 — 梦复用主 LLM 配置，取消独立 Key/预算
 
 > 用户决策：不再为 dream 维护独立 Key/预算，和其他 LLM 工具接在一起。
