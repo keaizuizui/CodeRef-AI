@@ -654,6 +654,13 @@ class MemoryLayer:
         try:
             from core.code_analyzer import CodeAnalyzer
             files = CodeAnalyzer().scan_directory(project_path)
+            # whitelist dir（如 _refactor_backup）不属于当前项目代码：
+            # 与图谱/审计同口径过滤，避免备份目录的模块拿到 high 置信度（外部 D-7）。
+            from core.pr_whitelist import whitelist_exclude_dirs, path_hits_excluded_dir
+            excl_dirs = whitelist_exclude_dirs(project_path)
+            files = [fp for fp in files
+                     if not path_hits_excluded_dir(
+                         os.path.relpath(fp, project_path), excl_dirs)]
         except Exception as e:
             logger.warning(f"[MemoryLayer] 状态扫描失败: {e}")
 

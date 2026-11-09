@@ -540,11 +540,18 @@ class CodeKnowledgeGraph:
     def _build_from_ast(self, ast_results: dict, stats: dict):
         """从 AstParser 批量解析结果构建调用关系和配置节点"""
         n = 0
+        # 模块 id 集合：import 作用域解析用（import 串常省略子工程前缀，
+        # 如 `入口与启动.web_gui` 实际 key 是 `chonggou/入口与启动/web_gui`）
+        self._module_keys = {
+            r["id"][4:] for r in self._conn.execute(
+                "SELECT id FROM nodes WHERE type='module'")
+            if r["id"].startswith("mod:")}
         for file_path, ar in ast_results.items():
             if self._is_excluded(file_path):
                 continue
             module_key = _module_key(self.project_path, file_path)
             rel = file_path
+            import_scope = self._build_import_scope(ar, module_key)
 
             # 变量宿主类推导：从 import（模块级 + 方法体内局部）+ 实例化赋值
             # 建立「(变量名, 作用域) → (宿主类, 模块)」映射，供 obj.method() 调用解析目标类
@@ -559,34 +566,28 @@ class CodeKnowledgeGraph:
                 if not caller_id:
                     caller_id = f"mod:{module_key}"
 
-                # 被调用者解析优先级（ / CodeRabbit major）：
-                #   1) 全名精确匹配（可命中带类/模块前缀的方法节点，如 Bot.run_bot）；
-                #   2) self/cls 调用 → 按调用者所在模块+类构造完整方法 id 精确匹配
-                #      （self.run_bot → method:<调用者mod>:<调用者类>.run_bot），避免与
-                #      其他模块同名类方法或顶层同名函数撞 CALLS 边；
-                #   3) 实例化对象方法调用 → 从 import + 实例化推导变量宿主类，
-                #      构造 method:<宿主类模块>:<宿主类>.<方法> 精确匹配
-                #      （svc=ResearchTool() → svc.run → ResearchTool.run），
-                #      避免短名 LIKE 回退把构造调用误匹配成方法调用（伪 CALLS 边）；
-                #   4) 回退短名模糊匹配（漏建则 callers 查询返空）。
-                # 悬空防御：caller/callee 定位可能合成「从未 upsert 的私有函数 id」
-                #（如 func:<mod>:_check_xxx，CodeAnalyzer 只注册公开函数节点），
-                # 直接建边会产生指向不存在节点的坏边，导致 flow_verify 下游遍历
-                # 与 cross_module_flows 崩溃。建边前校验节点存在，缺失降级为模块节点。
+                # 被调用者解析优先级：
+                #   1) self/cls 调用 → 按调用者所在模块+类构造完整方法 id；
+                #   2) 实例化对象方法调用 → 从 import + 实例化推导变量宿主类；
+                #   3) import 作用域解析 → 仅当被调符号确实由本文件的 import 引入，
+                #      或就是本模块内的函数/类方法时才建边；
+                #   4) 其余（datetime.now / params.get / json.dump / 任意属性链）
+                #      一律放弃：按裸名全局匹配会把全仓同名调用吸到同一个 helper，
+                #      外部实测 check 一个函数占 52% CALLS、66% 跨模块边无 import 依据。
+                # 悬空防御：caller/callee 定位可能合成不存在的 id，建边前校验。
                 if not self._node_exists(caller_id):
                     caller_id = f"mod:{module_key}"
-                callee_id = self._find_node_by_name(call.func_name)
-                if not callee_id:
-                    first, _, rest = call.func_name.partition(".")
-                    if first in ("self", "cls") and rest:
-                        mid = self._caller_method_id(caller_id, rest)
-                        if mid and self._node_exists(mid):
-                            callee_id = mid
+                callee_id = None
+                first, _, rest = call.func_name.partition(".")
+                if first in ("self", "cls") and rest:
+                    mid = self._caller_method_id(caller_id, rest)
+                    if mid and self._node_exists(mid):
+                        callee_id = mid
                 if not callee_id:
                     callee_id = self._resolve_instance_call(call, var_host, caller_id)
-                # 不再按短名兜底：self/cls 已按作用域解析、实例调用已按宿主类解析，
-                # 其余点号调用（params.get / json.dump）按短名全局匹配会把大量调用
-                # 吸到同一个 helper 名（外部实测 check/get 占 CALLS 66.4%）。宁漏不假。
+                if not callee_id:
+                    callee_id = self._resolve_scoped_call(
+                        call.func_name, module_key, import_scope)
                 if callee_id and not self._node_exists(callee_id):
                     callee_id = None  # 悬空防御：不存在的 callee 不建边
                 if callee_id:
@@ -826,6 +827,93 @@ class CodeKnowledgeGraph:
                VALUES(?,?,?,?)""",
             (edge.source, edge.target, edge.type,
              json.dumps(edge.props, ensure_ascii=False)))
+
+    def _build_import_scope(self, ar, module_key: str) -> Dict[str, set]:
+        """本文件的 import 作用域：本地名 → {(模块 key, 原始符号名或 None)}。
+
+        原始符号名用于还原 `from helpers import check as hcheck`：
+        调用 `hcheck()` 必须落到 helpers 里的 `check`，而不是同名模块。
+        只有「确实被本文件 import 引入」或「本模块内定义」的符号才允许建 CALLS
+        边，从根上消除「全仓同名调用吸到同一个 helper」与「生产调测试桩」假边。
+        """
+        scope: Dict[str, set] = {}
+        current_dir = os.path.dirname(module_key)
+        imports = list(getattr(ar, "imports", ()) or ()) + \
+            list(getattr(ar, "local_imports", ()) or ())
+        for imp in imports:
+            module = (getattr(imp, "module", "") or "").strip()
+            names = list(getattr(imp, "names", ()) or ())
+            if not module:
+                continue
+            if module.startswith("."):
+                # 相对导入：以当前文件目录为基准向上 level-1 层
+                level = len(module) - len(module.lstrip("."))
+                rest = module.lstrip(".").replace(".", "/")
+                base = current_dir
+                for _ in range(max(0, level - 1)):
+                    base = os.path.dirname(base)
+                module = "/".join(p for p in (base, rest) if p)
+            else:
+                module = module.replace(".", "/")
+            if not module:
+                continue
+            resolved = self._resolve_module_key(module)
+            if getattr(imp, "is_from_import", False):
+                asnames = dict(getattr(imp, "asnames", {}) or {})
+                for nm in names:
+                    local_name = asnames.get(nm, nm)
+                    if resolved:
+                        scope.setdefault(local_name, set()).add((resolved, nm))
+                    sub = self._resolve_module_key(f"{module}/{nm}")
+                    if sub:
+                        scope.setdefault(local_name, set()).add((sub, None))
+            else:
+                if resolved:
+                    for alias in {names[0] if names else module.split("/")[-1],
+                                  module.split("/")[-1]}:
+                        scope.setdefault(alias, set()).add((resolved, None))
+        return scope
+
+    def _resolve_module_key(self, module: str) -> Optional[str]:
+        """import 串 → 图谱模块 key：精确优先，其次子工程前缀唯一后缀。"""
+        module = (module or "").strip("/")
+        if not module:
+            return None
+        if module in self._module_keys:
+            return module
+        suffix = [k for k in self._module_keys if k.endswith("/" + module)]
+        return suffix[0] if len(suffix) == 1 else None
+
+    def _resolve_scoped_call(self, name: str, module_key: str,
+                             import_scope: Dict[str, set]) -> Optional[str]:
+        """按 import 作用域解析调用目标；无法证明来源时返回 None（宁漏不假）。"""
+        name = (name or "").strip()
+        if not name:
+            return None
+        if "." not in name:
+            cand = f"func:{module_key}:{name}"
+            if self._node_exists(cand):
+                return cand
+            for mk, sym in import_scope.get(name, ()):
+                cand = f"func:{mk}:{sym or name}"
+                if self._node_exists(cand):
+                    return cand
+            return None
+        parts = name.split(".")
+        first, attr = parts[0], parts[-1]
+        # 本模块内的类方法（MyClass.method）优先
+        cand = f"method:{module_key}:{first}.{attr}"
+        if self._node_exists(cand):
+            return cand
+        for mk, sym in import_scope.get(first, ()):
+            # sym=None：first 是导入的模块；sym 非空：first 是导入的类/函数
+            candidates = [f"func:{mk}:{attr}"]
+            if sym:
+                candidates.append(f"method:{mk}:{sym}.{attr}")
+            for cand in candidates:
+                if self._node_exists(cand):
+                    return cand
+        return None
 
     def _find_node_by_name(self, name: str) -> Optional[str]:
         """按符号名解析目标节点：精确优先，其次点号边界后缀，禁止任意子串。

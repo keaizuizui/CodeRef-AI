@@ -273,12 +273,22 @@ class OWASPCompliance:
         返回 findings 列表，每条含 {code, severity, file, line, title, detail, suggestion}。
         """
         findings = []
+        # whitelist 的 dir 条目（如 _refactor_backup）不是当前项目代码，
+        # 与审计/图谱同口径排除，避免备份目录的 prompt 计进 OWASP findings。
+        try:
+            from core.pr_whitelist import whitelist_exclude_dirs, path_hits_excluded_dir
+            excl_dirs = whitelist_exclude_dirs(project_path)
+        except Exception:  # noqa: BLE001
+            excl_dirs, path_hits_excluded_dir = [], lambda *_: False
         for root, dirs, files in os.walk(project_path):
             dirs[:] = [d for d in dirs if not d.startswith(".") and d not in EXCLUDE_DIRS]
             for f in files:
                 if not (f.endswith(".py") or f.endswith(".env") or f.endswith(".txt")):
                     continue
                 fpath = os.path.join(root, f)
+                if path_hits_excluded_dir(
+                        os.path.relpath(fpath, project_path), excl_dirs):
+                    continue
                 findings.extend(self._scan_custom_file(fpath))
         return findings
 

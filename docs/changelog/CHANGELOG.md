@@ -4,6 +4,19 @@
 
 ---
 
+### v5.18.11 — CALLS 改为 import 作用域解析；评估台 iframe / 口径说明修正
+
+> 来源：外部 AI 用 v5.18.10 对 `d:\kuajingdianshang` 的第三轮复审（4 高 / 3 中 / 3 低）。本轮重点解决「同名函数吸走全仓调用」与「评估台画布 404」。
+
+- **CALLS 作用域解析（高）**：不再按裸名全局精确匹配。调用目标只允许来自：本模块内定义的函数/类方法、本文件 `import`/`from ... import`（含 `as` 别名）引入的符号、`self`/`cls` 与实例化对象方法；其余（`datetime.now`、`params.get`、同名但未 import 的 `check(...)`）一律不建边。`AstParser` 新增 `asnames`（原名→别名），`names` 恢复为原始符号名。
+- **现场实测效果（对方仓库）**：`check` 入边 **7,788 → 12**；跨模块且无 import 依据的 CALLS **66.1% → 17.1%**；生产→测试 **89 → 0**；触及 `docs/legacy` 的跨模块边 **118 → 8（且全部为 legacy 内部调用）**。
+- **评估台 iframe 404（高）**：画布生成在 `.coderef/`、评估台在 `.coderef/report/html/`，`open_server` 静态根是 html/ 导致 `../../` 越界。渲染时把最新画布复制进报告目录并改用同目录相对名，自动清理旧副本；`file://` 与 `http://` 两种打开方式都可命中。
+- **图谱构建时间（中）**：统计口径优先取本次加载的 `kg_stats.built_at`，不再被旧 findings JSON 里的 `kg_built_at` 覆盖（对方实测差 8 分钟）。
+- **记分卡口径说明（中）**：只要存在「证据不足」维度就显式提示「本次仅 N/M 个维度有证据、不能当全局分汇报」；结构健康模块分母与图谱全量模块数并列展示，说明差额为测试/无调用模块。
+- **arch_verify 定标状态（中）**：返回新增 `target_health` / `score_status` / `score_note`；定标过期时 `score_status=stale_target`，明确低分不是代码问题。
+- **扫描口径（中）**：`coderef_owasp` 的自定义维度与 `coderef_memory(action=status)` 接入 whitelist dir 排除，`_refactor_backup` 不再进入 findings 或拿到 high 置信度。
+- **验证**：新增 4 例回归（import 作用域、画布复制、stale_target、模块总数字段）；全量 pytest **302 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.18.10 — 三路复审整改：7 条缺陷全修 + 两处结构性收尾
 
 > 来源：WSL CodeRabbit（6 条）、code-review-report-plugin（7 条，双代理 2/2 确认）、brooks-lint（PR Review）对 `13e0da6..f4db7f5` 的复审。
