@@ -198,7 +198,7 @@ class ProjectMaturityChecker:
     """项目成熟度审计器"""
 
     def __init__(self):
-        pass
+        self._scan_deadline = None  # 内容扫描总预算（首次扫描时设定）
 
     # ─── 辅助方法 ───
 
@@ -243,17 +243,19 @@ class ProjectMaturityChecker:
         except (OSError, IOError):
             return False
 
-    # 单次内容扫描的硬上限（秒）：成熟度检查不阻塞整条 audit 管线
-    _SCAN_DEADLINE_SEC = 20.0
+    # 内容扫描的硬上限（秒）：成熟度检查共 8 个维度、多次复用扫描，
+    # 单一维度耗时不设上限会把整条 audit 管线拖死（外部实测 >30 分钟无响应）。
+    _SCAN_DEADLINE_SEC = 25.0  # 整次 check() 内所有 _scan_content 合计预算
     _SKIP_DIRS = {"__pycache__", "node_modules", ".git", "venv", ".venv", "env",
                   "Lib", "lib", "site-packages", "dist-packages", "cache", "data",
                   "output", "dist", "build", ".ms-playwright", ".coderef"}
 
     def _scan_content(self, project_path: str, pattern: str, file_ext: str = ".py") -> bool:
-        """扫描项目文件内容，检查是否包含某模式（带目录排除与硬超时）。"""
+        """扫描项目文件内容，检查是否包含某模式（带目录排除与总预算超时）。"""
         import time as _time
         rgx = re.compile(pattern, re.IGNORECASE)
-        deadline = _time.monotonic() + self._SCAN_DEADLINE_SEC
+        if self._scan_deadline is None:
+            self._scan_deadline = _time.monotonic() + self._SCAN_DEADLINE_SEC
         for root, dirs, files in os.walk(project_path):
             dirs[:] = [d for d in dirs if not d.startswith(".")
                        and d not in self._SKIP_DIRS
@@ -261,8 +263,8 @@ class ProjectMaturityChecker:
             for f in files:
                 if not f.endswith(file_ext):
                     continue
-                if _time.monotonic() > deadline:
-                    logger.warning("[matu] 内容扫描超时，返回未命中（避免阻塞审计管线）")
+                if _time.monotonic() > self._scan_deadline:
+                    logger.warning("[matu] 内容扫描超出总预算，返回未命中（避免阻塞审计管线）")
                     return False
                 fp = os.path.join(root, f)
                 try:
@@ -310,6 +312,7 @@ class ProjectMaturityChecker:
     def check(self, project_path: str) -> MaturityReport:
         """执行项目成熟度审计"""
         project_path = os.path.abspath(project_path)
+        self._scan_deadline = None  # 每次审计重置内容扫描总预算
         project_name = os.path.basename(project_path)
         framework = self._detect_framework(project_path)
         project_type = self._detect_project_type(project_path, framework)
