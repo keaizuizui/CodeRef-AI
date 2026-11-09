@@ -103,6 +103,59 @@ BUILTIN_TOOLS: List[Dict] = [
                         }, "required": ["project_path"]},
                     },
         {
+                        "name": "coderef_plan",
+                        "description": (
+                            "dispatcher（5.19.3）计划卡：输入意图与项目路径，输出将执行的链、步骤、"
+                            "预计工具数与时长、需要用户决策的点。纯规划不执行。\n"
+                            "intent 枚举：probe（L1 变更探查）/ single_audit（全量审计）/ recover（上下文恢复）/ "
+                            "governance（L2 架构治理）/ asset（L3 资产沉淀）。\n"
+                            "确认后用 coderef_execute(plan_id=...) 执行；dispatcher 不可用时返回错误与裸工具回退建议。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "intent": {"type": "string", "enum": ["probe", "single_audit", "recover", "governance", "asset"], "default": "probe"},
+                        }, "required": ["project_path"]},
+                    },
+        {
+                        "name": "coderef_execute",
+                        "description": (
+                            "dispatcher（5.19.3）执行链：输入 plan_id 或 intent，返回 task_id（默认后台执行，"
+                            "可 wait=true 阻塞等待）。执行中每步过前置闸门，违规步骤自动补齐（缺 recover 先 recover、"
+                            "图旧先 sync），需要用户决策的步骤暂停并浮出，不替用户做治理决策。\n"
+                            "执行轨迹落盘 .coderef/dispatch/<task_id>.json，用 coderef_dispatch_status 看进度、"
+                            "coderef_dispatch_report 取最终摘要信封。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "plan_id": {"type": "string", "description": "coderef_plan 返回的计划 ID"},
+                            "intent": {"type": "string", "enum": ["probe", "single_audit", "recover", "governance", "asset"], "description": "未传 plan_id 时按意图生成默认链"},
+                            "wait": {"type": "boolean", "description": "阻塞等待任务完成，直接返回最终结果", "default": False},
+                        }, "required": ["project_path"]},
+                    },
+        {
+                        "name": "coderef_dispatch_status",
+                        "description": (
+                            "dispatcher（5.19.3）任务状态：当前步骤、各步状态与耗时、闸门命中与自动补齐记录、"
+                            "暂停时的用户决策点。只读查询，不触发执行。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "task_id": {"type": "string", "description": "coderef_execute 返回的 task_id"},
+                        }, "required": ["project_path", "task_id"]},
+                    },
+        {
+                        "name": "coderef_dispatch_report",
+                        "description": (
+                            "dispatcher（5.19.3）最终摘要信封：结论 + freshness + KL 限制引用 + owner_actions + "
+                            "中间步骤索引（可追溯但默认折叠）。中间工具返回不逐条进主 AI，token 消耗从 "
+                            "O(工具调用总数) 降到 O(任务数)。"
+                        ),
+                        "inputSchema": {"type": "object", "properties": {
+                            "project_path": {"type": "string", "description": "目标项目路径"},
+                            "task_id": {"type": "string", "description": "coderef_execute 返回的 task_id"},
+                        }, "required": ["project_path", "task_id"]},
+                    },
+        {
                         "name": "coderef_audit",
                         "description": (
                                 "全维度代码审计 = 治理审计 + Agent安全 + 依赖扫描(CVE) + 技术债务 + "

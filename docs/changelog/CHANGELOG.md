@@ -4,6 +4,16 @@
 
 ---
 
+### v5.19.3 — coderef-dispatcher 形态 A：规则引擎调度
+
+> 5.19.x 层2 第一版。把「链路编排靠 skill 文字自觉」换成 CodeRef 自己的规则引擎：编程 AI 只表达意图，不再手工编排 53 个工具。
+
+- **新增 `core/dispatcher.py` + `core/dispatch_chains.yaml`**：链定义（L1 probe / single_audit / recover / L2 governance / L3 asset）为唯一事实源，声明步骤、参数模板、失败策略（stop/continue）与用户决策点；零 LLM、确定性可复现。
+- **四个调度工具**（工具数 53→57）：`coderef_plan`（计划卡）、`coderef_execute`（默认后台 + wait）、`coderef_dispatch_status`（当前步骤/闸门记录）、`coderef_dispatch_report`（最终摘要信封 + 折叠步骤索引 + 上下文节省比）。
+- **违规自动补齐**：执行器在每步前过 precondition 闸门，G-A 自动 recover、G-B 自动 sync、G-D 自动审计；G-C（定标缺失）暂停并浮出用户决策，不替用户做治理决策。补齐记录写入轨迹 `.coderef/dispatch/<task_id>.json`。
+- **降级路径**：YAML 缺失/损坏时 `coderef_plan` 返回诚实错误 + 裸工具回退建议；dispatcher 不可用不影响 53 个裸工具与层1 闸门。
+- **验证**：新增 9 例回归（计划/执行/补齐/暂停/降级/Server 入口）；全量 pytest **358 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.19.2 — 统一范围层 + precondition 四闸门
 
 > 5.19.x 层1 收尾。解决 P2（纪律是文字不是代码）、P3（记忆不读取的状态判定）与 P5（忽略意图无持久化载体）。
