@@ -357,12 +357,22 @@ class MemoryLayer:
         return new_ast
 
     @staticmethod
-    def _analyze_structure(analyzer, project_path: str, mode: str):
-        """结构分析（复用 CodeAnalyzer 自身缓存；full 强制重建）。"""
+    def _analyze_structure(analyzer, project_path: str, mode: str,
+                           files: List[str] = None,
+                           changed: List[str] = None):
+        """结构分析（复用 CodeAnalyzer 自身缓存；full 强制重建）。
+
+        5.19.1：incr 模式优先走文件级增量分析（只重解析 changed），缓存缺失
+        时回退全量 analyze_project。
+        """
         try:
             if analyzer is None:
                 from core.code_analyzer import CodeAnalyzer
                 analyzer = CodeAnalyzer()
+            if mode != "full" and files is not None and changed is not None:
+                updated = analyzer.update_analysis(project_path, files, changed)
+                if updated is not None:
+                    return updated
             return analyzer.analyze_project(project_path,
                                             force_reanalyze=(mode == "full"))
         except Exception as e:
@@ -371,8 +381,8 @@ class MemoryLayer:
 
     @staticmethod
     def _update_knowledge_graph(project_path: str, analysis,
-                                ast_results) -> dict:
-        """更新知识图谱（结构记忆）。"""
+                                ast_results, incremental: dict = None) -> dict:
+        """更新知识图谱（结构记忆）。incremental 非空时走文件级增量（5.19.1）。"""
         try:
             from core.code_knowledge_graph import CodeKnowledgeGraph
             kg = CodeKnowledgeGraph(project_path)
@@ -389,13 +399,65 @@ class MemoryLayer:
                                 if e.get("dir")]
             except Exception:  # pragma: no cover
                 pass
-            kg_stats = kg.build(analysis=analysis, ast_results=ast_results,
-                                 exclude_dirs=exclude_dirs)
+            build_kwargs = {"analysis": analysis, "ast_results": ast_results,
+                            "exclude_dirs": exclude_dirs}
+            if incremental is not None:
+                build_kwargs["incremental"] = incremental
+            kg_stats = kg.build(**build_kwargs)
             kg.close()
             return kg_stats
         except Exception as e:
             logger.warning(f"[MemoryLayer] 图谱更新失败: {e}")
             return {"nodes": 0, "edges": 0, "errors": [str(e)]}
+
+    @staticmethod
+    def _dependents(analysis, affected_files: List[str]) -> List[str]:
+        """找出 import 了受影响模块的未变文件（增量重建依赖方，5.19.1）。
+
+        只按模块名匹配（含相对导入的尾段匹配），宁可多重建几个文件，
+        也不留下指向已移动/重命名符号的陈旧边。
+        """
+        proj = getattr(analysis, "project_path", "") or ""
+        affected = {os.path.abspath(f) for f in affected_files}
+
+        def _key(fp: str) -> str:
+            try:
+                rel = os.path.relpath(os.path.abspath(fp), proj)
+            except Exception:  # noqa: BLE001
+                rel = fp
+            return os.path.splitext(str(rel).replace("\\", "/"))[0].replace("/", ".")
+
+        keys = {k for k in (_key(f) for f in affected_files) if k}
+        if not keys:
+            return []
+        out = []
+        for cf in getattr(analysis, "files", []) or []:
+            ap = os.path.abspath(getattr(cf, "file_path", ""))
+            if ap in affected:
+                continue
+            for imp in getattr(cf, "imports", []) or []:
+                ip = str(imp).replace("/", ".")
+                if any(ip == k or ip.endswith("." + k) or k.endswith("." + ip)
+                       for k in keys):
+                    out.append(ap)
+                    break
+        return out
+
+    @staticmethod
+    def _kg_counts(project_path: str) -> dict:
+        """只读图谱现有节点/边数（增量无变更时避免无谓重建）。"""
+        try:
+            from core.code_knowledge_graph import CodeKnowledgeGraph
+            kg = CodeKnowledgeGraph(project_path)
+            if not kg.exists():
+                return {"nodes": 0, "edges": 0}
+            stats = kg.get_stats()
+            kg.close()
+            return {"nodes": stats.get("node_count", 0),
+                    "edges": stats.get("edge_count", 0)}
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[MemoryLayer] 读取图谱统计失败: {e}")
+            return {"nodes": 0, "edges": 0}
 
     def _persist_state(self, project_path: str, mode: str,
                        current_snapshot, new_ast, kg_stats: dict,
@@ -463,10 +525,25 @@ class MemoryLayer:
                        for fp, d in new_ast.items() if d}
 
         # 结构分析（复用 CodeAnalyzer 自身缓存；full 强制重建）
-        analysis = self._analyze_structure(analyzer, project_path, mode)
+        analysis = self._analyze_structure(analyzer, project_path, mode,
+                                           files, changed)
+
+        # 文件级增量：变更 + 已删除 + 依赖方（5.19.1）
+        deleted = [] if mode == "full" else [
+            fp for fp in prev_snapshot if fp not in current_snapshot]
+        incremental = None
+        if mode != "full" and (changed or deleted):
+            affected = list(changed) + list(deleted)
+            if analysis is not None:
+                affected += self._dependents(analysis, affected)
+            incremental = {"files": sorted(set(os.path.abspath(f) for f in affected))}
 
         # 更新知识图谱（结构记忆）
-        kg_stats = self._update_knowledge_graph(project_path, analysis, ast_results)
+        if mode != "full" and not changed and not deleted:
+            kg_stats = self._kg_counts(project_path)  # 无变更：不重建，只报现状
+        else:
+            kg_stats = self._update_knowledge_graph(project_path, analysis,
+                                                    ast_results, incremental)
 
         # 更新语义知识库（语义记忆，Ollama 缺失自动降级）
         kb_status = self._index_kb(project_path)
@@ -485,6 +562,8 @@ class MemoryLayer:
             "mode": mode,
             "synced_files": len(changed),
             "changed_files": changed,
+            "deleted_files": deleted,
+            "kg_incremental": bool(incremental),
             "unchanged_files": len(unchanged),
             "total_files": total_files,
             "coverage": coverage,

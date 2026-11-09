@@ -151,6 +151,8 @@ from core.handlers_misc import (
     _advisor, _docs_read, _eval, _frontend, _query, _report, _review,
     _scan_list, _scan_tool, _verify_findings, _version, _wl,
 )
+# 5.19.1 结果级新鲜度硬戳：信封统一挂 freshness 块（best-effort，失败不影响结论）
+from core.freshness_guard import attach_freshness as _env_with_freshness
 
 # 对外符号面（re-export 兼容层）：拆解后主文件保留全部既有符号，__all__ 仅用于
 # 声明"重导出符号"以通过 pyflakes 未使用 import 检查（无 star import 引用方，语义不变）。
@@ -782,7 +784,9 @@ class Server:
                 },
                 "errors": getattr(r, "errors", []),
                 # 结论信封：调用方 AI 可直接转述给人（含归属/限制/不可下结论项）
-                "envelope": for_audit(len(r.findings), getattr(r, "errors", [])),
+                "envelope": _env_with_freshness(
+                    for_audit(len(r.findings), getattr(r, "errors", [])),
+                    p, ["kg_db", "audit_findings"]),
             }, ensure_ascii=False)
         elif n == "coderef_docs":
             # 与 coderef_audit 的 strategy 一致：非法枚举显式拒绝（结构化错误），
@@ -989,8 +993,58 @@ class Server:
                            "message": ("已请求取消；任务在下一个阶段汇报点协作式收尾，"
                                        "可稍后用 coderef_task_status 查询最终结果")}, ensure_ascii=False)
 
+    def _start_sync_task(self, project_path: str) -> str:
+        """为陈旧图谱排入后台增量同步，返回 task_id。
+
+        5.19.1：coderef_query 发现 stale 时自动触发，调用方只需轮询一次
+        coderef_task_status；同一项目已有同步在跑时不重复建图（返回空串）。
+        """
+        try:
+            from core.freshness_guard import claim_sync, release_sync
+        except Exception:  # noqa: BLE001
+            return ""
+        if not claim_sync(project_path):
+            return ""
+        tid = str(uuid.uuid4())[:8]
+        rc = {}
+        args = {"project_path": project_path, "action": "sync", "mode": "incr"}
+
+        def _run_sync():
+            try:
+                self._bg(rc, "coderef_memory", args)
+            finally:
+                release_sync(project_path)
+
+        t = threading.Thread(target=_run_sync, daemon=True)
+        t.start()
+        with self._locked_tasks() as tasks:
+            tasks[tid] = {"thread": t, "result": rc, "tool": "coderef_memory",
+                          "started_at": time.time()}
+        logger.info(f"后台增量同步: {tid} {project_path}")
+        return tid
+
     def _query(self, a):
-        return _query(a)
+        raw = _query(a)
+        pp = a.get("project_path") or ""
+        if not pp:
+            return raw
+        try:
+            from core import freshness_guard as fg
+        except Exception:  # noqa: BLE001
+            return raw
+        try:
+            info = fg.query_staleness(pp)
+            # block 档：同步刷新图谱后重查，调用方拿到的就是新图结果
+            if info.get("stale") and info.get("mode") == "block":
+                from core.memory_layer import memory_layer
+                memory_layer.sync(pp, mode="incr")
+                raw = _query(a)
+                return fg.annotate_query_result(raw, pp, refreshed=True)
+            tid = self._start_sync_task(pp) if info.get("stale") else ""
+            return fg.annotate_query_result(raw, pp, sync_task_id=tid)
+        except Exception as e:  # noqa: BLE001 —— stale 感知失败不阻断原查询
+            logger.debug(f"[freshness] 查询 stale 感知失败: {e}")
+            return raw
 
     def _ok(self, rid, text, tool=None):
         return _ok(rid, text, tool=tool)

@@ -413,7 +413,7 @@ class CodeKnowledgeGraph:
     # ═══════════════════════════════════════════════════════════════════
 
     def build(self, analysis=None, ast_results=None, gitnexus_dir=None,
-              exclude_dirs=None) -> dict:
+              exclude_dirs=None, incremental=None) -> dict:
         """
         构建知识图谱。
 
@@ -424,28 +424,47 @@ class CodeKnowledgeGraph:
             exclude_dirs: 需排除的目录相对路径列表（如 ["_refactor_backup"]）。
                 目录下的文件不进入图谱，避免备份/镜像目录污染符号级真身判定、
                 循环与重复匹配。目录名按相对路径子串匹配（含路径分隔符边界）。
+            incremental: 文件级增量（5.19.1）。None=全量重建；
+                {"files": [受影响的文件绝对路径...]} 时只删除并重建这些文件的
+                节点/边，其余文件的图谱行原样保留，最后清理悬空边。
+                一致性由「全量重建 vs 增量重建」对比测试保障。
 
         Returns:
             {"nodes": N, "edges": M, "errors": [...]}
         """
         self._init_schema()
-        self._clear()
+        inc = incremental or {}
+        only = None
+        if inc:
+            only = {self._norm_path(f) for f in (inc.get("files") or []) if f}
+            if only:
+                self._delete_file_rows(only)
+            else:
+                self._clear()
+        else:
+            self._clear()
         stats = {"nodes": 0, "edges": 0, "errors": []}
         self._exclude_dirs = [d.replace("\\", "/").strip("/")
                               for d in (exclude_dirs or []) if d]
 
         try:
             if analysis:
-                self._build_from_analysis(analysis, stats)
+                self._build_from_analysis(analysis, stats, only)
             if ast_results:
-                self._build_from_ast(ast_results, stats)
+                self._build_from_ast(ast_results, stats, only)
             if gitnexus_dir and os.path.isdir(gitnexus_dir):
                 self._build_from_gitnexus(gitnexus_dir, stats)
             # 扫描 Go 文件（含 Go 组件的项目流程断链检测补盲；纯 Python 项目零开销）
-            self._build_from_go(self.project_path, stats)
+            self._build_from_go(self.project_path, stats, only)
         except Exception as e:
             stats["errors"].append(str(e))
             logger.error(f"[KG] 构建失败: {e}")
+
+        if only:
+            # 增量构建后清理悬空边（被删文件的节点已移除；重命名/移动后
+            # 旧调用方指向已不存在符号的边与全量重建口径一致地丢弃）
+            self._prune_dangling_edges()
+            stats.update(self._counts())
 
         self._set_meta("built_at", str(time.time()))
         self._set_meta("project_path", self.project_path)
@@ -453,6 +472,41 @@ class CodeKnowledgeGraph:
         self._conn.commit()
         logger.info(f"[KG] 构建完成: {stats['nodes']} 节点, {stats['edges']} 边")
         return stats
+
+    # ─── 文件级增量辅助（5.19.1） ───
+
+    def _norm_path(self, path: str) -> str:
+        """统一成绝对路径（节点 file_path 可能是绝对或项目相对路径）。"""
+        if not path:
+            return ""
+        if not os.path.isabs(path):
+            path = os.path.join(self.project_path, path)
+        return os.path.normcase(os.path.abspath(path))
+
+    def _delete_file_rows(self, files) -> None:
+        """删除受影响的文件在图谱中的节点与关联边。"""
+        id_rows = self._conn.execute("SELECT id, file_path FROM nodes").fetchall()
+        ids = [row["id"] for row in id_rows
+               if self._norm_path(row["file_path"]) in files]
+        for start in range(0, len(ids), 400):
+            chunk = ids[start:start + 400]
+            marks = ",".join("?" * len(chunk))
+            self._conn.execute(
+                f"DELETE FROM edges WHERE source IN ({marks}) OR target IN ({marks})",
+                chunk + chunk)
+            self._conn.execute(f"DELETE FROM nodes WHERE id IN ({marks})", chunk)
+        self._conn.commit()
+
+    def _prune_dangling_edges(self) -> None:
+        self._conn.execute(
+            "DELETE FROM edges WHERE source NOT IN (SELECT id FROM nodes) "
+            "OR target NOT IN (SELECT id FROM nodes)")
+        self._conn.commit()
+
+    def _counts(self) -> dict:
+        nodes = self._conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+        edges = self._conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+        return {"nodes": int(nodes), "edges": int(edges)}
 
     def _clear(self):
         self._conn.execute("DELETE FROM nodes")
@@ -469,12 +523,15 @@ class CodeKnowledgeGraph:
 
     # ─── 从 CodeAnalyzer 构建 ───
 
-    def _build_from_analysis(self, analysis, stats: dict):
+    def _build_from_analysis(self, analysis, stats: dict, only_files=None):
         """从 CodeAnalyzer.analyze_project() 的 ProjectAnalysis 构建节点
 
         拆分说明：id 预收集与各类节点构造提取为模块级 _collect_analysis_ids /
         _kg_*_node / _resolve_import_target 纯函数，本方法仅作编排，
         节点/边内容与建边过滤语义与拆分前逐字段一致。
+
+        only_files：5.19.1 文件级增量时只重建这些文件（绝对路径集合）；
+        id 预收集仍用全量 analysis，保证 IMPORTS/INHERITS 能解析到未变文件。
         """
         mod_ids, class_ids_by_name = _collect_analysis_ids(
             analysis, exclude_dirs=self._exclude_dirs)
@@ -483,6 +540,8 @@ class CodeKnowledgeGraph:
         for cf in getattr(analysis, "files", []):
             rel = getattr(cf, "file_path", "")
             if not rel:
+                continue
+            if only_files is not None and self._norm_path(rel) not in only_files:
                 continue
             if self._is_excluded(rel):
                 continue
@@ -537,7 +596,7 @@ class CodeKnowledgeGraph:
 
     # ─── 从 AstParser 构建 ───
 
-    def _build_from_ast(self, ast_results: dict, stats: dict):
+    def _build_from_ast(self, ast_results: dict, stats: dict, only_files=None):
         """从 AstParser 批量解析结果构建调用关系和配置节点"""
         n = 0
         # 模块 id 集合：import 作用域解析用（import 串常省略子工程前缀，
@@ -547,6 +606,8 @@ class CodeKnowledgeGraph:
                 "SELECT id FROM nodes WHERE type='module'")
             if r["id"].startswith("mod:")}
         for file_path, ar in ast_results.items():
+            if only_files is not None and self._norm_path(file_path) not in only_files:
+                continue
             if self._is_excluded(file_path):
                 continue
             module_key = _module_key(self.project_path, file_path)
@@ -628,7 +689,7 @@ class CodeKnowledgeGraph:
     _GO_CALL_RE = re.compile(
         r'(?<![\w.\[])(?:[A-Za-z_]\w*\.)*([A-Za-z_]\w*)\s*\(')
 
-    def _build_from_go(self, project_path, stats: dict):
+    def _build_from_go(self, project_path, stats: dict, only_files=None):
         """扫描 .go 文件，用轻量确证性正则把函数/方法与调用关系纳入知识图谱。
 
         背景：知识图谱此前只覆盖 Python AST，含 Go 组件的项目（如 目标项目 的
@@ -655,6 +716,8 @@ class CodeKnowledgeGraph:
                 if not fn.endswith('.go'):
                     continue
                 fp = os.path.join(root, fn)
+                if only_files is not None and self._norm_path(fp) not in only_files:
+                    continue
                 try:
                     with open(fp, 'r', encoding='utf-8', errors='ignore') as fh:
                         content = fh.read()

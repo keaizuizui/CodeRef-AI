@@ -4,6 +4,16 @@
 
 ---
 
+### v5.19.1 — 结果级新鲜度硬戳 + stale 感知查询 + 图谱文件级增量
+
+> 5.19.x 层1 第二版。解决 P1（引用陈旧产物）与 P4（图谱落后仍被查询）：新鲜度不再依赖 AI 主动查 version，查询结果自己带 `stale`。
+
+- **新增 `core/freshness_guard.py`**：`freshness_block()` 为工具信封生成 `freshness{artifacts_used, code_newer, stale_reason, refresh_action}`；带 60 秒进程内盘点缓存，避免高频工具重复全量 walk。
+- **信封扩展**：`coderef_audit` / `coderef_scan` / `coderef_report` / `coderef_arch_gap` / `coderef_arch_verify` / `coderef_interpret(action=health)` 的 `envelope.freshness` 直接标注引用了哪些产物、代码是否更新、该重跑什么。
+- **`coderef_query` stale 感知**：执行前比对代码 mtime 与图谱 `built_at`（复用统一扫描口径）；超阈值（默认 30 分钟或 3 个变更文件）返回 `stale=true` + `kg_freshness` + 自动后台增量 sync 的 `sync_task_id`；`.coderef/guard_config.json` 支持 `warn` / `block` 两档。
+- **图谱文件级增量**（`CodeKnowledgeGraph.build(incremental=...)`）：只删除并重建变更/删除文件及其 import 依赖方的节点与边，最后清理悬空边；`CodeAnalyzer.update_analysis()` 只重解析变更文件；无变更时跳过重建。
+- **验证**：新增 9 例回归（新鲜度 2 + stale/config 4 + 增量一致性 3，覆盖修改/删除/重命名）；全量 pytest **339 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.19.0 — 纪律代码化地基：自动变更守卫 + 记忆摘要前置注入
 
 > 5.19.x 版本线第一版（实施真源 `docs/5.19.x-版本线开发文档.md`）。针对「AI 不读 CODEREF.md、不跑 change_guard、不 recover 记忆」三个反复出现的失效，把纪律从文字移进服务端。
