@@ -4,6 +4,23 @@
 
 ---
 
+### v5.21.3 — 三路复审修复（CodeRabbit / Code Review / Brooks）
+
+> 背景：5.20.0–5.21.2 完成后跑了 WSL CodeRabbit、code-review-report-plugin、Brooks-Lint 三路审查；本版修复确认成立的问题。
+
+- **梦 / seed 游标**：`seeds_consumed` 改为 `min(len(seeds), consumed + MAX_SEEDS)`，notes 与 draft 成功路径都推进；返回体与 runs 增加 `seeds_pending`，第 21 条后的 seed 不再静默丢失。
+- **false_memory_check**：旧 state 缺 `goal/open_questions` 时从当前 DREAM.md 回填；无 rejected 不重写 MD；窗口外 `audit:` 证据记入 `unknown` 计数与明细，envelope 明示「未能复核」。
+- **默认 pitfall 提示词**：`{{ }}` 改回单花括号，删除未使用的 `_USER_PROMPT`；默认 job 的 JSON 示例不再非法。
+- **git 变更文件**：porcelain 解析改用 `split(None, 1)`，修复首行路径丢首字符。
+- **G-A 事实**：`memory_recovered_at` 仅在 `recovered_from` 含 `operation_memory` 时标记，梦单独可用不再冒充已 recover。
+- **工具面 profile**：`filter_tools` 支持显式 profile，initialize/_version 不再重复读配置。
+- **dispatcher.report**：收集 `failed_steps`；有失败步骤时 `usable_for_decisions=False`，paused/failed 链使用链级 verdict，不再被最后成功步骤覆盖。
+- **memory_layer**：图谱 DB 缺失时强制全量重建，避免只读计数永远 stale 或增量建出残图。
+- **code_analyzer**：缓存键按 `normcase(abspath)` 归一；`update_analysis` 用自身快照补漂移文件，避免复用旧 AST；旧缓存键保留回退读取。
+- **session_guard**：指纹增加 `digest`（status + `git diff HEAD` + 未跟踪文件 mtime/size），同一批已脏文件再次被改也会触发守卫；旧状态无 digest 视为不同。
+- **文档**：DREAM.md 六节、MCP_SETUP/README 工具数 58→59、README 当前版本、Skill 的 `target` 草稿文案改为 `refactor_draft`。
+- **验证**：全量 pytest **437 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.21.2 — 梦 P3：旧梦复核与评估回放
 
 > 背景：梦会随时间产生旧笔记，证据可能失效；也需要一套可回放的指标看梦是否真的有用。本版补齐 P3 两个维护/评估 job，手动触发，不默认跑。
