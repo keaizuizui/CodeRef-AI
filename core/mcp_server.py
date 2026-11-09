@@ -526,7 +526,7 @@ class Server:
         if m == "initialize":
             # 工具面 profile：full（默认）暴露全部工具，lite 只暴露 12 个入口
             profile_info = self._tool_profile()
-            exposed = len(filter_tools(self._tools))
+            exposed = len(filter_tools(self._tools, profile_info["profile"]))
             return {"jsonrpc":"2.0","id":rid,"result":{
                 "protocolVersion":"2024-11-05","capabilities":{"tools":{}},
                 "serverInfo":{
@@ -647,7 +647,7 @@ class Server:
             if not isinstance(data, dict):
                 return raw
             info = self._tool_profile()
-            exposed = len(filter_tools(self._tools))
+            exposed = len(filter_tools(self._tools, info.get("profile")))
             data["tool_profile"] = {
                 "profile": info.get("profile", "full"),
                 "source": info.get("source", "default"),
@@ -858,8 +858,9 @@ class Server:
                     "available": bool(digest.get("available")),
                     "items": len(digest.get("items") or []),
                 }
-                # G-A 的事实来源：记忆摘要可用 == 已完成 recover
-                if digest.get("available"):
+                # G-A 的事实来源：只有操作记忆 recover 成功才算完成 recover；
+                # 梦单独可用（recovered_from=dream）不代表操作记忆已恢复。
+                if "operation_memory" in str(digest.get("recovered_from") or ""):
                     from core.session_guard import mark_fact
                     mark_fact(p, "memory_recovered_at",
                               {"items": len(digest.get("items") or [])})

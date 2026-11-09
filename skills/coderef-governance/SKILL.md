@@ -71,7 +71,7 @@ description: 治理主链场景化 Skill。把 CodeRef-AI 的 MCP 工具收敛�
 ### 梦钩子
 
 - **先看梦再定标**：进入主链前先读 `context.memory_digest.dream` 或 `coderef_dream(action=read, limit=5)`，只从中取「上次治理目标 / 未决问题 / pitfall」作为开工线索。
-- **梦只出草稿**：梦最多提供 `target` / `refactor` 草稿（`hypothesis`）；定标、差距分析、验证结论仍必须走确定性工具，不得把梦的草稿当已确认的目标架构。
+- **梦只出草稿**：梦最多提供 `refactor_draft` 草稿（含 target 建议，`hypothesis`）；定标、差距分析、验证结论仍必须走确定性工具，不得把梦的草稿当已确认的目标架构。
 - **关键决策后 seed**：定标方向、真身收敛取舍、`coderef_verify_findings` 的验证结论等影响后续的决策落定后，seed 1–3 条（每条 ≤200 字）。
 - **不自动补梦**：本链不调用 `coderef_dream(action=run)`。
 - **草稿需确认**：`refactor_draft` 草稿用 `coderef_dream(action=drafts)` 读取，应用前必须走 `coderef_arch_verify` / `coderef_target_adopt` 并经用户确认。

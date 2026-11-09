@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.21.2** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.21.3** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -313,7 +313,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 
 ---
 
-## 58 个 MCP 工具速查
+## 59 个 MCP 工具速查
 
 > 完整功能、参数与「意图 → 工具」路由见 `skills/` 各 Skill 与 `MCP_SETUP.md`。这里按引擎列出。
 
@@ -465,7 +465,7 @@ CodeRef 会落很多文件，但**用户只需要看两个入口**。其余产�
 ```
 coderef-ai/
 ├── core/                             # 核心引擎
-│   ├── mcp_server.py                 # MCP Server 入口（58 个工具）
+│   ├── mcp_server.py                 # MCP Server 入口（59 个工具）
 │   ├── pipeline_runner.py            # 管线引擎（audit/architecture/docs + 知识图谱）
 │   ├── tool_registry.py              # 工具注册中心
 │   ├── review_strategy.py            # 审计策略判定（增量/全量 + 影响闭包）
@@ -568,14 +568,15 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 > 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.17.0）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.19.0 — 纪律代码化地基（自动守卫 + 记忆注入）
+### 当前版本 v5.21.3 — 梦 job 契约 + 草稿链 + P3 复核/评估 + 复审修复
 
-> 5.19.x 版本线第一版。核心命题：把「AI 该记得做的事」从 skill 文字移到服务端代码——不依赖调用方自觉。
+> 5.21.x 版本线：梦从单一 `pitfall` 扩到「记忆 / 叙事 / 草稿 / 维护」四类 job，并加工具面 profile。
 
-- **自动变更守卫**：调用 audit / scan / query / report / interpret / arch_gap / arch_verify 时，服务端自动比对 git 指纹；代码变了就先跑 `change_guard`，结果附在返回体 `context.guard`，同一指纹不重复跑。
-- **记忆摘要前置注入**：每项目进程内首次调重工具时自动 recover 操作记忆，压成 ≤800 token 摘要附在 `context.memory_digest`；记忆为空也如实标注，不冒充"没这项"。
-- **AGENTS.md 自包含**：6 条红线内联，不再只写"见 CODEREF.md"。
-- 完整实施真源见 [docs/5.19.x-版本线开发文档.md](docs/5.19.x-版本线开发文档.md)；后续 5.19.1–5.19.5 依次为：新鲜度硬戳、会话状态闸门、dispatcher 子 agent、LLM 意图层、观测层。
+- **梦 job 契约**：`pitfall/recap/routing/triage`（记忆）+ `change_narrative/failure_postmortem`（叙事），每条 note 带 `claim_type`；advice 永不 `verified`。
+- **草稿链（P2）**：`review_draft/refactor_draft/asset_candidate/noise_proposal` 只写 `drafts/`，必须用户确认后走 `next_tools` 的确定性工具。
+- **P3 维护**：`false_memory_check` 确定性复核证据引用（audit 窗口外如实记 `unknown`），`eval_replay` 指标落盘 `evals/`。
+- **工具面与梦协议**：`CODEREF_TOOL_PROFILE=lite|full` 只控制 `tools/list` 暴露面；`DREAM.md` 固定六节。
+- 设计真源见 [docs/dream.md](docs/dream.md) / [docs/dream-jobs.md](docs/dream-jobs.md)。
 
 #### v5.18.13 — 结论信封、CALLS 作用域与陈旧输入防呆
 
