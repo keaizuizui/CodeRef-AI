@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.21.5** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.21.6** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -569,7 +569,7 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 > 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.17.0）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.21.5 — 测试方登记册 11 条边界缺陷修复
+### 当前版本 v5.21.6 — CodeRabbit 复审 paused 轨迹错误回传
 
 > 5.21.x 版本线：梦从单一 `pitfall` 扩到「记忆 / 叙事 / 草稿 / 维护」四类 job，并加工具面 profile。
 

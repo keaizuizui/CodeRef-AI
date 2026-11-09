@@ -4,6 +4,13 @@
 
 ---
 
+### v5.21.6 — CodeRabbit 复审 paused 轨迹错误回传
+
+> 背景：5.21.5 提交后，用 WSL Ubuntu-24.04 的 CodeRabbit 0.9.3 复审 `84febf9..c33785b`，报 1 条 minor：`requires_user` 与 G-C 闸门两条 paused 返回路径忽略 `_write_trace` 的失败结果，调用方拿到 `trace_path` 却可能没有轨迹文件，且看不到失败原因。
+
+- **修复**：两条 paused 返回路径与最终返回路径统一，若 `trace.get("trace_error")` 存在则带回 `trace_error` 字段；未失败时返回结构不变。
+- **验证**：`tests/test_dispatcher.py` 14 例全绿；全量 pytest **437 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.21.5 — 测试方登记册 11 条边界缺陷修复
 
 > 背景：测试 AI 按 5.18.11–5.21.4 全量实测后，在 `测试归档/课题台账/登记册.md` 登记 U-52–U-62；本版逐条修复，并用其 STRICT 模式复测通过。
