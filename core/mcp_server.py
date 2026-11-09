@@ -285,6 +285,28 @@ def _ok(rid, text, tool=None):
     return {"jsonrpc":"2.0","id":rid,"result":{"content":[{"type":"text","text":text}]}}
 
 
+def _merge_session_context(raw: str, ctx: dict) -> str:
+    """把会话上下文（自动守卫 / 记忆摘要）合入工具 JSON 返回。
+
+    非 JSON 或非对象返回原样透传；合并失败不丢原结果（best-effort）。
+    """
+    try:
+        data = json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return raw
+    if not isinstance(data, dict):
+        return raw
+    existing = data.get("context")
+    if isinstance(existing, dict):
+        existing.update(ctx)
+    else:
+        data["context"] = ctx
+    try:
+        return json.dumps(data, ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        return raw
+
+
 class Server:
 
     def __init__(self):
@@ -674,6 +696,42 @@ class Server:
         return _validate_project_path(tool, p)
 
     def _run(self, n, a, progress_cb=None) -> str:
+        """工具执行入口：先跑原 _run_inner，再按需附加会话上下文。
+
+        5.19.x 地基：把「改完代码要跑变更守卫」「先恢复记忆」从 skill 文字
+        变成服务端自动行为——重工具返回体自带 `context.guard`（本次自动跑的
+        能力退化检查）与 `context.memory_digest`（进程内首次注入的操作记忆摘要）。
+        调用方不主动查也会拿到，避免“忘了/没读”导致的信息滞后。
+        """
+        raw = self._run_inner(n, a, progress_cb)
+        p = a.get("project_path") or ""
+        if not p:
+            return raw
+        try:
+            from core.session_guard import HEAVY_TOOLS, guard_if_needed
+        except Exception:  # noqa: BLE001
+            return raw
+        if n not in HEAVY_TOOLS:
+            return raw
+        ctx = {}
+        try:
+            guard = guard_if_needed(p)
+            if guard:
+                ctx["guard"] = guard
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[session] 自动守卫失败: {e}")
+        try:
+            from core.memory_digest import inject_once
+            digest = inject_once(p)
+            if digest is not None:
+                ctx["memory_digest"] = digest
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[session] 记忆摘要注入失败: {e}")
+        if not ctx:
+            return raw
+        return _merge_session_context(raw, ctx)
+
+    def _run_inner(self, n, a, progress_cb=None) -> str:
         from core.pipeline_runner import Pipe
         # 部分工具（如 coderef_scan_list）不依赖 project_path，用容错读取避免误抛 KeyError
         p, o = a.get("project_path", ""), a.get("output_dir")
