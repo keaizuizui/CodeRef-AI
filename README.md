@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.19.3** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.19.4** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -105,6 +105,13 @@ CodeRef 不靠宣称，靠可复现的硬指标（完整方法见后文「可靠
 - **`coderef_execute`**：按计划或意图执行，逐步过前置闸门；缺 recover 先 recover、图旧先 sync（违规自动补齐），G-C 定标缺失等需用户决策的步骤**暂停浮出**，不替用户做治理决策；默认后台执行返回 `task_id`。
 - **`coderef_dispatch_status` / `coderef_dispatch_report`**：前者看当前步骤与闸门记录，后者取最终摘要信封（结论 + freshness + KL + `owner_actions` + 折叠的步骤索引 + 上下文节省比）。
 - **链定义**：`core/dispatch_chains.yaml` 是唯一事实源（L1/L2/L3 步骤、失败策略、决策点）。轨迹落盘 `.coderef/dispatch/<task_id>.json`；YAML 缺失/损坏时 `coderef_plan` 明确报错并给出裸工具回退建议，57 个工具照常可用。
+
+### LLM 意图层（v5.19.4 起，形态 B，可选）
+
+- **`coderef_plan(intent_text="用大白话说目标")`**：由 LLM 把自然语言归到 5 个链意图之一，计划卡标 `mode=llm` 与 `router{intent, confidence, reason}`。LLM **只选链**，审计/图谱/架构结论仍全部来自规则引擎与静态分析。
+- **无 Key 硬阻断**：未配置有效 API Key 时返回 `status=blocked` + `mode=rule`，提示改用 `intent` 枚举（形态 A），不猜不编。
+- **置信度不足不执行**：低于 0.6 或返回不可解析时 `status=needs_confirmation` + 候选意图，交由用户/主 AI 确认。
+- **确认门**：`coderef_execute` 不接受未确认的 `intent_text`——必须先 `coderef_plan(intent_text=...)` 拿计划卡，再 `coderef_execute(plan_id=...)`。
 
 ---
 

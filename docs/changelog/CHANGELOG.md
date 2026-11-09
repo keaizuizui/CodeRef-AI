@@ -4,6 +4,16 @@
 
 ---
 
+### v5.19.4 — 形态 B：LLM 意图层（可选增强）
+
+> 5.19.x 层2 第二版。让不会选链的用户用自然语言表达目标；LLM 只做意图分类，不碰结论。
+
+- **新增 `core/intent_router.py`**：自然语言 → `probe / single_audit / recover / governance / asset`；复用 `LLMIntegration` 通道（OpenAI/DeepSeek/Ollama），要求只输出 `{intent, confidence, reason}` JSON。
+- **无 Key 硬阻断**：`is_available()` 为假时返回 `status=blocked` + `mode=rule` + 回退动作，降级回形态 A，绝不猜测意图。
+- **置信度门**：低于 0.6 或 JSON 不可解析时返回 `status=needs_confirmation` / `error` + 候选，不擅自出计划卡。
+- **确认门**：`coderef_execute` 传入 `intent_text` 但无 `plan_id` 时返回 blocked，要求先 `coderef_plan` 展示计划卡；LLM 只影响「选哪条链」，不影响任何审计结论。
+- **验证**：新增 7 例回归（无 Key/正常/低置信/坏 JSON/计划路由/降级/确认门）；全量 pytest **365 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.19.3 — coderef-dispatcher 形态 A：规则引擎调度
 
 > 5.19.x 层2 第一版。把「链路编排靠 skill 文字自觉」换成 CodeRef 自己的规则引擎：编程 AI 只表达意图，不再手工编排 53 个工具。

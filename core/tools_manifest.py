@@ -109,11 +109,14 @@ BUILTIN_TOOLS: List[Dict] = [
                             "预计工具数与时长、需要用户决策的点。纯规划不执行。\n"
                             "intent 枚举：probe（L1 变更探查）/ single_audit（全量审计）/ recover（上下文恢复）/ "
                             "governance（L2 架构治理）/ asset（L3 资产沉淀）。\n"
+                            "intent_text（5.19.4 形态 B）：自然语言目标，由 LLM 意图层选链；未配置 Key 时硬阻断并"
+                            "提示改用 intent 枚举，置信度不足时返回候选让用户确认（LLM 只选链，不参与任何结论）。\n"
                             "确认后用 coderef_execute(plan_id=...) 执行；dispatcher 不可用时返回错误与裸工具回退建议。"
                         ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
                             "intent": {"type": "string", "enum": ["probe", "single_audit", "recover", "governance", "asset"], "default": "probe"},
+                            "intent_text": {"type": "string", "description": "自然语言意图（可选；传了则走 LLM 意图层）"},
                         }, "required": ["project_path"]},
                     },
         {
@@ -123,12 +126,15 @@ BUILTIN_TOOLS: List[Dict] = [
                             "可 wait=true 阻塞等待）。执行中每步过前置闸门，违规步骤自动补齐（缺 recover 先 recover、"
                             "图旧先 sync），需要用户决策的步骤暂停并浮出，不替用户做治理决策。\n"
                             "执行轨迹落盘 .coderef/dispatch/<task_id>.json，用 coderef_dispatch_status 看进度、"
-                            "coderef_dispatch_report 取最终摘要信封。"
+                            "coderef_dispatch_report 取最终摘要信封。\n"
+                            "形态 B：传 intent_text 时必须先 coderef_plan 生成计划卡再执行（确认门），"
+                            "不接受未确认的自然语言直接执行。"
                         ),
                         "inputSchema": {"type": "object", "properties": {
                             "project_path": {"type": "string", "description": "目标项目路径"},
                             "plan_id": {"type": "string", "description": "coderef_plan 返回的计划 ID"},
                             "intent": {"type": "string", "enum": ["probe", "single_audit", "recover", "governance", "asset"], "description": "未传 plan_id 时按意图生成默认链"},
+                            "intent_text": {"type": "string", "description": "自然语言意图（仅用于确认门校验，需先 plan）"},
                             "wait": {"type": "boolean", "description": "阻塞等待任务完成，直接返回最终结果", "default": False},
                         }, "required": ["project_path"]},
                     },

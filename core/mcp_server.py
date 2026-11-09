@@ -904,13 +904,24 @@ class Server:
     def _dispatch_plan(self, a):
         from core import dispatcher
         return json.dumps(
-            dispatcher.plan(a.get("intent", "probe"), a["project_path"]),
+            dispatcher.plan(a.get("intent", "probe"), a["project_path"],
+                            intent_text=a.get("intent_text", "")),
             ensure_ascii=False)
 
     def _dispatch_execute(self, a, progress_cb=None):
         from core import dispatcher
         pp = a["project_path"]
         plan_id = a.get("plan_id") or ""
+        # 形态 B 的确认门：自然语言意图必须先经 coderef_plan 出计划卡，再 execute
+        if a.get("intent_text") and not plan_id:
+            return json.dumps({
+                "status": "blocked", "tool": "coderef_execute",
+                "reason": "自然语言意图需先 coderef_plan 生成计划卡并确认后再执行",
+                "owner_actions": {"consumer": [
+                    "coderef_plan(intent_text=...) 查看计划卡",
+                    "coderef_execute(plan_id=...)"],
+                },
+            }, ensure_ascii=False)
         card = (dispatcher.load_plan(pp, plan_id) if plan_id
                 else dispatcher.plan(a.get("intent") or "probe", pp))
         if not isinstance(card, dict) or card.get("status") != "ok":
