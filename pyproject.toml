@@ -47,6 +47,7 @@ exclude = ["tests*", "samples*", "workspace*", "*.tests"]
 
 [tool.setuptools.package-data]
 config = ["*.json"]
+core = ["*.yaml"]
 
 # ─── 覆盖率监控（dev 依赖：pip install -r requirements-dev.txt）───
 [tool.coverage.run]

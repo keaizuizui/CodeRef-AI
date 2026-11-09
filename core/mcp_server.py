@@ -342,6 +342,10 @@ class Server:
         self._handlers = {
             "coderef_whitelist": self._wl,
             "coderef_scope": self._scope,
+            "coderef_plan": self._dispatch_plan,
+            "coderef_execute": self._dispatch_execute,
+            "coderef_dispatch_status": self._dispatch_status,
+            "coderef_dispatch_report": self._dispatch_report,
             "coderef_architecture": self._arch,
             "coderef_docs_read": self._docs_read,
             "coderef_query": self._query,
@@ -422,6 +426,8 @@ class Server:
             # 逐指标打分，DeepSeek 单次可达数十秒）。入重工具集使其默认后台执行 +
             # 自动暴露 wait 参数（阻塞等待直接返回结果），避免同步撞 MCP 宿主超时。
             "coderef_eval",
+            # dispatcher 执行链：默认后台（返回 task_id 轮询），避免同步撞宿主超时
+            "coderef_execute",
         }
 
         # ─── 合并工具内保持同步的轻量 action ───────────────────────────
@@ -514,6 +520,9 @@ class Server:
             # 统一后台化决策：重型工具默认后台，轻量工具同步；background 显式参数可覆盖
             if self._should_background(n, a):
                 tid = str(uuid.uuid4())[:8]; rc = {}
+                a = dict(a)  # 不修改调用方字典
+                # dispatcher 需要知道自己的 task_id 才能把轨迹落到同一文件名
+                a["_task_id"] = tid
                 t = threading.Thread(target=lambda: self._bg(rc, n, a), daemon=True)
                 t.start()
                 with self._locked_tasks() as tasks:
@@ -859,6 +868,8 @@ class Server:
             return self._report(a)
         elif n == "coderef_audit_advisor":
             return self._advisor(a)
+        elif n == "coderef_execute":
+            return self._dispatch_execute(a, progress_cb)
         # 其余工具统一走 _handlers 分发（query / memory_* / owasp / innovation /
         # asset / change_* / scan / whitelist / registry / docs_read 等），
         # 使后台线程与同步路径都能执行任意工具，避免各自散落 if/elif。
@@ -887,6 +898,42 @@ class Server:
 
     def _scope(self, a):
         return _scope(a)
+
+    # ─── dispatcher（5.19.3 形态 A：规则引擎调度） ───
+
+    def _dispatch_plan(self, a):
+        from core import dispatcher
+        return json.dumps(
+            dispatcher.plan(a.get("intent", "probe"), a["project_path"]),
+            ensure_ascii=False)
+
+    def _dispatch_execute(self, a, progress_cb=None):
+        from core import dispatcher
+        pp = a["project_path"]
+        plan_id = a.get("plan_id") or ""
+        card = (dispatcher.load_plan(pp, plan_id) if plan_id
+                else dispatcher.plan(a.get("intent") or "probe", pp))
+        if not isinstance(card, dict) or card.get("status") != "ok":
+            return json.dumps(
+                card if isinstance(card, dict)
+                else {"status": "error", "error": "计划卡无效"},
+                ensure_ascii=False)
+        res = dispatcher.execute(
+            card, lambda tool, args: self._run(tool, args, None), pp,
+            task_id=a.get("_task_id") or "", progress_cb=progress_cb)
+        return json.dumps(res, ensure_ascii=False)
+
+    def _dispatch_status(self, a):
+        from core import dispatcher
+        return json.dumps(
+            dispatcher.status(a["project_path"], a.get("task_id", "")),
+            ensure_ascii=False)
+
+    def _dispatch_report(self, a):
+        from core import dispatcher
+        return json.dumps(
+            dispatcher.report(a["project_path"], a.get("task_id", "")),
+            ensure_ascii=False)
 
     def _tsk(self, a) -> str:
         import time

@@ -1,0 +1,101 @@
+# CodeRef-AI dispatcher 链定义（5.19.3 形态 A：规则引擎，零 LLM）
+# 本文件是链编排的唯一事实源；skill 文档只做人读说明，避免双头维护。
+# 字段：
+#   title/estimate_seconds  计划卡展示
+#   steps[].tool            进程内调用的工具名（经 Server._run 执行）
+#   steps[].args            参数模板，{project_path} 会在执行时替换
+#   steps[].fail            stop（默认）/ continue（失败后继续下一步）
+#   steps[].requires_user   true 表示需要用户决策，执行到该步暂停并浮出
+#   steps[].decision        用户决策说明
+version: 1
+chains:
+  probe:
+    title: "L1 变更探查"
+    estimate_seconds: 90
+    steps:
+      - id: version
+        tool: coderef_version
+        args: {project_path: "{project_path}"}
+      - id: audit_incr
+        tool: coderef_audit
+        args: {project_path: "{project_path}", strategy: incr}
+        fail: continue
+      - id: scan_agent
+        tool: coderef_scan
+        args: {project_path: "{project_path}", tool: agent}
+        fail: continue
+      - id: change_guard
+        tool: coderef_change_guard
+        args: {project_path: "{project_path}"}
+        fail: continue
+
+  single_audit:
+    title: "单次全量审计"
+    estimate_seconds: 180
+    steps:
+      - id: version
+        tool: coderef_version
+        args: {project_path: "{project_path}"}
+      - id: audit
+        tool: coderef_audit
+        args: {project_path: "{project_path}", strategy: full}
+
+  recover:
+    title: "上下文恢复"
+    estimate_seconds: 20
+    steps:
+      - id: recover
+        tool: coderef_operation_memory
+        args: {project_path: "{project_path}", action: recover, limit: 8}
+      - id: version
+        tool: coderef_version
+        args: {project_path: "{project_path}"}
+      - id: kg_status
+        tool: coderef_memory
+        args: {project_path: "{project_path}", action: status}
+        fail: continue
+
+  governance:
+    title: "L2 架构治理主链"
+    estimate_seconds: 300
+    steps:
+      - id: version
+        tool: coderef_version
+        args: {project_path: "{project_path}"}
+      - id: kg_sync
+        tool: coderef_memory
+        args: {project_path: "{project_path}", action: sync, mode: incr}
+        fail: continue
+      - id: arch_audit
+        tool: coderef_arch_audit
+        args: {project_path: "{project_path}"}
+      - id: arch_gap
+        tool: coderef_arch_gap
+        args: {project_path: "{project_path}"}
+        requires_user: true
+        decision: "请确认目标架构（coderef_target_arch_set）后再继续治理；dispatcher 不替用户做治理决策"
+      - id: arch_verify
+        tool: coderef_arch_verify
+        args: {project_path: "{project_path}"}
+        fail: continue
+      - id: health
+        tool: coderef_interpret
+        args: {project_path: "{project_path}", action: health}
+        fail: continue
+
+  asset:
+    title: "L3 资产沉淀"
+    estimate_seconds: 240
+    steps:
+      - id: recover
+        tool: coderef_operation_memory
+        args: {project_path: "{project_path}", action: recover}
+        fail: continue
+      - id: innovation
+        tool: coderef_innovation
+        args: {project_path: "{project_path}"}
+        fail: continue
+      - id: asset
+        tool: coderef_asset
+        args: {project_path: "{project_path}"}
+        fail: continue
