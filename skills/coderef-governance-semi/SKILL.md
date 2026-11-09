@@ -28,7 +28,7 @@ description: "治理主链「半自动确认版」。在 coderef-governance 五�
 ### 梦钩子
 
 - **先看梦再摸底**：开工前读 `context.memory_digest.dream` 或 `coderef_dream(action=read, limit=5)`，取上次治理目标与未决问题作为线索。
-- **梦只出草稿**：梦提供的 `target` / `refactor` 草稿只是假设，定标、差距、验证仍由确定性工具给出，不得把草稿当已确认结论。
+- **梦只出草稿**：梦提供的 `refactor_draft` 草稿（含 target 建议）只是假设，定标、差距、验证仍由确定性工具给出，不得把草稿当已确认结论。
 - **确认门带梦的未决问题**：M-FW / M2 / M3a 等确认门提问时，可把梦的 `open_questions` 一并交给用户判断，但必须标注“这是梦里的假设，证据是 …”。
 - **决策后 seed**：定标、治理范围、豁免等关键决策落定后，seed 1–3 条（每条 ≤200 字）；不自动调用 `coderef_dream(action=run)`。
 - **草稿需确认**：`refactor_draft` 草稿用 `coderef_dream(action=drafts)` 读取，可在确认门带给用户；应用前必须走 `coderef_arch_verify` / `coderef_target_adopt`。

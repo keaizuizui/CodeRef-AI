@@ -871,10 +871,15 @@ def _collect_git(project_path: str) -> dict:
     rc, out, _ = _git(["status", "--porcelain"], project_path)
     if rc == 0:
         for line in out.splitlines()[:MAX_CHANGED_FILES]:
-            path = line[3:] if len(line) > 3 else line
+            # porcelain 首行可能被 _git 的 strip() 去掉状态前缀空格，
+            # 不能按固定偏移切；用 split(None, 1) 稳健取路径。
+            parts = line.split(None, 1)
+            if len(parts) < 2:
+                continue
+            path = parts[1].strip()
             if " -> " in path:  # 重命名行：只保留新路径
-                path = path.split(" -> ", 1)[1]
-            path = path.strip().strip('"')
+                path = path.split(" -> ", 1)[1].strip()
+            path = path.strip('"')
             if path:
                 changed_files.append(path.replace("\\", "/")[:200])
     return {"available": True, "head": head, "commits": commits,
@@ -1011,18 +1016,18 @@ _PROMPT_HEAD = """项目：{project}
 """
 
 _PITFALL_PROMPT = """请输出 JSON：
-{{
+{
   "goal": "一句话概括当前目标（可为空串）",
   "notes": [
-    {{
+    {
       "kind": "rule|pitfall|convention|association",
       "text": "一条可被下次直接想起的经验（<=120字）",
       "evidence": ["file:相对路径", "git:短SHA", "audit:工具名", "seed:种子ID", "dispatch:任务ID"],
       "confidence": 0.0
-    }}
+    }
   ],
   "open_questions": ["尚未验证、需要下次留意的问题（<=3条）"]
-}}
+}
 
 硬约束：
 1. 最多 5 条 notes；没有可靠经验就返回空数组，不要凑数。
@@ -1232,7 +1237,6 @@ _NOISE_PROPOSAL_PROMPT = """本次 job=noise_proposal（草稿）：产出「降
 """
 
 # job → 输出契约（共用同一段原料头，只换这部分）
-_USER_PROMPT = _PROMPT_HEAD + _PITFALL_PROMPT
 _JOB_BODIES = {
     "pitfall": _PITFALL_PROMPT,
     "recap": _RECAP_PROMPT,
@@ -1627,6 +1631,50 @@ def _render_md(goal: str, notes: List[dict], open_questions: List[str]) -> str:
     return _fit_lines(lines, DREAM_MD_MAX_CHARS)
 
 
+def _md_section(md: str, heading: str) -> str:
+    """取 DREAM.md 中某个 `## 标题` 到下一个 `## ` 之间的正文。"""
+    text = str(md or "")
+    marker = "## " + heading
+    idx = text.find(marker)
+    if idx < 0:
+        return ""
+    section = text[idx + len(marker):]
+    end = section.find("\n## ")
+    return section[:end] if end >= 0 else section
+
+
+def _extract_md_goal(md: str) -> str:
+    """从当前 DREAM.md 的「当前目标」取第一条非占位项。"""
+    for line in _md_section(md, "当前目标").splitlines():
+        line = line.strip()
+        if not line.startswith("- "):
+            continue
+        item = line[2:].strip()
+        if not item or item in ("（未记录）", "（暂无）"):
+            continue
+        return item
+    return ""
+
+
+def _extract_md_open_questions(md: str) -> List[str]:
+    """从当前 DREAM.md 的「未决问题」提取已有问题。
+
+    `（暂无）` 是占位、`（假设，未验证）` 由 notes 重渲染，都不保留。
+    """
+    out: List[str] = []
+    for line in _md_section(md, "未决问题").splitlines():
+        line = line.strip()
+        if not line.startswith("- "):
+            continue
+        item = line[2:].strip()
+        if not item or item == "（暂无）":
+            continue
+        if item.startswith("（假设，未验证）"):
+            continue
+        out.append(item)
+    return out
+
+
 def _write_run(project_path: str, record: dict) -> str:
     name = (datetime.now().strftime("%Y%m%d-%H%M%S")
             + "-" + uuid.uuid4().hex[:4] + ".json")
@@ -1712,6 +1760,9 @@ def run(project_path: str, trigger: str = "manual", llm=None,
     seeds = _read_seeds(pp)
     consumed = _as_int((state.get("cursor") or {}).get("seeds_consumed"), 0)
     new_seeds = seeds[consumed:consumed + MAX_SEEDS]
+    # 本轮只消费最前面的 MAX_SEEDS 条；剩余留到下次，不能直接记成全部已消费。
+    seeds_consumed_after = min(len(seeds), consumed + MAX_SEEDS)
+    seeds_pending = max(0, len(seeds) - seeds_consumed_after)
     materials = _collect(pp, state, new_seeds)
     salient = _salient_count(materials)
     existing = _load_notes(pp)
@@ -1823,7 +1874,7 @@ def run(project_path: str, trigger: str = "manual", llm=None,
     })
     state["cursor"] = {
         "audit_after": last_audit or (state.get("cursor") or {}).get("audit_after", ""),
-        "seeds_consumed": len(seeds),
+        "seeds_consumed": seeds_consumed_after,
         "git_head": (materials.get("git") or {}).get("head", ""),
     }
     _save_state(pp, state)
@@ -1843,9 +1894,11 @@ def run(project_path: str, trigger: str = "manual", llm=None,
             "audit_events": len(materials.get("audit") or []),
             "dispatch_events": len(materials.get("dispatch") or []),
             "seeds": len(new_seeds),
+            "seeds_pending": seeds_pending,
             "git_commits": len((materials.get("git") or {}).get("commits") or []),
         },
         "goal": goal,
+        "seeds_pending": seeds_pending,
         "items": [{"text": n.get("text", ""), "kind": n.get("kind", ""),
                    "claim_type": n.get("claim_type", "fact"),
                    "status": n.get("status", ""),
@@ -1882,6 +1935,7 @@ def run(project_path: str, trigger: str = "manual", llm=None,
         "notes": {"added": len(accepted), "verified": len(verified),
                   "rejected": len(rejected), "decayed": len(decayed),
                   "dropped": dropped, "total": len(notes)},
+        "seeds_pending": seeds_pending,
         "dream_md_path": _path(pp, DREAM_MD), "dream_md_chars": md_chars,
         "notes_path": _path(pp, NOTES_FILE), "run_path": run_path,
         "llm": record["llm"], "limits": record["limits"],
@@ -1993,6 +2047,13 @@ def _run_draft(pp: str, cfg: dict, state: dict, trigger: str, job: str,
         "last_run_tokens": est_tokens,
         "runs": int(state.get("runs") or 0) + 1,
     })
+    # 草稿提示词确实消费了这批 seed，成功写盘后按同样规则推进 cursor。
+    consumed = _as_int((state.get("cursor") or {}).get("seeds_consumed"), 0)
+    seeds_consumed_after = min(len(seeds), consumed + MAX_SEEDS)
+    seeds_pending = max(0, len(seeds) - seeds_consumed_after)
+    cursor = dict(state.get("cursor") or {})
+    cursor["seeds_consumed"] = seeds_consumed_after
+    state["cursor"] = cursor
     _save_state(pp, state)
 
     llm_provider = getattr(llm_cfg, "provider", None)
@@ -2004,6 +2065,7 @@ def _run_draft(pp: str, cfg: dict, state: dict, trigger: str, job: str,
                                     str(llm_provider or "")),
                 "model": str(getattr(llm_cfg, "model", "") or "")},
         "materials": draft["materials"],
+        "seeds_pending": seeds_pending,
         "items": [{"text": n.get("text", ""),
                    "status": n.get("status", ""),
                    "evidence": list(n.get("evidence") or [])}
@@ -2037,6 +2099,7 @@ def _run_draft(pp: str, cfg: dict, state: dict, trigger: str, job: str,
         "items": len(items), "rejected": len(rejected),
         "requires_confirmation": True, "next_tools": next_tools,
         "open_questions": open_questions,
+        "seeds_pending": seeds_pending,
         "run_path": run_path, "limits": limits, "llm": record["llm"],
         "envelope": env,
     }
@@ -2065,6 +2128,7 @@ def _run_false_memory_check(pp: str, cfg: dict, state: dict,
     now = _now()
     checked = kept = 0
     rejected: List[dict] = []
+    unknown: List[dict] = []
     for n in notes:
         if str(n.get("status") or "") not in ("verified", "hypothesis"):
             continue
@@ -2074,8 +2138,10 @@ def _run_false_memory_check(pp: str, cfg: dict, state: dict,
         for ref in n.get("evidence") or []:
             ok, detail = _check_ref(ref, ctx)
             if ok is False:
-                # 审计日志按日轮转，只有 7 天窗口；窗口外找不到 ≠ 证据失效。
+                # 审计日志按日轮转，只有 7 天窗口；窗口外找不到 ≠ 证据失效，
+                # 但必须如实记为 unknown，不能悄悄吞掉。
                 if str(ref).startswith("audit:"):
+                    unknown.append({"ref": str(ref), "detail": detail})
                     continue
                 failed.append({"ref": str(ref), "detail": detail})
         if failed:
@@ -2096,14 +2162,21 @@ def _run_false_memory_check(pp: str, cfg: dict, state: dict,
         return _fail(pp, state, cfg, trigger, "notes.json 写入失败", {},
                      job="false_memory_check")
 
-    goal = str(state.get("goal") or "")
-    open_questions = [str(q) for q in (state.get("open_questions") or [])
+    goal = str(state.get("goal") or "").strip()
+    open_questions = [str(q).strip() for q in (state.get("open_questions") or [])
                       if str(q).strip()]
     md_path = _path(pp, DREAM_MD)
-    err = _write_text(md_path, _render_md(goal, notes, open_questions))
-    if err:
-        return _fail(pp, state, cfg, trigger, f"DREAM.md 写入失败: {err}", {},
-                     job="false_memory_check")
+    current_md = _read_text(md_path)
+    # 旧 state 可能没有 goal / open_questions：回落到当前 DREAM.md，避免清空。
+    if not goal:
+        goal = _extract_md_goal(current_md)
+    if not open_questions:
+        open_questions = _extract_md_open_questions(current_md)
+    if rejected:
+        err = _write_text(md_path, _render_md(goal, notes, open_questions))
+        if err:
+            return _fail(pp, state, cfg, trigger, f"DREAM.md 写入失败: {err}", {},
+                         job="false_memory_check")
 
     # 维护不是做梦：只更新 last_attempt_at，不动 last_dream_at。
     state.update({
@@ -2124,22 +2197,29 @@ def _run_false_memory_check(pp: str, cfg: dict, state: dict,
         "checked": checked,
         "rejected": rejected,
         "kept": kept,
+        "unknown": len(unknown),
+        "unknown_items": unknown,
         "limits": limits,
     }
     run_path = _write_run(pp, record)
 
     from core.result_envelope import envelope
+    cannot_conclude = ["笔记的语义真值（只核验证据引用是否仍存在）"]
+    if unknown:
+        cannot_conclude.append("部分 audit 证据超出 7 天窗口，未能复核")
     env = envelope(
-        f"复核 {checked} 条，拒绝 {len(rejected)} 条",
+        f"复核 {checked} 条，拒绝 {len(rejected)} 条，"
+        f"{len(unknown)} 条证据无法复核（unknown）",
         usable=True,
-        cannot_conclude=["笔记的语义真值（只核验证据引用是否仍存在）"],
+        cannot_conclude=cannot_conclude,
         guardrails=["false_memory_check 只核验证据引用是否仍存在，"
-                    "不判断语义真值"],
+                    "不判断语义真值；audit 窗口外证据如实记为 unknown"],
     )
     return {
         "status": "ok", "tool": "coderef_dream", "action": "run",
         "project_path": pp, "trigger": trigger, "job": "false_memory_check",
         "checked": checked, "rejected": len(rejected), "kept": kept,
+        "unknown": len(unknown), "unknown_items": unknown,
         "dream_md_path": md_path, "notes_path": _path(pp, NOTES_FILE),
         "run_path": run_path, "llm": record["llm"], "limits": limits,
         "envelope": env,

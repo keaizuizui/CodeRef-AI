@@ -8,7 +8,7 @@
 import json
 import logging
 import os
-from typing import List
+from typing import List, Optional
 
 logger = logging.getLogger("coderef")
 
@@ -93,10 +93,16 @@ def current_profile() -> dict:
                 "error": f"profile 读取异常，已回退 full: {e}"}
 
 
-def filter_tools(tools: list) -> list:
-    """full 原样返回；lite 只保留 LITE_TOOLS 内的工具，保持原顺序。"""
+def filter_tools(tools: list, profile: Optional[str] = None) -> list:
+    """full 原样返回；lite 只保留 LITE_TOOLS 内的工具，保持原顺序。
+
+    传入合法 profile 时不再读配置（避免同一请求重复读配置文件）。
+    """
     try:
-        if current_profile()["profile"] != "lite":
+        target = str(profile or "").strip().lower()
+        if target not in _VALID_PROFILES:
+            target = current_profile()["profile"]
+        if target != "lite":
             return tools
         return [t for t in tools if isinstance(t, dict) and t.get("name") in LITE_TOOLS]
     except Exception:  # noqa: BLE001
