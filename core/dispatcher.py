@@ -93,12 +93,32 @@ def load_chains() -> dict:
 
 
 def _fallback_hint() -> dict:
-    return {"fallback": "dispatcher 不可用时，53 个裸工具照常使用；"
+    return {"fallback": "dispatcher 不可用时，全部裸工具照常使用；"
                         "也可按 skills/ 的 coderef-mcp 手工编排"}
 
 
-def plan(intent: str, project_path: str) -> dict:
-    """生成计划卡（纯规划不执行），并落盘到 .coderef/dispatch/plans/。"""
+def plan(intent: str, project_path: str, intent_text: str = "") -> dict:
+    """生成计划卡（纯规划不执行），并落盘到 .coderef/dispatch/plans/。
+
+    5.19.4：传 intent_text 时先走 LLM 意图层（形态 B）选链；无 Key 硬阻断并
+    提示改用 intent 枚举；置信度不足时不擅自执行，返回候选让用户确认。
+    """
+    route = None
+    mode = "rule"
+    if intent_text:
+        from core.intent_router import classify
+        route = classify(intent_text)
+        if route.get("status") != "ok":
+            return {"status": route.get("status", "error"),
+                    "tool": "coderef_plan",
+                    "project_path": os.path.abspath(project_path),
+                    "intent_text": intent_text,
+                    "mode": route.get("mode", "llm"),
+                    "router": route,
+                    **_fallback_hint()}
+        intent = route.get("intent") or intent
+        mode = "llm"
+
     chains = load_chains()
     if chains.get("error"):
         return {"status": "error", "tool": "coderef_plan",
@@ -138,6 +158,9 @@ def plan(intent: str, project_path: str) -> dict:
         "estimated_tool_count": len(steps),
         "estimated_seconds": int(chain.get("estimate_seconds") or 0),
         "decision_points": decision_points,
+        "mode": mode,
+        "intent_text": intent_text,
+        "router": route or {"mode": "rule", "note": "枚举意图（形态 A）"},
         "note": "纯规划不执行；确认后用 coderef_execute(plan_id=...) 执行",
         "chain_source": CHAINS_FILE,
     }
