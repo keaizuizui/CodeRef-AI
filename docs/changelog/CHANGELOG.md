@@ -4,6 +4,20 @@
 
 ---
 
+### v5.18.10 — 三路复审整改：7 条缺陷全修 + 两处结构性收尾
+
+> 来源：WSL CodeRabbit（6 条）、code-review-report-plugin（7 条，双代理 2/2 确认）、brooks-lint（PR Review）对 `13e0da6..f4db7f5` 的复审。
+
+- **记分卡 findings 新鲜度（major）**：`_dim_findings` 的循环变量 `fp` 覆盖了外层 findings JSON 路径，导致过期判断读取最后一条发现的文件；改为独立变量 `f_path`，并让产物 mtime 不可读时 `stale=null`（不再冒充"新鲜"）。
+- **findings 路径过滤**：由子串匹配改为路径段匹配，`src/cache`、`webcache` 一类真实包不再被当成运行时目录排除。
+- **审计新鲜度三态**：`interpret(health)` 的 `_scan_age_hours` 只解析一次；`data_stale` 改为 true/false/null 三态，`scan_ts` 缺失时返回 null（未知），不再报告为新鲜。
+- **根目录名误判**：`blind_spot_detector` / `resource_gap_detector` 只在子目录时收录目录名，仓库名（如 `requests`）不再把同名真实依赖吞掉。
+- **成熟度扫描口径**：`lib/data/cache` 等通用目录名只在项目根排除（`src/data`、`app/cache` 保留），并接入 whitelist 的 dir 条目；环境与工具目录仍任意层级排除。
+- **LLM 配置容错**：配置查找改为逐候选 try/except，某个候选 JSON 损坏不再终止后续（用户级配置写坏时仍能读到工具仓/工作目录的 key）。
+- **依赖方向收尾（Brooks Suggestion）**：新增中立模块 `core/output_paths.py`（报告目录 + `.coderef/.gitignore` 规则），编排层不再反向 import 渲染层；`report_renderer` 保留同名兼容出口。
+- **快报函数拆分（Brooks Suggestion）**：`artifact_freshness.report()` 拆出 `_artifact_item` / `_kg_item`，主函数只做收集与拼装。
+- **验证**：新增 7 例复审回归（fp 遮蔽、cache 子包、三态新鲜度、成熟度目录层级、坏配置容错、仓库名误判、中立路径模块）；全量 pytest **298 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.18.9 — 陈旧输入防呆：`coderef_version` 附带派生产物新鲜度快报
 
 > 承接「对方输入陈旧」课题。不做内容指纹/不改评分，只在版本探针上增加一份只读快报，让调用 AI 一行确认「哪些产物、生成于何时、代码是否已比它新」，自行决定是否先重跑。

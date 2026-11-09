@@ -584,7 +584,11 @@ class ResourceGapDetector:
         for fpath in self._all_py_files:
             local_names.add(os.path.basename(fpath)[:-3] if fpath.endswith(".py")
                             else os.path.basename(fpath))
-            local_names.add(os.path.basename(os.path.dirname(fpath)))
+            # 项目根目录名是仓库名，不能当本地模块：仓库名与依赖同名时
+            # （如仓库叫 requests）会隐藏真实缺失模块。
+            parent = os.path.dirname(fpath)
+            if os.path.abspath(parent) != os.path.abspath(project_path):
+                local_names.add(os.path.basename(parent))
 
         # 检查每个 import
         checked_imports = set()

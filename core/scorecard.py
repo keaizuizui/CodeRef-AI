@@ -415,11 +415,12 @@ def _dim_findings(project_path: str) -> dict:
         if not isinstance(f, dict) or str(f.get("kind") or "") == "advice":
             continue
         # 运行时/第三方产物里的发现不计入健康分：旧快照可能把它们算进分母
-        # （外部实测证据锚点前三条全是 .ms-playwright 的 Chromium 脚本）
-        fp = str(f.get("file_path") or "").replace("\\", "/")
-        if any(seg in fp for seg in (".ms-playwright", ".coderef/", "cache/",
-                                     ".venv/", "site-packages/",
-                                     "_refactor_backup/")):
+        # （外部实测证据锚点前三条全是 .ms-playwright 的 Chromium 脚本）。
+        # 按路径段判定，避免子串匹配把 src/cache 这类真实包误排除。
+        f_path = str(f.get("file_path") or "").replace("\\", "/")
+        segments = set(f_path.split("/"))
+        if segments & {".ms-playwright", ".coderef", ".venv", "site-packages",
+                       "_refactor_backup"}:
             continue
         tier = str(f.get("tier") or "low").lower()
         if tier == "high":
@@ -434,10 +435,11 @@ def _dim_findings(project_path: str) -> dict:
                 evidence.append(anchor)
     score = max(0, 100 - h * 8 - m * 3 - lo * 1)
     # 新鲜度：源码比审计产物新超过 1 天 → 标记过期，避免把旧结论当当前健康度
+    # fp 保持 findings JSON 路径，不得被循环变量覆盖（外部复审 major）。
     try:
         stale = _latest_source_mtime(project_path) > os.path.getmtime(fp) + 86400
     except OSError:
-        stale = False
+        stale = None  # 产物 mtime 读不到 → 新鲜度未知，不冒充"新鲜"
     raw = {"high": h, "medium": m, "low": lo,
            "total_files": data.get("total_files", 0),
            "scan_ts": data.get("scan_ts", ""),
@@ -475,7 +477,7 @@ def _dim_governance(project_path: str) -> dict:
         age_days = (datetime.now() -
                     datetime.fromtimestamp(os.path.getmtime(db))).days
     except OSError:
-        age_days = 0
+        age_days = None  # 读不到库 mtime → 新鲜度未知，不据此判定"未过期"
     raw = {"open": len(issues), "high": high, "overdue": len(overdue),
            "archived": archived, "rejected": rejected,
            "db_age_days": age_days}
@@ -483,6 +485,11 @@ def _dim_governance(project_path: str) -> dict:
         return _unknown(
             "governance",
             "治理库条目全部为人工驳回（没有有效闭环），不能据此给出闭环分",
+            raw, [_rel(project_path, db)])
+    if age_days is None:
+        return _unknown(
+            "governance",
+            "治理库最后更新时间不可读，无法判断是否过期，请重跑 coderef_gov_report",
             raw, [_rel(project_path, db)])
     if age_days > 30:
         return _unknown(

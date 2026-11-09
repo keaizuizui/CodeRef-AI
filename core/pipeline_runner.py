@@ -375,9 +375,9 @@ def docs(project_path: str, output_dir: str = None,
 def _default_report_root(project_path: str) -> str:
     """报告产物根目录（项目侧隔离：<project>/.coderef/report，见 U-51）。
 
-    延迟导入 report_renderer，避免与渲染层形成模块级循环依赖。
+    实现在中立模块 output_paths，编排层不反向依赖渲染层（外部 Brooks 复审）。
     """
-    from core.report_renderer import default_report_root
+    from core.output_paths import default_report_root
     return default_report_root(project_path)
 
 
@@ -453,7 +453,7 @@ def _dump_findings_json(r: PipeResult, out: str) -> None:
         if out:
             targets.append(_findings_json_path(r.project_path, out))
         # 顺带建立 .coderef/.gitignore：审计产物默认不应被 git 跟踪
-        from core.report_renderer import ensure_coderef_gitignore
+        from core.output_paths import ensure_coderef_gitignore
         ensure_coderef_gitignore(r.project_path)
         for fp in dict.fromkeys(targets):
             os.makedirs(os.path.dirname(fp), exist_ok=True)
@@ -830,7 +830,7 @@ class Pipe:
         # 避免真实多项目/跨仓协作时把 coderef_arch_*.md 写进对方主仓（r6 红线段落）
         # 与 audit/report/docs 同源：默认落项目侧 .coderef/report（U-51 隔离），
         # 不再写旧共享目录 coderef-report/（否则多项目 last-writer-wins）
-        from core.report_renderer import default_report_root, ensure_coderef_gitignore
+        from core.output_paths import default_report_root, ensure_coderef_gitignore
         out = output_dir or default_report_root(project_path)
         ensure_coderef_gitignore(project_path)
 

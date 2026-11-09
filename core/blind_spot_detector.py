@@ -158,7 +158,10 @@ class BlindSpotDetector:
                 rel = os.path.relpath(fp, project_path)
                 self._all_module_names.add(rel.replace(os.sep, ".").replace(".py", ""))
                 self._all_local_names.add(os.path.basename(fp)[:-3])
-                self._all_local_names.add(os.path.basename(root))
+                # 只在子目录时收录目录名：项目根目录名是仓库名，若与第三方包
+                # 同名（如仓库叫 requests），会把真实缺失依赖误判为本地模块。
+                if os.path.abspath(root) != os.path.abspath(project_path):
+                    self._all_local_names.add(os.path.basename(root))
 
                 # 提取 import 语句
                 imports = self._extract_imports(fp)
