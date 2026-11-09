@@ -52,6 +52,30 @@ CodeRef 不靠宣称，靠可复现的硬指标（完整方法见后文「可靠
 
 ---
 
+## 给调用方 AI 的结论信封（v5.18.12 起）
+
+真正读结论的往往是对方的 AI，而它的用户可能不懂代码。为避免把「输入过期」说成「工具坏了」，6 个高频工具的返回顶层新增 `envelope`：
+
+```json
+"envelope": {
+  "verdict": "定标过期：本轮对齐度/覆盖率不可用，不是代码问题",
+  "usable_for_decisions": false,
+  "blocked_by": [{"id": "stale_target_arch", "owner": "consumer",
+                  "human": "target_arch 已过期，请先重新定标", "limitation": "KL-01"}],
+  "owner_actions": {"coderef": [], "consumer": ["coderef_target_arch_set"]},
+  "cannot_conclude": ["对齐度", "覆盖率", "差距条数作为代码质量结论"],
+  "guardrails": ["定标过期时任何基于 target_arch 的指标都不可对外引用"],
+  "limitations": ["KL-01"]
+}
+```
+
+- **归属模型**：`owner=coderef` 才是工具缺陷；`consumer` 表示需要调用方先重跑/重定标；`by_design` 是已知取舍。
+- **已知限制登记表 KL-01~KL-09**：定标过期、IMPORTS 只建内部边、CALLS 按 import 作用域、模块数多口径、architecture 不产 findings、过期产物 unknown、备份需 whitelist、动态调用不覆盖、文档只认 Wiki 目录。
+- **握手契约**：`coderef_version(project_path)` 返回 `consumer_contract`（3 条必读 + KL 全表 + 字段说明），调用方 AI 无需加载本仓 Skill 也能正确转述。
+- **覆盖工具**：`coderef_audit` / `coderef_scan` / `coderef_report` / `coderef_arch_gap` / `coderef_arch_verify` / `coderef_interpret(action=health)`；旧字段全部保留，向后兼容。
+
+---
+
 ## 快速开始
 
 如果你是**非编程人员**：把这部分说明交给你的编程 AI，它会帮你完成安装、配置和第一轮分析。你真正要做的，是最后打开它生成的**项目评估台**和 Wiki，看懂自己的项目。如果你是**自己动手**：照下面四步走。
@@ -206,6 +230,13 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 
 **实体类型：** `module` / `function` / `class` / `method` / `config` / `constant`
 **关系类型：** `CONTAINS` / `IMPORTS` / `INHERITS` / `CALLS` / `REFERENCES`
+
+**关系层口径（v5.18.7 / v5.18.11 起）：**
+
+- **私有函数 100% 收录**：模块级 `_foo` 不再被丢弃（只跳过类方法重复副本与 dunder）。
+- **CALLS 按 import 作用域解析**：只有「本模块内定义」或「确实被本文件 import（含 `as` 别名）」的调用才建边；同名但未 import 的 `check(...)`、`datetime.now` 等属性链一律不建边。精度优先、宁漏不假，因此 `fan_in` 偏保守，关键链路请用 `flow_verify` 核验。
+- **IMPORTS 只建项目内模块边**：第三方/标准库 import 不建边，因此「零 IMPORTS 边模块」比例高属设计取舍，不代表依赖图缺失。
+- **实测（外部 50 万行级项目）**：`check` 入边 7,788 → 12；跨模块且无 import 依据的 CALLS 66.1% → 17.1%；生产→测试调用 89 → 0。
 
 ---
 
@@ -458,7 +489,19 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 > 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.17.0）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.18.0 — 三轨评估（F 轨契合度 / B 轨条件触发 / U 轨只判阻断）+ 业务流程视图
+### 当前版本 v5.18.13 — 结论信封、CALLS 作用域与陈旧输入防呆
+
+> 承接外部审计第二轮/第三轮反馈，用「归属 + 限制」代替“每轮再修一遍”。工具数仍为 52，全部改动向后兼容。
+
+- **结论信封**（5.18.12）：audit / scan / report / arch_gap / arch_verify / interpret(health) 返回 `envelope`，含 `usable_for_decisions`、`blocked_by.owner`、`owner_actions`、`cannot_conclude`、`guardrails`、`limitations`（KL-01~KL-09）。
+- **握手契约**（5.18.12）：`coderef_version(project_path)` 返回 `consumer_contract`，调用方 AI 无需加载 Skill 即可正确区分「工具缺陷 / 输入过期 / 设计取舍」。
+- **CALLS 按 import 作用域解析**（5.18.11）：同名未 import、属性链不建边；外部实测 `check` 入边 7,788→12、无 import 依据 66.1%→17.1%、生产→测试 89→0。
+- **评估台可用性**（5.18.11）：画布复制进报告目录，修复 open_server 下三个 iframe 404；统计口径优先当前图谱 `built_at`。
+- **陈旧输入防呆**（5.18.9）：`coderef_version` 的 `artifacts_report` 列出各产物生成时间、`stale_by_age`、`code_newer` 与刷新方式。
+- **读数诚实化**（5.18.7/5.18.8）：治理/文档/对齐在证据不足时标 `unknown`；私有函数 100% 入图；扫描范围统一接入 whitelist。
+- **验证**：全量 pytest **313 全绿**；`core/` pyflakes 0；`check_version` EXIT=0；`coderef-src` SHA256 一致。
+
+#### v5.18.0 — 三轨评估（F 轨契合度 / B 轨条件触发 / U 轨只判阻断）+ 业务流程视图
 
 > 承接用户 2026-11-05 拍板（采纳外部 skill 的「三轨层级」）：评估台从「产品/UX 两 Tab 平行」改为**三轨有主轴**——F 轨业务契合度必跑，B 轨业务模式条件触发，U 轨人格走查只判阻断、不独立评分。版本按 SOP 升 minor（5.17.0 → 5.18.0；P1/P2 合并落地）。
 > - **产品证据包**（`core/product_evidence.py`，确定性、无 LLM）：能力清单**自动枚举**（业务架构树 + 前端菜单/表单 + 路由 + CLI 子命令），声称/首次价值路径/许可/付费/路线图信号全部带 `file:line`、路由或命令锚点；推不出的写 `unknown`，不写 0、不编造。
