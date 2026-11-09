@@ -32,6 +32,7 @@ CodeRef-AI 通过 MCP 协议暴露一组工具，给编程 AI 一双「确定性
 4. **引用梦必须标注假设**：写“这是梦里的假设，证据是 …”，不得转述为事实，也不得把 `hypothesis` 写进「已验证规则」。
 5. **冲突以工具为准**：梦与确定性工具冲突时，以工具结论为准，并 seed 一条“梦错了”的 pitfall。
 6. **草稿必须先确认**：`review_draft` / `refactor_draft` / `asset_candidate` / `noise_proposal` 只写 `.coderef/dream/drafts/`；用 `coderef_dream(action=drafts)` 读取，按返回的 `next_tools` 走确定性工具，并经用户确认后才能应用，**不得自动落地**。
+7. **P3 只手动跑**：`false_memory_check` / `eval_replay` 仅在用户明确要求时调用；`eval_replay` 的 LLM summary 是软判断，不能覆盖确定性指标。
 
 > 工具面提示：`CODEREF_TOOL_PROFILE=lite` 时只暴露 12 个入口；本文提到的 full-only 工具请通过 `coderef_plan/execute` 链调用，或临时切回 `full`。
 
