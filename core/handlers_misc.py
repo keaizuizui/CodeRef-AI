@@ -15,6 +15,16 @@ import os
 
 from core.tools_manifest import _SINGLE_TOOL_LABELS, WHITELIST_ACTIONS
 
+
+def _env_with_freshness(envelope: dict, project_path: str, artifacts: list) -> dict:
+    """给信封挂 freshness 块（5.19.1）；任何异常都不影响主结论。"""
+    try:
+        from core.freshness_guard import attach_freshness
+        return attach_freshness(envelope, project_path, artifacts)
+    except Exception:  # noqa: BLE001
+        return envelope
+
+
 def _scan_tool(a: dict) -> str:
     """运行单个审计维度（coderef_scan），返回结构化 JSON findings。
 
@@ -66,7 +76,8 @@ def _scan_tool(a: dict) -> str:
             "elapsed": r.elapsed,
         },
         "errors": r.errors,
-        "envelope": for_scan(len(r.findings), tool, r.errors),
+        "envelope": _env_with_freshness(
+            for_scan(len(r.findings), tool, r.errors), pp, ["kg_db"]),
     }, ensure_ascii=False)
 
 
@@ -293,8 +304,10 @@ def _report(a) -> str:
         except Exception as e:  # noqa: BLE001
             hr["serve"] = {"ok": False, "error": str(e)}
     from core.result_envelope import for_report
-    hr["envelope"] = for_report(bool(hr.get("ok")), str(hr.get("error") or ""),
-                                getattr(r, "errors", []) or [])
+    hr["envelope"] = _env_with_freshness(
+        for_report(bool(hr.get("ok")), str(hr.get("error") or ""),
+                   getattr(r, "errors", []) or []),
+        pp, ["architecture_report", "scorecard", "audit_findings", "kg_db"])
     return json.dumps(hr, ensure_ascii=False)
 
 

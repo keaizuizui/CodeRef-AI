@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.19.0** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.19.1** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -73,6 +73,23 @@ CodeRef 不靠宣称，靠可复现的硬指标（完整方法见后文「可靠
 - **已知限制登记表 KL-01~KL-09**：定标过期、IMPORTS 只建内部边、CALLS 按 import 作用域、模块数多口径、architecture 不产 findings、过期产物 unknown、备份需 whitelist、动态调用不覆盖、文档只认 Wiki 目录。
 - **握手契约**：`coderef_version(project_path)` 返回 `consumer_contract`（3 条必读 + KL 全表 + 字段说明），调用方 AI 无需加载本仓 Skill 也能正确转述。
 - **覆盖工具**：`coderef_audit` / `coderef_scan` / `coderef_report` / `coderef_arch_gap` / `coderef_arch_verify` / `coderef_interpret(action=health)`；旧字段全部保留，向后兼容。
+
+### 结果级新鲜度硬戳（v5.19.1 起）
+
+信封新增 `freshness` 块，滞后信息直接贴在结论上，调用方不查 `coderef_version` 也能看到：
+
+```json
+"freshness": {
+  "artifacts_used": [{"key": "kg_db", "exists": true, "modified_at": "2026-11-09 10:00:00",
+                      "code_newer": true, "stale_by_age": false, "refresh_hint": "coderef_memory(action=sync) 或重跑 coderef_audit"}],
+  "code_newer": true,
+  "stale_reason": "代码比产物新: 知识图谱",
+  "refresh_action": "coderef_memory(action=sync) 或重跑 coderef_audit"
+}
+```
+
+- **`coderef_query` stale 感知**：查询前比对代码 mtime 与图谱 `built_at`，代码更新超过阈值（默认 30 分钟或 3 个文件）时结果标 `stale=true`，并自动排入后台增量 `sync`，返回 `sync_task_id`；`<project>/.coderef/guard_config.json` 的 `query.mode=block` 可改为同步刷新后重查。
+- **图谱文件级增量**：`coderef_memory(action=sync, mode=incr)` 只重建变更/删除文件及其 import 依赖方的节点与边，并与全量重建结果逐行一致；无变更时不重建。
 
 ---
 

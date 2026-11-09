@@ -402,7 +402,9 @@ def _arch_gap(a: dict) -> str:
     r["tool"] = "coderef_arch_gap"
     r["project_path"] = pp
     from core.result_envelope import for_arch_gap
-    r["envelope"] = for_arch_gap(r)
+    from core.freshness_guard import attach_freshness
+    r["envelope"] = attach_freshness(
+        for_arch_gap(r), pp, ["target_arch", "kg_db"])
     return json.dumps(r, ensure_ascii=False)
 
 
@@ -517,7 +519,9 @@ def _arch_verify(a: dict) -> str:
     r["tool"] = "coderef_arch_verify"
     r["project_path"] = pp
     from core.result_envelope import for_arch_verify
-    r["envelope"] = for_arch_verify(r)
+    from core.freshness_guard import attach_freshness
+    r["envelope"] = attach_freshness(
+        for_arch_verify(r), pp, ["target_arch", "kg_db"])
     return json.dumps(r, ensure_ascii=False)
 
 

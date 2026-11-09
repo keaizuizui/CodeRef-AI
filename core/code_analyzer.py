@@ -614,6 +614,59 @@ class CodeAnalyzer:
         self.save_cache(result)
         
         return result
+
+    def update_analysis(self, project_path: str, current_files: List[str],
+                        changed_files: List[str]) -> Optional[ProjectAnalysis]:
+        """基于既有缓存做文件级增量分析（5.19.1）。
+
+        只重新解析 changed_files，未变文件复用缓存里的 CodeFile；缓存不存在
+        时返回 None，由调用方回退全量 analyze_project。删除文件通过
+        current_files 与缓存文件的差集自动剔除。
+        """
+        cached = self.load_cache(project_path)
+        if cached is None:
+            return None
+        self._current_project = project_path
+        current_abs = {os.path.abspath(f) for f in current_files}
+        changed_abs = {os.path.abspath(f) for f in changed_files}
+
+        kept: List[CodeFile] = []
+        existing_abs: Set[str] = set()
+        for cf in cached.files:
+            ap = os.path.abspath(cf.file_path)
+            if ap not in current_abs:
+                continue  # 已删除的文件
+            existing_abs.add(ap)
+            if ap in changed_abs:
+                parsed = self.parse_file(ap)
+                if parsed is not None:
+                    kept.append(parsed)
+            else:
+                kept.append(cf)
+        # 新增文件（缓存中不存在的变更文件）
+        for ap in sorted(changed_abs - existing_abs):
+            parsed = self.parse_file(ap)
+            if parsed is not None:
+                kept.append(parsed)
+
+        cached.files = kept
+        cached.total_files = len(current_files)
+        cached.total_lines = sum(
+            len((cf.raw_content or "").splitlines()) for cf in kept)
+        cached.languages = {}
+        cached.modules = defaultdict(list)
+        cached.dependencies = set()
+        for cf in kept:
+            cached.languages[cf.language] = cached.languages.get(cf.language, 0) + 1
+            rel_path = os.path.relpath(cf.file_path, project_path)
+            module = os.path.dirname(rel_path) or 'root'
+            cached.modules[module].append(rel_path)
+            cached.dependencies.update(cf.dependencies)
+        try:
+            self.save_cache(cached)
+        except Exception as e:  # noqa: BLE001 —— 缓存写失败不影响本次分析结果
+            logger.warning(f"[CodeAnalyzer] 增量分析缓存写入失败: {e}")
+        return cached
     
     def _analyze_tech_stack(self, analysis: ProjectAnalysis) -> List[str]:
         """分析技术栈（实现提取至模块级 _tech_stack_summary）"""

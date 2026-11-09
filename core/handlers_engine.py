@@ -301,6 +301,8 @@ def _interpret(a: dict) -> str:
     r["project_path"] = pp
     if a.get("action", "health") == "health":
         from core.result_envelope import for_health
-        r["envelope"] = for_health(r)
+        from core.freshness_guard import attach_freshness
+        r["envelope"] = attach_freshness(
+            for_health(r), pp, ["scorecard", "audit_findings", "kg_db"])
     return json.dumps(r, ensure_ascii=False)
 
