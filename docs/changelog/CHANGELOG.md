@@ -4,6 +4,16 @@
 
 ---
 
+### v5.19.0 — 纪律代码化地基：自动变更守卫 + 记忆摘要前置注入
+
+> 5.19.x 版本线第一版（实施真源 `docs/5.19.x-版本线开发文档.md`）。针对「AI 不读 CODEREF.md、不跑 change_guard、不 recover 记忆」三个反复出现的失效，把纪律从文字移进服务端。
+
+- **自动变更守卫**（`core/session_guard.py`）：重工具（audit / scan / query / report / interpret / arch_gap / arch_verify）被调用时，服务端自动比对 git 指纹（HEAD + 工作区变更数）；指纹变化才跑 `ChangeGuard.guard`，结果写入 `<project>/.coderef/session_state.json` 并附在返回体 `context.guard`。同一指纹不重复跑；守卫异常只记 error，不阻断审计。
+- **记忆摘要前置注入**（`core/memory_digest.py`）：每项目进程内首次调用重工具时，自动 `operation_memory.recover` 并压成 ≤800 token 的摘要（活跃任务 / 关键结论 / 未决事项等，最多 12 条），附在 `context.memory_digest`。记忆为空也返回 `available=false` + 原因，不冒充"没这项"。
+- **返回体合并**（`core/mcp_server.py`）：`_run` 拆为「执行 + 会话上下文附加」两层，`_merge_session_context` 只对 JSON 对象生效，非 JSON 原样透传，不改变任何既有字段。
+- **AGENTS.md 自包含化**：不再只写「见 CODEREF.md」，把 6 条红线（恢复记忆、先跑变更守卫、提交身份、提交粒度、发布 SOP、确定性/诚实红线）内联，解决"注入层只有跳转、AI 从不跳转"的失效。
+- **验证**：新增 13 例回归（session_guard 7 + memory_digest 7 + 注入 3，去重后新增 17）；全量 pytest **330 全绿**；`core/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.18.13 — CodeRabbit 复审 4 条：信封错误态与配置容错
 
 > 复审范围 `f4db7f5..HEAD`（5.18.10–5.18.12）。4 条全部成立，无假阳。
