@@ -4,6 +4,14 @@
 
 ---
 
+### v5.21.4 — CodeRabbit 复核剩余 2 条 minor
+
+> 5.21.3 修复后重跑 WSL CodeRabbit，发现从 10 条降到 2 条 minor；本版修掉并收尾。
+
+- **scope 排除模块仍进入 id 集合**：`code_knowledge_graph._collect_analysis_ids` 现在接收 `is_excluded` 回调，与 `_build_from_analysis` 的节点构造共用同一 scope 排除口径；scope 排除文件不再作为 IMPORTS/INHERITS 目标，避免全量构建留下悬空边、破坏 full/incremental 一致性。
+- **未跟踪目录内文件二次编辑漏检**：`session_guard.git_fingerprint` 的 `git status` 增加 `--untracked-files=all`，`_untracked_stamp` 能看到目录内每个文件，编辑未跟踪目录中的已有文件也会改变 digest、触发守卫。
+- **验证**：全量 pytest **437 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.21.3 — 三路复审修复（CodeRabbit / Code Review / Brooks）
 
 > 背景：5.20.0–5.21.2 完成后跑了 WSL CodeRabbit、code-review-report-plugin、Brooks-Lint 三路审查；本版修复确认成立的问题。

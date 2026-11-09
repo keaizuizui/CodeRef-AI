@@ -145,7 +145,7 @@ def _is_excluded_path(rel: str, project_path: str, exclude_dirs) -> bool:
                for d in exclude_dirs)
 
 
-def _collect_analysis_ids(analysis, exclude_dirs=None):
+def _collect_analysis_ids(analysis, exclude_dirs=None, is_excluded=None):
     """预收集项目内模块节点 id 与「类名→类节点 id」映射。
 
     mod_ids 供 IMPORTS 边过滤：仅当 import 目标是项目内真实存在的模块才建边，
@@ -154,20 +154,31 @@ def _collect_analysis_ids(analysis, exclude_dirs=None):
     class_ids_by_name 供 INHERITS 边做与 IMPORTS 一致的目标存在性过滤：仅当
     基类是项目内已注册的类才建边，排除 str/Enum/unittest.TestCase/HTMLParser
     等标准库或第三方基类，避免指向不存在节点的孤儿 INHERITS 边。
-    exclude_dirs 传入时，被排除目录下的文件不进入 id 集合（与节点构造一致）。
+    exclude_dirs / is_excluded 传入时，被排除的文件不进入 id 集合（与节点构造
+    一致）；否则 scope 排除文件仍会被当作 import 目标，产生悬空边。
     """
     proj = getattr(analysis, "project_path", "") or ""
     excl = exclude_dirs or []
+
+    def _skip(rel: str) -> bool:
+        if not rel or _is_excluded_path(rel, proj, excl):
+            return True
+        if is_excluded is None:
+            return False
+        try:
+            return bool(is_excluded(rel))
+        except Exception:  # noqa: BLE001 —— 排除回调故障不阻断建图
+            return False
+
     mod_ids = {
         f"mod:{_module_key(proj, getattr(cf, 'file_path', ''))}"
         for cf in getattr(analysis, "files", [])
-        if getattr(cf, "file_path", "")
-        and not _is_excluded_path(getattr(cf, "file_path", ""), proj, excl)
+        if not _skip(getattr(cf, "file_path", ""))
     }
     class_ids_by_name: Dict[str, str] = {}
     for cf in getattr(analysis, "files", []):
         _rel = getattr(cf, "file_path", "")
-        if not _rel or _is_excluded_path(_rel, proj, excl):
+        if _skip(_rel):
             continue
         _key = _module_key(proj, _rel)
         for _cls in getattr(cf, "classes", []):
@@ -566,7 +577,8 @@ class CodeKnowledgeGraph:
         id 预收集仍用全量 analysis，保证 IMPORTS/INHERITS 能解析到未变文件。
         """
         mod_ids, class_ids_by_name = _collect_analysis_ids(
-            analysis, exclude_dirs=self._exclude_dirs)
+            analysis, exclude_dirs=self._exclude_dirs,
+            is_excluded=self._is_excluded)
         proj = getattr(analysis, "project_path", "") or ""
         n = 0
         for cf in getattr(analysis, "files", []):
