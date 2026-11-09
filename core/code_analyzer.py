@@ -773,6 +773,14 @@ class CodeAnalyzer:
                     or abs(old.get("mtime", 0) - mtime) > 0.1
                     or old.get("size") != size):
                 drifted.add(ap)
+                continue
+            # 同尺寸改写并恢复 mtime 时，mtime+size 都看不出来；快照有 hash
+            # 时补一次内容比对，增量路径与 _is_cache_valid 同口径。
+            old_hash = old.get("hash")
+            if old_hash:
+                cur_hash = _content_hash(ap, size)
+                if cur_hash and cur_hash != old_hash:
+                    drifted.add(ap)
         return drifted
 
     def _analyze_tech_stack(self, analysis: ProjectAnalysis) -> List[str]:
