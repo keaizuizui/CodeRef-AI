@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.21.4** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.21.5** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -219,6 +219,7 @@ coderef_audit(project_path="/path/to/project", background=True)
 coderef_task_status(task_id="...")
 
 # 2. 生成项目 Wiki（未配 Key 时被硬阻断并提示配置）
+#    重型工具：大仓库单次可能 10 分钟以上，不要放在合入门禁/会话首响应同步调用
 coderef_docs(project_path="/path/to/project", background=True)
 
 # 3. 看健康读数（已归并到评估台；有评估台时直接返回其路径，不再产第二份仪表盘）
@@ -348,7 +349,7 @@ coderef_query(project_path=..., query_type="impact", file_path="utils.py")
 | `coderef_gov_schedule` | 定时体检：生成 run_cycle.py + 离期检查 | 否 |
 | `coderef_role_boundary` | 符号级职责越界检测 | 可选 |
 | `coderef_architecture` | 架构分析图谱 + 技术分区布局图（`arch_layout_*`，面向架构师/AI，非用户交付物） | 否 |
-| `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测 | 是 |
+| `coderef_docs` | 项目 Wiki 文档生成 + 子项目探测；重型，大仓单次可能 10 分钟以上，勿在合入门禁同步调用 | 是 |
 | `coderef_docs_read` | 按需读取已生成 Wiki 正文（返回内容而非路径） | 否 |
 | `coderef_query` | 知识图谱结构化查询（9 种查询类型） | 否 |
 | `coderef_review` | 代码审查：diff 变更审查 / 新项目全量语义首查 | 是 |
@@ -568,7 +569,7 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 > 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.17.0）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.21.4 — 梦 job 契约 + 草稿链 + P3 复核/评估 + 复审修复
+### 当前版本 v5.21.5 — 测试方登记册 11 条边界缺陷修复
 
 > 5.21.x 版本线：梦从单一 `pitfall` 扩到「记忆 / 叙事 / 草稿 / 维护」四类 job，并加工具面 profile。
 

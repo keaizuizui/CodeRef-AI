@@ -58,7 +58,7 @@ def _dispatch_dir(project_path: str) -> str:
 
 def _safe_id(value: str) -> str:
     """校验 task_id/plan_id 只含生成格式字符，防止路径穿越。"""
-    if not isinstance(value, str) or not _ID_RE.match(value):
+    if not isinstance(value, str) or not _ID_RE.fullmatch(value):
         raise ValueError(f"非法 id: {value!r}（只允许字母、数字、下划线、短横线）")
     return value
 
@@ -78,6 +78,16 @@ def _write_json(path: str, data: dict) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
+
+
+def _write_trace(project_path: str, task_id: str, trace: dict) -> str:
+    """落盘执行轨迹；失败返回错误文本，绝不向调用方抛 OSError。"""
+    try:
+        _write_json(_trace_path(project_path, task_id), trace)
+        return ""
+    except OSError as e:
+        trace["trace_error"] = str(e)
+        return str(e)
 
 
 def _read_json(path: str) -> Optional[dict]:
@@ -315,7 +325,10 @@ def execute(plan_card: dict, runner: Callable, project_path: str,
     }
     steps = plan_card.get("steps") or []
     progress = _Progress(progress_cb, len(steps))
-    _write_json(_trace_path(project_path, task_id), trace)
+    err = _write_trace(project_path, task_id, trace)
+    if err:
+        return {"status": "error", "task_id": task_id,
+                "error": f"执行轨迹写入失败，已中止（避免无轨迹执行）: {err}"}
 
     for step in steps:
         sid = step.get("id") or step.get("tool") or step.get("check")
@@ -332,9 +345,9 @@ def execute(plan_card: dict, runner: Callable, project_path: str,
                                "owner_actions": [
                                    "请先完成该决策；当前版本重新执行会从链首开始"
                                    "（不支持断点续跑）"]}
-            _write_json(_trace_path(project_path, task_id), trace)
+            _write_trace(project_path, task_id, trace)
             trace["finished_at"] = _now()
-            _write_json(_trace_path(project_path, task_id), trace)
+            _write_trace(project_path, task_id, trace)
             progress.step(sid, "pending_user")
             return {"status": "paused", "task_id": task_id,
                     "paused": trace["paused"], "trace_path":
@@ -358,7 +371,7 @@ def execute(plan_card: dict, runner: Callable, project_path: str,
                 entry["error"] = str(e)
             entry["elapsed"] = round(time.time() - t0, 2)
             trace["steps"].append(entry)
-            _write_json(_trace_path(project_path, task_id), trace)
+            _write_trace(project_path, task_id, trace)
             progress.step(sid, entry["status"])
             if entry["status"] == "failed" and step.get("fail", "stop") == "stop":
                 trace["status"] = "failed"
@@ -377,9 +390,9 @@ def execute(plan_card: dict, runner: Callable, project_path: str,
                 trace["steps"].append(entry)
                 trace["status"] = "paused"
                 trace["paused"] = dict(paused, step=sid)
-                _write_json(_trace_path(project_path, task_id), trace)
+                _write_trace(project_path, task_id, trace)
                 trace["finished_at"] = _now()
-                _write_json(_trace_path(project_path, task_id), trace)
+                _write_trace(project_path, task_id, trace)
                 progress.step(sid, "pending_user")
                 return {"status": "paused", "task_id": task_id,
                         "paused": trace["paused"], "trace_path":
@@ -395,7 +408,7 @@ def execute(plan_card: dict, runner: Callable, project_path: str,
             entry["error"] = str(e)
         entry["elapsed"] = round(time.time() - t0, 2)
         trace["steps"].append(entry)
-        _write_json(_trace_path(project_path, task_id), trace)
+        _write_trace(project_path, task_id, trace)
         progress.step(sid, entry["status"])
         if entry["status"] == "failed" and step.get("fail", "stop") == "stop":
             trace["status"] = "failed"
@@ -405,10 +418,13 @@ def execute(plan_card: dict, runner: Callable, project_path: str,
         trace["status"] = "completed"
     trace["current_step"] = ""
     trace["finished_at"] = _now()
-    _write_json(_trace_path(project_path, task_id), trace)
-    return {"status": trace["status"], "task_id": task_id,
-            "trace_path": _trace_path(project_path, task_id),
-            "steps": len(trace["steps"]), "gates": len(trace.get("gates") or [])}
+    _write_trace(project_path, task_id, trace)
+    result = {"status": trace["status"], "task_id": task_id,
+              "trace_path": _trace_path(project_path, task_id),
+              "steps": len(trace["steps"]), "gates": len(trace.get("gates") or [])}
+    if trace.get("trace_error"):
+        result["trace_error"] = trace["trace_error"]
+    return result
 
 
 def status(project_path: str, task_id: str) -> dict:

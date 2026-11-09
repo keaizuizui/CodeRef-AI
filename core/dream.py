@@ -43,7 +43,7 @@ import threading
 import uuid
 from collections import Counter
 from datetime import datetime, timedelta
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -107,6 +107,7 @@ MAX_OUTPUT_TOKENS = 2048
 _EVIDENCE_RE = re.compile(r"^(file|git|commit|audit|seed|dispatch|trace):(.+)$")
 _ID_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{4,40}$")
+_AUDIT_TOOL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 
 # 笔记类别 → DREAM.md 分组标签
 KIND_LABELS = {
@@ -131,6 +132,21 @@ DEFAULT_CONFIG = {
 # 进程内「本项目已尝试启动补梦」集合（一次启动一轮）
 _started = set()
 _start_lock = threading.Lock()
+
+# 同一项目的 run/seed 串行化：notes.json 是整文件读改写，并发 run 会互相覆盖；
+# seeds.jsonl 的多线程 append 也可能丢行。RLock 允许同线程内嵌套调用。
+_run_locks: Dict[str, threading.RLock] = {}
+_run_locks_guard = threading.Lock()
+
+
+def _project_lock(pp: str) -> threading.RLock:
+    key = os.path.normcase(os.path.abspath(pp))
+    with _run_locks_guard:
+        lock = _run_locks.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _run_locks[key] = lock
+        return lock
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -382,12 +398,36 @@ def _load_notes(project_path: str) -> List[dict]:
     return out
 
 
+_notes_lock = threading.Lock()
+_save_base = threading.local()
+
+
 def _save_notes(project_path: str, notes: List[dict]) -> str:
-    return _write_json(_path(project_path, NOTES_FILE), {
-        "version": SCHEMA_VERSION,
-        "updated_at": _now(),
-        "notes": notes,
-    })
+    """写 notes.json。
+
+    run 会在保存前通过 `_save_base.ids` 告知本轮读到的基线 id；写入时在锁内
+    重读磁盘，保留并发 run 新增的笔记，避免「后写覆盖前写」。没有基线时保持
+    原有的整文件替换语义（供测试/维护路径直接调用）。
+    """
+    base = getattr(_save_base, "ids", None)
+    if base is None:
+        return _write_json(_path(project_path, NOTES_FILE), {
+            "version": SCHEMA_VERSION,
+            "updated_at": _now(),
+            "notes": notes,
+        })
+    with _notes_lock:
+        current = _load_notes(project_path)
+        extra = [n for n in current if str(n.get("id") or "") not in base]
+        merged: Dict[str, dict] = {str(n.get("id") or ""): n for n in extra}
+        for n in notes:
+            merged[str(n.get("id") or "")] = n
+        final = list(merged.values())
+        return _write_json(_path(project_path, NOTES_FILE), {
+            "version": SCHEMA_VERSION,
+            "updated_at": _now(),
+            "notes": final,
+        })
 
 
 def _read_seeds(project_path: str) -> List[dict]:
@@ -416,6 +456,13 @@ def seed(project_path: str, text: str, kind: str = "association",
          source: str = "main_ai") -> dict:
     """主 AI 显式投喂一条显著事件（不读取主 AI 全量对话）。"""
     pp = os.path.abspath(project_path)
+    with _project_lock(pp):
+        return _seed_impl(pp, text, kind, source)
+
+
+def _seed_impl(pp: str, text: str, kind: str = "association",
+               source: str = "main_ai") -> dict:
+    """seed 的实际写入（调用方已持有项目锁）。"""
     if not os.path.isdir(pp):
         return {"status": "error", "tool": "coderef_dream", "action": "seed",
                 "error": f"项目目录不存在: {pp}"}
@@ -1297,6 +1344,8 @@ def _check_ref(ref: str, ctx: dict) -> Tuple[Optional[bool], str]:
         return rc == 0, ("commit 存在" if rc == 0 else "commit 不存在")
 
     if kind == "audit":
+        if not _AUDIT_TOOL_RE.fullmatch(value):
+            return False, "非法 audit 工具名"
         return (value in ctx["audit_tools"],
                 "审计记录存在" if value in ctx["audit_tools"] else "无该工具审计记录")
 
@@ -1676,8 +1725,9 @@ def _extract_md_open_questions(md: str) -> List[str]:
 
 
 def _write_run(project_path: str, record: dict) -> str:
-    name = (datetime.now().strftime("%Y%m%d-%H%M%S")
-            + "-" + uuid.uuid4().hex[:4] + ".json")
+    # 微秒 + 6 位随机：同一秒内多轮 run（并发/密集触发）也不会撞名覆盖。
+    name = (datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            + "-" + uuid.uuid4().hex[:6] + ".json")
     return _write_json(_path(project_path, os.path.join(RUNS_DIR, name)), record)
 
 
@@ -1724,6 +1774,13 @@ def _skip(pp: str, state: dict, cfg: dict, reason: str, trigger: str,
 
 def run(project_path: str, trigger: str = "manual", llm=None,
         job: str = DEFAULT_JOB) -> dict:
+    """补一轮梦；并发 run 通过 `_save_notes` 的基线合并保留彼此新增。"""
+    pp = os.path.abspath(project_path)
+    return _run_impl(pp, trigger=trigger, llm=llm, job=job)
+
+
+def _run_impl(project_path: str, trigger: str = "manual", llm=None,
+              job: str = DEFAULT_JOB) -> dict:
     """补一轮梦：收集 → 筛显著 → 主 LLM 提议 → 确定性核验 → 写梦。
 
     job ∈ ALL_JOBS；记忆/叙事类写 notes.json + DREAM.md，
@@ -1766,6 +1823,7 @@ def run(project_path: str, trigger: str = "manual", llm=None,
     materials = _collect(pp, state, new_seeds)
     salient = _salient_count(materials)
     existing = _load_notes(pp)
+    base_ids = {str(n.get("id") or "") for n in existing}
     if job in DRAFT_JOBS:
         # 草稿类允许 salient==0，但必须有可起草的上下文
         if salient == 0 and not _has_context(materials, existing):
@@ -1842,9 +1900,17 @@ def run(project_path: str, trigger: str = "manual", llm=None,
     notes, added = _merge_notes(existing, candidates, cfg)
     notes, decayed = _decay_notes(pp, notes, cfg)
     notes, dropped = _cap_notes(notes, cfg["max_notes"])
-    if _save_notes(pp, notes):
+    prev_base = getattr(_save_base, "ids", None)
+    _save_base.ids = base_ids
+    try:
+        save_err = _save_notes(pp, notes)
+    finally:
+        _save_base.ids = prev_base
+    if save_err:
         return _fail(pp, state, cfg, trigger, "notes.json 写入失败", materials,
                      job=job)
+    # 并发 run 可能刚合并进彼此的新笔记；重读后再渲染，DREAM.md 不丢并发结果。
+    notes = _load_notes(pp)
 
     verified = [n for n in notes if n.get("status") == "verified"]
     if goal or added:
@@ -2109,6 +2175,7 @@ def _run_false_memory_check(pp: str, cfg: dict, state: dict,
                             trigger: str) -> dict:
     """P3 自检：旧梦对照新证据，证据引用失效 → rejected（纯确定性，不调 LLM）。"""
     notes = _load_notes(pp)
+    base_ids = {str(n.get("id") or "") for n in notes}
     if not notes:
         return _skip(pp, state, cfg, "没有可复核的笔记", trigger,
                      job="false_memory_check")
@@ -2128,6 +2195,7 @@ def _run_false_memory_check(pp: str, cfg: dict, state: dict,
     now = _now()
     checked = kept = 0
     rejected: List[dict] = []
+    downgraded: List[dict] = []
     unknown: List[dict] = []
     for n in notes:
         if str(n.get("status") or "") not in ("verified", "hypothesis"):
@@ -2135,15 +2203,24 @@ def _run_false_memory_check(pp: str, cfg: dict, state: dict,
         checked += 1
         n["checked_at"] = now
         failed = []
-        for ref in n.get("evidence") or []:
+        unverifiable = []
+        refs = [str(r) for r in (n.get("evidence") or [])]
+        if not refs and str(n.get("status") or "") == "verified":
+            unverifiable.append({"ref": "", "detail": "无 evidence"})
+        for ref in refs:
             ok, detail = _check_ref(ref, ctx)
-            if ok is False:
+            if ok is None:
+                # 格式非法 / 空引用 / git 不可用：无法核验，不能继续当 verified。
+                unverifiable.append({"ref": ref, "detail": detail})
+            elif ok is False:
                 # 审计日志按日轮转，只有 7 天窗口；窗口外找不到 ≠ 证据失效，
-                # 但必须如实记为 unknown，不能悄悄吞掉。
-                if str(ref).startswith("audit:"):
-                    unknown.append({"ref": str(ref), "detail": detail})
+                # 但必须如实记为 unknown，不能悄悄吞掉。格式非法的 audit 引用
+                # （如 audit:../../etc/passwd）不是窗口问题，按失败处理。
+                if (ref.startswith("audit:")
+                        and _AUDIT_TOOL_RE.fullmatch(ref[6:].strip())):
+                    unknown.append({"ref": ref, "detail": detail})
                     continue
-                failed.append({"ref": str(ref), "detail": detail})
+                failed.append({"ref": ref, "detail": detail})
         if failed:
             n["status"] = "rejected"
             n["reason"] = "false_memory_check: 证据引用已失效"
@@ -2156,11 +2233,29 @@ def _run_false_memory_check(pp: str, cfg: dict, state: dict,
                 "failed": failed,
             })
         else:
+            if unverifiable and str(n.get("status") or "") == "verified":
+                n["status"] = "hypothesis"
+                n["reason"] = "false_memory_check: 证据无法核验，降级为假设"
+                downgraded.append({
+                    "id": n.get("id", ""),
+                    "text": n.get("text", ""),
+                    "status": "hypothesis",
+                    "reason": n["reason"],
+                    "evidence": list(n.get("evidence") or []),
+                    "unverifiable": unverifiable,
+                })
             kept += 1
 
-    if _save_notes(pp, notes):
+    prev_base = getattr(_save_base, "ids", None)
+    _save_base.ids = base_ids
+    try:
+        save_err = _save_notes(pp, notes)
+    finally:
+        _save_base.ids = prev_base
+    if save_err:
         return _fail(pp, state, cfg, trigger, "notes.json 写入失败", {},
                      job="false_memory_check")
+    notes = _load_notes(pp)
 
     goal = str(state.get("goal") or "").strip()
     open_questions = [str(q).strip() for q in (state.get("open_questions") or [])
@@ -2172,7 +2267,7 @@ def _run_false_memory_check(pp: str, cfg: dict, state: dict,
         goal = _extract_md_goal(current_md)
     if not open_questions:
         open_questions = _extract_md_open_questions(current_md)
-    if rejected:
+    if rejected or downgraded:
         err = _write_text(md_path, _render_md(goal, notes, open_questions))
         if err:
             return _fail(pp, state, cfg, trigger, f"DREAM.md 写入失败: {err}", {},
@@ -2196,6 +2291,7 @@ def _run_false_memory_check(pp: str, cfg: dict, state: dict,
         "llm": {"available": False, "source": "确定性核验（不调用 LLM）"},
         "checked": checked,
         "rejected": rejected,
+        "downgraded": downgraded,
         "kept": kept,
         "unknown": len(unknown),
         "unknown_items": unknown,
@@ -2207,8 +2303,10 @@ def _run_false_memory_check(pp: str, cfg: dict, state: dict,
     cannot_conclude = ["笔记的语义真值（只核验证据引用是否仍存在）"]
     if unknown:
         cannot_conclude.append("部分 audit 证据超出 7 天窗口，未能复核")
+    if downgraded:
+        cannot_conclude.append("证据无法核验的笔记已降级为 hypothesis")
     env = envelope(
-        f"复核 {checked} 条，拒绝 {len(rejected)} 条，"
+        f"复核 {checked} 条，拒绝 {len(rejected)} 条，降级 {len(downgraded)} 条，"
         f"{len(unknown)} 条证据无法复核（unknown）",
         usable=True,
         cannot_conclude=cannot_conclude,
@@ -2218,7 +2316,9 @@ def _run_false_memory_check(pp: str, cfg: dict, state: dict,
     return {
         "status": "ok", "tool": "coderef_dream", "action": "run",
         "project_path": pp, "trigger": trigger, "job": "false_memory_check",
-        "checked": checked, "rejected": len(rejected), "kept": kept,
+        "checked": checked, "rejected": len(rejected),
+        "downgraded": len(downgraded), "downgraded_items": downgraded,
+        "kept": kept,
         "unknown": len(unknown), "unknown_items": unknown,
         "dream_md_path": md_path, "notes_path": _path(pp, NOTES_FILE),
         "run_path": run_path, "llm": record["llm"], "limits": limits,

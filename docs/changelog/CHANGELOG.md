@@ -4,6 +4,23 @@
 
 ---
 
+### v5.21.5 — 测试方登记册 11 条边界缺陷修复
+
+> 背景：测试 AI 按 5.18.11–5.21.4 全量实测后，在 `测试归档/课题台账/登记册.md` 登记 U-52–U-62；本版逐条修复，并用其 STRICT 模式复测通过。
+
+- **U-52 旧梦复核降级**：`false_memory_check` 对 `ok=None`（空引用、格式非法、git 不可用）的 verified 笔记降级为 `hypothesis`；无 evidence 的 verified 同样降级；格式非法的 `audit:` 引用（如 `audit:../../etc/passwd`）按失败处理，只有合法工具名才落入「7 天窗口外 unknown」。
+- **U-53 审计产物归属**：`artifact_freshness` 对 `audit_findings` 增加项目哈希过滤，不再把其他项目残留的 `audit_findings_<旧哈希>.json` 当成本项目产物；直接传入具体路径的 `_artifact_item` 调用保持原语义。
+- **U-54 scope 脏规则容错**：`load_scope` 清洗非 dict / 非法 kind / 空 pattern 的规则，`is_excluded` 再次防御；损坏规则不再让读取/扫描崩溃。
+- **U-55 调度链路安全**：`_safe_id` 改 `fullmatch`，尾部换行/控制字符/全角字符一律拒绝；执行轨迹写入失败捕获 `OSError`，返回结构化错误而不是未捕获异常。
+- **U-56 并发补梦**：`seed` 追加加项目锁；`run` 不再整轮串行，`_save_notes` 用「基线 id + 锁内重读合并」保留并发 run 各自新增的笔记，DREAM.md 保存后重读再渲染。
+- **U-57 BOM 兼容**：`CodeAnalyzer.parse_file` 与 `AstParser.parse` 改用 `utf-8-sig`，带 UTF-8 BOM 的源码不再丢首行 import。
+- **U-58 未知主体快速失败**：`innovation_review` 在既非资产/别名、也非 workflow 模块时直接返回 `ok=false`，不生成 wiki、不调用 LLM。
+- **U-59 信封限制归一**：`envelope(limitations=...)` 支持字符串/序列，忽略非法类型与未知 id，不再因字符串被逐字符遍历。
+- **U-60 分析缓存内容指纹**：文件快照增加内容哈希（小文件全文、大文件首尾抽样），同尺寸改写并恢复 mtime 不再命中旧 AST。
+- **U-61 运行记录防撞名**：`runs/` 文件名改为微秒 + 6 位随机，密集/并发 run 不再互相覆盖。
+- **U-62 重型工具边界**：`coderef_docs` 工具描述与 README 明确「大仓单次可能 10 分钟以上，禁止合入门禁/会话首响应同步调用」。
+- **验证**：测试方 STRICT 模式 `41 passed / 61 subtests`；全量 pytest **437 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.21.4 — CodeRabbit 复核剩余 2 条 minor
 
 > 5.21.3 修复后重跑 WSL CodeRabbit，发现从 10 条降到 2 条 minor；本版修掉并收尾。
