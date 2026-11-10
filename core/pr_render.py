@@ -13,7 +13,8 @@ from datetime import datetime
 from typing import Dict, Optional
 
 from core.pr_models import Finding, PipeResult, Tier
-from core.pr_whitelist import _findings_json_path, _detect_wiki_dir, _count_md
+from core.pr_whitelist import (_findings_json_path, _count_md,
+                               detect_wiki_output_dir)
 
 
 # 降噪规则库：每个 rule 检测是否为已知误报模式
@@ -175,7 +176,9 @@ def _collect_dimension_states(project_path: str,
         }
 
     # ── Wiki 维度 ──
-    wiki_dir = _detect_wiki_dir(project_path)
+    # 与记分卡同口径：只认真正的 Wiki 产物目录，不把用户 docs/ 里的普通
+    # Markdown 冒充成「Wiki 已生成」（否则概览说已生成、文档覆盖说证据不足）。
+    wiki_dir = detect_wiki_output_dir(project_path)
     if wiki_dir:
         md_count = _count_md(wiki_dir)
         try:
