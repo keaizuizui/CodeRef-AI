@@ -914,33 +914,41 @@ def _parse_json_list(raw: str) -> List[dict]:
 
 
 def _read_procedure_card(project_path: str, max_chars: int = 1600) -> Optional[dict]:
-    """从项目 AGENTS.md 提取「## 0. 规程索引」块（自动注入的入口卡）。
+    """读取规程入口卡：优先项目 AGENTS.md，缺失时回退公开 docs/procedure-card.md。
 
-    CODEREF.md 不会被编程 AI 默认加载；recover 是强制第一步，因此把入口卡
-    随 recover 一起返回，避免「梦/记忆指向 CODEREF，但 AI 从未打开它」。
+    CODEREF.md / AGENTS.md 不会被编程 AI 默认加载，且二者在 CodeRef 仓库按 5.4
+    策略不公开；recover 是强制第一步，因此把入口卡随 recover 一起返回。
+    外部用户没有 AGENTS.md 时，仍可从仓库公开的 docs/procedure-card.md 拿到
+    发布/审计/CodeRabbit 入口，不会得到空卡片。
     """
-    path = os.path.join(os.path.abspath(project_path), "AGENTS.md")
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
-    except OSError:
-        return None
-    start = text.find("## 0.")
-    if start < 0:
-        start = text.find("## 规程索引")
-    if start < 0:
-        return None
-    end = text.find("\n## ", start + 4)
-    chunk = text[start:end if end > 0 else len(text)].strip()
-    if not chunk:
-        return None
-    return {
-        "source": "AGENTS.md#规程索引",
-        "text": chunk[:max_chars],
-        "truncated": len(chunk) > max_chars,
-    }
+    pp = os.path.abspath(project_path)
+    candidates = (
+        (os.path.join(pp, "AGENTS.md"), "AGENTS.md#规程索引"),
+        (os.path.join(pp, "docs", "procedure-card.md"), "docs/procedure-card.md"),
+    )
+    for path, source in candidates:
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+        except OSError:
+            continue
+        start = text.find("## 0.")
+        if start < 0:
+            start = text.find("## 规程索引")
+        if start < 0:
+            chunk = text.strip()
+        else:
+            end = text.find("\n## ", start + 4)
+            chunk = text[start:end if end > 0 else len(text)].strip()
+        if chunk:
+            return {
+                "source": source,
+                "text": chunk[:max_chars],
+                "truncated": len(chunk) > max_chars,
+            }
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════

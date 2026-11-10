@@ -6,6 +6,7 @@
 
 - `README.md` — 项目总览、核心引擎、59 个 MCP 工具、审计管线、当前版本摘要
 - `MCP_SETUP.md` — MCP Server 配置指南（工具清单、知识图谱查询速查、白名单、架构说明）
+- `procedure-card.md` — 公开规程入口卡（发布 SOP / 审计全流程 / CodeRabbit 位置；`recover` 与首次重工具注入的 `procedure_card` fallback）
 - `changelog/CHANGELOG.md` — 完整逐版本更新日志归档
 
 ## core/ 模块文档
