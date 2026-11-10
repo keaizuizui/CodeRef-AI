@@ -34,24 +34,18 @@ def _resolve_cache_dir() -> str:
 
 
 # 缓存有效性需要内容指纹：mtime+size 可被「同尺寸改写 + 恢复 mtime」绕过。
-# 小文件读全文，大文件只抽样首尾（成本有界，仍能识别绝大多数内容变化）。
+# 大文件阈值保留为公开常量（测试据此构造大文件）；哈希本身始终全量读取，
+# 避免「只采样首尾 8KB」导致中部改写漏检（U-66）。
 _HASH_FULL_LIMIT = 512 * 1024
-_HASH_SAMPLE_BYTES = 8192
 
 
 def _content_hash(path: str, size: int) -> str:
-    """文件内容指纹；读失败返回空串（调用方按快速路径处理）。"""
+    """文件内容指纹（全量哈希，分块读取）；读失败返回空串。"""
     h = hashlib.sha1()
     try:
         with open(path, "rb") as f:
-            if size <= _HASH_FULL_LIMIT:
-                for chunk in iter(lambda: f.read(65536), b""):
-                    h.update(chunk)
-            else:
-                h.update(f.read(_HASH_SAMPLE_BYTES))
-                f.seek(max(0, size - _HASH_SAMPLE_BYTES))
-                h.update(f.read(_HASH_SAMPLE_BYTES))
-                h.update(str(size).encode("ascii"))
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
     except OSError:
         return ""
     return h.hexdigest()
