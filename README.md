@@ -75,7 +75,7 @@ CodeRef 不靠宣称，靠可复现的硬指标（完整方法见后文「可靠
 - **已知限制登记表 KL-01~KL-09**：定标过期、IMPORTS 只建内部边、CALLS 按 import 作用域、模块数多口径、architecture 不产 findings、过期产物 unknown、备份需 whitelist、动态调用不覆盖、文档只认 Wiki 目录。
 - **握手契约**：`coderef_version(project_path)` 返回 `consumer_contract`（3 条必读 + KL 全表 + 字段说明），调用方 AI 无需加载本仓 Skill 也能正确转述。
 - **覆盖工具**：`coderef_audit` / `coderef_scan` / `coderef_report` / `coderef_arch_gap` / `coderef_arch_verify` / `coderef_interpret(action=health)`；旧字段全部保留，向后兼容。
-- **公开规程入口卡**：没有本地 `AGENTS.md` 时，`coderef_operation_memory(action=recover)` 与首次重工具的 `memory_digest` 会从 [docs/procedure-card.md](docs/procedure-card.md) 返回 `procedure_card`（发布 SOP / 审计全流程 / CodeRabbit 位置）；它只是入口，完整细节仍以项目自己的规程为准。
+- **公开规程入口卡示例**：没有本地 `AGENTS.md` 时，`coderef_operation_memory(action=recover)` 与首次重工具的 `memory_digest` 会从 [docs/procedure-card.md](docs/procedure-card.md) 返回 `procedure_card`（发布 SOP / 审计全流程 / CodeRabbit 位置）。该文件是一份**示例模板**，可直接复制到你自己的项目 `docs/procedure-card.md` 并替换成你的命令；它只是入口，完整细节仍以项目自己的规程为准。
 
 ### 结果级新鲜度硬戳（v5.19.1 起）
 
