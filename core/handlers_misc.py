@@ -374,18 +374,32 @@ def _report(a) -> str:
         跳过，避免每次 coderef_report 都重复消耗 LLM。
         """
         import importlib
+        import json as _json
         try:
             from core.freshness_guard import artifact_report
             rep = artifact_report(pp)
             by_key = {i.get("key"): i for i in (rep.get("artifacts") or [])}
         except Exception:  # noqa: BLE001 —— 盘点失败时照常跑
             by_key = {}
+
+        def _snapshot_status(filename: str) -> str:
+            try:
+                with open(os.path.join(pp, ".coderef", filename),
+                          "r", encoding="utf-8") as f:
+                    data = _json.load(f)
+                return str(data.get("status") or "") if isinstance(data, dict) else ""
+            except Exception:  # noqa: BLE001
+                return ""
+
         out = []
-        for scene, key, module_name in (
-                ("product", "product_fit", "core.product_eval"),
-                ("ux", "ux_fit", "core.ux_eval")):
+        for scene, key, filename, module_name in (
+                ("product", "product_fit", "product_fit.json", "core.product_eval"),
+                ("ux", "ux_fit", "ux_fit.json", "core.ux_eval")):
             item = by_key.get(key) or {}
-            if item.get("exists") and not item.get("code_newer"):
+            # 只有「快照不比代码旧 + 上次评估成功」才跳过；SKIP/STATIC_ONLY
+            # 允许在 Key/LLM 恢复后自动重试，不把降级结果永久钉死。
+            if (item.get("exists") and not item.get("code_newer")
+                    and _snapshot_status(filename) == "OK"):
                 out.append({"scene": scene, "status": "SKIPPED_FRESH",
                             "error": ""})
                 continue

@@ -4,6 +4,14 @@
 
 ---
 
+### v5.21.11 — 评估台 UI / 自动评估复审二轮
+
+> 背景：5.21.10 提交后 CodeRabbit 复审再报 1 条 major + 2 条 minor，逐条修复。
+
+- **降级评估可自动恢复**：自动评估的跳过条件增加快照 `status=="OK"`；`SKIP` / `STATIC_ONLY` 不再因为「文件存在且不比代码旧」被永久跳过，Key/LLM 恢复后下次 `coderef_report` 会自动重试。
+- **画布只在真实视图变化后停止自动适配**：`_userMoved` 改到 pan 实际位移、缩略图点击、缩放/重置时置位；普通节点点击不再阻止后续 resize 的 `fitView`。
+- **验证**：全量 pytest **438 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.21.10 — 评估台 UI / 自动评估复审收尾
 
 > 背景：5.21.9 提交后 CodeRabbit 复审报 3 条 minor，逐条修复。
