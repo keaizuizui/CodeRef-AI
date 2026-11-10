@@ -940,7 +940,7 @@ def _read_procedure_card(project_path: str, max_chars: int = 1600) -> Optional[d
         except OSError:
             continue
         start = -1
-        for marker in (r"^## 0\.", r"^## 规程索引"):
+        for marker in (r"^ {0,3}## 0\.", r"^ {0,3}## 规程索引"):
             match = re.search(marker, text, re.MULTILINE)
             if match:
                 start = match.start()
@@ -951,7 +951,8 @@ def _read_procedure_card(project_path: str, max_chars: int = 1600) -> Optional[d
             else:
                 continue   # 通用 AGENTS.md 没有规程索引：跳过，继续找专用卡
         else:
-            end = text.find("\n## ", start + 4)
+            end_match = re.search(r"(?m)^ {0,3}## ", text[start + 4:])
+            end = start + 4 + end_match.start() if end_match else -1
             chunk = text[start:end if end > 0 else len(text)].strip()
         if chunk:
             return {
