@@ -4,6 +4,15 @@
 
 ---
 
+### v5.21.8 — 评估台画布路由 + 图谱新鲜度一致性
+
+> 背景：5.21.7 在真实项目 `D:\kuajingdianshang` 实测发现两个工具侧缺陷（owner=coderef）：① 评估台三个画布 iframe 仍 404；② `coderef_query(stats)` 同响应里 `exists=true` 却报 `stale_reason="知识图谱不存在"`、`kg_built_at=""`。
+
+- **画布 iframe 404**：`report_console` 增加报告目录同目录相对路由 `/arch_canvas_*.html`、`/arch_flow_*.html`、`/arch_layout_*.html`、`/flow_canvas_*.html`；先读报告目录副本，再回退项目 `.coderef/`，保留旧 `/.coderef/<canvas>` 兼容；只放行固定前缀、`.html`、单层文件名，路径穿越仍 404。
+- **图谱新鲜度自相矛盾**：`query_staleness` 改为复用 `artifact_report` 的 `kg_db` 条目，与同响应 `freshness` 块同源；若 stale 缓存仍说“不存在”但 freshness 已见图谱，则在 `annotate_query_result` 内重算并更新缓存；图谱存在但缺 `built_at` 时用磁盘时间兜底，`stale_reason` 不再误写“不存在”。
+- **真实项目验证**：`D:\kuajingdianshang` 的 3 个 iframe（arch_flow / arch_canvas / arch_layout）同目录相对路径与旧 `/.coderef/` 路径均 **200**；`kg_freshness.kg_built_at=2026-11-10 09:37:16`、`stale_reason=""`，模拟 30 秒旧缓存后仍能自动纠正。
+- **验证**：全量 pytest **438 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.21.7 — 增量漂移补内容哈希
 
 > 背景：5.21.6 提交后 CodeRabbit 复核 `84febf9..HEAD` 再报 1 条 minor：`_snapshot_drift` 仍只看 mtime+size，`update_analysis` 的增量路径会漏掉「同尺寸改写 + 恢复 mtime」的漂移文件，U-60 在增量路径上未真正闭环。
