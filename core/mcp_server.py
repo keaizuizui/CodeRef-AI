@@ -131,6 +131,34 @@ TOOL_BOUNDARY_NOTES = {
 # 已整体外置，此处 re-export 保持符号面与 Server.__init__ 引用不变。
 from core.tools_manifest import BUILTIN_TOOLS, _SINGLE_TOOL_LABELS, WHITELIST_ACTIONS
 
+# 工具名 → inputSchema：协议入口统一校验 required/enum 的单一事实源
+# （U-64：此前 required 缺失/枚举非法只靠各 handler 自行处理，覆盖不一致）
+_SCHEMAS = {
+    t.get("name"): t.get("inputSchema") or {}
+    for t in BUILTIN_TOOLS if isinstance(t, dict) and t.get("name")
+}
+
+
+def _schema_error(n, a):
+    """按 inputSchema 校验必填与 enum；返回结构化错误或 None。"""
+    schema = _SCHEMAS.get(n)
+    if not isinstance(schema, dict) or not isinstance(a, dict):
+        return None
+    for req in schema.get("required") or []:
+        if req not in a or a.get(req) is None:
+            return {"status": "error", "tool": n,
+                    "error": f"缺少必填参数: {req}", "field": req}
+    props = schema.get("properties") or {}
+    for key, spec in props.items():
+        if key not in a or not isinstance(spec, dict):
+            continue
+        allowed = spec.get("enum")
+        if isinstance(allowed, list) and a[key] not in allowed:
+            return {"status": "error", "tool": n,
+                    "error": f"参数 {key} 非法: {a[key]!r}",
+                    "field": key, "allowed": allowed}
+    return None
+
 # ── 模块级 handler 外置（core.handlers_*）────────────────────────
 # handler 函数体按领域搬至 handlers_arch/engine/misc，此处重新绑定；
 # Server 类 _handlers 分发表与同名 wrapper 原封不动，引用语义不变。
@@ -575,6 +603,11 @@ class Server:
             # 未知工具提前拦截，避免落入 _run 才报"未知"
             if n not in self._handlers and n not in ("coderef_audit", "coderef_docs"):
                 return {"jsonrpc":"2.0","id":rid,"error":{"code":-32602,"message":f"未知工具: {n}"}}
+            # U-64：协议入口先按 inputSchema 校验，再决定是否后台化；
+            # 避免非法调用先拿 task_id、后台线程里才报错。
+            invalid = self._schema_error(n, a)
+            if invalid:
+                return self._ok(rid, json.dumps(invalid, ensure_ascii=False), tool=n)
             # 统一后台化决策：重型工具默认后台，轻量工具同步；background 显式参数可覆盖
             if self._should_background(n, a):
                 tid = str(uuid.uuid4())[:8]; rc = {}
@@ -785,6 +818,10 @@ class Server:
     def _validate_project_path(self, tool: str, p: str):
         return _validate_project_path(tool, p)
 
+    def _schema_error(self, n, a):
+        """兼容实例调用：委托模块级校验（测试可能用轻量替身调 _run）。"""
+        return _schema_error(n, a)
+
     def _run(self, n, a, progress_cb=None) -> str:
         """工具执行入口：precondition 闸门 → 执行 → 按需附加会话上下文。
 
@@ -793,6 +830,9 @@ class Server:
         gate_warnings；重工具返回体自带 `context.guard` 与
         `context.memory_digest`。5.19.5 起各防护点判定落盘 audit_log。
         """
+        invalid = _schema_error(n, a)
+        if invalid:
+            return json.dumps(invalid, ensure_ascii=False)
         p = a.get("project_path") or ""
         gate = {}
         audit = None
@@ -829,12 +869,15 @@ class Server:
                  "gate": _audit_gate(gate, checked=bool(gate.get("checked"))),
                  "scope": _audit_scope(p)}
         try:
-            from core.session_guard import HEAVY_TOOLS, guard_if_needed
+            from core.session_guard import HEAVY_TOOLS as GUARD_TOOLS, guard_if_needed
         except Exception:  # noqa: BLE001
             if audit is not None:
                 audit.record(p, entry)
             return raw
-        if n not in HEAVY_TOOLS:
+        # U-63：注入判定与后台化重工具取并集。此前只看 session_guard 的 7 个
+        # 守卫工具，architecture/change_guard/docs 等 20 个后台重工具首调拿不到
+        # memory_digest/procedure_card；两处集合不再分叉。
+        if n not in GUARD_TOOLS and n not in getattr(self, "HEAVY_TOOLS", ()):
             entry["freshness"] = _audit_freshness(raw)
             if audit is not None:
                 audit.record(p, entry)
@@ -842,12 +885,13 @@ class Server:
         ctx = {}
         if gate.get("hits"):
             ctx["gate_warnings"] = gate["hits"]
-        try:
-            guard = guard_if_needed(p)
-            if guard:
-                ctx["guard"] = guard
-        except Exception as e:  # noqa: BLE001
-            logger.debug(f"[session] 自动守卫失败: {e}")
+        if n in GUARD_TOOLS:
+            try:
+                guard = guard_if_needed(p)
+                if guard:
+                    ctx["guard"] = guard
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"[session] 自动守卫失败: {e}")
         try:
             from core.memory_digest import inject_once
             digest = inject_once(p)
