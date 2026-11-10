@@ -269,9 +269,35 @@ _STALE_TTL = 30
 _stale_cache: Dict[str, tuple] = {}
 
 
+def _kg_artifact_item(project_path: str):
+    """取 artifact_report 的 kg_db 条目；与 freshness 块共用同一口径。"""
+    try:
+        rep = artifact_report(project_path)
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[freshness] 图谱产物条目读取失败: {e}")
+        return None
+    for item in rep.get("artifacts") or []:
+        if isinstance(item, dict) and item.get("key") == "kg_db":
+            return item
+    return None
+
+
 def _compute_staleness(project_path: str) -> dict:
     cfg = guard_config(project_path)["query"]
-    kg_db = _kg_db_path(project_path)
+    # 图谱是否存在以 artifact_report 为准：同一响应里的 freshness 块也读它，
+    # 避免「freshness 说存在、kg_freshness 说不存在」的自相矛盾（测试方 D-1）。
+    item = _kg_artifact_item(project_path)
+    claimed_exists = bool(item and item.get("exists"))
+    kg_db = ""
+    if item and claimed_exists:
+        rel = str(item.get("path") or "")
+        if rel:
+            kg_db = rel if os.path.isabs(rel) else os.path.join(project_path, rel)
+            if not os.path.isfile(kg_db):
+                kg_db = ""
+    elif item is None:
+        # artifact_report 异常时才回退直接定位（正常情况下两者不应分叉）。
+        kg_db = _kg_db_path(project_path)
     built_ts = _kg_built_ts(kg_db)
     mtimes = _code_mtimes(project_path)
     latest = max(mtimes) if mtimes else None
@@ -287,10 +313,16 @@ def _compute_staleness(project_path: str) -> dict:
         "stale_file_threshold": cfg["stale_file_threshold"],
         "mode": cfg["mode"],
     }
+    if not kg_db:
+        info["stale"] = True
+        info["stale_reason"] = ("知识图谱不存在" if not claimed_exists
+                                else "知识图谱文件不可读")
+        return info
     if built_ts is None:
         info["stale"] = True
-        info["stale_reason"] = ("知识图谱不存在" if not kg_db
-                                else "知识图谱缺少构建时间标记")
+        info["stale_reason"] = "知识图谱缺少构建时间标记"
+        # 产物存在但 meta 缺 built_at：至少把磁盘时间作为可核验的构建时间。
+        info["kg_built_at"] = str(item.get("modified_at") or "") if item else ""
         return info
     if latest is None:
         info["stale_reason"] = "未扫描到代码文件"
@@ -323,6 +355,16 @@ def annotate_query_result(raw: str, project_path: str,
     try:
         info = query_staleness(project_path)
         fresh = freshness_block(project_path, ["kg_db"])
+        fresh_kg = next((i for i in (fresh.get("artifacts_used") or [])
+                         if i.get("key") == "kg_db"), None)
+        # 两个缓存（stale 30s / artifact 60s）可能短暂分叉；同一响应内以
+        # artifact 盘点为准重算一次，避免 freshness.exists=true 却报「不存在」。
+        if (fresh_kg and fresh_kg.get("exists")
+                and (info.get("stale_reason") == "知识图谱不存在"
+                     or not info.get("kg_built_at"))):
+            info = _compute_staleness(project_path)
+            with _cache_lock:
+                _stale_cache[_norm(project_path)] = (time.time(), dict(info))
         data["stale"] = info["stale"] if not refreshed else False
         data["kg_freshness"] = {
             "stale_reason": info["stale_reason"],

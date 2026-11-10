@@ -40,6 +40,16 @@ from core.http_path_guard import has_unsafe_path
 
 _MAX_BODY = 64 * 1024
 _LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+# 评估台 iframe 引用的画布产物前缀（同目录相对路径与旧 .coderef/ 绝对路径都放行）
+_CANVAS_PREFIXES = ("arch_canvas_", "arch_flow_", "arch_layout_", "flow_canvas_")
+
+
+def _is_canvas_file(name: str) -> bool:
+    """只接受固定前缀、.html、单层文件名（拒绝分隔符与目录穿越）。"""
+    return (bool(name) and name == os.path.basename(name)
+            and name.endswith(".html") and name.startswith(_CANVAS_PREFIXES))
+
+
 _SERVERS: Dict[str, Dict[str, Any]] = {}
 _LOCK = threading.Lock()
 # 同一项目同一场景的评估串行（LLM 慢调用时不重复跑）；不同场景可并行
@@ -185,6 +195,12 @@ def _make_handler(project_path: str, out_dir: str, token: str,
                 return self._serve_index()
             if path in ("/audit.html", "/kg.html", "/wiki.html"):
                 return self._serve_subpage(path.lstrip("/"))
+            # 画布由 index.html 以同目录相对路径引用（/arch_canvas_*.html）。
+            # 先查报告目录里的副本，再回退项目 .coderef/，两条路径都限制在固定根内。
+            name = path.lstrip("/")
+            if _is_canvas_file(name):
+                return self._serve_canvas(name, (out_dir,
+                                                 os.path.join(project_path, ".coderef")))
             if path.startswith("/.coderef/"):
                 return self._serve_arch(path[len("/.coderef/"):])
             if path == "/api/scorecard":
@@ -221,21 +237,24 @@ def _make_handler(project_path: str, out_dir: str, token: str,
                 return self._json({"ok": False, "error": f"读取失败: {e}"}, 500)
 
         def _serve_arch(self, name: str) -> None:
-            # 只放行 .coderef 下的画布产物（业务树 arch_canvas_* / 业务流程 arch_flow_*）；
-            # 不允许分隔符/目录穿越
-            fn = os.path.basename(name)
-            prefixes = ("arch_canvas_", "arch_flow_", "arch_layout_")
-            if (fn != name or not fn.endswith(".html")
-                    or not fn.startswith(prefixes)):
+            """兼容旧 `/.coderef/<canvas>` 引用；只放行单层画布文件名。"""
+            return self._serve_canvas(name, (os.path.join(project_path, ".coderef"),
+                                             out_dir))
+
+        def _serve_canvas(self, name: str, roots: Tuple[str, ...]) -> None:
+            """按固定根顺序读取画布文件；非法名/不存在一律 404。"""
+            if not _is_canvas_file(name):
                 return self._json({"ok": False, "error": "404"}, 404)
-            fp = os.path.join(project_path, ".coderef", fn)
-            if not os.path.isfile(fp):
-                return self._json({"ok": False, "error": "404"}, 404)
-            try:
-                with open(fp, "r", encoding="utf-8") as f:
-                    return self._html(f.read(), 200)
-            except Exception as e:  # noqa: BLE001
-                return self._json({"ok": False, "error": f"读取失败: {e}"}, 500)
+            for root in roots:
+                fp = os.path.join(root, name)
+                if not os.path.isfile(fp):
+                    continue
+                try:
+                    with open(fp, "r", encoding="utf-8") as f:
+                        return self._html(f.read(), 200)
+                except Exception as e:  # noqa: BLE001
+                    return self._json({"ok": False, "error": f"读取失败: {e}"}, 500)
+            return self._json({"ok": False, "error": "404"}, 404)
 
         def _api_scorecard(self, qs: Dict[str, Any]) -> None:
             from core.scorecard import compute, write_card
