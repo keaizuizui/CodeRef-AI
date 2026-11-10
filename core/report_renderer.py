@@ -356,6 +356,12 @@ function scEsc(s){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
   });
 }
+function scRawVal(v){
+  if (v && typeof v === 'object') {
+    return Object.keys(v).map(function(k){ return k + ':' + v[k]; }).join(',');
+  }
+  return String(v);
+}
 function scApply(j){
   var ov = document.getElementById('sc-overall');
   if (ov) ov.innerHTML = (j.overall === null || j.overall === undefined) ? 'N/A'
@@ -382,8 +388,8 @@ function scApply(j){
       : (d.status === 'not_applicable' ? '不适用' : '证据不足');
     var raw = Object.keys(d.raw || {}).filter(function(k){
       var v = d.raw[k]; return v !== '' && v !== null && v !== undefined;
-    }).slice(0, 8).map(function(k){
-      return k + '=' + d.raw[k];
+    }).slice(0, 10).map(function(k){
+      return k + '=' + scRawVal(d.raw[k]);
     }).join(' · ');
     var ev = (d.evidence || []).join('、');
     return '<tr><td>' + scEsc(d.name || d.id || '') + '</td><td>' + scEsc(d.weight)
@@ -833,7 +839,12 @@ class HtmlReportRenderer:
         scope = getattr(pr, "scope_text", "") or ""
         note = "<section><h2>统计口径</h2>"
         note += f"<p>本次扫描时间：<code>{_esc(ts or '未记录')}</code></p>"
-        note += f"<p>知识图谱构建：<code>{_esc(kgt or audit_d.get('ts', '') or '未记录')}</code>（图谱可能滞后于代码）</p>"
+        kg_note = ""
+        if ts and kgt and kgt < ts:
+            kg_note = "（图谱构建早于本次扫描，可能滞后于代码）"
+        elif ts and kgt:
+            kg_note = "（图谱构建晚于本次扫描，已覆盖最新代码）"
+        note += f"<p>知识图谱构建：<code>{_esc(kgt or audit_d.get('ts', '') or '未记录')}</code>{kg_note}</p>"
         if scope:
             note += f"<p>审计范围：{_esc(scope)}</p>"
         note += "</section>"
@@ -869,8 +880,26 @@ class HtmlReportRenderer:
                      '<a href="kg.html">知识图谱统计</a> ｜ '
                      '<a href="wiki.html">Wiki 文档</a></p></div>'
                      + "".join(secs) + "</section>")
+        # 记分卡与审计总条数的差异必须当场解释，避免「736 vs 720」被当成漏算
+        audit_note = ""
+        try:
+            fraw = next((d.get("raw") or {} for d in (scorecard or {}).get("dimensions") or []
+                         if d.get("id") == "findings"), {})
+            counted, total = fraw.get("counted"), fraw.get("total")
+            if isinstance(counted, int) and isinstance(total, int) and counted != total:
+                ex = fraw.get("excluded") or {}
+                parts = []
+                if ex.get("advice"):
+                    parts.append(f"建议 {ex['advice']} 条")
+                if ex.get("runtime_path"):
+                    parts.append(f"运行时/第三方路径 {ex['runtime_path']} 条")
+                detail = "、".join(parts) if parts else "按口径排除项"
+                audit_note = (f'<p class="sc-note">记分卡参与计分 {counted} / 总发现 {total}：'
+                              f'{detail}不计分（与「技术」Tab 原始分项同口径）。</p>')
+        except Exception:  # noqa: BLE001
+            audit_note = ""
         overview += '<section><h2>技术概览</h2><p class="empty">以下为代码级统计，业务理解请以上方业务视角为主。</p>' \
-                    + cards + '</section>' + note
+                    + cards + audit_note + '</section>' + note
 
         return overview
 

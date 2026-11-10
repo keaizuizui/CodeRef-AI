@@ -58,6 +58,14 @@ def _iso(ts: Optional[float]) -> str:
         return ""
 
 
+def _iso_ts(value: str) -> Optional[float]:
+    """把盘点报告里的 ISO 时间还原成时间戳（解析失败返回 None）。"""
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
 def guard_config(project_path: str) -> dict:
     """读取项目级守护配置（缺省/损坏时回退默认值，绝不抛异常）。"""
     cfg = {"query": dict(DEFAULT_QUERY_CONFIG), "preconditions": {"mode": "warn"}}
@@ -126,6 +134,10 @@ def freshness_block(project_path: str, artifacts: List[str]) -> dict:
     refresh_action = ""
     for key in artifacts:
         item = by_key.get(key)
+        # 图谱条目始终取实时磁盘值：盘点缓存可能落后于另一个进程的建图，
+        # 导致「raw 查询有图谱、freshness 说缺少产物」的同响应矛盾。
+        if key == "kg_db":
+            item = _live_kg_item(project_path, _iso_ts(rep.get("latest_code_mtime", "")))
         if not item:
             continue
         used.append({
@@ -180,15 +192,6 @@ def attach_freshness(envelope: dict, project_path: str,
 
 
 # ── 图谱 stale 感知 ─────────────────────────────────────────────
-
-def _kg_db_path(project_path: str) -> str:
-    try:
-        from core.arch_audit import locate_kg_db
-        return locate_kg_db(project_path) or ""
-    except Exception as e:  # noqa: BLE001
-        logger.debug(f"[freshness] 图谱定位失败: {e}")
-        return ""
-
 
 def _kg_built_ts(kg_db: str) -> Optional[float]:
     """从图谱 meta 读取构建时间戳（秒）。"""
@@ -269,38 +272,32 @@ _STALE_TTL = 30
 _stale_cache: Dict[str, tuple] = {}
 
 
-def _kg_artifact_item(project_path: str):
-    """取 artifact_report 的 kg_db 条目；与 freshness 块共用同一口径。"""
+def _live_kg_item(project_path: str, code_mtime: Optional[float] = None) -> dict:
+    """直接取实时的 kg_db 条目（绕过 artifact_report 的 60s 盘点缓存）。"""
     try:
-        rep = artifact_report(project_path)
+        from core.artifact_freshness import live_kg_item
+        return live_kg_item(project_path, code_mtime)
     except Exception as e:  # noqa: BLE001
-        logger.debug(f"[freshness] 图谱产物条目读取失败: {e}")
-        return None
-    for item in rep.get("artifacts") or []:
-        if isinstance(item, dict) and item.get("key") == "kg_db":
-            return item
-    return None
+        logger.debug(f"[freshness] 图谱实时条目读取失败: {e}")
+        return {"key": "kg_db", "name": "知识图谱", "exists": False,
+                "path": "", "refresh_hint": "coderef_memory(action=sync)"}
 
 
 def _compute_staleness(project_path: str) -> dict:
     cfg = guard_config(project_path)["query"]
-    # 图谱是否存在以 artifact_report 为准：同一响应里的 freshness 块也读它，
-    # 避免「freshness 说存在、kg_freshness 说不存在」的自相矛盾（测试方 D-1）。
-    item = _kg_artifact_item(project_path)
-    claimed_exists = bool(item and item.get("exists"))
+    mtimes = _code_mtimes(project_path)
+    latest = max(mtimes) if mtimes else None
+    # 图谱是否存在以「实时磁盘」为准：同一响应里的 freshness 块也走实时条目，
+    # 避免 60s 盘点缓存与 raw 查询结果自相矛盾（测试方 D-1 复发）。
+    item = _live_kg_item(project_path, latest)
     kg_db = ""
-    if item and claimed_exists:
+    if item.get("exists"):
         rel = str(item.get("path") or "")
         if rel:
             kg_db = rel if os.path.isabs(rel) else os.path.join(project_path, rel)
             if not os.path.isfile(kg_db):
                 kg_db = ""
-    elif item is None:
-        # artifact_report 异常时才回退直接定位（正常情况下两者不应分叉）。
-        kg_db = _kg_db_path(project_path)
     built_ts = _kg_built_ts(kg_db)
-    mtimes = _code_mtimes(project_path)
-    latest = max(mtimes) if mtimes else None
     changed = len([m for m in mtimes if built_ts is not None and m > built_ts])
 
     info = {
@@ -315,14 +312,14 @@ def _compute_staleness(project_path: str) -> dict:
     }
     if not kg_db:
         info["stale"] = True
-        info["stale_reason"] = ("知识图谱不存在" if not claimed_exists
-                                else "知识图谱文件不可读")
+        info["stale_reason"] = ("知识图谱文件不可读" if item.get("exists")
+                                else "知识图谱不存在")
         return info
     if built_ts is None:
         info["stale"] = True
         info["stale_reason"] = "知识图谱缺少构建时间标记"
         # 产物存在但 meta 缺 built_at：至少把磁盘时间作为可核验的构建时间。
-        info["kg_built_at"] = str(item.get("modified_at") or "") if item else ""
+        info["kg_built_at"] = str(item.get("modified_at") or "")
         return info
     if latest is None:
         info["stale_reason"] = "未扫描到代码文件"

@@ -184,6 +184,16 @@ def _kg_item(project_path: str, code_mtime) -> dict:
     }
 
 
+def live_kg_item(project_path: str, code_mtime=None) -> dict:
+    """绕过盘点缓存，直接按磁盘定位知识图谱条目。
+
+    供 query 类工具纠偏：artifact_report 有 60 秒进程内缓存，若图谱在缓存
+    之后才由另一个进程/线程构建，缓存会短暂报「不存在」，与 raw 查询结果
+    自相矛盾。图谱定位与 stat 成本很低，可每次直接取实时值。
+    """
+    return _kg_item(os.path.abspath(project_path), code_mtime)
+
+
 def report(project_path: str) -> dict:
     """盘点派生产物新鲜度（只读、秒级）。"""
     project_path = os.path.abspath(project_path)

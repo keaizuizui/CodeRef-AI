@@ -243,6 +243,13 @@ def ux_panel(project_path: str) -> str:
     return "".join(parts)
 
 
+def _raw_text(value) -> str:
+    """原始分项的展示文本：字典压成 k:v，避免渲染出 Python 字典字面量。"""
+    if isinstance(value, dict):
+        return ",".join(f"{k}:{v}" for k, v in value.items())
+    return str(value)
+
+
 def tech_panel(project_path: str, card: Optional[dict], layout_link: str = "") -> str:
     """技术视图：技术评分明细 + 技术分区图。
 
@@ -253,8 +260,8 @@ def tech_panel(project_path: str, card: Optional[dict], layout_link: str = "") -
     if card and card.get("dimensions"):
         rows = []
         for d in card.get("dimensions") or []:
-            raw_items = [f'{k}={v}' for k, v in (d.get("raw") or {}).items()
-                         if v not in ("", None)][:8]
+            raw_items = [f'{k}={_raw_text(v)}' for k, v in (d.get("raw") or {}).items()
+                         if v not in ("", None)][:10]
             if d.get("status") == "ok":
                 score = str(d.get("score"))
             elif d.get("status") == "not_applicable":

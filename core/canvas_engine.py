@@ -752,13 +752,19 @@ function initNav(){
   // 可重置：导入/撤销重做替换画布数据后重新配置导航（ 复审）
   navLevel = 'all'; navLayer = 'all'; navFocus = null;
   const on = hasTierLayers();
+  // 大图默认进 L0 总览：全量视图会把 200+ 节点缩成不可读色块（真实项目实测）
+  if (on && nodes.length > 120
+      && nodes.some(n => n.type === 'step' || n.type === 'role')) {
+    navLevel = 'L0';
+  }
   ['navSep','navGroup','gapSep','gapToggle'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = on ? '' : 'none';
   });
+  const activeId = navLevel === 'all' ? 'navAll' : 'nav' + navLevel;
   ['navL0','navL1','navL2','navL3','navAll'].forEach(id => {
     const el = document.getElementById(id);
-    if (el) el.classList.toggle('active', id === 'navAll');
+    if (el) el.classList.toggle('active', id === activeId);
   });
   renderBreadcrumb();
 }
@@ -780,13 +786,23 @@ function setNav(lv){
   navLevel = lv;
   navLayer = 'all';
   navFocus = null;
+  if (lv === 'L1') {
+    // L1 的语义是「按层聚焦」：默认落到第一个有节点的层，
+    // 否则与「全量」完全一样，用户会误以为按钮失效。
+    const avail = NAV_LAYERS.filter(l => nodes.some(n => n.layer === l));
+    navLayer = avail[0] || 'all';
+  }
   selected.clear();   // 导航过滤变化：清除隐藏节点的选中，避免 Delete 误删
   ['navL0','navL1','navL2','navL3','navAll'].forEach(id => {
     document.getElementById(id).classList.toggle('active', id === 'nav' + lv.toUpperCase() || (lv === 'all' && id === 'navAll'));
   });
   renderBreadcrumb();
   render();
-  if (lv !== 'all') fitView();
+  // 切换层级后必须重新适配：从 L0 切到「全量」时保留旧视图会只看到局部
+  fitView();
+  if (lv === 'all' && nodes.length > 150) {
+    toast('全量视图节点较多，可滚轮放大或用 L0–L3 下钻');
+  }
 }
 function drillFocus(id){
   if (navLevel !== 'L2') return;
@@ -809,7 +825,7 @@ function setLayer(layer){
 function navBack(){
   selected.clear();   // 回退改变可见范围：清除隐藏节点的选中
   if (navFocus){ navFocus = null; renderBreadcrumb(); render(); fitView(); return; }
-  if (navLayer !== 'all'){ navLayer = 'all'; renderBreadcrumb(); render(); fitView(); return; }
+  if (navLayer !== 'all'){ setNav('L0'); return; }
   setNav('all');
 }
 function renderBreadcrumb(){
@@ -818,7 +834,15 @@ function renderBreadcrumb(){
   bc.style.display = '';
   let s = '📍 ';
   if (navLevel === 'L0') s += 'L0 总览';
-  else if (navLevel === 'L1') s += 'L1 分层' + (navLayer !== 'all' ? ' › ' + navLayer : '');
+  else if (navLevel === 'L1') {
+    const avail = NAV_LAYERS.filter(l => nodes.some(n => n.layer === l));
+    s += 'L1 分层';
+    avail.forEach(l => {
+      s += (l === navLayer)
+        ? ' › ' + l
+        : ' <a href="javascript:setLayer(\'' + l + '\')" style="color:#60A5FA">[' + l + ']</a>';
+    });
+  }
   else if (navLevel === 'L2') {
     const focused = nodes.find(x => x.id === navFocus);
     s += 'L2 模块' + (navFocus ? ' › ' + esc(focused ? focused.label : '') : '');
@@ -1422,6 +1446,9 @@ function toast(msg){
 initNav();
 render();
 fitView();
+if (navLevel === 'L0' && nodes.length > 120) {
+  toast('节点较多，已默认 L0 总览；可点 L1/L2/L3 下钻或「全量」查看全部');
+}
 // 评估台 iframe 在隐藏 Tab 中加载时容器尺寸为 0，初次 fitView 会算错；
 // 变为可见/尺寸变化后重新适配，避免用户看到只有左上角一簇节点。
 let _fitRaf = null;
@@ -1434,8 +1461,12 @@ window.addEventListener('resize', scheduleFit);
 if (window.ResizeObserver) {
   try { new ResizeObserver(scheduleFit).observe(document.body); } catch (e) {}
 }
+// iframe 可见后字体/工具栏布局才稳定，延迟再 fit 一次，避免内容偏到一侧
+function delayedFit(){ setTimeout(scheduleFit, 160); }
+if (document.readyState === 'complete') delayedFit();
+else window.addEventListener('load', delayedFit);
 document.addEventListener('visibilitychange', function(){
-  if (!document.hidden) scheduleFit();
+  if (!document.hidden) delayedFit();
 });
 </script>
 </body>

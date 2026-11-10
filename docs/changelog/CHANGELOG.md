@@ -4,6 +4,17 @@
 
 ---
 
+### v5.21.12 — 图谱新鲜度实时纠偏 + 评估台口径一致性
+
+> 背景：测试方 v5.21.7→5.21.11 实测仍复现 `coderef_query(stats)` 同响应矛盾（raw 查询有 11.7MB 图谱，freshness 却 `exists=false / path=""`）；评估台另有三处口径不一致：Wiki 卡片说已生成但文档覆盖说证据不足、统计口径无条件写「图谱可能滞后」、记分卡 720 与审计 736 差 16 条未说明；技术分区图默认「全量」把 209 节点缩成不可读色块。
+
+- **图谱新鲜度实时纠偏**：`artifact_freshness.live_kg_item()` 绕过 60 秒盘点缓存，`freshness_block` 与 `query_staleness` 对 `kg_db` 一律取实时磁盘条目；缓存说缺失但磁盘存在时不再误报「缺少产物 / 知识图谱不存在」。
+- **Wiki 口径统一**：评估台概览的 Wiki 状态改用 `detect_wiki_output_dir`，与记分卡文档覆盖同口径；用户 `docs/` 里的普通 Markdown 不再被冒充成「Wiki 已生成」。
+- **统计口径不再无条件告警**：仅当图谱构建时间早于本次扫描时才提示「可能滞后」，否则明确写「已覆盖最新代码」。
+- **记分卡差异显式化**：`_dim_findings` 增加 `counted / total / excluded{advice,runtime_path}`，概览与技术 Tab 同时展示「参与计分 720 / 总发现 736」及排除原因。
+- **技术分区图可读性**：节点数 >120 时默认进入 L0 总览；L1 默认落到第一个有节点的层，并在面包屑提供层切换；切换层级后始终重新适配，iframe 可见后延迟再 fit 一次；「全量」视图给出下钻提示。
+- **验证**：全量 pytest **441 全绿**（新增 3 条：图谱缓存纠偏、记分卡排除项、Wiki 口径）；`core/ tools/` pyflakes 0；`check_version` EXIT=0；真实项目 `D:\kuajingdianshang` 评估台复查：Wiki 卡片与文档覆盖一致、统计口径显示「已覆盖最新代码」、技术 Tab 原始分项显示 `counted=720 / total=736 / excluded=advice:10,runtime_path:6`、技术分区图默认 L0 且节点可读、控制台 0 错误。
+
 ### v5.21.11 — 评估台 UI / 自动评估复审二轮
 
 > 背景：5.21.10 提交后 CodeRabbit 复审再报 1 条 major + 2 条 minor，逐条修复。

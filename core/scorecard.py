@@ -412,9 +412,14 @@ def _dim_findings(project_path: str) -> dict:
         return _unknown("findings", "audit_findings 产物无法解析")
     findings = data.get("findings") or []
     h = m = lo = 0
+    excluded_advice = 0
+    excluded_runtime = 0
     evidence: List[str] = []
     for f in findings:
-        if not isinstance(f, dict) or str(f.get("kind") or "") == "advice":
+        if not isinstance(f, dict):
+            continue
+        if str(f.get("kind") or "") == "advice":
+            excluded_advice += 1
             continue
         # 运行时/第三方产物里的发现不计入健康分：旧快照可能把它们算进分母
         # （外部实测证据锚点前三条全是 .ms-playwright 的 Chromium 脚本）。
@@ -423,6 +428,7 @@ def _dim_findings(project_path: str) -> dict:
         segments = set(f_path.split("/"))
         if segments & {".ms-playwright", ".coderef", ".venv", "site-packages",
                        "_refactor_backup"}:
+            excluded_runtime += 1
             continue
         tier = str(f.get("tier") or "low").lower()
         if tier == "high":
@@ -443,6 +449,10 @@ def _dim_findings(project_path: str) -> dict:
     except OSError:
         stale = None  # 产物 mtime 读不到 → 新鲜度未知，不冒充"新鲜"
     raw = {"high": h, "medium": m, "low": lo,
+           "counted": h + m + lo,
+           "total": len(findings),
+           "excluded": {"advice": excluded_advice,
+                        "runtime_path": excluded_runtime},
            "total_files": data.get("total_files", 0),
            "scan_ts": data.get("scan_ts", ""),
            "stale": stale}
