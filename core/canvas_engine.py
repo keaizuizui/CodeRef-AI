@@ -1674,7 +1674,9 @@ function layoutForce(){
 
 // ═══════════ 导出 / 导入 ═══════════
 function buildJSON(){
-  return {canvas: CANVAS, nodes, edges, meta: DATA.meta || {}};
+  return {canvas: CANVAS, nodes, edges, meta: DATA.meta || {},
+          groups: DATA.groups || [], lanes: DATA.lanes || [],
+          stage_bands: DATA.stage_bands || []};
 }
 function downloadJSON(){
   const blob = new Blob([JSON.stringify(buildJSON(), null, 2)], {type:'application/json'});
@@ -1697,6 +1699,11 @@ function importJSON(ev){
       if (d.edges) edges = d.edges.map(e => Object.assign({}, e));
       // 报告视图与导入数据同源：meta 整体替换（缺失时清空，防旧 meta 混入误导报告）
       DATA.meta = d.meta || {};
+      // 模块组/泳道/阶段表头同样整体替换：否则导入后仍用原页面的分组，
+      // isClusterView() 会误判并把成员 id 不存在的组渲染成空画布或错卡。
+      DATA.groups = d.groups || [];
+      DATA.lanes = d.lanes || [];
+      DATA.stage_bands = d.stage_bands || [];
       commitChange();
       selected.clear();
       initNav();   // 画布数据替换后重新配置导航（ 复审）
