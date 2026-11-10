@@ -34,7 +34,9 @@ L3  coderef-asset      · 资产层 · 把治理/开发成果沉淀成可复用�
 - **L2 治理主链**：把被反复修改搞乱的存量工程捋回正轨——先辨清真身/孪生/孤本，再沿 `map → target → refactor → verify → health` 五阶段规整，用 9 类确定性差距生成任务卡，靠四维对齐度确认真正回正轨，最后用定期体检维持。
 - **L3 资产链**：把值得复用的设计提炼成资产，防止高价值设计随项目迁移流失——沉淀有门槛（≥2 处采用 + 证据防污染）、命名先归一、复刻不自动改源码。
 
-跨链转场由**编排 gate 强制**兜底，不靠调用方自觉：L2 ③ 改码前 → gate G1 转 L1 做变更探查/防护；L2 ③ 收尾/⑤ 体检/L2 软入口档摸底发现可复用设计 → gate G2 转 L3 评估沉淀；L1 发现存量结构问题 → gate G3 回 L2 立项，L3 复刻落地 → gate G3 回 L1 验证。真·屎山项目可先进 **L2 软入口档「先架构诊断」**只摸底（架构梳理 + 治理价值决策门，不动生产码），价值成立再升级正式主链，价值不足则停在摸底不硬上全链。详见仓库 `skills/` 目录下的 4 个 Skill（含 `coderef-mcp` 的「意图 → 工具」速查表与顶层入口判定）。
+跨链转场由**编排 gate 强制**兜底，不靠调用方自觉：L2 ③ 改码前 → gate G1 转 L1 做变更探查/防护；L2 ③ 收尾/⑤ 体检/L2 软入口档摸底发现可复用设计 → gate G2 转 L3 评估沉淀；L1 发现存量结构问题 → gate G3 回 L2 立项，L3 复刻落地 → gate G3 回 L1 验证。真·屎山项目可先进 **L2 软入口档「先架构诊断」**只摸底（架构梳理 + 治理价值决策门，不动生产码），价值成立再升级正式主链，价值不足则停在摸底不硬上全链。
+
+**Skill 怎么接入**：先加载 `skills/coderef-mcp/SKILL.md`（工具速查 + 意图→工具路由 + 梦协议），再按阶段追加 probe / governance / governance-semi / asset。支持目录式 Skill 的客户端直接把 `skills/` 复制到客户端 skills 目录；只支持系统提示的客户端把 `coderef-mcp` 正文粘进项目规则即可。完整说明见 [MCP_SETUP.md → Skill 接入](MCP_SETUP.md#skill-接入让编程-ai-知道先做什么再做什么)。
 
 ---
 
@@ -494,7 +496,7 @@ coderef-ai/
 │   ├── change_guard.py / change_report.py              # 变更守护
 │   ├── version.py                   # 版本号唯一真源（__init__ / pyproject / mcp_server 均从此读取）
 │   └── llm_integration.py / cache_manager.py / project_scope.py / shared_filter.py  # 基础设施
-├── skills/                          # 三层编排 Skill（probe/governance/asset/mcp）
+├── skills/                          # 5 个编排 Skill（mcp 入口 + probe/governance/governance-semi/asset）
 ├── tools/check_version.py           # 发布前版本一致性校验（README/MCP_SETUP/CHANGELOG 与真源比对）
 ├── config/                           # 配置（settings.py + 本地 config.json，含密钥，已 gitignore）
 ├── docs/                             # 文档 + changelog 更新日志归档
@@ -577,7 +579,8 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 - **草稿链（P2）**：`review_draft/refactor_draft/asset_candidate/noise_proposal` 只写 `drafts/`，必须用户确认后走 `next_tools` 的确定性工具。
 - **P3 维护**：`false_memory_check` 确定性复核证据引用（audit 窗口外如实记 `unknown`），`eval_replay` 指标落盘 `evals/`。
 - **工具面与梦协议**：`CODEREF_TOOL_PROFILE=lite|full` 只控制 `tools/list` 暴露面；`DREAM.md` 固定六节。
-- 设计真源见 [docs/dream.md](docs/dream.md) / [docs/dream-jobs.md](docs/dream-jobs.md)。
+- **本版修复（5.21.5–5.21.7）**：测试方登记册 U-52–U-62 共 11 条边界缺陷（证据降级、并发补梦、BOM、缓存内容指纹等）；CodeRabbit 复审 2 条 minor（paused 轨迹错误回传、增量漂移补内容哈希），第三轮 findings=0。
+- 设计真源见 [docs/dream.md](docs/dream.md) / [docs/dream-jobs.md](docs/dream-jobs.md)；完整逐版本记录见 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
 
 #### v5.18.13 — 结论信封、CALLS 作用域与陈旧输入防呆
 

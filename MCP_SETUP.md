@@ -192,6 +192,80 @@ export CODEREF_API_KEY="ollama"
 
 ---
 
+## Skill 接入（让编程 AI 知道「先做什么、再做什么」）
+
+MCP 只负责暴露工具，**不负责告诉 AI 先调哪个**。`skills/` 下的 5 个 Skill 就是这层编排说明，按阶段分工：
+
+| Skill | 层级 | 什么时候加载 |
+|---|---|---|
+| `skills/coderef-mcp/SKILL.md` | 顶层入口 | **先加载这个**：工具速查、意图→工具路由、梦协议、结论信封读法、诚实边界 |
+| `skills/coderef-probe/SKILL.md` | L1 小阶段 | 提交/CI 前做增量探查、变更回归防护、论断核验 |
+| `skills/coderef-governance/SKILL.md` | L2 大阶段 | 存量架构治理（map → target → refactor → verify → health） |
+| `skills/coderef-governance-semi/SKILL.md` | L2 软入口 | 屎山项目先摸底，不动生产码 |
+| `skills/coderef-asset/SKILL.md` | L3 资产层 | 把值得复用的设计沉淀为资产、复刻到新项目 |
+
+**接入方式**（按客户端任选其一）：
+
+1. **支持目录式 Skill 的客户端**（如 Trae / Claude Code）：把整个 `skills/` 目录复制到客户端的 skills 目录（常见为用户级 `~/.trae-cn/skills/` 或项目级 `.trae/skills/`），或直接指向本仓 `skills/` 路径。
+2. **只支持系统提示的客户端**：把 `skills/coderef-mcp/SKILL.md` 的正文粘进项目规则/系统提示；其余 Skill 在命中对应阶段时再追加。
+3. **不想装 Skill**：直接调 `coderef_version(project_path)`，其 `consumer_contract` 已内联 3 条必读 + KL-01~KL-09 限制表，足以正确转述结论，只是不如 Skill 细。
+
+> Skill 只描述「怎么编排」，不新增工具；所有能力仍走下面的 MCP 工具。Skill 里的工具名按 `lite` profile 编写，full-only 工具会显式标注。
+
+---
+
+## 工具面 profile（可选）
+
+`CODEREF_TOOL_PROFILE` 控制 `tools/list` 暴露多少工具，**不删除 handler**：被隐藏的工具仍可按名直接调用。
+
+| 值 | 暴露数 | 适用场景 |
+|---|---|---|
+| `full`（默认） | 59 | CI、高级用户、需要完整工具面 |
+| `lite` | 12 | 日常开发，只暴露入口工具（version / plan / execute / dispatch_status / dispatch_report / dream / task_status / scope / operation_memory / verify_findings / change_guard / audit） |
+
+配置方式（优先级从高到低）：
+
+```bash
+# 1. 环境变量
+export CODEREF_TOOL_PROFILE=lite
+
+# 2. config.json 顶层字段
+{ "tool_profile": "lite" }
+```
+
+非法值会自动回退 `full`，并在 `coderef_version` 的 `tool_profile.error` 中如实报告。`coderef_version` 返回的 `tool_profile` 形如：
+
+```json
+{"profile": "full", "source": "default", "error": "", "tools_exposed": 59, "tools_hidden": 0}
+```
+
+---
+
+## 梦（coderef_dream，可选）
+
+梦是 CodeRef 的离线巩固层：主 AI 醒着做事，CodeRef 在安静时把「被闸门阻断 / 失败 / 变更守卫退化 / 主 AI 显式 seed」的经历巩固成更少更准的联想，写进项目本地 `.coderef/dream/DREAM.md`（≤800 token）。
+
+- **复用主 LLM**：不维护独立 Key/预算，和其他 LLM 工具共用 `CODEREF_API_KEY` / `config.json`。
+- **默认不自动跑**：`dream.run_on_startup` 默认 `false`；只有显式设为 `true`，才会在首次带 `project_path` 的调用后后台补一轮。
+- **四个常用 action**：`status`（默认，同步）/ `seed`（投喂一条显著事件）/ `read`（读 DREAM.md）/ `run`（补梦，后台，可传 `job`）。
+- **输出是假设不是事实**：`advice` 永远 `hypothesis`；只有 `verified` 事实进「已验证规则」。草稿（`drafts/`）必须用户确认后走 `next_tools` 的确定性工具，P3（`false_memory_check` / `eval_replay`）只手动跑。
+
+```json
+{
+  "dream": {
+    "enabled": true,
+    "run_on_startup": false,
+    "max_notes": 40,
+    "ttl_days": 30,
+    "min_interval_hours": 12
+  }
+}
+```
+
+详细设计见 [docs/dream.md](docs/dream.md) 与 [docs/dream-jobs.md](docs/dream-jobs.md)。
+
+---
+
 ## MCP 工具
 
 | 工具 | 功能 | 模式 | 需要 LLM |
@@ -226,6 +300,36 @@ export CODEREF_API_KEY="ollama"
 | `coderef_innovation_review` | 创新复刻的 LLM 协助排查：让 LLM 阅读源项目管线设计（知识图谱调用链）+ wiki，判定是否确属创新 workflow、管线与 wiki 是否一致、复刻是否合理。无 API Key 时硬阻断（只给确定性管线摘要，不产出降级判断） | 后台 | 是 |
 | `coderef_interpret` | 人话解读（把审计/图谱结论转成人人可读） | 后台 | 是 |
 | `coderef_owasp` | OWASP LLM Top 10 合规检测 | 后台 | 否 |
+| **调度与观测（v5.19）** | | | |
+| `coderef_plan` | dispatcher 计划卡：intent（probe / single_audit / recover / governance / asset / remind）或 intent_text → 链、步骤、决策点；纯规划不执行 | 同步 | 否 |
+| `coderef_execute` | 执行计划卡或 intent，返回 task_id；每步过前置闸门，缺 recover/图谱旧时自动补齐，用户决策步骤暂停 | 后台 | 否 |
+| `coderef_dispatch_status` | 任务当前步骤、各步状态/耗时、闸门命中与自动补齐记录、暂停决策点 | 同步 | 否 |
+| `coderef_dispatch_report` | 最终摘要信封：结论 + freshness + KL 限制 + owner_actions + 折叠步骤索引，中间返回不进主上下文 | 同步 | 否 |
+| `coderef_dispatch_metrics` | 从 `.coderef/audit_log` 聚合闸门命中率、阻断 Top、记忆命中率、新鲜度事件、scope 生效、任务结局 | 同步 | 否 |
+| `coderef_task_cancel` | 取消运行中的后台任务；已完成/不存在时如实返回实际状态 | 同步 | 否 |
+| **范围、版本与梦（v5.19–v5.21）** | | | |
+| `coderef_scope` | 项目边界单一事实源 `.coderef/scope.json`：add / remove / list / verify；add 后立即回执生效验证 | 同步 | 否 |
+| `coderef_version` | 版本探针 + `consumer_contract`（必读 + KL-01~KL-09）+ 派生产物新鲜度快报 + `tool_profile` 暴露面 | 同步 | 否 |
+| `coderef_dream` | 梦：status / seed / read / run（job 12 类：pitfall/recap/routing/triage/change_narrative/failure_postmortem/review_draft/refactor_draft/asset_candidate/noise_proposal/false_memory_check/eval_replay）；另支持 action=drafts / evals 读草稿与评估 | status/seed/read 同步，run 后台 | run 是 |
+| **架构治理（v5.0）** | | | |
+| `coderef_target_arch_set` | 设置/更新目标架构 JSON（业务层 + 技术层 + 约束），作为差距分析的参照系 | 同步 | 否 |
+| `coderef_target_arch_get` | 读取当前目标架构；未设置时明确返回 `not_set` | 同步 | 否 |
+| `coderef_target_adopt` | 把 `arch_gap` 报出的游离/未建模模块按角色批量追加 `target_modules` | 同步 | 否 |
+| `coderef_arch_gap` | 现状图谱 vs 目标架构的确定性差距清单（missing / dependency_violation / cycle / business_gap / unassigned / god_module / large_module） | 同步 | 否 |
+| `coderef_refactor_plan` | 差距 → 可执行重构任务卡（操作、确定性影响范围、验证标准） | 同步 | 否 |
+| `coderef_arch_verify` | 重构后 0–100 四维对齐度评分 + 差距复检；传 `changed_files` 走增量 | 同步 | 否 |
+| `coderef_role_boundary` | 符号级职责越界检测（命名语义 / 跨角色调用 / 复用信号）；`semantic=true` 时用 LLM 辅助 | 同步 | 可选 |
+| `coderef_dynamic_probe` | 动态探针：动态导入、装饰器注册、工厂/回调、entry_points；只扫代码不执行 | 同步 | 否 |
+| **定期体检（v5.1–5.2）** | | | |
+| `coderef_gov_start` | 建档体检周期并把当前差距导入为治理工作项（去重 / 复发 / 豁免） | 同步 | 否 |
+| `coderef_gov_close` | 收尾周期并输出完成率 / 剩余 / 复发 / 豁免统计 | 同步 | 否 |
+| `coderef_gov_issues` | 按视图查询工作项（open / high / recent / recurred / rejected / overdue 等） | 同步 | 否 |
+| `coderef_gov_transition` | 工作项状态机流转与豁免（Detected→Confirmed→Fixing→Verified→Archived） | 同步 | 否 |
+| `coderef_gov_report` | 体检报告 / 治理看板（单期 + 跨期趋势 + 交互 HTML）；`action=board` 等价旧 `gov_board` | 同步 | 否 |
+| `coderef_gov_pipeline` | 在途工作项自动化流水线：改状态 → 生成任务卡 → 复验 → 闭环 | 同步 | 否 |
+| `coderef_gov_board` | 兼容别名，转发 `coderef_gov_report(action=board)`，落盘 `.coderef/gov_board.html` | 同步 | 否 |
+| `coderef_gov_workspace` | 多代码库聚合治理状态与跨仓 TOP 风险 | 同步 | 否 |
+| `coderef_gov_schedule` | 生成 cron/CI 可运行的体检触发脚本 `run_cycle.py` + 离期检查 | 同步 | 否 |
 
 ---
 
