@@ -267,7 +267,9 @@ def _make_handler(project_path: str, out_dir: str, token: str,
                 write_card(project_path, card)
                 with _LOCK:
                     cache["card"] = card
-            return self._json(card)
+            # 前端只做展示：raw 里的嵌套值先由服务端压成文本，避免前后端各写一套格式规则
+            from core.report_panels import scorecard_for_display
+            return self._json(scorecard_for_display(card))
 
         def _refresh_page(self) -> Tuple[bool, str]:
             """评估产物落盘后重渲染评估台；返回 (是否产出新页面, 失败原因)。
