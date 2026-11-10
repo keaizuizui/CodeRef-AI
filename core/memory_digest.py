@@ -89,6 +89,8 @@ def _empty_digest() -> dict:
         "truncated": False,
         "error": "",
         "dream": {},
+        "procedure_card": {},
+        "procedure_hint": "",
     }
 
 
@@ -255,6 +257,21 @@ def build_digest(project_path: str, max_tokens: int = 800) -> dict:
         digest["operation_memory_error"] = op_error
     else:
         digest["error"] = op_error
+
+    # 规程入口卡：即使操作记忆还没同步，也直接从 AGENTS.md 取，确保首次重工具
+    # 响应就带上「发布/审计/CodeRabbit 先看哪里」，不再依赖 AI 主动打开 CODEREF.md。
+    try:
+        card = data.get("procedure_card") if isinstance(data, dict) else None
+        if not card:
+            from core.operation_memory import _read_procedure_card
+            card = _read_procedure_card(project_path)
+        digest["procedure_card"] = card or {}
+        digest["procedure_hint"] = (
+            (data.get("procedure_hint") if isinstance(data, dict) else "")
+            or "procedure_card 是入口卡；完整步骤见 CODEREF.md，不得只凭卡片执行。"
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"[MemoryDigest] 读取规程入口卡失败: {exc}")
 
     digest["truncated"] = truncated
     if not digest["items"]:
