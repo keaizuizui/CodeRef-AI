@@ -27,7 +27,7 @@
 
 | 路径 | 说明 |
 |------|------|
-| `core/mcp_server.py` | MCP Server 入口，暴露 50 个工具 |
+| `core/mcp_server.py` | MCP Server 入口，暴露 59 个工具 |
 | `core/pipeline_runner.py` | 审计管线引擎（audit / architecture / docs + 知识图谱） |
 | `core/governance_audit.py` | 治理审计检测器（架构 / 变更 / 质量 / 安全铁律） |
 | `core/agent_security_auditor.py` | Agent 安全审计检测器 |
