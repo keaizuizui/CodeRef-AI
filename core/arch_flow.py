@@ -26,14 +26,12 @@ _X0 = 120
 _Y0 = 110
 
 
-def _build_canvas_data(data: dict) -> dict:
-    """把 business_semantics 的 307 个模块压成非空格子汇总卡 + 聚合边。"""
-    stages = data.get("stages") or []
-    actors = data.get("actors") or []
-    nodes = data.get("nodes") or []
-    edges = data.get("edges") or []
-    summary = data.get("summary") or {}
+def _collect_grid(nodes: List[dict], edges: List[dict],
+                  stages: List[dict], actors: List[dict]) -> tuple:
+    """按 actor×stage 聚合模块，并返回有内容的泳道/阶段。
 
+    返回 (grid, module_cell, active_actors, active_stages, handoff_modules)。
+    """
     handoff_modules = {e.get("from") for e in edges if e.get("handoff")}
     grid: Dict[tuple, List[dict]] = {}
     module_cell: Dict[str, tuple] = {}
@@ -46,12 +44,13 @@ def _build_canvas_data(data: dict) -> dict:
                      if any(grid.get((a["id"], s["id"])) for s in stages)]
     active_stages = [s for s in stages
                      if any(grid.get((a["id"], s["id"])) for a in actors)]
+    return grid, module_cell, active_actors, active_stages, handoff_modules
 
-    stage_x = {s["id"]: _X0 + i * (_CELL_W + _GAP_X)
-               for i, s in enumerate(active_stages)}
-    actor_y = {a["id"]: _Y0 + j * (_CELL_H + _GAP_Y)
-               for j, a in enumerate(active_actors)}
 
+def _cell_nodes(grid: Dict[tuple, List[dict]], active_actors: List[dict],
+                active_stages: List[dict], stage_x: Dict[str, int],
+                actor_y: Dict[str, int], handoff_modules) -> tuple:
+    """每个非空格子生成一张汇总卡；返回 (nodes, cell_id 映射)。"""
     canvas_nodes: List[dict] = []
     cell_id: Dict[tuple, str] = {}
     for a in active_actors:
@@ -78,7 +77,12 @@ def _build_canvas_data(data: dict) -> dict:
                     "actor": a["id"], "stage": s["id"],
                 },
             })
+    return canvas_nodes, cell_id
 
+
+def _aggregate_edges(edges: List[dict], module_cell: Dict[str, tuple],
+                     cell_id: Dict[tuple, str]) -> List[dict]:
+    """跨格子调用聚合成一条边；交接点用琥珀色虚线。"""
     agg: Dict[tuple, dict] = {}
     for e in edges:
         a = module_cell.get(e.get("from", ""))
@@ -91,7 +95,7 @@ def _build_canvas_data(data: dict) -> dict:
         rec = agg.setdefault((f, t), {"count": 0, "handoff": False})
         rec["count"] += 1
         rec["handoff"] = rec["handoff"] or bool(e.get("handoff"))
-    canvas_edges = [{
+    return [{
         "id": f"e:{f}->{t}", "from": f, "to": t,
         "label": str(rec["count"]) if rec["count"] > 1 else "",
         "type": "flow", "rel": "",
@@ -99,6 +103,11 @@ def _build_canvas_data(data: dict) -> dict:
         "dashed": bool(rec["handoff"]),
     } for (f, t), rec in agg.items()]
 
+
+def _build_bands(grid: Dict[tuple, List[dict]], active_actors: List[dict],
+                 active_stages: List[dict], stage_x: Dict[str, int],
+                 actor_y: Dict[str, int]) -> tuple:
+    """泳道带与阶段表头（位置与格子坐标同源）。"""
     lanes = [{
         "id": a["id"], "name": a.get("name", a["id"]),
         "y": actor_y[a["id"]] - 8, "h": _CELL_H + 16,
@@ -109,6 +118,29 @@ def _build_canvas_data(data: dict) -> dict:
         "x": stage_x[s["id"]], "w": _CELL_W,
         "count": sum(len(grid.get((a["id"], s["id"])) or []) for a in active_actors),
     } for s in active_stages]
+    return lanes, stage_bands
+
+
+def _build_canvas_data(data: dict) -> dict:
+    """把 business_semantics 的 307 个模块压成非空格子汇总卡 + 聚合边。"""
+    stages = data.get("stages") or []
+    actors = data.get("actors") or []
+    nodes = data.get("nodes") or []
+    edges = data.get("edges") or []
+    summary = data.get("summary") or {}
+
+    grid, module_cell, active_actors, active_stages, handoff_modules = _collect_grid(
+        nodes, edges, stages, actors)
+    stage_x = {s["id"]: _X0 + i * (_CELL_W + _GAP_X)
+               for i, s in enumerate(active_stages)}
+    actor_y = {a["id"]: _Y0 + j * (_CELL_H + _GAP_Y)
+               for j, a in enumerate(active_actors)}
+
+    canvas_nodes, cell_id = _cell_nodes(
+        grid, active_actors, active_stages, stage_x, actor_y, handoff_modules)
+    canvas_edges = _aggregate_edges(edges, module_cell, cell_id)
+    lanes, stage_bands = _build_bands(
+        grid, active_actors, active_stages, stage_x, actor_y)
 
     return {
         "canvas": {"type": "flow", "title": "业务流程画布",
