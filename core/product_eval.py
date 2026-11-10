@@ -492,7 +492,7 @@ def evaluate(project_path: str, stage: Optional[str] = None,
         return _degrade(pp, result, f"LLM 调用失败，已降级为 SKIP: {raw[:200]}")
 
     out = _parse_json(raw)
-    if out is None:
+    if not isinstance(out, dict):
         # 大项目能力矩阵可能超出模型单次输出上限，整段 JSON 被截断。
         # 退化为「前 12 个能力」的紧凑重试：拿到语义确认即可，其余能力
         # 保留确定性矩阵结果，并在 assumptions 里如实标注覆盖范围。
@@ -506,7 +506,7 @@ def evaluate(project_path: str, stage: Optional[str] = None,
             return _degrade(pp, result,
                             err2 or "LLM 不可用，已降级为 SKIP（不编造结论）")
         out = _parse_json(raw2)
-        if out is None:
+        if not isinstance(out, dict):
             return _degrade(pp, result,
                             "LLM 返回无法解析为 JSON（含紧凑重试），"
                             "已降级为 SKIP（不编造结论）")

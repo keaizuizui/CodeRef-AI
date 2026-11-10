@@ -4,6 +4,15 @@
 
 ---
 
+### v5.21.10 — 评估台 UI / 自动评估复审收尾
+
+> 背景：5.21.9 提交后 CodeRabbit 复审报 3 条 minor，逐条修复。
+
+- **产品紧凑重试类型防护**：`_parse_json` 可能返回 list 等非 dict，`out.setdefault` 会抛 `AttributeError`；初始与重试结果都要求 `isinstance(out, dict)`，否则按原逻辑降级 SKIP。
+- **画布自动适配不覆盖用户视图**：`_userMoved` 标记在 mousedown / wheel（`zoomAt`）/ 重置视图时置位；`scheduleFit` 只在用户尚未交互时重跑 `fitView`，窗口或 iframe resize 不再把用户平移/缩放重置。
+- **自动评估避免重复烧 LLM**：`coderef_report` 的自动产品/UX 先读 `artifact_report`，快照存在且 `code_newer=false` 时记 `SKIPPED_FRESH` 并跳过；动态导入改用 `importlib.import_module`。
+- **验证**：全量 pytest **438 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.21.9 — 评估台 UI 修复 + 产品/UX 自动评估
 
 > 背景：5.21.8 在真实项目复查评估台时发现 4 个 UI 可用性问题；同时用户要求产品（F 轨）与 UX（U 轨）在生成评估台时自动跑，不再依赖用户点按钮。

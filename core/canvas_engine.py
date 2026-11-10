@@ -500,6 +500,7 @@ const CANVAS = DATA.canvas || {};
 let nodes = (DATA.nodes||[]).map(n => Object.assign({}, n));
 let edges = (DATA.edges||[]).map(e => Object.assign({}, e));
 let view = {x: 0, y: 0, scale: 1};
+let _userMoved = false;   // 用户一旦平移/缩放，就不再自动 fit 覆盖其视图
 let selected = new Set();
 let history = [];
 let redoStack = [];
@@ -542,6 +543,7 @@ function applyView(){
   renderMiniMap();
 }
 function zoomAt(cx, cy, factor){
+  _userMoved = true;
   const p = toLocal(cx, cy);
   const w = toWorld(cx, cy);
   view.scale = Math.max(0.2, Math.min(3, view.scale * factor));
@@ -572,7 +574,7 @@ function fitView(){
   view.y = (wrap.clientHeight - h*view.scale)/2 - minY*view.scale;
   applyView();
 }
-function resetView(){ view = {x:0, y:0, scale:1}; applyView(); }
+function resetView(){ _userMoved = true; view = {x:0, y:0, scale:1}; applyView(); }
 
 // ═══════════ 渲染 ═══════════
 function portPos(n, port){
@@ -1421,7 +1423,9 @@ fitView();
 // 评估台 iframe 在隐藏 Tab 中加载时容器尺寸为 0，初次 fitView 会算错；
 // 变为可见/尺寸变化后重新适配，避免用户看到只有左上角一簇节点。
 let _fitRaf = null;
+wrap.addEventListener('mousedown', function(){ _userMoved = true; }, {passive: true});
 function scheduleFit(){
+  if (_userMoved) return;
   if (_fitRaf) cancelAnimationFrame(_fitRaf);
   _fitRaf = requestAnimationFrame(function(){ _fitRaf = null; fitView(); });
 }
