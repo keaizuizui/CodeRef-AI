@@ -4,6 +4,18 @@
 
 ---
 
+### v5.21.14 — 复审整改：锁半径、构造拆分与展示口径
+
+> 背景：CodeRabbit 与 Brooks-Lint 对 `origin/master..5.21.13` 的全量复审。CodeRabbit 1 条 minor（画布导入导出丢模块组/泳道/阶段表头）已修；Brooks-Lint 报 2 条 warning + 3 条 suggestion，本轮逐条整改。
+
+- **dream 锁按资源拆分（warning）**：`run` 不再整轮持跨进程文件锁——整轮含多分钟 LLM 调用，长持锁会让另一进程的 `seed`/`run` 等满 120s 后失败。改为：读 `seeds.jsonl` 用独立 `.lock.seeds`（`seed` 也只取这把锁，不再被 run 阻塞）、写 `notes.json` 用原有合并锁、写 `DREAM.md` 与 `state.json` 用主锁；写 state 时以磁盘值为基准合并 `cursor.seeds_consumed`（取较大值）与 `runs` 计数，避免并发 run 互相覆盖。
+- **业务流程画布构造拆分（warning）**：`_build_canvas_data` 从约 100 行拆为 `_collect_grid` / `_cell_nodes` / `_aggregate_edges` / `_build_bands` 四个纯函数，主函数只做坐标映射与编排；格子、聚合边、泳道带、阶段表头仍共用同一组坐标，输出逐字段不变。
+- **删除 `Server._schema_error` 中间人（suggestion）**：`tools/call` 与 `_run` 统一调用模块级 `_schema_error`，不再保留只做委托的实例方法。
+- **记分卡原始分项格式化统一（suggestion）**：新增 `report_panels.raw_text` / `scorecard_for_display` 与 `RAW_ITEMS_MAX`；`/api/scorecard` 返回前由服务端把 `raw` 中的嵌套值压成展示文本，前端 `scApply` 只做 `String()`，删除 `scRawVal`，两边不再各写一套格式规则。
+- **画布导入导出补字段（CodeRabbit minor）**：`buildJSON` 导出 `groups` / `lanes` / `stage_bands`，`importJSON` 整体替换这三个字段，避免导入后沿用原页面分组导致 `isClusterView()` 误判、流程画布丢泳道与阶段表头。
+- **未改动项（诚实记录）**：Brooks-Lint 的「仓库无被跟踪测试」一条属既定策略，README `测试与验证：公开什么、不公开什么` 已明确说明 `tests/` 不公开、回归由外部 STRICT 套件覆盖，故只保留文档说明，不新增仓库测试。
+- **验证**：全量 pytest **453 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.14）；测试方 STRICT 定向复跑 U-63/U-64/U-65/U-67 全绿（含 8 进程 seed、2 进程 run、增量 vs 全量边集合、schema 负例）。
+
 ### v5.21.13 — 测试登记册 U-63~U-68 修复
 
 > 背景：测试方对 v5.21.12 回测，登记册新增 U-63~U-68 六条（3 中 / 3 低），均为确定性行为边界；逐条修复后按 STRICT 定向复跑。
