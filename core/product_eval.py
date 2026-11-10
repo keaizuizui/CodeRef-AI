@@ -376,8 +376,14 @@ def _call_llm(prompt: List[dict]) -> tuple:
         llm = LLMIntegration()
         if not llm.is_available():
             return None, "", False
+        # 大项目能力矩阵（最多 60 项 × 五问）输出较长，4000 tokens 容易被截断
+        # 导致 JSON 解析失败；放大到 8000，仍受主 LLM 调用预算约束。
+        # 产品评估的合法 JSON 可能超过通用 12000 字符输出封顶（紧凑重试实测
+        # 12 项能力约 12k 字符），这里只为本实例放宽，避免把完整 JSON 截断。
+        if getattr(llm, "output_cap_chars", 0) < 24000:
+            llm.output_cap_chars = 24000
         raw = llm.chat_completion(prompt, response_format={"type": "json_object"},
-                                  max_tokens=4000)
+                                  max_tokens=8000)
         return raw, "", True
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[product_eval] LLM 调用异常，降级 SKIP: {e}")
@@ -487,8 +493,29 @@ def evaluate(project_path: str, stage: Optional[str] = None,
 
     out = _parse_json(raw)
     if out is None:
-        return _degrade(pp, result,
-                        "LLM 返回无法解析为 JSON，已降级为 SKIP（不编造结论）")
+        # 大项目能力矩阵可能超出模型单次输出上限，整段 JSON 被截断。
+        # 退化为「前 12 个能力」的紧凑重试：拿到语义确认即可，其余能力
+        # 保留确定性矩阵结果，并在 assumptions 里如实标注覆盖范围。
+        trim_evidence = dict(evidence)
+        trim_evidence["capabilities"] = (evidence.get("capabilities") or [])[:12]
+        trim_matrix = dict(matrix)
+        trim_matrix["rows"] = (matrix.get("rows") or [])[:12]
+        raw2, err2, available2 = _call_llm(
+            _prompt(trim_evidence, trim_matrix, chain, b_track))
+        if err2 or not available2:
+            return _degrade(pp, result,
+                            err2 or "LLM 不可用，已降级为 SKIP（不编造结论）")
+        out = _parse_json(raw2)
+        if out is None:
+            return _degrade(pp, result,
+                            "LLM 返回无法解析为 JSON（含紧凑重试），"
+                            "已降级为 SKIP（不编造结论）")
+        out.setdefault("assumptions", []).append({
+            "text": "LLM 语义确认仅覆盖前 12 个能力，其余能力保留确定性矩阵结果",
+            "evidence_level": "E4",
+        })
+        extra = dict(extra or {})
+        extra["llm_scope"] = "compact_retry:12"
     bad = _validate_llm(out)
     if bad:
         return _degrade(pp, result, bad)

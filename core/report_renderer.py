@@ -280,7 +280,7 @@ section h2 { font-size:16px; color:#f1f5f9; margin-bottom:14px; padding-bottom:1
 .card .val { font-size:24px; font-weight:700; color:#f1f5f9; }
 table { width:100%; border-collapse:collapse; font-size:13px; }
 th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #2a2d3a; vertical-align:top; }
-th { color:#9ca3af; font-weight:600; background:#14161f; }
+th { color:#9ca3af; font-weight:600; background:#14161f; white-space:nowrap; }
 tr:hover td { background:#1e2234; }
 code { background:#14161f; border:1px solid #2a2d3a; border-radius:4px; padding:1px 5px; font-size:12px; color:#93c5fd; }
 pre { background:#14161f; border:1px solid #2a2d3a; border-radius:8px; padding:14px; overflow-x:auto; font-size:12px; margin:8px 0; }
@@ -397,6 +397,19 @@ function scApply(j){
   var stamp = document.getElementById('sc-stamp');
   if (stamp) stamp.textContent = '评估时间 ' + (j.generated_at || '');
 }
+function probeLocal(){
+  var st = document.getElementById('sc-status');
+  if (!st) return;
+  fetch('/api/health', {cache:'no-store'}).then(function(r){
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(function(j){
+    st.textContent = '本地服务已连接' + (j.version ? '（v' + j.version + '）' : '')
+      + '，可重新评估';
+  }).catch(function(){
+    st.textContent = '离线快照：未连接本地评估服务，无法重新评估（用 coderef_report open_server=true 打开）';
+  });
+}
 function scRefresh(){
   var st = document.getElementById('sc-status');
   fetch('/api/scorecard?refresh=1', {cache:'no-store'}).then(function(r){
@@ -456,6 +469,7 @@ function runEval(scene){
     if (st) st.textContent = '评估失败：' + e.message;
   });
 }
+probeLocal();
 </script>
 """
 
@@ -991,7 +1005,7 @@ class HtmlReportRenderer:
             '</div>'
             f'<div class="sc-meta" id="sc-stamp">评估时间 {_esc(card.get("generated_at", ""))}</div></div>'
             '<button class="tab-btn" onclick="scRefresh()">重新评估</button>'
-            '<span class="sc-note" id="sc-status">离线快照（重新评估需经 coderef_report open_server 打开）</span>'
+            '<span class="sc-note" id="sc-status">正在检测本地评估服务…</span>'
             '</div>'
             + cov_warn + scope_note +
             '<div class="scroll-x"><table style="margin-top:18px"><thead><tr>'

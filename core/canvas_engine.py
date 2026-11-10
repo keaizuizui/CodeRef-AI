@@ -1418,6 +1418,20 @@ function toast(msg){
 initNav();
 render();
 fitView();
+// 评估台 iframe 在隐藏 Tab 中加载时容器尺寸为 0，初次 fitView 会算错；
+// 变为可见/尺寸变化后重新适配，避免用户看到只有左上角一簇节点。
+let _fitRaf = null;
+function scheduleFit(){
+  if (_fitRaf) cancelAnimationFrame(_fitRaf);
+  _fitRaf = requestAnimationFrame(function(){ _fitRaf = null; fitView(); });
+}
+window.addEventListener('resize', scheduleFit);
+if (window.ResizeObserver) {
+  try { new ResizeObserver(scheduleFit).observe(document.body); } catch (e) {}
+}
+document.addEventListener('visibilitychange', function(){
+  if (!document.hidden) scheduleFit();
+});
 </script>
 </body>
 </html>
