@@ -14,7 +14,7 @@
 - **记分卡差异显式化**：`_dim_findings` 增加 `counted / total / excluded{advice,runtime_path}`，概览与技术 Tab 同时展示「参与计分 720 / 总发现 736」及排除原因。
 - **业务流程画布（根因修复）**：`canvas_engine` 的泳道层被写成 `<svg>` 后又嵌套 `<svg>`、边层被写成 0×0 SVG，浏览器把泳道与**所有连线**都裁掉——所以画布一直像一堆互不相连的方块。改为 `<div>` 泳道容器 + 20000×20000 边层后，42 条跨格子调用 / 交接线可见；307 个模块压成 17 个 actor×stage 汇总卡（未归类只出一张计数卡），X=阶段、Y=泳道，交接点琥珀色虚线、交付点绿色。
 - **技术分区图模块组**：代码模块按目录聚合为模块组卡片（真实项目 176 模块 → 16 组），点击下钻组内模块；>40 模块的组标记「大组，建议按子目录拆分」，下钻时至少保持 0.7 缩放从左上角展开；L1 默认落到第一个有节点的层并在面包屑提供层切换。
-- **规程入口卡（解决 CODEREF.md 不被默认加载）**：`AGENTS.md` 新增 `## 0. 规程索引`（发布 SOP、审计全流程、CodeRabbit 位置、硬规则）；`coderef_operation_memory(action=recover)` 与首次重工具的 `memory_digest` 都会返回从该节提取的 `procedure_card` + `procedure_hint`，即使操作记忆尚未同步也能拿到入口卡，不再出现「梦/记忆指向 CODEREF、AI 却从未打开它」的断链。`procedure_card` 只是入口，完整步骤仍以 `CODEREF.md` 为准。
+- **规程入口卡（解决 CODEREF.md 不被默认加载）**：`AGENTS.md` 新增 `## 0. 规程索引`（发布 SOP、审计全流程、CodeRabbit 位置、硬规则）；`coderef_operation_memory(action=recover)` 与首次重工具的 `memory_digest` 都会返回从该节提取的 `procedure_card` + `procedure_hint`，即使操作记忆尚未同步也能拿到入口卡，不再出现「梦/记忆指向 CODEREF、AI 却从未打开它」的断链。`procedure_card` 只是入口，完整步骤仍以 `CODEREF.md` 为准。注：`AGENTS.md` / `CODEREF.md` 自 5.4 起为本地注入文件、不随仓库公开；代码侧对任意存在 `AGENTS.md` 的项目生效，无该文件时 `procedure_card` 为空。
 - **验证**：全量 pytest **446 全绿**（新增 6 条：图谱缓存纠偏、记分卡排除项、Wiki 口径、大层分组布局、流程画布格子汇总、规程入口卡/无 ledger 注入）；`core/ tools/` pyflakes 0；`check_version` EXIT=0；真实项目 `D:\kuajingdianshang` 评估台复查：Wiki 卡片与文档覆盖一致、统计口径显示「已覆盖最新代码」、技术 Tab 原始分项显示 `counted=720 / total=736 / excluded=advice:10,runtime_path:6`、业务流程画布显示 6 个阶段表头 + 7 条泳道 + 17 个汇总卡 + 42 条聚合边、技术分区图显示 16 个模块组卡片并可下钻、控制台 0 错误（favicon 404 已补空图标）。
 
 ### v5.21.11 — 评估台 UI / 自动评估复审二轮
