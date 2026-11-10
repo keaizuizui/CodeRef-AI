@@ -605,7 +605,7 @@ class Server:
                 return {"jsonrpc":"2.0","id":rid,"error":{"code":-32602,"message":f"未知工具: {n}"}}
             # U-64：协议入口先按 inputSchema 校验，再决定是否后台化；
             # 避免非法调用先拿 task_id、后台线程里才报错。
-            invalid = self._schema_error(n, a)
+            invalid = _schema_error(n, a)
             if invalid:
                 return self._ok(rid, json.dumps(invalid, ensure_ascii=False), tool=n)
             # 统一后台化决策：重型工具默认后台，轻量工具同步；background 显式参数可覆盖
@@ -817,10 +817,6 @@ class Server:
 
     def _validate_project_path(self, tool: str, p: str):
         return _validate_project_path(tool, p)
-
-    def _schema_error(self, n, a):
-        """兼容实例调用：委托模块级校验（测试可能用轻量替身调 _run）。"""
-        return _schema_error(n, a)
 
     def _run(self, n, a, progress_cb=None) -> str:
         """工具执行入口：precondition 闸门 → 执行 → 按需附加会话上下文。
