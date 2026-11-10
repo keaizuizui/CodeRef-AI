@@ -486,6 +486,7 @@ def _page(title: str, body: str, nav_links: str, project_name: str) -> str:
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<link rel="icon" href="data:,">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{_esc(title)} - {_esc(project_name)}</title>
 <style>{_BASE_CSS}{_CONSOLE_CSS}</style>
