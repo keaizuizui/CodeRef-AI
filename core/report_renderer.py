@@ -914,15 +914,15 @@ class HtmlReportRenderer:
             return ('<section><h2>业务架构视图 <span class="badge badge-missing">未生成</span></h2>'
                     '<p class="empty">尚无架构画布产物。请在 MCP 中调用 '
                     '<code>coderef_arch_canvas(project_path=..., open_server=true)</code> 生成；'
-                    '该调用会同时产出「业务流程视图」与「业务树视图」，生成后刷新本页即可内嵌。</p>'
-                    '<p class="sc-note">业务流程视图 = 泳道（角色）× 阶段（触发→校验→执行→落库→通知→交付）；'
+                    '该调用会同时产出「业务流程画布」与「业务树视图」，生成后刷新本页即可内嵌。</p>'
+                    '<p class="sc-note">业务流程画布 = 泳道（角色）× 阶段（触发→校验→执行→落库→通知→交付）；'
                     '业务树视图 = 入口 → 主功能 → 子功能 → 步骤。</p></section>')
 
         btns = []
         frames = []
         first = True
         for key, label, link, desc in (
-            ("flow", "业务流程视图", flow_link,
+            ("flow", "业务流程画布", flow_link,
              "按角色（泳道）与流程阶段排布；含「交接点」「交付点」标记。未判定 actor/stage 的模块进「未归类」。"),
             ("tree", "业务树视图", arch_link,
              "入口层 → 主功能 → 子功能 → 步骤链；模块依赖只作为编程 AI 的数据。"),

@@ -457,15 +457,15 @@ def _arch_canvas(a: dict) -> str:
             sem_path = write_result(pp, sem)
             flow_dir = output_dir or os.path.join(pp, ".coderef")
             flow_path = render_file(pp, sem, output_dir=flow_dir,
-                                    title="业务流程视图")
+                                    title="业务流程画布")
             r["flow_path"] = flow_path
             r["semantics_path"] = sem_path
             r["flow_summary"] = sem.get("summary", {})
-            r["message"] += ("；已同时生成「业务流程视图」（按角色与流程阶段划分的泳道画布），"
+            r["message"] += ("；已同时生成「业务流程画布」（按角色与流程阶段划分的泳道画布），"
                              "未判定 actor/stage 的模块会进「未归类」并计数，不假装已归类")
         except Exception as e:  # noqa: BLE001
             # 流程视图是增强项：失败不影响业务树画布可用性
-            r["flow_error"] = f"业务流程视图生成失败: {e}"
+            r["flow_error"] = f"业务流程画布生成失败: {e}"
     if a.get("open_server"):
         r["server"] = _serve_arch_static(
             os.path.dirname(filepath),

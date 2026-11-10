@@ -1,169 +1,141 @@
 # -*- coding: utf-8 -*-
-"""arch_flow — 业务流程泳道图渲染（v5.18.0）。
+"""arch_flow — 业务流程画布（v5.18.0；5.21.12 起改为 actor × stage 汇总画布）。
 
 把 `business_semantics` 的标注结果渲染成**确定性**泳道画布：
 
-    X 轴 = 流程阶段（触发 → 准入校验 → 执行 → 落库 → 通知 → 交付）
+    X 轴 = 流程阶段（触发 → 准入校验 → 执行 → 落库 → 通知 → 交付 → 未归类）
     Y 轴 = 泳道（用户界面 / 接口层 / 业务执行 / 数据存储 / 支付 / 通知 / 定时 / 基础）
-    格子 = 模块卡片；跨泳道或跨阶段的调用 = 交接点
+    格子 = 该 actor × stage 下的模块汇总卡（模块数 + 样例 + 交接/交付标记）
+    边   = 跨格子的调用聚合；交接点用琥珀色虚线标出
 
-不做力导向、不做自动布局：格子位置由标注决定，因此同一份标注必然渲染出同一张图
-（可复现）。未判定的模块进「未归类」泳道 / 「未归类阶段」列，并显示数量，
-不假装已经归类。
-
-纯静态自包含 HTML（无 CDN、无 JS 框架），离线可打开。
+不再把 300 个模块逐个铺进格子（那会退化成「士兵方阵」）；未归类格子也只出一张
+汇总卡并显示数量，不假装已经归类。位置完全由标注决定，同一份标注必然渲染同一张图。
 """
 
-import html as _html
 import os
 from datetime import datetime
 from typing import Dict, List
 
-_CSS = """
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
-"Microsoft YaHei",sans-serif;background:#0f1117;color:#e5e7eb;line-height:1.55}
-.wrap{padding:20px}
-.top{display:flex;justify-content:space-between;align-items:flex-start;
-gap:16px;flex-wrap:wrap;margin-bottom:14px}
-h1{font-size:18px;color:#f1f5f9}
-.meta{font-size:12px;color:#6b7280}
-.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#9ca3af;margin:10px 0 16px}
-.dot{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:5px;
-vertical-align:middle}
-.dot-handoff{background:#fcd34d}
-.dot-value{background:#6ee7b7}
-.dot-plain{background:#4b5563}
-.board{display:grid;gap:8px;min-width:1080px}
-.head{font-size:12px;font-weight:700;color:#9ca3af;background:#14161f;
-border:1px solid #2a2d3a;border-radius:8px;padding:8px 10px;text-align:center}
-.lane{font-size:12px;font-weight:700;color:#c9cdd4;background:#14161f;
-border:1px solid #2a2d3a;border-radius:8px;padding:8px 10px;
-display:flex;align-items:center;gap:6px}
-.lane .cnt{font-weight:400;color:#6b7280}
-.cell{background:#14161f;border:1px dashed #232733;border-radius:8px;
-padding:6px;min-height:56px;max-height:520px;overflow-y:auto;
-display:flex;flex-direction:column;gap:6px}
-.diag{margin-top:12px;font-size:12px;color:#9ca3af}
-.diag summary{cursor:pointer;color:#c9cdd4;margin-bottom:6px}
-.card{background:#1a1d2e;border:1px solid #2a2d3a;border-left:3px solid #4b5563;
-border-radius:6px;padding:6px 8px;font-size:12px}
-.card.value{border-left-color:#6ee7b7}
-.card.handoff{border-left-color:#fcd34d}
-.card .t{color:#e5e7eb;font-weight:600;word-break:break-all}
-.card .a{color:#6b7280;font-size:11px;word-break:break-all}
-.pill{display:inline-block;font-size:10px;padding:1px 6px;border-radius:5px;
-margin-top:3px;margin-right:3px}
-.pill-v{background:#1d3b33;color:#6ee7b7}
-.pill-h{background:#3b2f1d;color:#fcd34d}
-.pill-u{background:#3b1d1d;color:#fca5a5}
-.scroll{overflow-x:auto}
-.note{font-size:12px;color:#9ca3af;margin-top:14px}
-.warn{font-size:12px;color:#fcd34d;margin-top:8px}
-"""
+from core.canvas_engine import render_canvas
+
+_CELL_W = 150
+_CELL_H = 64
+_GAP_X = 18
+_GAP_Y = 16
+_X0 = 120
+_Y0 = 110
 
 
-def _esc(s) -> str:
-    return _html.escape(str(s or ""), quote=False)
-
-
-def _render_cards(nodes: List[dict], handoff_modules: set) -> str:
-    cards = []
-    for n in nodes:
-        cls = "card"
-        if n.get("value_node"):
-            cls += " value"
-        elif n["module"] in handoff_modules:
-            cls += " handoff"
-        pills = ""
-        if n.get("value_node"):
-            pills += '<span class="pill pill-v">交付点</span>'
-        if n["module"] in handoff_modules:
-            pills += '<span class="pill pill-h">交接点</span>'
-        if str(n.get("evidence_level")) == "E4":
-            pills += '<span class="pill pill-u">LLM 推断</span>'
-        cards.append(
-            f'<div class="{cls}"><div class="t">{_esc(n.get("title"))}</div>'
-            f'<div class="a">{_esc(n["module"])}</div>{pills}</div>')
-    return "".join(cards)
-
-
-def render_html(data: dict, title: str = "业务流程视图") -> str:
-    """按 actor × stage 渲染泳道画布（纯静态、确定性）。"""
-    stages = [s["id"] for s in data.get("stages") or []]
-    actors = [a["id"] for a in data.get("actors") or []]
+def _build_canvas_data(data: dict) -> dict:
+    """把 business_semantics 的 307 个模块压成非空格子汇总卡 + 聚合边。"""
+    stages = data.get("stages") or []
+    actors = data.get("actors") or []
     nodes = data.get("nodes") or []
     edges = data.get("edges") or []
+    summary = data.get("summary") or {}
 
-    # 交接点：作为出边的模块打标（读者沿列向右看就知道要交接给谁）
-    handoff_modules = {e["from"] for e in edges if e.get("handoff")}
+    handoff_modules = {e.get("from") for e in edges if e.get("handoff")}
     grid: Dict[tuple, List[dict]] = {}
+    module_cell: Dict[str, tuple] = {}
     for n in nodes:
-        grid.setdefault((n["actor"], n["stage"]), []).append(n)
+        key = (n.get("actor") or "unlabeled", n.get("stage") or "unlabeled")
+        grid.setdefault(key, []).append(n)
+        module_cell[n.get("module", "")] = key
 
-    stage_names = {s["id"]: s["name"] for s in data.get("stages") or []}
-    actor_names = {a["id"]: a["name"] for a in data.get("actors") or []}
-    counts_by_actor: Dict[str, int] = {}
-    for n in nodes:
-        counts_by_actor[n["actor"]] = counts_by_actor.get(n["actor"], 0) + 1
+    active_actors = [a for a in actors
+                     if any(grid.get((a["id"], s["id"])) for s in stages)]
+    active_stages = [s for s in stages
+                     if any(grid.get((a["id"], s["id"])) for a in actors)]
 
-    cols = f"180px repeat({len(stages)}, minmax(200px,1fr))"
-    head_cells = '<div class="head">泳道 / 阶段</div>' + "".join(
-        f'<div class="head">{_esc(stage_names.get(s, s))}</div>' for s in stages)
-    rows = []
-    for a in actors:
-        cnt = counts_by_actor.get(a, 0)
-        if a == "unlabeled" and cnt == 0:
-            continue  # 未归类泳道为空时不占位
-        lane = (f'<div class="lane">{_esc(actor_names.get(a, a))}'
-                f'<span class="cnt">{cnt}</span></div>')
-        cells = []
-        for s in stages:
-            items = grid.get((a, s)) or []
-            if s == "unlabeled" and not items:
-                cells.append('<div class="cell"></div>')
+    stage_x = {s["id"]: _X0 + i * (_CELL_W + _GAP_X)
+               for i, s in enumerate(active_stages)}
+    actor_y = {a["id"]: _Y0 + j * (_CELL_H + _GAP_Y)
+               for j, a in enumerate(active_actors)}
+
+    canvas_nodes: List[dict] = []
+    cell_id: Dict[tuple, str] = {}
+    for a in active_actors:
+        for s in active_stages:
+            items = grid.get((a["id"], s["id"])) or []
+            if not items:
                 continue
-            cells.append('<div class="cell">'
-                         + _render_cards(items, handoff_modules) + '</div>')
-        rows.append(lane + "".join(cells))
+            nid = f"cell:{a['id']}:{s['id']}"
+            cell_id[(a["id"], s["id"])] = nid
+            value = sum(1 for i in items if i.get("value_node"))
+            handoff = any(i.get("module") in handoff_modules for i in items)
+            samples = [i.get("title") or i.get("module", "").split("/")[-1]
+                       for i in items[:2]]
+            canvas_nodes.append({
+                "id": nid, "type": "cell",
+                "label": f"{len(items)} 个模块",
+                "icon": "✅" if value else ("🔁" if handoff else "📦"),
+                "color": "#10B981" if value else ("#F59E0B" if handoff else "#3B82F6"),
+                "x": stage_x[s["id"]], "y": actor_y[a["id"]] + 8,
+                "w": _CELL_W, "h": _CELL_H,
+                "props": {
+                    "count": len(items), "samples": samples,
+                    "desc": " · ".join(samples),
+                    "actor": a["id"], "stage": s["id"],
+                },
+            })
 
-    s = data.get("summary") or {}
-    unknowns = data.get("unknowns") or []
-    note = "".join(f'<div class="warn">· {_esc(u)}</div>' for u in unknowns)
-    # 原始 LLM 异常属于诊断信息，折叠到「数据说明」里，不占据主画布视觉。
-    diag = (f'<details class="diag"><summary>数据说明与降级诊断'
-            f'（{len(unknowns)} 条）</summary>{note}</details>'
-            if unknowns else "")
+    agg: Dict[tuple, dict] = {}
+    for e in edges:
+        a = module_cell.get(e.get("from", ""))
+        b = module_cell.get(e.get("to", ""))
+        if not a or not b or a == b:
+            continue
+        f, t = cell_id.get(a), cell_id.get(b)
+        if not f or not t:
+            continue
+        rec = agg.setdefault((f, t), {"count": 0, "handoff": False})
+        rec["count"] += 1
+        rec["handoff"] = rec["handoff"] or bool(e.get("handoff"))
+    canvas_edges = [{
+        "id": f"e:{f}->{t}", "from": f, "to": t,
+        "label": str(rec["count"]) if rec["count"] > 1 else "",
+        "type": "flow", "rel": "",
+        "color": "#F59E0B" if rec["handoff"] else "#3B82F6",
+        "dashed": bool(rec["handoff"]),
+    } for (f, t), rec in agg.items()]
 
-    return f"""<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="UTF-8">
-<title>{_esc(title)} - {_esc(data.get("project"))}</title>
-<style>{_CSS}</style></head><body><div class="wrap">
-<div class="top">
-  <div><h1>{_esc(title)}</h1>
-  <div class="meta">{_esc(data.get("project"))} · 生成 {_esc(data.get("generated_at"))}
-   · 模块 {s.get("modules", 0)} · 角色已判 {s.get("actor_labeled", 0)}
-   · 阶段已判 {s.get("stage_labeled", 0)} · 交接点 {s.get("handoffs", 0)}
-   · 交付点 {s.get("value_nodes", 0)}</div></div>
-</div>
-<div class="legend">
-  <span><span class="dot dot-handoff"></span>交接点（跨泳道/跨阶段调用）</span>
-  <span><span class="dot dot-value"></span>交付点（写库/导出/发布/扣款）</span>
-  <span><span class="dot dot-plain"></span>普通模块</span>
-</div>
-<div class="scroll"><div class="board" style="grid-template-columns:{cols}">
-{head_cells}
-{"".join(rows)}
-</div></div>
-<div class="note">读法：从左到右＝流程推进（触发 → 校验 → 执行 → 落库 → 通知 → 交付）；
-从上到下＝不同角色/系统。含「交接点」标记的卡片表示它会把流程交给别的泳道或下一阶段。
-actor/stage 为启发式/LLM 标注，不是业务方确认口径。单元格内可滚动查看全部模块。</div>
-{diag}
-</div></body></html>"""
+    lanes = [{
+        "id": a["id"], "name": a.get("name", a["id"]),
+        "y": actor_y[a["id"]] - 8, "h": _CELL_H + 16,
+        "count": sum(len(grid.get((a["id"], s["id"])) or []) for s in active_stages),
+    } for a in active_actors]
+    stage_bands = [{
+        "id": s["id"], "name": s.get("name", s["id"]),
+        "x": stage_x[s["id"]], "w": _CELL_W,
+        "count": sum(len(grid.get((a["id"], s["id"])) or []) for a in active_actors),
+    } for s in active_stages]
+
+    return {
+        "canvas": {"type": "flow", "title": "业务流程画布",
+                   "width": _X0 + len(active_stages) * (_CELL_W + _GAP_X) + 120,
+                   "height": _Y0 + len(active_actors) * (_CELL_H + _GAP_Y) + 120},
+        "nodes": canvas_nodes,
+        "edges": canvas_edges,
+        "meta": {
+            "summary": summary,
+            "legend": [
+                {"label": "交接点（跨泳道/跨阶段）", "color": "#F59E0B"},
+                {"label": "交付点（写库/导出/发布/扣款）", "color": "#10B981"},
+                {"label": "普通格子", "color": "#3B82F6"},
+            ],
+        },
+        "lanes": lanes,
+        "stage_bands": stage_bands,
+    }
+
+
+def render_html(data: dict, title: str = "业务流程画布") -> str:
+    """按 actor × stage 渲染汇总画布（确定性、可平移缩放）。"""
+    return render_canvas(_build_canvas_data(data), title=title)
 
 
 def render_file(project_path: str, data: dict,
-                output_dir: str = None, title: str = "业务流程视图") -> str:
+                output_dir: str = None, title: str = "业务流程画布") -> str:
     out_dir = output_dir or os.path.join(os.path.abspath(project_path), ".coderef")
     os.makedirs(out_dir, exist_ok=True)
     text = render_html(data, title=title)
