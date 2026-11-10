@@ -916,21 +916,30 @@ def _parse_json_list(raw: str) -> List[dict]:
 def _mask_fenced(text: str) -> str:
     """把围栏代码块替换为等长空白（保留换行），避免示例标题被当成真标题。
 
-    返回文本与原文等长，便于用同一组下标在原文上切片。
+    返回文本与原文等长，便于用同一组下标在原文上切片。闭合围栏必须与开围栏
+    同类型、长度不短于开围栏、且其后只有空白（CommonMark 规则），避免四反引号
+    块内的三反引号行被误判为闭合。
     """
     out = []
+
+    def _blank(line: str) -> str:
+        return "".join("\n" if ch == "\n" else " " for ch in line)
+
     fence = ""
     for line in text.splitlines(keepends=True):
-        marker = re.match(r" {0,3}(`{3,}|~{3,})", line)
         if fence:
-            if marker and marker.group(1)[0] == fence:
+            close = re.match(r" {0,3}(`{3,}|~{3,})[ \t]*\r?\n?$", line)
+            if (close and close.group(1)[0] == fence[0]
+                    and len(close.group(1)) >= len(fence)):
                 fence = ""
-            out.append("".join("\n" if ch == "\n" else " " for ch in line))
-        elif marker:
-            fence = marker.group(1)[0]
-            out.append("".join("\n" if ch == "\n" else " " for ch in line))
+            out.append(_blank(line))
         else:
-            out.append(line)
+            opening = re.match(r" {0,3}(`{3,}|~{3,})", line)
+            if opening:
+                fence = opening.group(1)
+                out.append(_blank(line))
+            else:
+                out.append(line)
     return "".join(out)
 
 
