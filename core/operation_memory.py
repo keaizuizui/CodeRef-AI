@@ -914,17 +914,22 @@ def _parse_json_list(raw: str) -> List[dict]:
 
 
 def _read_procedure_card(project_path: str, max_chars: int = 1600) -> Optional[dict]:
-    """读取规程入口卡：优先项目 AGENTS.md，缺失时回退公开 docs/procedure-card.md。
+    """读取规程入口卡：项目 AGENTS.md → 项目公开卡 → CodeRef 自带公开卡。
 
     CODEREF.md / AGENTS.md 不会被编程 AI 默认加载，且二者在 CodeRef 仓库按 5.4
     策略不公开；recover 是强制第一步，因此把入口卡随 recover 一起返回。
-    外部用户没有 AGENTS.md 时，仍可从仓库公开的 docs/procedure-card.md 拿到
-    发布/审计/CodeRabbit 入口，不会得到空卡片。
+    外部项目既没有 AGENTS.md、也没有自己的 docs/procedure-card.md 时，回退到
+    CodeRef 安装目录自带的 docs/procedure-card.md，避免返回空卡片。
+    只有专用的 procedure-card 文件允许整文件兜底；通用 AGENTS.md 没有规程
+    索引时必须跳过，不能把项目规则误当成规程卡。
     """
     pp = os.path.abspath(project_path)
+    pkg_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     candidates = (
         (os.path.join(pp, "AGENTS.md"), "AGENTS.md#规程索引"),
         (os.path.join(pp, "docs", "procedure-card.md"), "docs/procedure-card.md"),
+        (os.path.join(pkg_root, "docs", "procedure-card.md"),
+         "CodeRef:docs/procedure-card.md"),
     )
     for path, source in candidates:
         if not os.path.isfile(path):
@@ -938,7 +943,10 @@ def _read_procedure_card(project_path: str, max_chars: int = 1600) -> Optional[d
         if start < 0:
             start = text.find("## 规程索引")
         if start < 0:
-            chunk = text.strip()
+            if source.endswith("procedure-card.md"):
+                chunk = text.strip()
+            else:
+                continue   # 通用 AGENTS.md 没有规程索引：跳过，继续找专用卡
         else:
             end = text.find("\n## ", start + 4)
             chunk = text[start:end if end > 0 else len(text)].strip()
