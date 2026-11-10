@@ -35,11 +35,13 @@ llm_* 与主 LLM 调用预算）。`dream` 段只保留行为开关（是否启�
 版本: v1.1
 """
 
+import contextlib
 import json
 import os
 import re
 import subprocess
 import threading
+import time
 import uuid
 from collections import Counter
 from datetime import datetime, timedelta
@@ -147,6 +149,74 @@ def _project_lock(pp: str) -> threading.RLock:
             lock = threading.RLock()
             _run_locks[key] = lock
         return lock
+
+
+# 跨进程锁（U-67）：进程内 RLock 管不到多进程，seeds.jsonl / notes.json 的
+# 读改写需要文件锁兜底。同线程可重入：run 整体持锁时 _save_notes 再取不自杀。
+_lock_state = threading.local()
+_LOCK_FILE = ".lock"
+_LOCK_TIMEOUT = 120.0
+
+
+def _os_lock(fh, unlock: bool = False) -> None:
+    """对锁文件加/解非阻塞独占锁，带超时轮询（Windows/POSIX 通用）。"""
+    if unlock:
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        return
+    deadline = time.time() + _LOCK_TIMEOUT
+    while True:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except OSError:
+            if time.time() >= deadline:
+                raise
+            time.sleep(0.05)
+
+
+@contextlib.contextmanager
+def _file_lock(project_path: str):
+    """项目级跨进程文件锁（同线程可重入）。"""
+    key = _norm(project_path)
+    held = getattr(_lock_state, "held", None)
+    if held is None:
+        held = _lock_state.held = {}
+    if held.get(key, 0) > 0:
+        held[key] += 1
+        try:
+            yield
+        finally:
+            held[key] -= 1
+        return
+    path = os.path.join(_dream_dir(project_path), _LOCK_FILE)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fh = open(path, "a+b")
+    try:
+        fh.seek(0, os.SEEK_END)
+        if fh.tell() == 0:   # Windows 锁定需要文件里有字节
+            fh.write(b"0")
+            fh.flush()
+        _os_lock(fh)
+        held[key] = 1
+        try:
+            yield
+        finally:
+            held[key] = 0
+            _os_lock(fh, unlock=True)
+    finally:
+        fh.close()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -411,12 +481,13 @@ def _save_notes(project_path: str, notes: List[dict]) -> str:
     """
     base = getattr(_save_base, "ids", None)
     if base is None:
-        return _write_json(_path(project_path, NOTES_FILE), {
-            "version": SCHEMA_VERSION,
-            "updated_at": _now(),
-            "notes": notes,
-        })
-    with _notes_lock:
+        with _file_lock(project_path):
+            return _write_json(_path(project_path, NOTES_FILE), {
+                "version": SCHEMA_VERSION,
+                "updated_at": _now(),
+                "notes": notes,
+            })
+    with _notes_lock, _file_lock(project_path):
         current = _load_notes(project_path)
         extra = [n for n in current if str(n.get("id") or "") not in base]
         merged: Dict[str, dict] = {str(n.get("id") or ""): n for n in extra}
@@ -456,7 +527,7 @@ def seed(project_path: str, text: str, kind: str = "association",
          source: str = "main_ai") -> dict:
     """主 AI 显式投喂一条显著事件（不读取主 AI 全量对话）。"""
     pp = os.path.abspath(project_path)
-    with _project_lock(pp):
+    with _project_lock(pp), _file_lock(pp):
         return _seed_impl(pp, text, kind, source)
 
 
@@ -1776,7 +1847,8 @@ def run(project_path: str, trigger: str = "manual", llm=None,
         job: str = DEFAULT_JOB) -> dict:
     """补一轮梦；并发 run 通过 `_save_notes` 的基线合并保留彼此新增。"""
     pp = os.path.abspath(project_path)
-    return _run_impl(pp, trigger=trigger, llm=llm, job=job)
+    with _project_lock(pp), _file_lock(pp):
+        return _run_impl(pp, trigger=trigger, llm=llm, job=job)
 
 
 def _run_impl(project_path: str, trigger: str = "manual", llm=None,
