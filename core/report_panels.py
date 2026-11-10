@@ -248,7 +248,11 @@ RAW_ITEMS_MAX = 10
 
 
 def raw_text(value) -> str:
-    """原始分项的展示文本：字典压成 k:v，避免渲染出 Python 字典字面量。"""
+    """原始分项的展示文本：字典压成 k:v、列表逗号连接，不输出 Python 字面量。"""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return ",".join(str(v) for v in value)
     if isinstance(value, dict):
         return ",".join(f"{k}:{v}" for k, v in value.items())
     return str(value)
@@ -267,7 +271,9 @@ def scorecard_for_display(card: Optional[dict]) -> dict:
     for d in card.get("dimensions") or []:
         item = dict(d) if isinstance(d, dict) else d
         if isinstance(item, dict) and isinstance(item.get("raw"), dict):
-            item["raw"] = {k: raw_text(v) for k, v in item["raw"].items()}
+            # None 保持 None：前端按 '' / null / undefined 过滤，转成 "None" 会漏过来
+            item["raw"] = {k: (v if v is None else raw_text(v))
+                           for k, v in item["raw"].items()}
         dims.append(item)
     out["dimensions"] = dims
     return out
