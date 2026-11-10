@@ -356,12 +356,6 @@ function scEsc(s){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
   });
 }
-function scRawVal(v){
-  if (v && typeof v === 'object') {
-    return Object.keys(v).map(function(k){ return k + ':' + v[k]; }).join(',');
-  }
-  return String(v);
-}
 function scApply(j){
   var ov = document.getElementById('sc-overall');
   if (ov) ov.innerHTML = (j.overall === null || j.overall === undefined) ? 'N/A'
@@ -389,7 +383,7 @@ function scApply(j){
     var raw = Object.keys(d.raw || {}).filter(function(k){
       var v = d.raw[k]; return v !== '' && v !== null && v !== undefined;
     }).slice(0, 10).map(function(k){
-      return k + '=' + scRawVal(d.raw[k]);
+      return k + '=' + String(d.raw[k]);
     }).join(' · ');
     var ev = (d.evidence || []).join('、');
     return '<tr><td>' + scEsc(d.name || d.id || '') + '</td><td>' + scEsc(d.weight)

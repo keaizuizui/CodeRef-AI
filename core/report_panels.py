@@ -243,11 +243,34 @@ def ux_panel(project_path: str) -> str:
     return "".join(parts)
 
 
-def _raw_text(value) -> str:
+# 原始分项最多展示几条（技术 Tab 与评估台前端同源，避免两处各写一个数字）
+RAW_ITEMS_MAX = 10
+
+
+def raw_text(value) -> str:
     """原始分项的展示文本：字典压成 k:v，避免渲染出 Python 字典字面量。"""
     if isinstance(value, dict):
         return ",".join(f"{k}:{v}" for k, v in value.items())
     return str(value)
+
+
+def scorecard_for_display(card: Optional[dict]) -> dict:
+    """评估台前端用的记分卡副本：raw 里的嵌套值预先压成展示文本。
+
+    前端「重新评估」只负责展示，不再自己实现一套字典格式化规则；
+    技术 Tab 与前端共用本函数，保证同一份口径。
+    """
+    if not isinstance(card, dict):
+        return {}
+    out = dict(card)
+    dims = []
+    for d in card.get("dimensions") or []:
+        item = dict(d) if isinstance(d, dict) else d
+        if isinstance(item, dict) and isinstance(item.get("raw"), dict):
+            item["raw"] = {k: raw_text(v) for k, v in item["raw"].items()}
+        dims.append(item)
+    out["dimensions"] = dims
+    return out
 
 
 def tech_panel(project_path: str, card: Optional[dict], layout_link: str = "") -> str:
@@ -260,8 +283,8 @@ def tech_panel(project_path: str, card: Optional[dict], layout_link: str = "") -
     if card and card.get("dimensions"):
         rows = []
         for d in card.get("dimensions") or []:
-            raw_items = [f'{k}={_raw_text(v)}' for k, v in (d.get("raw") or {}).items()
-                         if v not in ("", None)][:10]
+            raw_items = [f'{k}={raw_text(v)}' for k, v in (d.get("raw") or {}).items()
+                         if v not in ("", None)][:RAW_ITEMS_MAX]
             if d.get("status") == "ok":
                 score = str(d.get("score"))
             elif d.get("status") == "not_applicable":
