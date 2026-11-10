@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.21.11** | Python 3.10+ | MCP Protocol | PolyForm Noncommercial 1.0.0
+**Version 5.21.11** | Python 3.10+ | MCP Protocol | CodeRef 双轨授权协议
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -658,7 +658,7 @@ CodeRef-AI 从 **5.0** 起采用**双轨授权协议**（[LICENSE](LICENSE)）�
 - **非商业场景免费**：个人学习、研究、开源项目、非营利/教育/政府机构等非商业目的可自由下载、使用、修改、分发，无需付费。
 - 完整许可文本见 [LICENSE](LICENSE)；需要商业授权的合作请与作者联系。
 
-> **许可元数据说明**：`pyproject.toml` 的 SPDX `license` 字段用于兼容 PolyForm Noncommercial 1.0.0 的使用边界；**实际授权以仓库根 `LICENSE` 的自定义双轨协议为准**。两者冲突时，以 `LICENSE` 为准。
+> **许可元数据说明**：`pyproject.toml` 的 SPDX `license` 字段为 `LicenseRef-CodeRef-Dual`（自定义许可引用），与仓库根 `LICENSE` 的自定义双轨协议一致；**实际授权以 `LICENSE` 文本为准**。`LICENSE-MIT-v4.md` 仅适用于 v4.9.12 及更早的 4.X 系列。
 
 **版本分界**：`v4.9.12` 及更早的 **4.X 系列** 仍按 **MIT License** 授权（[LICENSE-MIT-v4.md](LICENSE-MIT-v4.md)）。
 

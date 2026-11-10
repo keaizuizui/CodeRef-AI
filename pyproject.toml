@@ -12,7 +12,8 @@ dynamic = ["version"]
 description = "静态图驱动的 LLM 代码审计工具 —— 非编程人员也可验证 AI 项目是否按期望执行、架构是否健康、文档是否可信"
 readme = "README.md"
 # SPDX 标识（新 setuptools 要求字符串而非 {text=...}，否则 pip install . 构建失败）
-license = "PolyForm-Noncommercial-1.0.0"
+# 自定义双轨协议用 LicenseRef 引用，实际授权以根 LICENSE 为准（PEP 639 允许 LicenseRef- 自定义标识）
+license = "LicenseRef-CodeRef-Dual"
 license-files = ["LICENSE", "LICENSE-MIT-v4.md"]
 authors = [{ name = "CodeRef Team" }]
 keywords = ["code-audit", "llm", "static-analysis", "audit", "mcp"]
