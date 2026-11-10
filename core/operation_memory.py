@@ -939,9 +939,12 @@ def _read_procedure_card(project_path: str, max_chars: int = 1600) -> Optional[d
                 text = f.read()
         except OSError:
             continue
-        start = text.find("## 0.")
-        if start < 0:
-            start = text.find("## 规程索引")
+        start = -1
+        for marker in (r"^## 0\.", r"^## 规程索引"):
+            match = re.search(marker, text, re.MULTILINE)
+            if match:
+                start = match.start()
+                break
         if start < 0:
             if source.endswith("procedure-card.md"):
                 chunk = text.strip()
