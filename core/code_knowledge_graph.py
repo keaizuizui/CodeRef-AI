@@ -504,7 +504,13 @@ class CodeKnowledgeGraph:
         return os.path.normcase(os.path.abspath(path))
 
     def _delete_file_rows(self, files) -> None:
-        """删除受影响的文件在图谱中的节点与关联边。"""
+        """删除受影响文件在图谱中的节点与其出边（保留未变文件的入边）。
+
+        U-65：旧实现连「未变依赖方 → 变更模块」的入边一起删，但增量只重建
+        变更文件，导致 IMPORTS/CALLS 入边永久缺失，与全量重建不一致。
+        入边保留后，指向已删除/重命名符号的悬空边由 `_prune_dangling_edges`
+        统一清理，因此语义仍与全量重建一致。
+        """
         id_rows = self._conn.execute("SELECT id, file_path FROM nodes").fetchall()
         ids = [row["id"] for row in id_rows
                if self._norm_path(row["file_path"]) in files]
@@ -512,8 +518,7 @@ class CodeKnowledgeGraph:
             chunk = ids[start:start + 400]
             marks = ",".join("?" * len(chunk))
             self._conn.execute(
-                f"DELETE FROM edges WHERE source IN ({marks}) OR target IN ({marks})",
-                chunk + chunk)
+                f"DELETE FROM edges WHERE source IN ({marks})", chunk)
             self._conn.execute(f"DELETE FROM nodes WHERE id IN ({marks})", chunk)
         self._conn.commit()
 
