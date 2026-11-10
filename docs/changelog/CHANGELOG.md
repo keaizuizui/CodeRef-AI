@@ -12,7 +12,7 @@
 - **U-64 schema 强制力**：MCP 入口在 `tools/call` 与 `_run` 两处按 `BUILTIN_TOOLS.inputSchema` 统一校验 `required`/`enum`，非法调用返回 `status=error` + `field`/`allowed`，不再静默按默认执行；校验先于后台化，避免非法调用只拿到 task_id。
 - **U-65 增量图谱**：`_delete_file_rows` 只删变更文件的出边，保留未变依赖方指向变更模块的入边；悬空边仍由 `_prune_dangling_edges` 清理，增量与全量的节点/边集合严格一致。
 - **U-66 大文件哈希**：`_content_hash` 改为全量分块哈希，移除首尾 8KB 采样；`_HASH_FULL_LIMIT` 仅保留为测试构造大文件的公开阈值。
-- **U-67 dream 跨进程锁**：`seed` / `run` 增加项目级锁文件（Windows `msvcrt` / POSIX `fcntl`，带超时轮询、同线程可重入），`notes.json` 读改写与 `seeds.jsonl` 追加跨进程串行化。
+- **U-67 dream 跨进程锁**：`seed` / `run` 增加项目级锁文件（Windows `msvcrt` / POSIX `fcntl`，带超时轮询、同线程可重入），`notes.json` 读改写与 `seeds.jsonl` 追加跨进程串行化；锁超时/不可用返回结构化 `status=error`，项目目录不存在时先报错、不再由锁创建目录树。
 - **U-68 画布 favicon**：`canvas_engine._HTML_TEMPLATE` 的 `<head>` 补 `<link rel="icon" href="data:,">`，`arch_flow` / `arch_layout` / `arch_canvas` / `flow_canvas` 直开页不再请求 `/favicon.ico`。
 - **验证**：全量 pytest **453 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.13）；测试方 STRICT 定向复跑 U-63~U-68 全绿（含 8 进程 seed、2 进程 run、增量 vs 全量边集合、600KB 中部改写）。
 
