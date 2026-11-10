@@ -8,13 +8,14 @@
 
 > 背景：CodeRabbit 与 Brooks-Lint 对 `origin/master..5.21.13` 的全量复审。CodeRabbit 1 条 minor（画布导入导出丢模块组/泳道/阶段表头）已修；Brooks-Lint 报 2 条 warning + 3 条 suggestion，本轮逐条整改。
 
-- **dream 锁按资源拆分（warning）**：`run` 不再整轮持跨进程文件锁——整轮含多分钟 LLM 调用，长持锁会让另一进程的 `seed`/`run` 等满 120s 后失败。改为：读 `seeds.jsonl` 用独立 `.lock.seeds`（`seed` 也只取这把锁，不再被 run 阻塞）、写 `notes.json` 用原有合并锁、写 `DREAM.md` 与 `state.json` 用主锁；写 state 时以磁盘值为基准合并 `cursor.seeds_consumed`（取较大值）与 `runs` 计数，避免并发 run 互相覆盖。
+- **dream 锁按资源拆分（warning）**：`run` 不再整轮持锁（原先进程内项目锁 + 跨进程文件锁都要等一次多分钟 LLM），改为按资源取短锁：读 `seeds.jsonl` 用独立 `.lock.seeds`（`seed` 也只取这把，不再被 run 阻塞）、写 `notes.json` 用原有合并锁、写 `DREAM.md` 与 `state.json` 用主锁。`state.json` 改由统一的 `_save_state(fields, runs_delta, cursor)` 在锁内以磁盘状态为基准写入：只覆盖本轮改变字段，`audit_after` / `seeds_consumed` 取较大值，`runs` 在磁盘值上累加；SKIP、失败、草稿、维护（`false_memory_check` / `eval_replay`）四条路径全部走同一合并逻辑，不再回退并发 run 的游标。
 - **业务流程画布构造拆分（warning）**：`_build_canvas_data` 从约 100 行拆为 `_collect_grid` / `_cell_nodes` / `_aggregate_edges` / `_build_bands` 四个纯函数，主函数只做坐标映射与编排；格子、聚合边、泳道带、阶段表头仍共用同一组坐标，输出逐字段不变。
 - **删除 `Server._schema_error` 中间人（suggestion）**：`tools/call` 与 `_run` 统一调用模块级 `_schema_error`，不再保留只做委托的实例方法。
 - **记分卡原始分项格式化统一（suggestion）**：新增 `report_panels.raw_text` / `scorecard_for_display` 与 `RAW_ITEMS_MAX`；`/api/scorecard` 返回前由服务端把 `raw` 中的嵌套值压成展示文本，前端 `scApply` 只做 `String()`，删除 `scRawVal`，两边不再各写一套格式规则。
 - **画布导入导出补字段（CodeRabbit minor）**：`buildJSON` 导出 `groups` / `lanes` / `stage_bands`，`importJSON` 整体替换这三个字段，避免导入后沿用原页面分组导致 `isClusterView()` 误判、流程画布丢泳道与阶段表头。
 - **未改动项（诚实记录）**：Brooks-Lint 的「仓库无被跟踪测试」一条属既定策略，README `测试与验证：公开什么、不公开什么` 已明确说明 `tests/` 不公开、回归由外部 STRICT 套件覆盖，故只保留文档说明，不新增仓库测试。
-- **验证**：全量 pytest **453 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.14）；测试方 STRICT 定向复跑 U-63/U-64/U-65/U-67 全绿（含 8 进程 seed、2 进程 run、增量 vs 全量边集合、schema 负例）。
+- **验证**：全量 pytest **453 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.14）；测试方 STRICT 定向复跑全绿：U-63（重工具首调带 procedure_card）、U-64（schema 负例全拒绝）、U-65（增量 vs 全量边集合相等）、U-67（8 进程 seed 40 行 / 2 进程 run 两条笔记），另加并发回归 t01（两线程 run 同屏障下都保留笔记）、t02（20 线程 × 5 seed 不丢行）、t03（`os.replace` 失败保留旧 notes）。
+- **复审收敛**：CodeRabbit 对本批次共 3 轮——第 1 轮（`bfd6048..2ba6814`）3 条（1 major：seed 仍等进程内锁；2 minor：`audit_after` 可能回退、`None` 渲染成 "None"）；第 2 轮（`2ba6814..21e47ec`）1 条 major（SKIP/失败/草稿/维护路径仍整对象写 state，会回退并发 run 的游标）；第 3 轮（`21e47ec..16ef717`）**findings=0**。
 
 ### v5.21.13 — 测试登记册 U-63~U-68 修复
 
