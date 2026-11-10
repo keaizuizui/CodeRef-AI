@@ -913,6 +913,36 @@ def _parse_json_list(raw: str) -> List[dict]:
         return []
 
 
+def _read_procedure_card(project_path: str, max_chars: int = 1600) -> Optional[dict]:
+    """从项目 AGENTS.md 提取「## 0. 规程索引」块（自动注入的入口卡）。
+
+    CODEREF.md 不会被编程 AI 默认加载；recover 是强制第一步，因此把入口卡
+    随 recover 一起返回，避免「梦/记忆指向 CODEREF，但 AI 从未打开它」。
+    """
+    path = os.path.join(os.path.abspath(project_path), "AGENTS.md")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return None
+    start = text.find("## 0.")
+    if start < 0:
+        start = text.find("## 规程索引")
+    if start < 0:
+        return None
+    end = text.find("\n## ", start + 4)
+    chunk = text[start:end if end > 0 else len(text)].strip()
+    if not chunk:
+        return None
+    return {
+        "source": "AGENTS.md#规程索引",
+        "text": chunk[:max_chars],
+        "truncated": len(chunk) > max_chars,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 主类
 # ═══════════════════════════════════════════════════════════════════
@@ -1284,6 +1314,9 @@ class OperationMemory:
             "pitfalls": brief["pitfall"],
             "pending_items": pending_items,
             "pending_counts": pending_counts,
+            "procedure_card": _read_procedure_card(project_path),
+            "procedure_hint": ("procedure_card 是自动注入的入口卡；完整步骤见 CODEREF.md，"
+                               "不得只凭卡片执行，也不得凭上下文记忆执行。"),
             "hint": ("涉及 git / push / CodeRabbit / Release 等工具或约定类操作时，"
                      "请优先采用本结果中的 env_tools 工具定位与 conventions / pitfalls 约定，"
                      "勿满 PATH 找工具，也勿在未查询操作记忆前直接抓取外部连接器。"),
