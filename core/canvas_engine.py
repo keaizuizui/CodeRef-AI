@@ -117,6 +117,8 @@ def normalize(canvas_data: Dict[str, Any]) -> Dict[str, Any]:
         "meta": canvas_data.get("meta") or {},
         "tier_order": canvas_data.get("tier_order") or None,
         "groups": canvas_data.get("groups") or [],
+        "lanes": canvas_data.get("lanes") or [],
+        "stage_bands": canvas_data.get("stage_bands") or [],
     }
 
 
@@ -477,7 +479,7 @@ body { font-family:"Segoe UI","Noto Sans CJK SC",sans-serif; background:#0F172A;
 #canvasWrap { position:fixed; top:44px; left:0; right:0; bottom:0; overflow:hidden; cursor:grab; background:#0F172A; }
 #canvasWrap.panning { cursor:grabbing; }
 #viewport { position:absolute; top:0; left:0; transform-origin:0 0; }
-#edgeLayer { position:absolute; top:0; left:0; width:0; height:0; overflow:visible; pointer-events:none; }
+#edgeLayer { position:absolute; top:0; left:0; overflow:visible; pointer-events:none; }
 #edgeLayer path { pointer-events:stroke; cursor:pointer; }
 #edgeLayer path:hover { stroke-width:4 !important; }
 #edgeLayer path.hl { stroke:#FBBF24 !important; stroke-width:4 !important; }
@@ -569,8 +571,8 @@ body { font-family:"Segoe UI","Noto Sans CJK SC",sans-serif; background:#0F172A;
 </div>
 <div id="canvasWrap">
   <div id="viewport">
-    <svg id="laneLayer"></svg>
-    <svg id="edgeLayer"></svg>
+    <div id="laneLayer"></div>
+    <svg id="edgeLayer" width="20000" height="20000"></svg>
     <div id="nodeLayer"></div>
   </div>
 </div>
@@ -648,6 +650,15 @@ function fitView(){
   if (!vis.length) return;
   let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
   vis.forEach(n => { minX=Math.min(minX,n.x); minY=Math.min(minY,n.y); maxX=Math.max(maxX,n.x+n.w); maxY=Math.max(maxY,n.y+n.h); });
+  // 业务流程画布的泳道/阶段表头不在节点 bbox 内，必须一起纳入 fit，否则表头被裁掉
+  (DATA.stage_bands || []).forEach(s => {
+    minX = Math.min(minX, s.x); maxX = Math.max(maxX, s.x + s.w);
+    minY = Math.min(minY, 46); maxY = Math.max(maxY, 80);
+  });
+  (DATA.lanes || []).forEach(l => {
+    minY = Math.min(minY, l.y); maxY = Math.max(maxY, l.y + l.h);
+    minX = Math.min(minX, 0); maxX = Math.max(maxX, 600);
+  });
   const pad = 80;
   minX-=pad; minY-=pad; maxX+=pad; maxY+=pad;
   const w = maxX-minX, h = maxY-minY;
@@ -855,13 +866,55 @@ function tierTitle(t){
 }
 function renderLanes(){
   laneLayer.innerHTML = '';
-  if (!nodes.some(n => n.tier)) return;
-  const vis = nodes.filter(navVisible);
-  if (!vis.length) return;
   const svgns = 'http://www.w3.org/2000/svg';
   const ns = document.createElementNS(svgns,'svg');
   ns.setAttribute('width','20000'); ns.setAttribute('height','20000');
   ns.style.position = 'absolute'; ns.style.left = '0'; ns.style.top = '0'; ns.style.overflow = 'visible';
+  // 业务流程画布（actor × stage）：泳道带 + 阶段表头由数据层给出，确定性渲染
+  const lanes = DATA.lanes || [];
+  const stageBands = DATA.stage_bands || [];
+  if (lanes.length || stageBands.length){
+    const vis = displayNodes().filter(navVisible);
+    const xs = vis.map(n => n.x), xe = vis.map(n => n.x + n.w);
+    const minX = xs.length ? Math.min.apply(null, xs) : 0;
+    const maxX = xe.length ? Math.max.apply(null, xe) : 0;
+    stageBands.forEach(s => {
+      const r = document.createElementNS(svgns,'rect');
+      r.setAttribute('x', s.x); r.setAttribute('y', 46);
+      r.setAttribute('width', s.w); r.setAttribute('height', 34);
+      r.setAttribute('rx', 8);
+      r.setAttribute('fill', '#1a1e2b'); r.setAttribute('stroke', '#334155');
+      ns.appendChild(r);
+      const t = document.createElementNS(svgns,'text');
+      t.setAttribute('x', s.x + s.w/2); t.setAttribute('y', 68);
+      t.setAttribute('text-anchor','middle');
+      t.setAttribute('fill','#E2E8F0'); t.setAttribute('font-size','13');
+      t.setAttribute('font-weight','600');
+      t.textContent = s.name + ' · ' + (s.count || 0);
+      ns.appendChild(t);
+    });
+    lanes.forEach(l => {
+      const r = document.createElementNS(svgns,'rect');
+      r.setAttribute('x', Math.min(minX - 60, 0)); r.setAttribute('y', l.y);
+      r.setAttribute('width', Math.max(maxX - minX + 140, 600));
+      r.setAttribute('height', l.h);
+      r.setAttribute('rx', 10);
+      r.setAttribute('fill', 'rgba(59,130,246,.08)');
+      r.setAttribute('stroke', '#243044');
+      r.setAttribute('stroke-dasharray', '4 3');
+      ns.appendChild(r);
+      const t = document.createElementNS(svgns,'text');
+      t.setAttribute('x', Math.min(minX - 60, 0) + 10); t.setAttribute('y', l.y + 20);
+      t.setAttribute('fill','#CBD5E1'); t.setAttribute('font-size','12'); t.setAttribute('font-weight','600');
+      t.textContent = l.name + ' · ' + (l.count || 0);
+      ns.appendChild(t);
+    });
+    laneLayer.appendChild(ns);
+    return;
+  }
+  if (!nodes.some(n => n.tier)) return;
+  const vis = nodes.filter(navVisible);
+  if (!vis.length) return;
   const xs = vis.map(n => n.x), xe = vis.map(n => n.x + n.w);
   const minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xe);
   const laneFill = {'business':'rgba(59,130,246,.08)','service':'rgba(245,158,11,.07)','code':'rgba(16,185,129,.07)'};
