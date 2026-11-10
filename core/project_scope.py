@@ -15,7 +15,7 @@
 7. 打包元数据目录：*.dist-info / *.egg-info
 8. 数据/资源目录：只包含非代码文件
 
-作者: PersuadeAI Team
+作者: CodeRef-AI Team
 版本: v1.0
 """
 

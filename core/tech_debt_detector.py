@@ -17,7 +17,7 @@
 - GovernanceAuditor 聚焦安全与架构合规（铁律、错题本）
 - TechDebtDetector 聚焦技术债务（未完成工作、代码质量下降）
 
-作者: PersuadeAI Team
+作者: CodeRef-AI Team
 版本: v1.0
 """
 

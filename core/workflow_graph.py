@@ -17,7 +17,7 @@
     html_path = graph.generate(project_path="/path/to/your_project")
     # 返回 HTML 文件路径，浏览器打开即可
 
-作者: PersuadeAI Team
+作者: CodeRef-AI Team
 版本: v1.0
 """
 

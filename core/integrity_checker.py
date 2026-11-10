@@ -17,7 +17,7 @@
 - BlindSpotDetector 聚焦知识盲区（三方盲区）
 - IntegrityChecker 聚焦完整性（遗漏、不一致、残留）
 
-作者: PersuadeAI Team
+作者: CodeRef-AI Team
 版本: v1.0
 """
 
