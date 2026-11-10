@@ -366,6 +366,28 @@ def _report(a) -> str:
         except Exception as e:  # noqa: BLE001
             return str(e)
 
+    def _run_auto_evals() -> list:
+        """评估台生成时自动跑产品（F 轨）与 UX（U 轨），无需用户再点按钮。
+
+        两者都会自行落盘 product_fit.json / ux_fit.json；无 Key 时按各自
+        SKIP/STATIC_ONLY 语义降级，不阻断报告渲染。
+        """
+        out = []
+        for scene, module_name in (("product", "core.product_eval"),
+                                   ("ux", "core.ux_eval")):
+            try:
+                mod = __import__(module_name, fromlist=["evaluate"])
+                res = mod.evaluate(pp)
+                out.append({"scene": scene,
+                            "status": str(res.get("status") or ""),
+                            "error": str(res.get("error") or "")})
+            except Exception as e:  # noqa: BLE001 —— 单项失败不拖垮报告
+                out.append({"scene": scene, "status": "ERROR", "error": str(e)})
+        return out
+
+    # 产品/UX 自动评估必须在首次 render_report 前完成，面板才能读到快照。
+    auto_evals = _run_auto_evals()
+
     # 评估台是用户入口：这里显式重算并落盘记分卡快照；渲染层只读快照，
     # 因此审计/docs 等其他渲染路径不会再被拖进一次全量结构扫描。
     # 已有审计产物时才先算分；没有产物时等回退审计产出后再算，避免空算一次。
@@ -387,6 +409,11 @@ def _report(a) -> str:
             if errs and hasattr(r, "errors"):
                 r.errors.extend(errs)
     hr = getattr(r, "html_report", None) or {}
+    hr["auto_evals"] = auto_evals
+    auto_eval_errors = [f"{e['scene']}: {e['error']}"
+                        for e in auto_evals if e.get("status") == "ERROR"]
+    if auto_eval_errors:
+        hr["auto_eval_errors"] = auto_eval_errors
     if sc_err:
         hr["scorecard_error"] = sc_err
     if a.get("open_server"):

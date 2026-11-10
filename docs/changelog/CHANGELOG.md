@@ -4,6 +4,18 @@
 
 ---
 
+### v5.21.9 — 评估台 UI 修复 + 产品/UX 自动评估
+
+> 背景：5.21.8 在真实项目复查评估台时发现 4 个 UI 可用性问题；同时用户要求产品（F 轨）与 UX（U 轨）在生成评估台时自动跑，不再依赖用户点按钮。
+
+- **画布首次不自动适配**：`canvas_engine` 增加 `ResizeObserver` / resize / visibilitychange 的延迟 `fitView()`；评估台 iframe 在隐藏 Tab 中加载时容器尺寸为 0 的问题不再导致技术分区图只剩左上角一簇节点。
+- **业务流程视图过长**：`arch_flow` 单元格增加 `max-height:520px; overflow-y:auto`，307 张卡片不再把页面撑到 20,716px；原始 LLM 降级信息折叠进「数据说明与降级诊断」。
+- **本地服务误显示离线**：评估台新增 `probeLocal()`，页面加载时探测 `/api/health`；open_server 下显示「本地服务已连接（vX）」，file:// 下才显示离线提示。
+- **表头竖排**：评估台 `th` 增加 `white-space:nowrap`，权重/维度等表头不再被挤成两行。
+- **产品/UX 自动评估**：`coderef_report` 在首次渲染前自动执行 `product_eval.evaluate` 与 `ux_eval.evaluate`，结果落 `.coderef/product_fit.json` / `.coderef/ux_fit.json`；无 Key 时按各自 SKIP / STATIC_ONLY 语义降级，不阻断报告。产品评估增加「紧凑重试」：大项目全量 JSON 被截断时，自动用前 12 个能力重跑并如实标注覆盖范围。
+- **真实项目验证**：业务流程 iframe 高度 20,716 → **3,298px**；技术分区图首次打开即 209 节点铺满（不再需要点「适应」）；`sc-status=本地服务已连接`；产品 `OK / Validate-first`、UX `OK / 阻断` 自动产出，控制台与网络 0 错误。
+- **验证**：全量 pytest **438 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0。
+
 ### v5.21.8 — 评估台画布路由 + 图谱新鲜度一致性
 
 > 背景：5.21.7 在真实项目 `D:\kuajingdianshang` 实测发现两个工具侧缺陷（owner=coderef）：① 评估台三个画布 iframe 仍 404；② `coderef_query(stats)` 同响应里 `exists=true` 却报 `stale_reason="知识图谱不存在"`、`kg_built_at=""`。

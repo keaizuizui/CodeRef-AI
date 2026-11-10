@@ -42,7 +42,10 @@ border:1px solid #2a2d3a;border-radius:8px;padding:8px 10px;
 display:flex;align-items:center;gap:6px}
 .lane .cnt{font-weight:400;color:#6b7280}
 .cell{background:#14161f;border:1px dashed #232733;border-radius:8px;
-padding:6px;min-height:56px;display:flex;flex-direction:column;gap:6px}
+padding:6px;min-height:56px;max-height:520px;overflow-y:auto;
+display:flex;flex-direction:column;gap:6px}
+.diag{margin-top:12px;font-size:12px;color:#9ca3af}
+.diag summary{cursor:pointer;color:#c9cdd4;margin-bottom:6px}
 .card{background:#1a1d2e;border:1px solid #2a2d3a;border-left:3px solid #4b5563;
 border-radius:6px;padding:6px 8px;font-size:12px}
 .card.value{border-left-color:#6ee7b7}
@@ -127,6 +130,10 @@ def render_html(data: dict, title: str = "业务流程视图") -> str:
     s = data.get("summary") or {}
     unknowns = data.get("unknowns") or []
     note = "".join(f'<div class="warn">· {_esc(u)}</div>' for u in unknowns)
+    # 原始 LLM 异常属于诊断信息，折叠到「数据说明」里，不占据主画布视觉。
+    diag = (f'<details class="diag"><summary>数据说明与降级诊断'
+            f'（{len(unknowns)} 条）</summary>{note}</details>'
+            if unknowns else "")
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="UTF-8">
@@ -150,8 +157,8 @@ def render_html(data: dict, title: str = "业务流程视图") -> str:
 </div></div>
 <div class="note">读法：从左到右＝流程推进（触发 → 校验 → 执行 → 落库 → 通知 → 交付）；
 从上到下＝不同角色/系统。含「交接点」标记的卡片表示它会把流程交给别的泳道或下一阶段。
-actor/stage 为启发式/LLM 标注，不是业务方确认口径。</div>
-{note}
+actor/stage 为启发式/LLM 标注，不是业务方确认口径。单元格内可滚动查看全部模块。</div>
+{diag}
 </div></body></html>"""
 
 
