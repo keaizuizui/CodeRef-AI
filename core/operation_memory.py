@@ -913,6 +913,27 @@ def _parse_json_list(raw: str) -> List[dict]:
         return []
 
 
+def _mask_fenced(text: str) -> str:
+    """把围栏代码块替换为等长空白（保留换行），避免示例标题被当成真标题。
+
+    返回文本与原文等长，便于用同一组下标在原文上切片。
+    """
+    out = []
+    fence = ""
+    for line in text.splitlines(keepends=True):
+        marker = re.match(r" {0,3}(`{3,}|~{3,})", line)
+        if fence:
+            if marker and marker.group(1)[0] == fence:
+                fence = ""
+            out.append("".join("\n" if ch == "\n" else " " for ch in line))
+        elif marker:
+            fence = marker.group(1)[0]
+            out.append("".join("\n" if ch == "\n" else " " for ch in line))
+        else:
+            out.append(line)
+    return "".join(out)
+
+
 def _read_procedure_card(project_path: str, max_chars: int = 1600) -> Optional[dict]:
     """读取规程入口卡：项目 AGENTS.md → 项目公开卡 → CodeRef 自带公开卡。
 
@@ -939,9 +960,10 @@ def _read_procedure_card(project_path: str, max_chars: int = 1600) -> Optional[d
                 text = f.read()
         except OSError:
             continue
+        masked = _mask_fenced(text)
         start = -1
         for marker in (r"^ {0,3}## 0\.", r"^ {0,3}## 规程索引"):
-            match = re.search(marker, text, re.MULTILINE)
+            match = re.search(marker, masked, re.MULTILINE)
             if match:
                 start = match.start()
                 break
@@ -951,7 +973,7 @@ def _read_procedure_card(project_path: str, max_chars: int = 1600) -> Optional[d
             else:
                 continue   # 通用 AGENTS.md 没有规程索引：跳过，继续找专用卡
         else:
-            end_match = re.search(r"(?m)^ {0,3}## ", text[start + 4:])
+            end_match = re.search(r"(?m)^ {0,3}## ", masked[start + 4:])
             end = start + 4 + end_match.start() if end_match else -1
             chunk = text[start:end if end > 0 else len(text)].strip()
         if chunk:
