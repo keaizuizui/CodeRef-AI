@@ -868,6 +868,7 @@ function renderMiniMap(){
 }
 mmCanvas.addEventListener('click', e => {
   const t = mmCanvas._transform; if (!t) return;
+  _userMoved = true;   // 用户通过缩略图导航，resize 时不要覆盖
   const r = mmCanvas.getBoundingClientRect();
   const wx = (e.clientX - r.left - t.ox)/t.sc;
   const wy = (e.clientY - r.top - t.oy)/t.sc;
@@ -911,6 +912,7 @@ window.addEventListener('mousemove', e => {
   if (!drag) return;
   const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
   if (drag.mode === 'pan'){
+    if (dx || dy) _userMoved = true;
     view.x = drag.vx + dx; view.y = drag.vy + dy;
     applyView();
   } else if (drag.mode === 'node'){
@@ -1423,7 +1425,6 @@ fitView();
 // 评估台 iframe 在隐藏 Tab 中加载时容器尺寸为 0，初次 fitView 会算错；
 // 变为可见/尺寸变化后重新适配，避免用户看到只有左上角一簇节点。
 let _fitRaf = null;
-wrap.addEventListener('mousedown', function(){ _userMoved = true; }, {passive: true});
 function scheduleFit(){
   if (_userMoved) return;
   if (_fitRaf) cancelAnimationFrame(_fitRaf);
