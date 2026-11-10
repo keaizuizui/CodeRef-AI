@@ -18,7 +18,7 @@
 - JunkDetector 聚焦项目中的垃圾文件清理
 - ResourceGapDetector 聚焦资源遗漏（缺失的模块、未使用的依赖、环境变量遗漏）
 
-作者: PersuadeAI Team
+作者: CodeRef-AI Team
 版本: v1.0
 """
 

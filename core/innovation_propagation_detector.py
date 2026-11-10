@@ -21,7 +21,7 @@
   - BlindSpotDetector 检测"缺少什么（文档、依赖、模块）"
   - InnovationPropagationDetector 检测"应该传播什么（设计模式、架构决策）"
 
-作者: PersuadeAI Team
+作者: CodeRef-AI Team
 版本: v1.0
 """
 

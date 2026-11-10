@@ -18,7 +18,7 @@
 - GovernanceAuditor 聚焦安全与架构合规
 - JunkDetector 聚焦项目中的垃圾文件清理（面向非技术用户）
 
-作者: PersuadeAI Team
+作者: CodeRef-AI Team
 版本: v1.0
 """
 

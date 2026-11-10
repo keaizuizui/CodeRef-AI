@@ -17,7 +17,7 @@
 - GovernanceAuditor 聚焦安全与架构合规（铁律、错题本）
 - BlindSpotDetector 聚焦知识盲区（用户不知道、AI 不知道、代码缺失）
 
-作者: PersuadeAI Team
+作者: CodeRef-AI Team
 版本: v1.0
 """
 

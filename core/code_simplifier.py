@@ -28,7 +28,7 @@ Ponytail 核心理念（40K+ stars, 2026-06-12）：
     report = simplifier.analyze(project_path)
     # 或通过 MCP 工具 coderef_simplify_project 调用
 
-作者: PersuadeAI Team
+作者: CodeRef-AI Team
 版本: v1.0
 """
 
