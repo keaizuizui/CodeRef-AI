@@ -297,7 +297,7 @@ def tech_panel(project_path: str, card: Optional[dict], layout_link: str = "") -
             '用于排查分层与依赖，不回答业务问题。</p>'
             # 与被分析项目的画布隔离，避免读取父页 token
             f'<iframe src="{_attr(layout_link)}" sandbox="allow-scripts allow-popups" '
-            'style="width:100%;height:70vh;border:1px solid #2a2d3a;'
+            'style="width:100%;height:78vh;min-height:560px;border:1px solid #2a2d3a;'
             'border-radius:8px;background:#0f1117"></iframe></section>')
     else:
         parts.append('<section><h2>技术分区图 <span class="badge badge-missing">未生成</span></h2>'

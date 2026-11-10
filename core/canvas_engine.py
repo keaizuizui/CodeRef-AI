@@ -80,6 +80,7 @@ def _norm_node(n: Dict[str, Any]) -> Dict[str, Any]:
         "icon": n.get("icon", ""),
         "layer": n.get("layer", n.get("type", "default")),
         "tier": n.get("tier", ""),          #  泳道：business|service|code；空=不区分层
+        "group": n.get("group", ""),        #  模块组：大图分组布局/模块组卡片
         "props": n.get("props") or {},
         "ports": n.get("ports") or ["top", "right", "bottom", "left"],
     }
@@ -115,6 +116,7 @@ def normalize(canvas_data: Dict[str, Any]) -> Dict[str, Any]:
         "edges": edges,
         "meta": canvas_data.get("meta") or {},
         "tier_order": canvas_data.get("tier_order") or None,
+        "groups": canvas_data.get("groups") or [],
     }
 
 
@@ -135,8 +137,9 @@ def auto_layout(canvas_data: Dict[str, Any], mode: str = "layered") -> Dict[str,
         return data
     if mode == "force":
         _layout_force(nodes, edges)
+        data["groups"] = []
     else:
-        _layout_layered(nodes, edges)
+        data["groups"] = _layout_layered(nodes, edges)
     return data
 
 
@@ -172,9 +175,32 @@ def _node_depths(node_ids: List[str], edges: List[Dict]) -> Dict[str, int]:
 
 _NODE_GAP_DEFAULT = 28
 
+# 大图分组布局（真实项目实测：176 个代码模块排成无差别方阵不可读）。
+# 按模块目录分组后，每组独立成块并留标题区；全量视图可退化为「模块组卡片」。
+_GROUP_MIN_NODES = 60      # 同层节点超过该数才启用分组布局
+_GROUP_MAX_PER_ROW = 6     # 组内单行节点上限（保持块窄而高，便于横向并排）
+_GROUP_GAP = 64            # 组块间距
+_GROUP_HEADER = 40         # 组标题区高度
+
+
+def _node_group(n: Dict) -> str:
+    """模块节点的分组名：优先显式 group，其次按 full_label 目录取第二段。"""
+    g = str(n.get("group") or "").strip()
+    if g:
+        return g
+    props = n.get("props") or {}
+    full = str(props.get("full_label") or "")
+    parts = [p for p in full.replace("\\", "/").split("/") if p]
+    if len(parts) >= 3:
+        return parts[1]
+    if len(parts) == 2:
+        return parts[0]
+    return ""
+
 
 def _split_layer_rows(items: List[Dict], edges: List[Dict],
-                      topo_always: bool = False) -> List[List[Dict]]:
+                      topo_always: bool = False,
+                      max_per_row: int = MAX_NODES_PER_ROW) -> List[List[Dict]]:
     """把某层节点拆成多行：先按拓扑深度浅→深排，再用行宽/行数上限截断。
 
     解决 ：全部节点归入同一层时，避免横排成一条超宽线；深度相近的
@@ -184,14 +210,14 @@ def _split_layer_rows(items: List[Dict], edges: List[Dict],
     名字排序把链路打乱。
     """
     ids = [n["id"] for n in items]
-    use_depth = topo_always or len(ids) > MAX_NODES_PER_ROW
+    use_depth = topo_always or len(ids) > max_per_row
     depth = _node_depths(ids, edges) if use_depth else {}
     ordered = sorted(items, key=lambda n: (depth.get(n["id"], 0), n.get("label", n["id"])))
     rows: List[List[Dict]] = []
     cur: List[Dict] = []
     for n in ordered:
         nw = n.get("w", _DEF_W)
-        if cur and (len(cur) >= MAX_NODES_PER_ROW
+        if cur and (len(cur) >= max_per_row
                     or sum(x.get("w", _DEF_W) for x in cur) + _NODE_GAP_DEFAULT * (len(cur) - 1)
                     + nw + _NODE_GAP_DEFAULT > MAX_LAYER_WIDTH):
             rows.append(cur)
@@ -251,15 +277,17 @@ def _layout_lanes(nodes: List[Dict], edges: List[Dict],
 
 def _layout_layered(nodes: List[Dict], edges: List[Dict],
                     layer_gap: float = 150, node_gap: float = 28,
-                    margin: float = 80) -> None:
+                    margin: float = 80) -> List[Dict]:
     """分层布局：按 tier 泳道（）或 layer 分组，主层间垂直排列，层内再按深度子行展开。
 
     仅给未定位节点（x=0 且 y=0）赋坐标；已显式定位的节点保留原位。
     单层内节点过多或过宽时，按 DAG 深度拆成多行（），避免 Y 轴坍缩成线。
+    大层（≥ _GROUP_MIN_NODES）按模块目录分组为独立块，返回组块元数据供
+    前端渲染「模块组」，避免 176 个节点排成无差别方阵。
     """
     if any(n.get("tier") for n in nodes):
         _layout_lanes(nodes, edges, node_gap=node_gap, margin=margin)
-        return
+        return []
     order: List[str] = []
     layers: Dict[str, List[Dict]] = {}
     for n in nodes:
@@ -268,6 +296,7 @@ def _layout_layered(nodes: List[Dict], edges: List[Dict],
             order.append(l)
         layers.setdefault(l, []).append(n)
 
+    groups_meta: List[Dict] = []
     y = margin
     for l in order:
         items = layers[l]
@@ -280,6 +309,55 @@ def _layout_layered(nodes: List[Dict], edges: List[Dict],
                 placed_bottom = max(placed_bottom, n["y"] + n.get("h", _DEF_H))
         y = max(y, placed_bottom + layer_gap)
 
+        grouped: Dict[str, List[Dict]] = {}
+        if len(unpositioned) >= _GROUP_MIN_NODES:
+            for n in unpositioned:
+                grouped.setdefault(_node_group(n) or "未归类", []).append(n)
+        if len(grouped) >= 2:
+            block_x, block_y, row_h = margin, y, 0.0
+            max_right = max(DEFAULT_WIDTH - margin, margin + 600)
+            # 大组优先，保证主要功能块在左上；同大小按名称稳定排序
+            for g, group_items in sorted(grouped.items(),
+                                         key=lambda kv: (-len(kv[1]), kv[0])):
+                rows = _split_layer_rows(group_items, edges,
+                                         max_per_row=_GROUP_MAX_PER_ROW)
+                widths = [
+                    sum(n.get("w", _DEF_W) for n in row) + node_gap * (len(row) - 1)
+                    for row in rows
+                ]
+                block_w = max(widths) if widths else _DEF_W
+                block_h = sum(
+                    max((n.get("h", _DEF_H) for n in row), default=_DEF_H)
+                    for row in rows
+                ) + node_gap * max(0, len(rows) - 1)
+                if block_x > margin and block_x + block_w > max_right:
+                    block_x = margin
+                    block_y += row_h + _GROUP_GAP
+                    row_h = 0.0
+                yy = block_y + _GROUP_HEADER
+                for row in rows:
+                    xx = block_x
+                    rh = max((n.get("h", _DEF_H) for n in row), default=_DEF_H)
+                    for n in row:
+                        n["x"] = xx
+                        n["y"] = yy
+                        xx += n.get("w", _DEF_W) + node_gap
+                    yy += rh + node_gap
+                groups_meta.append({
+                    "label": g,
+                    "x": block_x - 16,
+                    "y": block_y - 30,
+                    "w": block_w + 32,
+                    "h": block_h + _GROUP_HEADER + 10,
+                    "count": len(group_items),
+                    "layer": l,
+                    "ids": [n["id"] for n in group_items],
+                })
+                block_x += block_w + _GROUP_GAP
+                row_h = max(row_h, block_h + _GROUP_HEADER + 10)
+            y = block_y + row_h + layer_gap
+            continue
+
         rows = _split_layer_rows(unpositioned, edges)
         for row in rows:
             total_w = sum(n.get("w", _DEF_W) for n in row) + node_gap * (len(row) - 1)
@@ -290,6 +368,7 @@ def _layout_layered(nodes: List[Dict], edges: List[Dict],
                 n["y"] = y
                 x += n.get("w", _DEF_W) + node_gap
             y += row_h + layer_gap
+    return groups_meta
 
 
 def _layout_force(nodes: List[Dict], edges: List[Dict],
@@ -417,6 +496,12 @@ body { font-family:"Segoe UI","Noto Sans CJK SC",sans-serif; background:#0F172A;
 .node .node-icon { font-size:18px; line-height:1; }
 .node .node-label { font-size:13px; color:#E2E8F0; text-align:center; padding:2px 6px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:help; }
 .node .node-sub { font-size:11px; color:#94A3B8; max-width:90%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.node.cluster { align-items:flex-start; justify-content:flex-start; padding:16px 18px; cursor:pointer;
+  background:linear-gradient(135deg,#1E293B 0%,#111827 100%); border-style:dashed; border-width:2px; }
+.node.cluster .cluster-title { font-size:16px; font-weight:700; color:#E2E8F0; line-height:1.3; }
+.node.cluster .cluster-sub { font-size:12px; color:#94A3B8; margin-top:8px; line-height:1.7; white-space:normal;
+  overflow:hidden; display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; }
+.node.cluster .cluster-hint { font-size:12px; color:#60A5FA; margin-top:auto; }
 .node .port { position:absolute; width:10px; height:10px; border-radius:50%; background:#0F172A; border:2px solid #64748B; opacity:0; transition:opacity .15s; cursor:crosshair; }
 .node:hover .port { opacity:1; }
 .node .port:hover { background:#3B82F6; border-color:#3B82F6; }
@@ -512,6 +597,7 @@ let propTarget = null;   // 属性面板目标 {kind:'node'|'edge', id}
 let navLevel = 'all';    // 'all'|'L0'|'L1'|'L2'|'L3'
 let navLayer = 'all';    // L1 分层过滤：'all'|'业务层'|'技术层'|'代码层'
 let navFocus = null;     // L2 聚焦模块 id
+let navGroup = null;     // 模块组下钻：组名（全量视图点模块组卡片后进入）
 let showGaps = true;     // 差距高亮开关（先捋清后治理）
 const NAV_LAYERS = ['业务层', '技术层', '代码层'];
 const GAP_NODE_COLORS = ['#64748B', '#F59E0B', '#EF4444'];  // 游离/循环/缺失角色
@@ -558,7 +644,7 @@ function zoomBy(factor){
 function fitView(){
   if (!nodes.length) return;
   // ：导航激活时按当前可见节点计算边界，避免隐藏节点把聚焦视图缩得过小
-  const vis = navLevel === 'all' ? nodes : nodes.filter(navVisible);
+  const vis = displayNodes().filter(navVisible);
   if (!vis.length) return;
   let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
   vis.forEach(n => { minX=Math.min(minX,n.x); minY=Math.min(minY,n.y); maxX=Math.max(maxX,n.x+n.w); maxY=Math.max(maxY,n.y+n.h); });
@@ -570,8 +656,19 @@ function fitView(){
   const maxNW = Math.max(...vis.map(n=>n.w));
   const minScale = MIN_READABLE_PX / Math.max(maxNW, 1);
   view.scale = Math.max(view.scale, minScale);
-  view.x = (wrap.clientWidth - w*view.scale)/2 - minX*view.scale;
-  view.y = (wrap.clientHeight - h*view.scale)/2 - minY*view.scale;
+  // 大组下钻：不把 90 个模块压成米粒阵；至少保持可读比例，其余靠平移/缩略图
+  if (navGroup && groupMembers(navGroup).length > 40) {
+    view.scale = Math.max(view.scale, 0.7);
+  }
+  const overflow = w*view.scale > wrap.clientWidth || h*view.scale > wrap.clientHeight;
+  if (overflow) {
+    // 内容超出视口时从左上角开始，避免用户一进来就看到被裁掉一半的中间行
+    view.x = 40 - minX*view.scale;
+    view.y = 40 - minY*view.scale;
+  } else {
+    view.x = (wrap.clientWidth - w*view.scale)/2 - minX*view.scale;
+    view.y = (wrap.clientHeight - h*view.scale)/2 - minY*view.scale;
+  }
   applyView();
 }
 function resetView(){ _userMoved = true; view = {x:0, y:0, scale:1}; applyView(); }
@@ -607,8 +704,33 @@ function bezierPath(p1, p2){
 }
 function renderNodes(){
   nodeLayer.innerHTML = '';
-  nodes.forEach(n => {
+  displayNodes().forEach(n => {
     if (!navVisible(n)) return;
+    if (n.type === 'cluster'){
+      // 全量视图的模块组卡片：替代 100+ 个同质小方块（「士兵方阵」）
+      const p = n.props || {};
+      const el = document.createElement('div');
+      el.className = 'node cluster';
+      el.style.left = n.x+'px'; el.style.top = n.y+'px';
+      el.style.width = n.w+'px'; el.style.height = n.h+'px';
+      el.style.borderColor = '#475569';
+      el.dataset.cluster = '1';
+      el.innerHTML = '<div class="cluster-title">📦 ' + esc(n.label) + '</div>'
+        + '<div class="cluster-sub">' + (p.count || 0) + ' 个模块'
+        + ((p.count || 0) > 40 ? ' · <span style="color:#F59E0B">大组，建议按子目录拆分</span>' : '')
+        + '<br>' + esc((p.samples || []).join(' · ')) + '</div>'
+        + '<div class="cluster-hint">点击查看组内模块 →</div>';
+      el.addEventListener('click', ev => {
+        ev.stopPropagation();
+        navGroup = n.label; navFocus = null; navLayer = 'all';
+        renderBreadcrumb(); render(); fitView();
+        if ((p.count || 0) > 40) {
+          toast('组内 ' + p.count + ' 个模块，已按可读比例显示；拖拽平移查看其余模块');
+        }
+      });
+      nodeLayer.appendChild(el);
+      return;
+    }
     const el = document.createElement('div');
     el.className = 'node' + (selected.has(n.id) ? ' selected' : '') + (n.tier ? ' tier-'+n.tier : '');
     el.style.left = n.x+'px'; el.style.top = n.y+'px';
@@ -621,7 +743,7 @@ function renderNodes(){
       else if (navLevel === 'L1') setLayer(n.layer);
     });
     const p = n.props || {};
-    const sub = p.twin_verdict || p.file || p.desc || '';
+    const sub = p.twin_verdict || p.full_label || p.file || p.desc || '';
     el.innerHTML = `<div class="node-icon">${esc(n.icon||'')}</div>
       <div class="node-label" title="${esc(n.label)}">${esc(n.label)}</div>
       ${sub ? `<div class="node-sub" title="${esc(sub)}">${esc(sub)}</div>` : ''}`;
@@ -648,6 +770,45 @@ function renderEdges(){
   poly.setAttribute('fill','#94A3B8');
   marker.appendChild(poly); defs.appendChild(marker);
   edgeLayer.appendChild(defs);
+  if (isClusterView()){
+    // 模块组视图：把组间依赖聚合成一条线，线宽/数字表示调用条数
+    const clusters = clusterNodes();
+    const byLabel = {};
+    clusters.forEach(c => byLabel[c.label] = c);
+    const groupOfId = {};
+    (DATA.groups || []).forEach(g => (g.ids || []).forEach(id => groupOfId[id] = g.label));
+    const agg = {};
+    edges.forEach(e => {
+      const a = groupOfId[e.from], b = groupOfId[e.to];
+      if (!a || !b || a === b) return;
+      const k = a + '\u0000' + b;
+      (agg[k] = agg[k] || {a: a, b: b, count: 0}).count++;
+    });
+    Object.keys(agg).forEach(k => {
+      const it = agg[k], from = byLabel[it.a], to = byLabel[it.b];
+      if (!from || !to) return;
+      const ap = autoPort(from, to);
+      const p1 = portPos(from, ap.fromPort), p2 = portPos(to, ap.toPort);
+      const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d', bezierPath(p1,p2));
+      path.setAttribute('stroke', '#64748B');
+      path.setAttribute('stroke-width', '1.5');
+      path.setAttribute('stroke-dasharray', '6 4');
+      path.setAttribute('fill','none');
+      path.setAttribute('marker-end','url(#arrow)');
+      edgeLayer.appendChild(path);
+      if (it.count > 1){
+        const t = document.createElementNS('http://www.w3.org/2000/svg','text');
+        t.setAttribute('x', (p1.x+p2.x)/2);
+        t.setAttribute('y', (p1.y+p2.y)/2 - 4);
+        t.setAttribute('text-anchor','middle');
+        t.setAttribute('class','edge-label');
+        t.textContent = it.count;
+        edgeLayer.appendChild(t);
+      }
+    });
+    return;
+  }
   const byId = {};
   nodes.forEach(n => byId[n.id] = n);
   edges.forEach(e => {
@@ -727,8 +888,13 @@ function renderLanes(){
   laneLayer.appendChild(ns);
 }
 function renderStats(){
+  if (isClusterView()){
+    document.getElementById('stats').innerHTML =
+      `模块组 ${clusterNodes().length} | 模块 ${nodes.filter(n => n.type === 'module').length}`;
+    return;
+  }
   // ：统计随层级导航联动——按当前 navVisible 过滤后的可见节点/连线计数
-  const vis = navLevel === 'all' ? nodes : nodes.filter(navVisible);
+  const vis = nodes.filter(navVisible);
   const visIds = new Set(vis.map(n => n.id));
   const visEdges = edges.filter(e => visIds.has(e.from) && visIds.has(e.to));
   const s = (DATA.meta && DATA.meta.summary) || {};
@@ -750,12 +916,13 @@ function hasTierLayers(){
 }
 function initNav(){
   // 可重置：导入/撤销重做替换画布数据后重新配置导航（ 复审）
-  navLevel = 'all'; navLayer = 'all'; navFocus = null;
+  navLevel = 'all'; navLayer = 'all'; navFocus = null; navGroup = null;
   const on = hasTierLayers();
-  // 大图默认进 L0 总览：全量视图会把 200+ 节点缩成不可读色块（真实项目实测）
+  // 大图默认进聚合视图：有模块组时直接看「模块组卡片」，否则退 L0 总览；
+  // 两者都好过把 200+ 节点缩成不可读的「士兵方阵」。
   if (on && nodes.length > 120
       && nodes.some(n => n.type === 'step' || n.type === 'role')) {
-    navLevel = 'L0';
+    navLevel = (DATA.groups || []).length >= 2 ? 'all' : 'L0';
   }
   ['navSep','navGroup','gapSep','gapToggle'].forEach(id => {
     const el = document.getElementById(id);
@@ -769,6 +936,8 @@ function initNav(){
   renderBreadcrumb();
 }
 function navVisible(n){
+  if (navGroup) return n.type === 'module' && groupOfNode(n) === navGroup;
+  if (isClusterView()) return n.type === 'cluster';   // 全量：只显示模块组卡片
   if (navLevel === 'all') return true;
   if (navLevel === 'L0') return n.type === 'step' || n.type === 'role';   // 业务定位 + 角色总览
   if (navLevel === 'L1') return navLayer === 'all' || n.layer === navLayer;
@@ -782,10 +951,53 @@ function navVisible(n){
   if (navLevel === 'L3') return n.layer === '代码层' || n.tier === 'code';   // 代码管线：只看代码层模块与依赖
   return true;
 }
+function groupOfNode(n){
+  if (n.group) return n.group;
+  const full = String((n.props || {}).full_label || '');
+  const parts = full.replace(/\\/g, '/').split('/').filter(Boolean);
+  if (parts.length >= 3) return parts[1];
+  if (parts.length === 2) return parts[0];
+  return '未归类';
+}
+function groupMembers(label){
+  const g = (DATA.groups || []).find(x => x.label === label);
+  return g ? (g.ids || []).map(id => nodes.find(n => n.id === id)).filter(Boolean) : [];
+}
+function isClusterView(){
+  return navLevel === 'all' && !navGroup
+    && (DATA.groups || []).length >= 2
+    && nodes.filter(n => n.type === 'module').length > 60;
+}
+function clusterNodes(){
+  const groups = (DATA.groups || []).filter(g => (g.ids || []).length);
+  if (!groups.length) return [];
+  // 组卡片使用独立的网格坐标：模块已隐藏，不必沿用真实模块块的位置，
+  // 这样 10 个组可以按 4 列排成 3 排，fit 后文字仍可读。
+  const cols = Math.max(2, Math.min(4, Math.ceil(Math.sqrt(groups.length))));
+  const CW = 320, CH = 160, GAP = 40, X0 = 80, Y0 = 80;
+  return groups.map((g, i) => {
+    const members = (g.ids || []).map(id => nodes.find(n => n.id === id)).filter(Boolean);
+    if (!members.length) return null;
+    const col = i % cols, row = Math.floor(i / cols);
+    return {
+      id: 'cluster:' + g.label, type: 'cluster', label: g.label, icon: '📦',
+      x: X0 + col * (CW + GAP), y: Y0 + row * (CH + GAP), w: CW, h: CH,
+      color: '#64748B', layer: g.layer || '',
+      props: {count: members.length, ids: g.ids || [],
+              samples: members.slice(0, 5).map(n => n.label)},
+    };
+  }).filter(Boolean);
+}
+function displayNodes(){
+  return isClusterView()
+    ? nodes.filter(n => n.type !== 'module').concat(clusterNodes())
+    : nodes;
+}
 function setNav(lv){
   navLevel = lv;
   navLayer = 'all';
   navFocus = null;
+  navGroup = null;
   if (lv === 'L1') {
     // L1 的语义是「按层聚焦」：默认落到第一个有节点的层，
     // 否则与「全量」完全一样，用户会误以为按钮失效。
@@ -824,12 +1036,19 @@ function setLayer(layer){
 }
 function navBack(){
   selected.clear();   // 回退改变可见范围：清除隐藏节点的选中
+  if (navGroup){ navGroup = null; renderBreadcrumb(); render(); fitView(); return; }
   if (navFocus){ navFocus = null; renderBreadcrumb(); render(); fitView(); return; }
   if (navLayer !== 'all'){ setNav('L0'); return; }
   setNav('all');
 }
 function renderBreadcrumb(){
   const bc = document.getElementById('breadcrumb');
+  if (navGroup){
+    bc.style.display = '';
+    bc.innerHTML = '📍 模块组 › ' + esc(navGroup)
+      + ' <a href="javascript:navBack()" style="color:#60A5FA">[回退]</a>';
+    return;
+  }
   if (navLevel === 'all'){ bc.style.display = 'none'; bc.innerHTML = ''; return; }
   bc.style.display = '';
   let s = '📍 ';
@@ -869,17 +1088,19 @@ function render(){
 }
 function renderMiniMap(){
   if (!nodes.length) return;
+  const mmNodes = displayNodes().filter(navVisible);
+  if (!mmNodes.length) return;
   const cw = mmCanvas.clientWidth, ch = mmCanvas.clientHeight;
   mmCanvas.width = cw; mmCanvas.height = ch;
   mmCtx.clearRect(0,0,cw,ch);
   let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
-  nodes.forEach(n => { minX=Math.min(minX,n.x); minY=Math.min(minY,n.y); maxX=Math.max(maxX,n.x+n.w); maxY=Math.max(maxY,n.y+n.h); });
+  mmNodes.forEach(n => { minX=Math.min(minX,n.x); minY=Math.min(minY,n.y); maxX=Math.max(maxX,n.x+n.w); maxY=Math.max(maxY,n.y+n.h); });
   const pad = 60;
   minX-=pad; minY-=pad; maxX+=pad; maxY+=pad;
   const sc = Math.min(cw/(maxX-minX), ch/(maxY-minY));
   const ox = (cw - (maxX-minX)*sc)/2 - minX*sc;
   const oy = (ch - (maxY-minY)*sc)/2 - minY*sc;
-  nodes.forEach(n => {
+  mmNodes.forEach(n => {
     mmCtx.fillStyle = nodeColor(n);
     mmCtx.fillRect(n.x*sc+ox, n.y*sc+oy, Math.max(2,n.w*sc), Math.max(2,n.h*sc));
   });
@@ -915,6 +1136,7 @@ wrap.addEventListener('mousedown', e => {
     return;
   }
   if (nodeEl){
+    if (nodeEl.dataset.cluster) return;   // 模块组卡片只响应 click 下钻，不参与拖拽
     const id = nodeEl.dataset.id;
     if (!e.shiftKey && !selected.has(id)){
       selected.clear();
@@ -1446,7 +1668,9 @@ function toast(msg){
 initNav();
 render();
 fitView();
-if (navLevel === 'L0' && nodes.length > 120) {
+if (isClusterView()) {
+  toast('已按模块目录聚合为 ' + clusterNodes().length + ' 个模块组；点击卡片查看组内模块');
+} else if (navLevel === 'L0' && nodes.length > 120) {
   toast('节点较多，已默认 L0 总览；可点 L1/L2/L3 下钻或「全量」查看全部');
 }
 // 评估台 iframe 在隐藏 Tab 中加载时容器尺寸为 0，初次 fitView 会算错；
