@@ -370,13 +370,27 @@ def _report(a) -> str:
         """评估台生成时自动跑产品（F 轨）与 UX（U 轨），无需用户再点按钮。
 
         两者都会自行落盘 product_fit.json / ux_fit.json；无 Key 时按各自
-        SKIP/STATIC_ONLY 语义降级，不阻断报告渲染。
+        SKIP/STATIC_ONLY 语义降级，不阻断报告渲染。快照已存在且不比代码旧时
+        跳过，避免每次 coderef_report 都重复消耗 LLM。
         """
+        import importlib
+        try:
+            from core.freshness_guard import artifact_report
+            rep = artifact_report(pp)
+            by_key = {i.get("key"): i for i in (rep.get("artifacts") or [])}
+        except Exception:  # noqa: BLE001 —— 盘点失败时照常跑
+            by_key = {}
         out = []
-        for scene, module_name in (("product", "core.product_eval"),
-                                   ("ux", "core.ux_eval")):
+        for scene, key, module_name in (
+                ("product", "product_fit", "core.product_eval"),
+                ("ux", "ux_fit", "core.ux_eval")):
+            item = by_key.get(key) or {}
+            if item.get("exists") and not item.get("code_newer"):
+                out.append({"scene": scene, "status": "SKIPPED_FRESH",
+                            "error": ""})
+                continue
             try:
-                mod = __import__(module_name, fromlist=["evaluate"])
+                mod = importlib.import_module(module_name)
                 res = mod.evaluate(pp)
                 out.append({"scene": scene,
                             "status": str(res.get("status") or ""),
