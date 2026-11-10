@@ -155,6 +155,7 @@ def _project_lock(pp: str) -> threading.RLock:
 # 读改写需要文件锁兜底。同线程可重入：run 整体持锁时 _save_notes 再取不自杀。
 _lock_state = threading.local()
 _LOCK_FILE = ".lock"
+_SEEDS_LOCK_FILE = ".lock.seeds"
 _LOCK_TIMEOUT = 120.0
 
 
@@ -187,9 +188,13 @@ def _os_lock(fh, unlock: bool = False) -> None:
 
 
 @contextlib.contextmanager
-def _file_lock(project_path: str):
-    """项目级跨进程文件锁（同线程可重入）。"""
-    key = _norm(project_path)
+def _file_lock(project_path: str, name: str = _LOCK_FILE):
+    """项目级跨进程文件锁（同线程可重入）。
+
+    name 用于按资源分锁：seeds.jsonl 的追加用独立锁，避免被「正在跑 LLM 的
+    整轮梦」长时间挡住（Brooks 复审：run 的长事务不应阻塞轻量 seed）。
+    """
+    key = _norm(project_path) + "|" + name
     held = getattr(_lock_state, "held", None)
     if held is None:
         held = _lock_state.held = {}
@@ -200,7 +205,7 @@ def _file_lock(project_path: str):
         finally:
             held[key] -= 1
         return
-    path = os.path.join(_dream_dir(project_path), _LOCK_FILE)
+    path = os.path.join(_dream_dir(project_path), name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fh = open(path, "a+b")
     try:
@@ -531,7 +536,8 @@ def seed(project_path: str, text: str, kind: str = "association",
         return {"status": "error", "tool": "coderef_dream", "action": "seed",
                 "error": f"项目目录不存在: {pp}"}
     try:
-        with _project_lock(pp), _file_lock(pp):
+        # 只取 seeds 专用锁：run 可能正持主锁跑多分钟 LLM，不该拦住一条投喂。
+        with _project_lock(pp), _file_lock(pp, _SEEDS_LOCK_FILE):
             return _seed_impl(pp, text, kind, source)
     except OSError as e:   # 锁超时或文件系统错误：结构化返回，不抛给协议层
         return {"status": "error", "tool": "coderef_dream", "action": "seed",
@@ -1852,15 +1858,21 @@ def _skip(pp: str, state: dict, cfg: dict, reason: str, trigger: str,
 
 def run(project_path: str, trigger: str = "manual", llm=None,
         job: str = DEFAULT_JOB) -> dict:
-    """补一轮梦；并发 run 通过 `_save_notes` 的基线合并保留彼此新增。"""
+    """补一轮梦；并发 run 通过 `_save_notes` 的基线合并保留彼此新增。
+
+    只取进程内锁，不在整轮期间持跨进程文件锁：整轮包含多分钟 LLM 调用，
+    长持锁会让另一进程的 run 等满超时后失败。跨进程写安全由三段短锁保证：
+    读取 seeds（seeds 锁）、写 notes.json（`_save_notes` 合并锁）、
+    写 DREAM.md 与 state（主锁）。
+    """
     pp = os.path.abspath(project_path)
     if not os.path.isdir(pp):
         return {"status": "error", "tool": "coderef_dream", "action": "run",
                 "error": f"项目目录不存在: {pp}"}
     try:
-        with _project_lock(pp), _file_lock(pp):
+        with _project_lock(pp):
             return _run_impl(pp, trigger=trigger, llm=llm, job=job)
-    except OSError as e:   # 另一进程长跑梦时锁可能超时：结构化返回
+    except OSError as e:   # 短锁超时或文件系统错误：结构化返回
         return {"status": "error", "tool": "coderef_dream", "action": "run",
                 "error": f"dream 锁被占用或不可用，请稍后重试: {e}"}
 
@@ -1900,7 +1912,8 @@ def _run_impl(project_path: str, trigger: str = "manual", llm=None,
                      "未配置有效的主 LLM API Key（梦复用主 LLM 配置，无 Key 不编造）",
                      trigger, job=job)
 
-    seeds = _read_seeds(pp)
+    with _file_lock(pp, _SEEDS_LOCK_FILE):
+        seeds = _read_seeds(pp)
     consumed = _as_int((state.get("cursor") or {}).get("seeds_consumed"), 0)
     new_seeds = seeds[consumed:consumed + MAX_SEEDS]
     # 本轮只消费最前面的 MAX_SEEDS 条；剩余留到下次，不能直接记成全部已消费。
@@ -1996,40 +2009,49 @@ def _run_impl(project_path: str, trigger: str = "manual", llm=None,
         return _fail(pp, state, cfg, trigger, "notes.json 写入失败", materials,
                      job=job)
     # 并发 run 可能刚合并进彼此的新笔记；重读后再渲染，DREAM.md 不丢并发结果。
-    notes = _load_notes(pp)
+    # 重读 + 渲染 + 写回放进主锁，保证 DREAM.md 与当时的 notes.json 一致。
+    with _file_lock(pp):
+        notes = _load_notes(pp)
 
-    verified = [n for n in notes if n.get("status") == "verified"]
-    if goal or added:
-        md = _render_md(goal or str(state.get("goal") or ""), notes,
-                        open_questions)
-        err = _write_text(_path(pp, DREAM_MD), md)
-        if err:
-            return _fail(pp, state, cfg, trigger, f"DREAM.md 写入失败: {err}",
-                         materials, job=job)
-    md_chars = len(_read_text(_path(pp, DREAM_MD)))
+        verified = [n for n in notes if n.get("status") == "verified"]
+        if goal or added:
+            md = _render_md(goal or str(state.get("goal") or ""), notes,
+                            open_questions)
+            err = _write_text(_path(pp, DREAM_MD), md)
+            if err:
+                return _fail(pp, state, cfg, trigger, f"DREAM.md 写入失败: {err}",
+                             materials, job=job)
+        md_chars = len(_read_text(_path(pp, DREAM_MD)))
 
     est_tokens = round((len(material_text) + len(response)) / CHARS_PER_TOKEN)
     now = _now()
     last_audit = ""
     if materials.get("audit"):
         last_audit = str(materials["audit"][-1].get("ts") or "")
-    state.update({
-        "last_dream_at": now,
-        "last_attempt_at": now,
-        "last_status": "ok",
-        "last_error": "",
-        "last_job": job,
-        "goal": goal or state.get("goal", ""),
-        "open_questions": open_questions,
-        "last_run_tokens": est_tokens,
-        "runs": int(state.get("runs") or 0) + 1,
-    })
-    state["cursor"] = {
-        "audit_after": last_audit or (state.get("cursor") or {}).get("audit_after", ""),
-        "seeds_consumed": seeds_consumed_after,
-        "git_head": (materials.get("git") or {}).get("head", ""),
-    }
-    _save_state(pp, state)
+    with _file_lock(pp):
+        # 跨进程 run 可能已推进过 cursor/runs：以磁盘状态为准做一次合并写，
+        # 不把对方新增的计数或游标覆盖回本轮开始时的旧值。
+        fresh = _load_state(pp)
+        prev_cursor = fresh.get("cursor") or {}
+        fresh.update({
+            "last_dream_at": now,
+            "last_attempt_at": now,
+            "last_status": "ok",
+            "last_error": "",
+            "last_job": job,
+            "goal": goal or str(fresh.get("goal") or ""),
+            "open_questions": open_questions,
+            "last_run_tokens": est_tokens,
+            "runs": int(fresh.get("runs") or 0) + 1,
+        })
+        fresh["cursor"] = {
+            "audit_after": last_audit or prev_cursor.get("audit_after", ""),
+            "seeds_consumed": max(seeds_consumed_after,
+                                  _as_int(prev_cursor.get("seeds_consumed"), 0)),
+            "git_head": ((materials.get("git") or {}).get("head", "")
+                         or prev_cursor.get("git_head", "")),
+        }
+        _save_state(pp, fresh)
 
     accepted = [n for n in added if n.get("status") in ("verified", "hypothesis")]
     rejected = [{"text": n.get("text", ""), "reason": n.get("reason", "")}
