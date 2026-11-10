@@ -135,24 +135,10 @@ DEFAULT_CONFIG = {
 _started = set()
 _start_lock = threading.Lock()
 
-# 同一项目的 run/seed 串行化：notes.json 是整文件读改写，并发 run 会互相覆盖；
-# seeds.jsonl 的多线程 append 也可能丢行。RLock 允许同线程内嵌套调用。
-_run_locks: Dict[str, threading.RLock] = {}
-_run_locks_guard = threading.Lock()
-
-
-def _project_lock(pp: str) -> threading.RLock:
-    key = os.path.normcase(os.path.abspath(pp))
-    with _run_locks_guard:
-        lock = _run_locks.get(key)
-        if lock is None:
-            lock = threading.RLock()
-            _run_locks[key] = lock
-        return lock
-
-
-# 跨进程锁（U-67）：进程内 RLock 管不到多进程，seeds.jsonl / notes.json 的
-# 读改写需要文件锁兜底。同线程可重入：run 整体持锁时 _save_notes 再取不自杀。
+# 跨进程锁（U-67）：seeds.jsonl / notes.json 的读改写需要文件锁兜底。
+# 5.21.14 起不再用进程内项目锁串行整轮 run——那会让 seed 与并发 run 无谓地
+# 等一次多分钟 LLM；并发写安全改由「按资源短锁 + 合并语义」保证。
+# 锁按资源分名（seeds 用 .lock.seeds），同线程可重入。
 _lock_state = threading.local()
 _LOCK_FILE = ".lock"
 _SEEDS_LOCK_FILE = ".lock.seeds"
@@ -536,8 +522,9 @@ def seed(project_path: str, text: str, kind: str = "association",
         return {"status": "error", "tool": "coderef_dream", "action": "seed",
                 "error": f"项目目录不存在: {pp}"}
     try:
-        # 只取 seeds 专用锁：run 可能正持主锁跑多分钟 LLM，不该拦住一条投喂。
-        with _project_lock(pp), _file_lock(pp, _SEEDS_LOCK_FILE):
+        # 只取 seeds 专用锁：run 可能正持进程内锁跑多分钟 LLM，不该拦住一条投喂。
+        # 跨进程/跨线程追加互斥由 .lock.seeds 文件锁保证（各线程独立句柄）。
+        with _file_lock(pp, _SEEDS_LOCK_FILE):
             return _seed_impl(pp, text, kind, source)
     except OSError as e:   # 锁超时或文件系统错误：结构化返回，不抛给协议层
         return {"status": "error", "tool": "coderef_dream", "action": "seed",
@@ -546,7 +533,7 @@ def seed(project_path: str, text: str, kind: str = "association",
 
 def _seed_impl(pp: str, text: str, kind: str = "association",
                source: str = "main_ai") -> dict:
-    """seed 的实际写入（调用方已持有项目锁）。"""
+    """seed 的实际写入（调用方已持有 seeds 文件锁）。"""
     if not os.path.isdir(pp):
         return {"status": "error", "tool": "coderef_dream", "action": "seed",
                 "error": f"项目目录不存在: {pp}"}
@@ -1860,18 +1847,17 @@ def run(project_path: str, trigger: str = "manual", llm=None,
         job: str = DEFAULT_JOB) -> dict:
     """补一轮梦；并发 run 通过 `_save_notes` 的基线合并保留彼此新增。
 
-    只取进程内锁，不在整轮期间持跨进程文件锁：整轮包含多分钟 LLM 调用，
-    长持锁会让另一进程的 run 等满超时后失败。跨进程写安全由三段短锁保证：
-    读取 seeds（seeds 锁）、写 notes.json（`_save_notes` 合并锁）、
-    写 DREAM.md 与 state（主锁）。
+    只按资源取短锁：读取 seeds（seeds 锁）、写 notes.json（`_save_notes` 合并锁）、
+    写 DREAM.md 与 state（主锁）。整轮期间不持任何长锁，因此另一进程/线程的
+    `seed` 与 `run` 都不会等 LLM 跑完；并发 run 的写安全由合并语义保证
+    （notes 按基线 id 合并、state 的 cursor/runs 按磁盘值取较大或累加）。
     """
     pp = os.path.abspath(project_path)
     if not os.path.isdir(pp):
         return {"status": "error", "tool": "coderef_dream", "action": "run",
                 "error": f"项目目录不存在: {pp}"}
     try:
-        with _project_lock(pp):
-            return _run_impl(pp, trigger=trigger, llm=llm, job=job)
+        return _run_impl(pp, trigger=trigger, llm=llm, job=job)
     except OSError as e:   # 短锁超时或文件系统错误：结构化返回
         return {"status": "error", "tool": "coderef_dream", "action": "run",
                 "error": f"dream 锁被占用或不可用，请稍后重试: {e}"}
@@ -2045,7 +2031,10 @@ def _run_impl(project_path: str, trigger: str = "manual", llm=None,
             "runs": int(fresh.get("runs") or 0) + 1,
         })
         fresh["cursor"] = {
-            "audit_after": last_audit or prev_cursor.get("audit_after", ""),
+            # 两个游标都取较大值：本轮基于开始时的旧游标收集原料，若另一进程
+            # 在 LLM 期间推进得更远，写回旧值会让下一轮重复收集同一批事件。
+            "audit_after": max(last_audit,
+                               str(prev_cursor.get("audit_after") or "")),
             "seeds_consumed": max(seeds_consumed_after,
                                   _as_int(prev_cursor.get("seeds_consumed"), 0)),
             "git_head": ((materials.get("git") or {}).get("head", "")
