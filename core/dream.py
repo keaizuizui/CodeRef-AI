@@ -433,8 +433,33 @@ def _load_state(project_path: str) -> dict:
     return out
 
 
-def _save_state(project_path: str, state: dict) -> str:
-    return _write_json(_path(project_path, STATE_FILE), state)
+def _save_state(project_path: str, fields: dict, runs_delta: int = 0,
+                cursor: Optional[dict] = None) -> str:
+    """只写本轮真正改变的字段：锁内以磁盘状态为基准，合并游标与轮次。
+
+    并发 run 各自基于旧快照时，整对象覆盖会把对方的 cursor/runs 写回旧值；
+    这里统一在锁内重读磁盘：`fields` 覆盖到磁盘状态上，游标取较大值，
+    轮次在磁盘值上按 `runs_delta` 累加。
+    """
+    with _file_lock(project_path):
+        fresh = _load_state(project_path)
+        merged = dict(fresh)
+        for key, value in (fields or {}).items():
+            if key in ("cursor", "runs"):
+                continue
+            merged[key] = value
+        if cursor:
+            cur_fresh = fresh.get("cursor") or {}
+            merged["cursor"] = {
+                "audit_after": max(str(cursor.get("audit_after") or ""),
+                                   str(cur_fresh.get("audit_after") or "")),
+                "seeds_consumed": max(_as_int(cursor.get("seeds_consumed"), 0),
+                                      _as_int(cur_fresh.get("seeds_consumed"), 0)),
+                "git_head": (str(cursor.get("git_head") or "")
+                             or str(cur_fresh.get("git_head") or "")),
+            }
+        merged["runs"] = _as_int(fresh.get("runs"), 0) + max(0, runs_delta)
+        return _write_json(_path(project_path, STATE_FILE), merged)
 
 
 def _load_notes(project_path: str) -> List[dict]:
@@ -1810,12 +1835,8 @@ def _skip(pp: str, state: dict, cfg: dict, reason: str, trigger: str,
           run_extra: Optional[dict] = None,
           job: str = DEFAULT_JOB) -> dict:
     """诚实 SKIP：不写 DREAM.md / notes，不推进 cursor；只留运行痕迹。"""
-    state["last_attempt_at"] = _now()
-    state["last_status"] = "SKIP"
-    state["last_error"] = reason
-    state["last_job"] = job
-    state["runs"] = int(state.get("runs") or 0) + 1
-    _save_state(pp, state)
+    _save_state(pp, {"last_attempt_at": _now(), "last_status": "SKIP",
+                     "last_error": reason, "last_job": job}, runs_delta=1)
     record = {"ts": _now(), "trigger": trigger, "job": job, "status": "SKIP",
               "reason": reason,
               "llm": {"available": False, "source": "主 LLM 配置"},
@@ -2014,33 +2035,22 @@ def _run_impl(project_path: str, trigger: str = "manual", llm=None,
     last_audit = ""
     if materials.get("audit"):
         last_audit = str(materials["audit"][-1].get("ts") or "")
-    with _file_lock(pp):
-        # 跨进程 run 可能已推进过 cursor/runs：以磁盘状态为准做一次合并写，
-        # 不把对方新增的计数或游标覆盖回本轮开始时的旧值。
-        fresh = _load_state(pp)
-        prev_cursor = fresh.get("cursor") or {}
-        fresh.update({
-            "last_dream_at": now,
-            "last_attempt_at": now,
-            "last_status": "ok",
-            "last_error": "",
-            "last_job": job,
-            "goal": goal or str(fresh.get("goal") or ""),
-            "open_questions": open_questions,
-            "last_run_tokens": est_tokens,
-            "runs": int(fresh.get("runs") or 0) + 1,
-        })
-        fresh["cursor"] = {
-            # 两个游标都取较大值：本轮基于开始时的旧游标收集原料，若另一进程
-            # 在 LLM 期间推进得更远，写回旧值会让下一轮重复收集同一批事件。
-            "audit_after": max(last_audit,
-                               str(prev_cursor.get("audit_after") or "")),
-            "seeds_consumed": max(seeds_consumed_after,
-                                  _as_int(prev_cursor.get("seeds_consumed"), 0)),
-            "git_head": ((materials.get("git") or {}).get("head", "")
-                         or prev_cursor.get("git_head", "")),
-        }
-        _save_state(pp, fresh)
+    # 跨进程 run 可能已推进过 cursor/runs：_save_state 会在锁内按磁盘值合并
+    # （游标取较大值、轮次在磁盘值上累加），这里只需给出本轮的结果。
+    _save_state(pp, {
+        "last_dream_at": now,
+        "last_attempt_at": now,
+        "last_status": "ok",
+        "last_error": "",
+        "last_job": job,
+        "goal": goal or str(state.get("goal") or ""),
+        "open_questions": open_questions,
+        "last_run_tokens": est_tokens,
+    }, runs_delta=1, cursor={
+        "audit_after": last_audit,
+        "seeds_consumed": seeds_consumed_after,
+        "git_head": (materials.get("git") or {}).get("head", ""),
+    })
 
     accepted = [n for n in added if n.get("status") in ("verified", "hypothesis")]
     rejected = [{"text": n.get("text", ""), "reason": n.get("reason", "")}
@@ -2202,22 +2212,17 @@ def _run_draft(pp: str, cfg: dict, state: dict, trigger: str, job: str,
         return _fail(pp, state, cfg, trigger, f"草稿写入失败: {err}", materials,
                      job=job)
 
-    state.update({
+    # 草稿提示词确实消费了这批 seed，成功写盘后按同样规则推进 cursor。
+    consumed = _as_int((state.get("cursor") or {}).get("seeds_consumed"), 0)
+    seeds_consumed_after = min(len(seeds), consumed + MAX_SEEDS)
+    seeds_pending = max(0, len(seeds) - seeds_consumed_after)
+    _save_state(pp, {
         "last_attempt_at": now,
         "last_status": "ok",
         "last_error": "",
         "last_job": job,
         "last_run_tokens": est_tokens,
-        "runs": int(state.get("runs") or 0) + 1,
-    })
-    # 草稿提示词确实消费了这批 seed，成功写盘后按同样规则推进 cursor。
-    consumed = _as_int((state.get("cursor") or {}).get("seeds_consumed"), 0)
-    seeds_consumed_after = min(len(seeds), consumed + MAX_SEEDS)
-    seeds_pending = max(0, len(seeds) - seeds_consumed_after)
-    cursor = dict(state.get("cursor") or {})
-    cursor["seeds_consumed"] = seeds_consumed_after
-    state["cursor"] = cursor
-    _save_state(pp, state)
+    }, runs_delta=1, cursor={"seeds_consumed": seeds_consumed_after})
 
     llm_provider = getattr(llm_cfg, "provider", None)
     record = {
@@ -2371,14 +2376,9 @@ def _run_false_memory_check(pp: str, cfg: dict, state: dict,
                          job="false_memory_check")
 
     # 维护不是做梦：只更新 last_attempt_at，不动 last_dream_at。
-    state.update({
-        "last_attempt_at": now,
-        "last_status": "ok",
-        "last_error": "",
-        "last_job": "false_memory_check",
-        "runs": int(state.get("runs") or 0) + 1,
-    })
-    _save_state(pp, state)
+    _save_state(pp, {"last_attempt_at": now, "last_status": "ok",
+                     "last_error": "", "last_job": "false_memory_check"},
+                runs_delta=1)
 
     limits = {"max_prompt_chars": 0, "max_output_tokens": 0,
               "estimated_tokens": 0}
@@ -2562,15 +2562,9 @@ def _run_eval_replay(pp: str, cfg: dict, state: dict, trigger: str,
                      job="eval_replay")
 
     # 维护不是做梦：只更新 last_attempt_at，不动 last_dream_at。
-    state.update({
-        "last_attempt_at": now,
-        "last_status": "ok",
-        "last_error": "",
-        "last_job": "eval_replay",
-        "last_run_tokens": est_tokens,
-        "runs": int(state.get("runs") or 0) + 1,
-    })
-    _save_state(pp, state)
+    _save_state(pp, {"last_attempt_at": now, "last_status": "ok",
+                     "last_error": "", "last_job": "eval_replay",
+                     "last_run_tokens": est_tokens}, runs_delta=1)
 
     record = {
         "ts": now, "trigger": trigger, "job": "eval_replay", "status": "ok",
@@ -2608,12 +2602,8 @@ def _fail(pp: str, state: dict, cfg: dict, trigger: str, error: str,
           materials: dict, response: str = "",
           job: str = DEFAULT_JOB) -> dict:
     """做梦失败：保留旧梦，只记录错误（不写 DREAM.md / notes）。"""
-    state["last_attempt_at"] = _now()
-    state["last_status"] = "error"
-    state["last_error"] = error[:500]
-    state["last_job"] = job
-    state["runs"] = int(state.get("runs") or 0) + 1
-    _save_state(pp, state)
+    _save_state(pp, {"last_attempt_at": _now(), "last_status": "error",
+                     "last_error": error[:500], "last_job": job}, runs_delta=1)
     record = {"ts": _now(), "trigger": trigger, "job": job, "status": "error",
               "error": error[:500], "response_preview": (response or "")[:500],
               "materials": {"salient": _salient_count(materials)},
