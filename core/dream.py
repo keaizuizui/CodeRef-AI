@@ -527,8 +527,15 @@ def seed(project_path: str, text: str, kind: str = "association",
          source: str = "main_ai") -> dict:
     """主 AI 显式投喂一条显著事件（不读取主 AI 全量对话）。"""
     pp = os.path.abspath(project_path)
-    with _project_lock(pp), _file_lock(pp):
-        return _seed_impl(pp, text, kind, source)
+    if not os.path.isdir(pp):
+        return {"status": "error", "tool": "coderef_dream", "action": "seed",
+                "error": f"项目目录不存在: {pp}"}
+    try:
+        with _project_lock(pp), _file_lock(pp):
+            return _seed_impl(pp, text, kind, source)
+    except OSError as e:   # 锁超时或文件系统错误：结构化返回，不抛给协议层
+        return {"status": "error", "tool": "coderef_dream", "action": "seed",
+                "error": f"dream 锁被占用或不可用，请稍后重试: {e}"}
 
 
 def _seed_impl(pp: str, text: str, kind: str = "association",
@@ -1847,8 +1854,15 @@ def run(project_path: str, trigger: str = "manual", llm=None,
         job: str = DEFAULT_JOB) -> dict:
     """补一轮梦；并发 run 通过 `_save_notes` 的基线合并保留彼此新增。"""
     pp = os.path.abspath(project_path)
-    with _project_lock(pp), _file_lock(pp):
-        return _run_impl(pp, trigger=trigger, llm=llm, job=job)
+    if not os.path.isdir(pp):
+        return {"status": "error", "tool": "coderef_dream", "action": "run",
+                "error": f"项目目录不存在: {pp}"}
+    try:
+        with _project_lock(pp), _file_lock(pp):
+            return _run_impl(pp, trigger=trigger, llm=llm, job=job)
+    except OSError as e:   # 另一进程长跑梦时锁可能超时：结构化返回
+        return {"status": "error", "tool": "coderef_dream", "action": "run",
+                "error": f"dream 锁被占用或不可用，请稍后重试: {e}"}
 
 
 def _run_impl(project_path: str, trigger: str = "manual", llm=None,
