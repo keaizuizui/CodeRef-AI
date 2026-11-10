@@ -595,7 +595,8 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 > 5.21.x 版本线：梦从单一 `pitfall` 扩到「记忆 / 叙事 / 草稿 / 维护」四类 job，并加工具面 profile。
 
-- **5.21.14（Brooks-Lint / CodeRabbit 复审整改）**：`dream.run` 不再整轮持跨进程文件锁（LLM 期间不阻塞 `seed`），改为 seeds / notes / DREAM·state 三段短锁，并在写 state 时按磁盘值合并游标与计数；业务流程画布构造拆为聚合、格子、边、泳道四个纯函数；删除只做委托的 `Server._schema_error`；记分卡原始分项的展示格式化统一由服务端预生成，前端不再自带一套规则。
+- **5.21.14（Brooks-Lint / CodeRabbit 复审整改）**：`dream.run` 不再整轮持锁（LLM 期间不阻塞 `seed` 与并发 `run`），改为 seeds / notes / DREAM·state 三段短锁，`state.json` 统一由 `_save_state` 在锁内按磁盘值合并游标与轮次（SKIP / 失败 / 草稿 / 维护四条路径共用）；业务流程画布构造拆为聚合、格子、边、泳道四个纯函数；删除只做委托的 `Server._schema_error`；记分卡原始分项的展示格式化统一由服务端预生成，前端不再自带一套规则；画布导出再导入不丢模块组、泳道与阶段表头。
+- **验证（5.21.14 发布门槛）**：全量 pytest **453 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；测试方 STRICT 定向复跑全绿（U-63~U-68，另加并发 t01「两线程 run 都保留笔记」、t02「20 线程 × 5 seed 不丢行」、t03「`os.replace` 失败保留旧 notes」）；CodeRabbit 对本批次 3 轮复审最终 **findings=0**；`Coderef-Test\coderef-src` 同步文件 SHA256 一致。
 
 - **5.21.13（测试方登记册 U-63~U-68）**：MCP 入口按 `inputSchema` 统一校验 `required`/`enum`；注入判定与后台化重工具取并集，`architecture` / `change_guard` / `docs` 首调也带 `procedure_card`；增量图谱保留未变依赖方指向变更模块的入边；大文件内容哈希改为全量读取；dream 的 `seed` / `run` 加跨进程文件锁；画布模板补空 favicon，直开画布页不再有 `/favicon.ico` 404。
 
