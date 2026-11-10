@@ -9,7 +9,8 @@
 > 背景：5.21.6 提交后 CodeRabbit 复核 `84febf9..HEAD` 再报 1 条 minor：`_snapshot_drift` 仍只看 mtime+size，`update_analysis` 的增量路径会漏掉「同尺寸改写 + 恢复 mtime」的漂移文件，U-60 在增量路径上未真正闭环。
 
 - **修复**：`_snapshot_drift` 在 mtime+size 相同且快照有 `hash` 时，补算当前内容哈希并比对；缺失 hash 的旧快照保持原语义。
-- **验证**：全量 pytest **437 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0。
+- **文档补齐**：`MCP_SETUP.md` 补上 26 个缺失工具的说明（调度/观测、范围/版本/梦、架构治理、定期体检），并新增「Skill 接入」「工具面 profile」「梦（coderef_dream）」三节；README 当前版本段补 5.21.5–5.21.7 修复摘要与 Skill 接入指引，目录树 Skill 数 4→5。
+- **验证**：全量 pytest **437 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0；`MCP_SETUP` 覆盖 manifest 59/59 个工具名。
 
 ### v5.21.6 — CodeRabbit 复审 paused 轨迹错误回传
 
