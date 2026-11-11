@@ -16,8 +16,9 @@ echo   5. 设计注册表管理（list / add / alias / delete）
 echo   6. 激活治理看板前端（本地服务）
 echo   7. 生成并打开架构画布
 echo   8. 退出
+echo   9. 部署 CodeRef 记忆规则（AGENTS.md / CLAUDE.md）
 echo.
-set /p choice="请选择 [1-8]: "
+set /p choice="请选择 [1-9]: "
 
 if "%choice%"=="1" goto :config_llm
 if "%choice%"=="2" goto :cache_menu
@@ -27,6 +28,7 @@ if "%choice%"=="5" goto :registry_menu
 if "%choice%"=="6" goto :board_menu
 if "%choice%"=="7" goto :canvas_menu
 if "%choice%"=="8" exit /b 0
+if "%choice%"=="9" goto :install_rules
 goto :menu
 
 :: ============================================================
@@ -455,6 +457,28 @@ if "%canvas_file%"=="" (
     echo [OK] 画布已生成: %canvas_file%
     start "" "%canvas_file%"
 )
+echo.
+pause
+goto :menu
+
+:: ============================================================
+:: 9. 部署 CodeRef 记忆规则
+:: ============================================================
+:install_rules
+cls
+echo ============================================
+echo   部署 CodeRef 记忆规则
+echo ============================================
+echo.
+echo 将把「改码前先 recover」写入项目自动加载的规则文件：
+echo   AGENTS.md / CLAUDE.md / .cursor/rules / copilot instructions
+echo 以及用户级规则（Claude / Cursor / Codex，若已安装）。
+echo.
+echo 提示：规则只在编辑器新建对话时加载；已开工的旧会话需粘贴激活语。
+echo.
+set /p rules_project="项目路径（回车=当前目录）: "
+if "%rules_project%"=="" set "rules_project=%CD%"
+python tools\install_rules.py --project "%rules_project%" --include-global
 echo.
 pause
 goto :menu

@@ -856,24 +856,29 @@ BUILTIN_TOOLS: List[Dict] = [
                     "name": "coderef_operation_memory",
                     "description": (
                         "操作记忆层——上下文丢失后恢复（4.8 起；5.12.3 合并 6 工具）。\n"
-                        "action=sync（默认）：初始化/增量同步（识别资源位置 + 可选 LLM 提炼隐性知识，输出 ledger.json + BRAIN.md）；\n"
+                        "action=sync（默认）：扫描环境事实（工具位置/资源/文档）写入梦的 memory_index.json，不调用 LLM；\n"
                         "action=query：按类别检索（decision/convention/pitfall/resource/tool/doc/all）；\n"
                         "action=find：定位资源（name=test/.env/model）；\n"
                         "action=status：健康状态 + 待人工确认项；\n"
                         "action=recover：上下文丢失后一次调用恢复关键记忆（强制 gate，涉及 git/约定类操作先调用，勿满 PATH 找工具）；\n"
-                        "action=export：导出 Markdown 知识库 + 冲突检测（attach 到不支持 MCP 的 LLM 界面）。\n"
+                        "action=export：导出 Markdown 知识库（attach 到不支持 MCP 的 LLM 界面）；\n"
+                        "action=setup_status/setup_install/setup_uninstall：把记忆契约写入 AGENTS.md/CLAUDE.md/.cursor/rules 等编辑器自动读取的规则文件。\n"
                         "供 AI 在上下文被压缩后最小成本拿回『东西在哪儿、过去的规范是什么』。"
                     ),
                     "inputSchema": {"type": "object", "properties": {
                         "project_path": {"type": "string", "description": "目标项目路径"},
-                        "action": {"type": "string", "enum": ["sync", "query", "find", "status", "recover", "export"], "default": "sync"},
+                        "action": {"type": "string", "enum": ["sync", "query", "find", "status", "recover", "export", "setup_status", "setup_install", "setup_upgrade", "setup_uninstall"], "default": "sync"},
                         "mode": {"type": "string", "enum": ["full", "incr"], "default": "full", "description": "action=sync 时增量/全量"},
-                        "with_llm": {"type": "boolean", "default": True, "description": "action=sync 时是否启用 LLM 提炼"},
+                        "with_llm": {"type": "boolean", "default": True, "description": "兼容旧参数：语义记忆已归梦，sync 不再做 LLM 提炼"},
                         "query_type": {"type": "string", "enum": ["all", "resource", "tool", "doc", "decision", "convention", "pitfall"], "default": "all", "description": "action=query 时类别"},
                         "keyword": {"type": "string", "description": "模糊匹配 name/summary/path"},
                         "name": {"type": "string", "description": "资源名或路径片段（find 用，如 'test'、'.env'）"},
                         "limit": {"type": "integer", "description": "返回条数上限（各 action 默认：query=10 / find=5 / recover=8）"},
-                        "output_path": {"type": "string", "description": "导出文件路径（export 用，缺省 <项目>/data/operation_memory/OPERATION_MEMORY.md）"},
+                        "output_path": {"type": "string", "description": "导出文件路径（export 用，缺省 .coderef/dream/MEMORY.md）"},
+                        "targets": {"type": "string", "enum": ["project", "global", "all"], "default": "project", "description": "setup 安装目标（默认只写项目级）"},
+                        "include_global": {"type": "boolean", "default": False, "description": "setup_status/uninstall 是否包含全局规则文件"},
+                        "dry_run": {"type": "boolean", "default": False, "description": "setup_install/uninstall 只预览不落盘"},
+                        "no_create": {"type": "boolean", "default": False, "description": "setup_install 时不新建缺失的 AGENTS.md"},
                         "background": {"type": "boolean", "description": "是否后台执行；未指定时 action=sync 默认后台，recover/query/find/status/export 保持同步（返回 task_id 用 coderef_task_status 查询）"},
                     }, "required": ["project_path"]},
                 },
