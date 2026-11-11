@@ -39,7 +39,7 @@ except Exception:  # pragma: no cover
         _logger.setLevel(logging.INFO)
 logger = _logger
 
-from core.operation_memory import operation_memory
+from core.dream_memory import dream_memory as operation_memory
 
 # recover 时每次取回的条数（与记忆层默认值保持一致）
 RECOVER_LIMIT = 8
