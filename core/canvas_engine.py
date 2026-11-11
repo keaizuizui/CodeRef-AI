@@ -1686,6 +1686,23 @@ function downloadJSON(){
   a.click();
   toast('已导出画布 JSON');
 }
+function bandGeometryError(list, fields, label){
+  // U-69：泳道/阶段表头整段来自导入 JSON，缺几何字段会在 SVG 上写出
+  // undefined/NaN 属性（console 报错但页面不崩）。导入前校验，坏文件直接拒绝。
+  if (list === undefined || list === null) return '';
+  if (!Array.isArray(list)) return label + ' 必须是数组';
+  for (let i = 0; i < list.length; i++){
+    const it = list[i];
+    if (!it || typeof it !== 'object') return label + '[' + i + '] 不是对象';
+    for (const f of fields){
+      if (typeof it[f] !== 'number' || !isFinite(it[f]))
+        return label + '[' + i + '] 缺少数值字段 ' + f;
+    }
+    if (typeof it.name !== 'string' && typeof it.id !== 'string')
+      return label + '[' + i + '] 缺少 name/id';
+  }
+  return '';
+}
 function importJSON(ev){
   const file = ev.target.files[0];
   if (!file) return;
@@ -1693,6 +1710,10 @@ function importJSON(ev){
   reader.onload = () => {
     try {
       const d = JSON.parse(reader.result);
+      // 先校验再改动任何状态：坏 JSON 不进入 DATA，也不污染撤销栈。
+      const bad = bandGeometryError(d.lanes, ['y','h'], 'lanes')
+               || bandGeometryError(d.stage_bands, ['x','w'], 'stage_bands');
+      if (bad){ toast('导入失败：' + bad); return; }
       recordPre();
       if (d.canvas) Object.assign(CANVAS, d.canvas);
       if (d.nodes) nodes = d.nodes.map(n => Object.assign({}, n));
