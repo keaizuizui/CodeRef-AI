@@ -81,8 +81,30 @@ RELIABILITY_GUIDE = (
     "【协作建议】收到 CVE/安全类发现时先人工复核再决定是否修复；超大文件/结构债属改进建议非缺陷。"
 )
 
+# MCP initialize.instructions：客户端初始化时注入模型上下文的全局记忆契约。
+# 这是唯一不依赖用户改文件、也不依赖工具被调用的投递通道。
+MEMORY_CONTRACT = (
+    "CodeRef 记忆契约：开始任何改码/审计/发布前，必须先调用 "
+    "coderef_operation_memory(action=recover)；返回 status != ok 时如实说明，"
+    "不得假装有记忆；梦笔记是假设，引用前先核验 evidence。改码后调用 "
+    "coderef_change_guard。若当前会话在安装/升级前已开始，规则不会热加载，"
+    "请用户粘贴：请先调用 coderef_operation_memory(action=recover)。"
+)
+
 # 逐工具边界提示（追加到 tools/list 对应工具的 description 末尾）
 TOOL_BOUNDARY_NOTES = {
+    "coderef_operation_memory": (
+        "\n\n[记忆契约] 开始改码/审计/发布前先 action=recover；规则文件缺失或过期时"
+        "用 action=setup_status / setup_install 写入 AGENTS.md 等规则文件。"
+    ),
+    "coderef_change_guard": (
+        "\n\n[记忆契约] 改码前必须先 coderef_operation_memory(action=recover)；"
+        "项目已安装记忆契约但未 recover 时会被 G-E 拦截。"
+    ),
+    "coderef_docs": (
+        "\n\n[记忆契约] 生成文档前先 coderef_operation_memory(action=recover)；"
+        "项目已安装记忆契约但未 recover 时会被 G-E 拦截。"
+    ),
     "coderef_scan": (
         "\n\n[可靠性] sca 维度(CVE)有已知误报：会把 poetry 配置 priority='primary' 误当依赖、"
         "把 >= 范围约束当固定版本。CVE 类结果需人工复核，勿直接采信。"
@@ -381,6 +403,50 @@ def _audit_scope(project_path: str) -> dict:
         return {}
 
 
+# 首次调用自动 setup：每个项目每进程只尝试一次，避免重复写文件
+_AUTO_SETUP_DONE = set()
+_AUTO_SETUP_LOCK = threading.Lock()
+# 只读/显式 setup 调用不做自动写入，保持 version 等工具的零副作用契约
+_AUTO_SETUP_SKIP = {
+    "coderef_version", "coderef_scan_list", "coderef_task_status",
+    "coderef_task_cancel", "coderef_docs_read",
+}
+
+
+def _maybe_auto_setup(project_path: str):
+    """项目规则缺失/过期时，首次调用自动写入记忆契约（项目级）。"""
+    if not project_path or os.environ.get("CODEREF_AUTO_SETUP", "1") == "0":
+        return None
+    try:
+        key = os.path.normcase(os.path.abspath(project_path))
+    except Exception:  # noqa: BLE001
+        return None
+    with _AUTO_SETUP_LOCK:
+        if key in _AUTO_SETUP_DONE:
+            return None
+        _AUTO_SETUP_DONE.add(key)
+    try:
+        from core.setup_rules import ensure_project_rule
+        return ensure_project_rule(project_path)
+    except Exception as exc:  # noqa: BLE001 —— 自动 setup 失败不阻断主流程
+        logger.debug(f"[setup] 自动安装规则失败: {exc}")
+        return None
+
+
+def _attach_setup(raw: str, setup: dict) -> str:
+    """把本次自动 setup 结果附加到工具返回的 JSON 里。"""
+    if not setup:
+        return raw
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            data["setup"] = setup
+            return json.dumps(data, ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        pass
+    return raw
+
+
 class Server:
 
     def __init__(self):
@@ -513,7 +579,9 @@ class Server:
         # 强制 gate，不可后台化须先拿 task_id 再轮询）。行为与合并前完全一致。
         self.MERGE_SYNC_ACTIONS = {
             "coderef_memory": {"query"},
-            "coderef_operation_memory": {"query", "find", "status", "recover", "export"},
+            "coderef_operation_memory": {"query", "find", "status", "recover",
+                                          "export", "setup_status", "setup_install",
+                                          "setup_upgrade", "setup_uninstall"},
             "coderef_dream": {"status", "seed", "read"},
         }
 
@@ -557,6 +625,7 @@ class Server:
             exposed = len(filter_tools(self._tools, profile_info["profile"]))
             return {"jsonrpc":"2.0","id":rid,"result":{
                 "protocolVersion":"2024-11-05","capabilities":{"tools":{}},
+                "instructions": MEMORY_CONTRACT,
                 "serverInfo":{
                     "name":"coderef-ai","version":PKG_VERSION,
                     "reliability": RELIABILITY_GUIDE,
@@ -830,6 +899,12 @@ class Server:
         if invalid:
             return json.dumps(invalid, ensure_ascii=False)
         p = a.get("project_path") or ""
+        # 首次调用自动 setup：规则缺失/过期时先把记忆契约写进项目规则文件。
+        # 放在闸门之前：写完后 G-E 才能按“契约已安装”拦截未 recover 的调用。
+        setup_info = None
+        if p and n not in _AUTO_SETUP_SKIP and \
+                not str(a.get("action", "")).startswith("setup_"):
+            setup_info = _maybe_auto_setup(p)
         gate = {}
         audit = None
         if p:
@@ -843,6 +918,8 @@ class Server:
                 gate = evaluate(n, p, a)
                 if gate.get("blocked"):
                     blocked = blocked_result(n, gate.get("blocking") or {})
+                    if setup_info:
+                        blocked["setup"] = setup_info
                     if audit is not None:
                         audit.record(p, {
                             "tool": n,
@@ -859,6 +936,7 @@ class Server:
                 gate = {}
 
         raw = self._run_inner(n, a, progress_cb)
+        raw = _attach_setup(raw, setup_info)
         if not p:
             return raw
         entry = {"tool": n,

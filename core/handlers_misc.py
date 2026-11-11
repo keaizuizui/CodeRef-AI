@@ -232,6 +232,21 @@ def _version(a: dict) -> str:
         out["consumer_contract"] = handshake()
     except Exception as e:  # noqa: BLE001
         out["consumer_contract"] = {"error": str(e)}
+    # 记忆契约：告诉调用方“改码前必须先 recover”，并报告规则文件接入状态
+    try:
+        from core import setup_rules
+        st = setup_rules.status(pp, include_global=True) if pp else {}
+        out["memory_rule"] = {
+            "required_call": "coderef_operation_memory(action=recover)",
+            "activation_line": setup_rules.activation_line(),
+            "integration_version": st.get("integration_version", 0),
+            "needs_setup": st.get("needs_setup", True),
+            "dream_never_ran": st.get("dream_never_ran", False),
+            "setup_call": "coderef_operation_memory(action=setup_install)",
+            "note": "首次调用会自动写项目级规则；已开工的旧会话请粘贴 activation_line",
+        }
+    except Exception as e:  # noqa: BLE001
+        out["memory_rule"] = {"error": str(e)}
     return json.dumps(out, ensure_ascii=False)
 
 
