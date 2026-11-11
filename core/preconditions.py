@@ -59,6 +59,9 @@ GATE_C_TOOLS = frozenset({
 # G-D：依赖审计产物新鲜度的健康解读
 GATE_D_TOOLS = frozenset({"coderef_interpret"})
 
+# G-E：记忆契约已安装，但本次会话尚未 recover（硬闸门，默认 block）
+GATE_E_TOOLS = frozenset({"coderef_audit", "coderef_change_guard", "coderef_docs"})
+
 GATE_META = {
     "G-A": {"title": "未恢复操作记忆",
             "actions": ["coderef_operation_memory(action=recover)"]},
@@ -68,24 +71,43 @@ GATE_META = {
             "actions": ["coderef_target_arch_set"]},
     "G-D": {"title": "审计产物超龄",
             "actions": ["coderef_audit"]},
+    "G-E": {"title": "记忆契约已安装但未恢复",
+            "actions": ["coderef_operation_memory(action=recover)"]},
 }
 
 
 def _mode_for(project_path: str, gate_id: str) -> str:
-    """闸门生效模式：off / warn / block（默认 follow 全局 preconditions.mode）。"""
+    """闸门生效模式：off / warn / block（G-E 默认 block，其余跟随全局）。"""
     try:
         from core.freshness_guard import guard_config
         cfg = guard_config(project_path).get("preconditions") or {}
     except Exception:  # noqa: BLE001
-        return "warn"
+        return "block" if gate_id == "G-E" else "warn"
     gates = cfg.get("gates") if isinstance(cfg.get("gates"), dict) else {}
-    mode = str(gates.get(gate_id) or cfg.get("mode") or "warn").lower()
+    if gate_id in gates:
+        mode = str(gates.get(gate_id) or "").lower()
+    elif gate_id == "G-E":
+        # G-E 默认硬拦；只有按闸门显式配置才能改成 warn/off，避免被全局 mode 软化
+        mode = "block"
+    elif cfg.get("mode"):
+        mode = str(cfg.get("mode")).lower()
+    else:
+        mode = "warn"
     return mode if mode in ("off", "warn", "block") else "warn"
 
 
 def _fact_ok(project_path: str, key: str) -> bool:
     from core.session_guard import get_fact
     return get_fact(project_path, key, max_age_hours=24) is not None
+
+
+def _memory_rule_installed(project_path: str) -> bool:
+    """项目是否已安装 CodeRef 记忆契约（决定 G-E 是否启用）。"""
+    try:
+        from core.setup_rules import memory_rule_installed
+        return memory_rule_installed(project_path)
+    except Exception:  # noqa: BLE001 —— 规则探测失败不启用硬闸门
+        return False
 
 
 def _hit(gate_id: str, reason: str) -> dict:
@@ -108,7 +130,8 @@ def evaluate(tool: str, project_path: str, args: Optional[dict] = None) -> dict:
     if not tool or not project_path or tool in READONLY_TOOLS:
         return result
     applicable = (tool in GATE_A_TOOLS or tool in GATE_B_TOOLS
-                  or tool in GATE_C_TOOLS or tool in GATE_D_TOOLS)
+                  or tool in GATE_C_TOOLS or tool in GATE_D_TOOLS
+                  or tool in GATE_E_TOOLS)
     if not applicable:
         return result
     result["checked"] = True
@@ -118,6 +141,13 @@ def evaluate(tool: str, project_path: str, args: Optional[dict] = None) -> dict:
         if tool in GATE_A_TOOLS and not _fact_ok(project_path, "memory_recovered_at"):
             hits.append(_hit(
                 "G-A", "本次会话尚未恢复操作记忆，先 recover 再产出结论"))
+
+        # G-E：只对「已安装记忆契约」的项目硬拦，未接入的旧项目保持原有 warn 行为
+        if tool in GATE_E_TOOLS and _memory_rule_installed(project_path) \
+                and not _fact_ok(project_path, "memory_recovered_at"):
+            hits.append(_hit(
+                "G-E", "记忆契约已安装，但本次会话尚未 recover；先调用 "
+                       "coderef_operation_memory(action=recover) 再继续"))
 
         if tool in GATE_B_TOOLS:
             from core.freshness_guard import query_staleness
