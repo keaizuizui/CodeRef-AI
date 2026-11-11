@@ -100,14 +100,27 @@ def _collect_target_files(project_path: str) -> List[str]:
     SELF_EXEMPT_FILES 中的检测器自身文件（规则文本自命中豁免）。
     """
     scan_files: List[str] = []
+    # whitelist 的 dir 条目（如 _refactor_backup）必须与审计/图谱同口径排除：
+    # 旧实现只查 EXCLUDE_DIRS 固定名单，导致备份目录仍进入 Agent 安全扫描，
+    # 进而让 OWASP 的 LLM 分类把备份代码计成当前项目风险（外部实测 58%）。
+    try:
+        from core.pr_whitelist import whitelist_exclude_dirs, path_hits_excluded_dir
+        excl_dirs = whitelist_exclude_dirs(project_path)
+    except Exception:  # noqa: BLE001 —— 白名单读取失败不阻断扫描
+        excl_dirs, path_hits_excluded_dir = [], lambda *_: False
     for root, dirs, files in os.walk(project_path):
         dirs[:] = [d for d in dirs if not _is_excluded_dir(root, d)]
         for f in files:
             if f in SELF_EXEMPT_FILES:
                 continue
             ext = os.path.splitext(f)[1].lower()
-            if ext == ".py" or ext in CROSSLANG_GROUPS:
-                scan_files.append(os.path.join(root, f))
+            if ext != ".py" and ext not in CROSSLANG_GROUPS:
+                continue
+            fpath = os.path.join(root, f)
+            if path_hits_excluded_dir(
+                    os.path.relpath(fpath, project_path), excl_dirs):
+                continue
+            scan_files.append(fpath)
     return scan_files
 
 
