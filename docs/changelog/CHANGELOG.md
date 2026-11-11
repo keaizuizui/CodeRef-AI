@@ -14,9 +14,10 @@
 - **D-5 定标路径前缀假阴性**：`arch_gap_analyzer._module_exists` 对含 `/` 的模块声明增加唯一后缀匹配（与 `_match_module_ids` 对齐）；多候选仍判缺失，避免跨子工程误配。旧定标按业务目录书写，需按当前结构重建后复跑。
 - **C10 `coderef_docs` 15 分钟零产物**：模块文档改为 `as_completed` 逐篇落盘，先写盘再回报进度（取消检查点在两篇之间生效），`shutdown(wait=False, cancel_futures=True)` 不再等待剩余 LLM；已生成文档不因后续模块慢/失败而丢失，`_write_doc` 补建输出目录。
 - **U-69 画布导入畸形 JSON**：`importJSON` 在改动任何状态前校验 `lanes[].y/h` 与 `stage_bands[].x/w`，缺字段/非数值/非数组直接拒绝并 toast 具体字段（如 `lanes[0] 缺少数值字段 y`），不再让 `undefined` / `NaN` 写进 SVG 属性；正常导出文件不受影响。
+- **文档治理（AGENTS 单一真源）**：确认原 `CODEREF.md` 设计失败——它与 `AGENTS.md` 同被 `.gitignore` 排除、只能靠 AI 主动跳转、且与 `procedure-card` 三处双写漂移（CodeRabbit 路径、测试用例归属、版本源互相矛盾）。本轮把有效红线压缩进 `AGENTS.md` 并删除 `CODEREF.md`（备份留在 `交接/`）；修正 CodeRabbit 为 Windows 原生路径（以 `recover` 的 `env_tools` 为准）、测试用例归属（`独立测试\tests`，不再按总数对齐）、版本真源（`core/version.py`）、push 闸门（测试回执 + 用户确认）；`procedure_hint` 不再指向已删除文件。
 - **低危**：`arch_view.html` 补空 favicon（直开页不再 404）；报告置信度表补口径说明（本表为降噪/去重前命中数，API `summary` 与评估台为去重后，两者不等属正常）。
 - **未修项（诚实记录）**：定标过期属消费方输入，工具侧只在 `arch_gap` 结果提示需按当前目录结构重建；评估台「清空」缺二次确认属外部项目自身前端待办，不计入工具缺陷。
-- **验证**：全量 pytest **464 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.15）；`change_guard` 无退化。
+- **验证**：全量 pytest **466 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.15）；`change_guard` 无退化。
 
 ### v5.21.14 — 复审整改：锁半径、构造拆分与展示口径
 

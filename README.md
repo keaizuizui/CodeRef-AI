@@ -595,8 +595,8 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 > 5.21.x 版本线：梦从单一 `pitfall` 扩到「记忆 / 叙事 / 草稿 / 维护」四类 job，并加工具面 profile。
 
-- **5.21.15（外部第五轮反馈）**：建图加进程内 + 跨进程锁串行化，`query(stats)` 暴露 `calls` / `built_by` / `built_mode` / `ast_files`，同一代码两次建图不再因并发覆盖出现 CALLS 漂移；`verify_findings` 以 `file` 为符号匹配第一约束，文件外同名只计 `same_name_elsewhere` 不判确证；OWASP/Agent 安全扫描与审计同口径排除 whitelist 备份目录；`arch_gap` 支持唯一后缀匹配减少前缀假阴性；`coderef_docs` 模块文档逐篇落盘，取消可在两篇之间生效；画布导入校验泳道/阶段表头几何字段，畸形 JSON 直接拒绝并提示；画布页补空 favicon，报告置信度表补去重口径说明。
-- **验证（5.21.15 发布门槛）**：全量 pytest **464 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；`Coderef-Test\coderef-src` 同步文件 SHA256 一致。
+- **5.21.15（外部第五轮反馈）**：建图加进程内 + 跨进程锁串行化，`query(stats)` 暴露 `calls` / `built_by` / `built_mode` / `ast_files`，同一代码两次建图不再因并发覆盖出现 CALLS 漂移；`verify_findings` 以 `file` 为符号匹配第一约束，文件外同名只计 `same_name_elsewhere` 不判确证；OWASP/Agent 安全扫描与审计同口径排除 whitelist 备份目录；`arch_gap` 支持唯一后缀匹配减少前缀假阴性；`coderef_docs` 模块文档逐篇落盘，取消可在两篇之间生效；画布导入校验泳道/阶段表头几何字段，畸形 JSON 直接拒绝并提示；画布页补空 favicon，报告置信度表补去重口径说明；`AGENTS.md` 收编 `CODEREF.md` 有效红线成为唯一必读入口，并修正 CodeRabbit 路径、测试归属与 push 闸门。
+- **验证（5.21.15 发布门槛）**：全量 pytest **466 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；`Coderef-Test\coderef-src` 同步文件 SHA256 一致。
 
 - **5.21.14（Brooks-Lint / CodeRabbit 复审整改）**：`dream.run` 不再整轮持锁（LLM 期间不阻塞 `seed` 与并发 `run`），改为 seeds / notes / DREAM·state 三段短锁，`state.json` 统一由 `_save_state` 在锁内按磁盘值合并游标与轮次（SKIP / 失败 / 草稿 / 维护四条路径共用）；业务流程画布构造拆为聚合、格子、边、泳道四个纯函数；删除只做委托的 `Server._schema_error`；记分卡原始分项的展示格式化统一由服务端预生成，前端不再自带一套规则；画布导出再导入不丢模块组、泳道与阶段表头。
 - **验证（5.21.14 发布门槛）**：全量 pytest **453 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；测试方 STRICT 定向复跑全绿（U-63~U-68，另加并发 t01「两线程 run 都保留笔记」、t02「20 线程 × 5 seed 不丢行」、t03「`os.replace` 失败保留旧 notes」）；CodeRabbit 对本批次 3 轮复审最终 **findings=0**；`Coderef-Test\coderef-src` 同步文件 SHA256 一致。
@@ -607,7 +607,7 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 - **草稿链（P2）**：`review_draft/refactor_draft/asset_candidate/noise_proposal` 只写 `drafts/`，必须用户确认后走 `next_tools` 的确定性工具。
 - **P3 维护**：`false_memory_check` 确定性复核证据引用（audit 窗口外如实记 `unknown`），`eval_replay` 指标落盘 `evals/`。
 - **工具面与梦协议**：`CODEREF_TOOL_PROFILE=lite|full` 只控制 `tools/list` 暴露面；`DREAM.md` 固定六节。
-- **本版修复（5.21.5–5.21.12）**：测试方登记册 U-52–U-62 共 11 条边界缺陷（证据降级、并发补梦、BOM、缓存内容指纹等）；CodeRabbit 复审 minor（paused 轨迹错误回传、增量漂移补内容哈希）；5.21.8 修复评估台画布 iframe 404 与 `coderef_query(stats)` 图谱新鲜度自相矛盾；5.21.9–5.21.11 修复画布首次不自动适配、业务流程单元格过高、本地服务误显示离线、表头竖排，并让 `coderef_report` 自动跑产品与 UX 评估；5.21.12 让图谱新鲜度绕过 60 秒盘点缓存实时纠偏，统一 Wiki 口径、统计口径与记分卡 720/736 差异说明；修复画布泳道/连线被 SVG 尺寸裁剪、从未显示的根因，把业务流程画布改为 actor×stage 汇总视图（307 模块 → 17 个非空格子 + 42 条聚合边），技术分区图改为可下钻的模块组卡片；同时把发布/审计/CodeRabbit 入口卡放进 AGENTS.md 并随 recover 与首次重工具注入，解决 CODEREF.md 不被默认加载的断链。
+- **本版修复（5.21.5–5.21.12）**：测试方登记册 U-52–U-62 共 11 条边界缺陷（证据降级、并发补梦、BOM、缓存内容指纹等）；CodeRabbit 复审 minor（paused 轨迹错误回传、增量漂移补内容哈希）；5.21.8 修复评估台画布 iframe 404 与 `coderef_query(stats)` 图谱新鲜度自相矛盾；5.21.9–5.21.11 修复画布首次不自动适配、业务流程单元格过高、本地服务误显示离线、表头竖排，并让 `coderef_report` 自动跑产品与 UX 评估；5.21.12 让图谱新鲜度绕过 60 秒盘点缓存实时纠偏，统一 Wiki 口径、统计口径与记分卡 720/736 差异说明；修复画布泳道/连线被 SVG 尺寸裁剪、从未显示的根因，把业务流程画布改为 actor×stage 汇总视图（307 模块 → 17 个非空格子 + 42 条聚合边），技术分区图改为可下钻的模块组卡片；同时把发布/审计/CodeRabbit 入口卡放进 AGENTS.md 并随 recover 与首次重工具注入，解决入口卡不被默认加载的断链。
 - 设计真源见 [docs/dream.md](docs/dream.md) / [docs/dream-jobs.md](docs/dream-jobs.md)；完整逐版本记录见 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
 
 #### v5.18.13 — 结论信封、CALLS 作用域与陈旧输入防呆

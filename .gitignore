@@ -62,7 +62,6 @@ core/mcp_server.py.bak
 # ─── 内部交接/设计/规程文件（已从远端移出，本地保留，不再公开）───
 交接/
 HANDOFF_编程AI.md
-CODEREF.md
 AGENTS.md
 docs/operation-memory-design/
 docs/5.*-plan.md

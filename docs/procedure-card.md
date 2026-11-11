@@ -12,9 +12,9 @@
 
 下面以 CodeRef 自己为例，复制后请替换为你项目的流程：
 
-- **发布 SOP**：`pyflakes` 0 → `pytest` 全绿 → `python tools/check_version.py` EXIT=0 → 同步测试副本（SHA256 一致）→ 报告写入 `交接/响应册.md` → 与维护者确认后 push。
+- **发布 SOP**：`pyflakes` 0 → `pytest` 全绿 → `python tools/check_version.py` EXIT=0 → 同步测试副本（SHA256 一致）→ 测试方回归/运行态通过并给"可 push"回执 → 报告写入 `交接/响应册.md` → 与维护者确认后 push。
 - **审计全流程**：`recover` → `audit` → `architecture` → `report` → 产品 / UX 评估 → `change_guard` → lint / 测试 / 版本检查 → 同步副本 → 响应册。
-- **CodeRabbit**：在 WSL `~/.local/bin/coderabbit`（用 `coderabbit --version` 验证）；Windows `where coderabbit` 找不到不代表没装，实际位置以 `recover` 返回的 `env_tools` 为准。
+- **CodeRabbit**：Windows 原生版，安装后通常在 `%LOCALAPPDATA%\Programs\coderabbit\coderabbit.exe`；不在 PATH 时用完整路径。`where` 找不到不代表没装，实际位置以 `recover` 返回的 `env_tools` 为准。
 - **硬规则**：涉及发布 / 审计 / CodeRabbit，先 `recover` 拿 `procedure_card`；未读对应章节不得动手，不得凭上下文记忆执行。
 - **诚实边界**：`missing` / `outside` / `SKIP` / `stale` / `unknown` 是事实不是故障，不得美化或吞掉；确定性静态分析优先，LLM 缺 Key 硬阻断不编造。
 
