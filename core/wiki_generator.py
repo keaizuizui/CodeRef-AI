@@ -2148,33 +2148,45 @@ class _WikiDocMixin:
             plan.append(dict(name=mod.name, badge_md=badge_md, anchor_md=anchor_md,
                              front_matter=front_matter, prompt=(system_prompt, user_prompt)))
 
-        # 2) 并发调用 LLM（网络 IO 并行）；每 worker 只调 self._llm_ask，不写共享列表
+        # 2) 并发调用 LLM（网络 IO 并行）；每完成一个立即落盘。
+        # 旧实现把所有结果攒到全部完成后再写，外部实测「15 分钟 0 文件落盘」：
+        # 大项目 300+ 模块时，取消信号也要等整批 LLM 结束才生效。改为
+        # as_completed 逐篇写盘 + 逐篇回报进度，取消可在两篇之间立即收尾，
+        # 且已生成的文档不会因后续模块慢/失败而全部丢失。
         def _gen(item):
             sp, up = item["prompt"]
             return item["name"], self._llm_ask(sp, up)
 
-        results = {}
-        if plan:
-            with ThreadPoolExecutor(max_workers=wmax) as ex:
-                futs = [ex.submit(_gen, it) for it in plan]
-                for fut in as_completed(futs):
-                    name, content = fut.result()
-                    results[name] = content
-
-        # 3) 主线程按原顺序注入徽章/锚定并落盘（写文件/文档列表线程安全）
-        for item in plan:
-            name = item["name"]
-            #  保留逐模块进度/取消检查点：落盘前同样回报，后台可在此收尾
-            if progress_cb:
-                progress_cb("wiki生成", 3, 3, f"写入模块文档: {name}")
-            content = results.get(name, "")
-            # 在 LLM 生成内容前注入徽章与证据锚定（均为铁证，不经过 LLM 幻觉）
-            if item["badge_md"] and content:
-                content = item["badge_md"] + "\n" + content
-            if item["anchor_md"] and content:
-                content = item["anchor_md"] + "\n" + content
-            self._emit(docs, modules_dir, f"{name}.md", content,
-                       front_matter=item["front_matter"])
+        ex = ThreadPoolExecutor(max_workers=wmax) if plan else None
+        try:
+            if ex is not None:
+                fut_map = {ex.submit(_gen, it): it for it in plan}
+                done = 0
+                for fut in as_completed(fut_map):
+                    item = fut_map[fut]
+                    name = item["name"]
+                    try:
+                        _, content = fut.result()
+                    except Exception as exc:  # noqa: BLE001 —— 单篇失败不拖垮整批
+                        content = ""
+                        self._last_llm_error = f"{name}: {exc}"
+                    done += 1
+                    if item["badge_md"] and content:
+                        content = item["badge_md"] + "\n" + content
+                    if item["anchor_md"] and content:
+                        content = item["anchor_md"] + "\n" + content
+                    # 先落盘再回报进度：progress_cb 是取消检查点，抛异常时本批
+                    # 已完成的文档必须已在磁盘上（外部反馈 C10）。
+                    self._emit(docs, modules_dir, f"{name}.md", content,
+                               front_matter=item["front_matter"])
+                    if progress_cb:
+                        progress_cb(
+                            "wiki生成", 3, 3,
+                            f"写入模块文档: {name}（{done}/{len(plan)}）")
+        finally:
+            if ex is not None:
+                # 取消/异常时不再等待剩余 LLM 调用；已写文档保留
+                ex.shutdown(wait=False, cancel_futures=True)
 
         return docs
 
@@ -2796,6 +2808,13 @@ class _WikiEmitMixin:
         if os.path.basename(filename) == WIKI_INSTRUCTIONS_FILE:
             return ""
         filepath = os.path.join(output_dir, filename)
+        # 逐篇落盘时目录可能尚未创建（旧实现依赖 generate() 预先建目录）；
+        # 缺目录会让整批文档在写第一句时就崩，这里统一兜底建目录。
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+        except OSError as exc:  # noqa: BLE001 —— 建目录失败交由写文件如实暴露
+            self._last_llm_error = f"创建文档目录失败 {output_dir}: {exc}"
+            return ""
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
         return filepath
