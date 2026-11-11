@@ -4,6 +4,18 @@
 
 ---
 
+### v5.21.16 — 记忆投递层：把「先 recover」送到编程 AI 眼前
+
+> 背景：外部实测确认，编程 AI 只在新建对话时读取 `AGENTS.md` / `CLAUDE.md`，MCP 服务端无法主动推送；记忆内容再全，不落规则文件就送不到。本版补三层投递与一条硬闸门。
+
+- **零安装层（不依赖用户改文件）**：MCP `initialize.result.instructions` 注入记忆契约；`coderef_operation_memory` / `change_guard` / `audit` / `docs` 的工具描述追加前置要求；`coderef_version` 返回 `memory_rule`（required_call / activation_line / needs_setup / setup_call）。
+- **安装器**：新增 `core/setup_rules.py` 与 `tools/install_rules.py`，在 `AGENTS.md` / `CLAUDE.md` / `.cursor/rules/coderef.mdc` / `.github/copilot-instructions.md` 维护 `<!-- CODEREF-MEMORY-RULE:START -->` 标记块；写前备份、保留手写内容、支持 `--status/--uninstall/--dry-run`。`setup.bat` 新增菜单 9。
+- **首次调用自动 setup**：真实工程（有 `.git` / 依赖清单 / 源码文件）首次调用带 `project_path` 的工具时，自动写入项目级规则；空目录/测试目录不写；`CODEREF_AUTO_SETUP=0` 可关闭。返回体带 `setup`（写了哪些文件、激活语、是否需新会话）。
+- **G-E 硬闸门**：项目已安装记忆契约但本次会话未 `recover` 时，`change_guard` / `audit` / `docs` 返回 `blocked`（`gate=G-E` + `owner_actions`），必须补 `coderef_operation_memory(action=recover)`；未接入规则的旧项目保持原 warn 行为。默认 block，可按闸门显式配置。
+- **数据层收口**：新增 `core/dream_memory.py`，`coderef_operation_memory` 的 sync/query/find/status/recover/export 统一走梦（环境索引 `memory_index.json` + 语义笔记），`sync` 不再做 LLM 提炼；`memory_digest` 仍 dream-first。梦内 4 条 WSL/CODEREF 过期联想已标 `rejected`，并补 2 条新 seed（备份在 `交接/dream_data_bak_mem_merge_*`）。
+- **生效时机（诚实边界）**：新对话自动加载规则；已开工对话不热加载，需粘贴激活语 `请先调用 coderef_operation_memory(action=recover)`。服务端无法主动推送，这是 MCP 协议边界。
+- **验证**：全量 pytest **478 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.16）；`change_guard` 无退化；G-E 实测：未 recover 时 blocked（G-A + G-E），recover 后放行；安装器幂等/卸载/手写内容保留均有回归。
+
 ### v5.21.15 — 外部第五轮反馈：建图确定性、file 限定核验、扫描口径与 Wiki 落盘
 
 > 背景：外部独立项目 AI 对 5.21.14 的第五轮实测报 5 条（D-1~D-5）+ 1 条低危。逐条归因：4 条工具缺陷已修，1 条属消费方定标过期（工具侧补提示），口径类已在报告与返回中写清。
