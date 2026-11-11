@@ -278,6 +278,9 @@ def _fmt(r: PipeResult, title: str, t0: float = 0.0) -> str:
         "|----------|------------|---------|---------|",
         f"| {_weighted(h)} | {_weighted(m)} | {_weighted(l)} | {_weighted(adv)} |",
         "",
+        "> 口径：本表是**降噪/去重前**的命中数（按 count 加权）；API `summary` 与评估台"
+        "使用**去重后**的 findings 数，两者不相等属正常，抑制明细见下方降噪统计。",
+        "",
     ]
     if r.scope_text:
         lines.append(f"> 📋 审计范围: {r.scope_text}")

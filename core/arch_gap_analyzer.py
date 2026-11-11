@@ -221,9 +221,12 @@ def _module_exists(project_path: str, spec: str, nodes: Dict[str, dict],
     if by_rel.get(ns):
         return True
     # 与 _match_module_ids 对齐：含路径分隔符的 spec 不做 basename 兜底，
-    # 避免 domain/models 被误判为已存在的其它 …/models 而掩盖职责缺失
+    # 避免 domain/models 被误判为已存在的其它 …/models 而掩盖职责缺失；
+    # 但允许唯一后缀匹配——多工程仓库的图谱模块常带顶层目录
+    # （chonggou/入口与启动/web_gui），target_arch 按业务目录写时
+    # 不能全判缺失（外部实测 41 条中 3 条是这样假阴性）。
     if "/" in ns:
-        return False
+        return len([k for k in by_rel if k.endswith("/" + ns)]) == 1
     return bool(by_base.get(ns))
 
 
