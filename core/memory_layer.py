@@ -381,7 +381,8 @@ class MemoryLayer:
 
     @staticmethod
     def _update_knowledge_graph(project_path: str, analysis,
-                                ast_results, incremental: dict = None) -> dict:
+                                ast_results, incremental: dict = None,
+                                builder: str = "memory_sync") -> dict:
         """更新知识图谱（结构记忆）。incremental 非空时走文件级增量（5.19.1）。"""
         try:
             from core.code_knowledge_graph import CodeKnowledgeGraph
@@ -400,7 +401,7 @@ class MemoryLayer:
             except Exception:  # pragma: no cover
                 pass
             build_kwargs = {"analysis": analysis, "ast_results": ast_results,
-                            "exclude_dirs": exclude_dirs}
+                            "exclude_dirs": exclude_dirs, "builder": builder}
             if incremental is not None:
                 build_kwargs["incremental"] = incremental
             kg_stats = kg.build(**build_kwargs)
@@ -488,12 +489,14 @@ class MemoryLayer:
         except Exception as e:
             logger.warning(f"[MemoryLayer] 记忆状态写入失败: {e}")
 
-    def sync(self, project_path: str, mode: str = "full") -> dict:
+    def sync(self, project_path: str, mode: str = "full",
+             builder: str = "") -> dict:
         """全量或增量同步项目到代码记忆层。
 
         Args:
             project_path: 项目绝对路径
             mode: "full" 全量重建；"incr" 增量（基于 mtime+size 快照）
+            builder: 建图溯源标签（写入图谱 meta.built_by），留空按模式生成
 
         Returns:
             {"status", "mode", "synced_files", "changed_files", "unchanged_files",
@@ -558,7 +561,9 @@ class MemoryLayer:
             kg_stats = self._kg_counts(project_path)  # 无变更：不重建，只报现状
         else:
             kg_stats = self._update_knowledge_graph(project_path, analysis,
-                                                    ast_results, incremental)
+                                                    ast_results, incremental,
+                                                    builder=builder or
+                                                    f"memory_sync_{mode}")
         # 图谱更新后清空新鲜度缓存，让紧随其后的 query 立刻看到新图（5.19.1）
         try:
             from core.freshness_guard import invalidate

@@ -311,7 +311,7 @@ def _build_kg(project_path: str, analysis) -> dict:
         kg = build_knowledge_graph(
             project_path, analysis=analysis,
             ast_results=ast_results, gitnexus_dir=gx,
-            exclude_dirs=exclude_dirs)
+            exclude_dirs=exclude_dirs, builder="audit_pipeline")
         return kg.get_stats()
     except Exception as e:
         return {"error": str(e)}

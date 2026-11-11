@@ -55,7 +55,8 @@ def _memory(a: dict) -> str:
     pp = a["project_path"]
     act = a.get("action", "sync")
     if act == "sync":
-        r = memory_layer.sync(pp, mode=a.get("mode", "full"))
+        r = memory_layer.sync(pp, mode=a.get("mode", "full"),
+                              builder="mcp_memory_sync")
     elif act == "query":
         qt = a.get("query_type", "semantic")
         kwargs = {k: v for k, v in a.items()

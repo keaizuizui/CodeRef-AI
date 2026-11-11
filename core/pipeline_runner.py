@@ -663,7 +663,8 @@ class Pipe:
             from core.memory_layer import memory_layer
             strata = getattr(r, "audit_strategy", "full") or "full"
             memory_layer.sync(project_path,
-                              mode="incr" if strata == "incr" else "full")
+                              mode="incr" if strata == "incr" else "full",
+                              builder="audit_sync")
         except Exception as e:
             r.errors.append(f"memory_sync: {e}")
 
