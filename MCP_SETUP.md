@@ -214,6 +214,45 @@ MCP 只负责暴露工具，**不负责告诉 AI 先调哪个**。`skills/` 下�
 
 ---
 
+## 记忆规则部署（安装后必做）
+
+MCP 服务端不能主动呼叫编程 AI；AI 只在**新建对话时**读取编辑器规则文件。所以安装后要把一条短规则写进这些文件，否则 `recover` 返回得再全也不会被调用。
+
+**一次性安装**（任选其一）：
+
+```bash
+# 项目级 + 用户级（推荐）
+python tools/install_rules.py --project <项目路径> --include-global
+
+# 只写项目级
+python tools/install_rules.py --project <项目路径>
+
+# 查看 / 卸载 / 预览
+python tools/install_rules.py --project <项目路径> --status
+python tools/install_rules.py --project <项目路径> --uninstall
+python tools/install_rules.py --project <项目路径> --dry-run
+```
+
+Windows 用户也可以运行 `setup.bat` → 菜单 9。
+
+写入位置（只改 marker 块，不动手写内容）：
+
+| 范围 | 文件 |
+|---|---|
+| 项目级 | `AGENTS.md`、`CLAUDE.md`、`.cursor/rules/coderef.mdc`、`.github/copilot-instructions.md`（后三者仅在已存在时更新） |
+| 用户级 | `~/.claude/CLAUDE.md`、`~/.cursor/rules/coderef.mdc`、`~/.codex/AGENTS.md`（仅目录已存在时） |
+
+规则内容只有一句核心要求：**改码 / 审计 / 发布前先调用 `coderef_operation_memory(action=recover)`**；改码后调用 `coderef_change_guard`。
+
+**生效时机**：
+
+- 新对话：规则自动加载，AI 会先 `recover`。
+- 已开工的旧对话：规则不会热加载，粘贴激活语：`请先调用 coderef_operation_memory(action=recover)，之后每次改码前都先调用。`
+- 项目已安装规则但未 `recover` 就调 `change_guard` / `audit` / `docs`：返回 `blocked`（G-E），必须先补 `recover`。
+- 首次调用会自动给真实工程写项目级规则（`CODEREF_AUTO_SETUP=0` 可关闭）；空目录/测试目录不会写。
+
+---
+
 ## 工具面 profile（可选）
 
 `CODEREF_TOOL_PROFILE` 控制 `tools/list` 暴露多少工具，**不删除 handler**：被隐藏的工具仍可按名直接调用。
@@ -495,7 +534,7 @@ print(client.models.list())
 ```
 AI 编程助手 (Trae / Claude Desktop / Cursor)
    │
-   └── coderef-ai MCP Server (v5.21.15, 59 个工具)
+   └── coderef-ai MCP Server (v5.21.16, 59 个工具)
           │
           ├── coderef_audit ─── 11 检测器管线
           │      ├── 治理审计 (governance_audit)
