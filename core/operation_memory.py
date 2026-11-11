@@ -946,10 +946,10 @@ def _mask_fenced(text: str) -> str:
 def _read_procedure_card(project_path: str, max_chars: int = 1600) -> Optional[dict]:
     """读取规程入口卡：项目 AGENTS.md → 项目公开卡 → CodeRef 自带公开卡。
 
-    CODEREF.md / AGENTS.md 不会被编程 AI 默认加载，且二者在 CodeRef 仓库按 5.4
-    策略不公开；recover 是强制第一步，因此把入口卡随 recover 一起返回。
-    外部项目既没有 AGENTS.md、也没有自己的 docs/procedure-card.md 时，回退到
-    CodeRef 安装目录自带的 docs/procedure-card.md，避免返回空卡片。
+    AGENTS.md 的「规程索引」不保证被模型主动展开；recover 是强制第一步，
+    因此把入口卡随 recover 一起返回。外部项目既没有 AGENTS.md、也没有自己的
+    docs/procedure-card.md 时，回退到 CodeRef 安装目录自带的
+    docs/procedure-card.md，避免返回空卡片。
     只有专用的 procedure-card 文件允许整文件兜底；通用 AGENTS.md 没有规程
     索引时必须跳过，不能把项目规则误当成规程卡。
     """
@@ -1366,7 +1366,8 @@ class OperationMemory:
             "pending_items": pending_items,
             "pending_counts": pending_counts,
             "procedure_card": _read_procedure_card(project_path),
-            "procedure_hint": ("procedure_card 是自动注入的入口卡；完整步骤见 CODEREF.md，"
+            "procedure_hint": ("procedure_card 是自动注入的入口卡；开发侧完整规程见项目根 "
+                               "AGENTS.md（外部项目见 docs/procedure-card.md）。"
                                "不得只凭卡片执行，也不得凭上下文记忆执行。"),
             "hint": ("涉及 git / push / CodeRabbit / Release 等工具或约定类操作时，"
                      "请优先采用本结果中的 env_tools 工具定位与 conventions / pitfalls 约定，"
