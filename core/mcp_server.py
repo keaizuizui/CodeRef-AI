@@ -1294,7 +1294,7 @@ class Server:
             # block 档：同步刷新图谱后重查，调用方拿到的就是新图结果
             if info.get("stale") and info.get("mode") == "block":
                 from core.memory_layer import memory_layer
-                memory_layer.sync(pp, mode="incr")
+                memory_layer.sync(pp, mode="incr", builder="query_refresh")
                 raw = _query(a)
                 return fg.annotate_query_result(raw, pp, refreshed=True)
             tid = self._start_sync_task(pp) if info.get("stale") else ""

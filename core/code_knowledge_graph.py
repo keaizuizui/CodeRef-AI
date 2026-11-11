@@ -14,11 +14,78 @@ SQLite 存储：节点（函数/类/模块/配置/常量/路由）+ 边（CALLS/
 """
 
 import os, json, hashlib, sqlite3, csv, time, re
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 
 from loguru import logger
+
+# ─── 建图串行化 ───────────────────────────────────────────────
+# 审计、memory sync、query 的新鲜度刷新、flow_verify 的自动补建可能在同一
+# 项目上并发触发建图。旧实现无互斥：两个 build 各自 _clear + 分批写入，
+# 后提交者可能以「部分 AST / 部分输入」覆盖先完成的全量结果，表现为
+# 「同一份代码两次查询 CALLS 差 70、节点数却不变」（外部实测 5.21.14）。
+# 这里用「进程内锁 + 跨进程文件锁」把同一 DB 的 build 串成队列；等待者
+# 拿到锁后重新读取现状再建，避免并发交错。
+_BUILD_LOCKS: Dict[str, threading.Lock] = {}
+_BUILD_LOCKS_GUARD = threading.Lock()
+
+
+def _thread_build_lock(db_path: str) -> threading.Lock:
+    key = os.path.normcase(os.path.abspath(db_path))
+    with _BUILD_LOCKS_GUARD:
+        lock = _BUILD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _BUILD_LOCKS[key] = lock
+        return lock
+
+
+@contextmanager
+def _build_guard(db_path: str):
+    """同一 DB 的 build 串行执行（进程内 + 跨进程）。失败时退化为进程内锁。"""
+    tlock = _thread_build_lock(db_path)
+    tlock.acquire()
+    fh = None
+    try:
+        lock_path = db_path + ".lock"
+        try:
+            os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+            fh = open(lock_path, "a+b")
+            if os.name == "nt":
+                import msvcrt
+                ran = False
+                while not ran:
+                    try:
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                        ran = True
+                    except OSError:
+                        time.sleep(0.2)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        except Exception as exc:  # noqa: BLE001 —— 文件锁不可用时保留进程内锁
+            logger.debug(f"[KG] 跨进程建图锁不可用: {exc}")
+        yield
+    finally:
+        if fh is not None:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                fh.close()
+            except Exception:  # noqa: BLE001
+                pass
+        tlock.release()
 
 # 内置函数/常用属性名：它们不是项目符号，按名字匹配会把 bool/max/split/warn
 # 连到任意含该子串的模块或方法（外部审计实测 14.77% CALLS 假边）。
@@ -424,7 +491,22 @@ class CodeKnowledgeGraph:
     # ═══════════════════════════════════════════════════════════════════
 
     def build(self, analysis=None, ast_results=None, gitnexus_dir=None,
-              exclude_dirs=None, incremental=None) -> dict:
+              exclude_dirs=None, incremental=None, builder: str = "unknown") -> dict:
+        """构建知识图谱（同一 DB 串行执行，避免并发交错写出残图）。
+
+        builder 仅用于溯源：把「谁建的图、全量还是增量、AST 覆盖文件数」
+        写进 meta，`query(stats)` 可直接读到，便于区分「代码变了」与
+        「最后建图的人不同」。
+        """
+        with _build_guard(self._db_path):
+            return self._build_impl(
+                analysis=analysis, ast_results=ast_results,
+                gitnexus_dir=gitnexus_dir, exclude_dirs=exclude_dirs,
+                incremental=incremental, builder=builder)
+
+    def _build_impl(self, analysis=None, ast_results=None, gitnexus_dir=None,
+                    exclude_dirs=None, incremental=None,
+                    builder: str = "unknown") -> dict:
         """
         构建知识图谱。
 
@@ -487,9 +569,17 @@ class CodeKnowledgeGraph:
             stats.update(self._counts())
 
         self._set_meta("built_at", str(time.time()))
+        # 建图溯源：谁建的、全量还是增量、AST 覆盖多少文件。
+        # 外部实测「同一份代码两次查询 CALLS 差 70」时，旧返回无法回答
+        # 「最后是谁建的图」；这三个字段让差异可归因，而不是靠猜。
+        self._set_meta("built_by", builder or "unknown")
+        self._set_meta("built_mode", "incremental" if only else "full")
+        self._set_meta("ast_files", str(len(ast_results or {})))
         self._set_meta("project_path", self.project_path)
         self._set_meta("schema_version", str(self.SCHEMA_VERSION))
         self._conn.commit()
+        stats["built_by"] = builder or "unknown"
+        stats["built_mode"] = "incremental" if only else "full"
         logger.info(f"[KG] 构建完成: {stats['nodes']} 节点, {stats['edges']} 边")
         return stats
 
@@ -1305,6 +1395,22 @@ class CodeKnowledgeGraph:
         nodes = [self._row_to_node(r) for r in rows]
         return KGQueryResult(nodes=nodes, total=len(nodes), query_type="callees")
 
+    def query_call_counts(self, node_id: str) -> dict:
+        """按节点 ID 统计 CALLS 入/出边数（同名符号消歧后使用）。
+
+        同名函数在项目中大量存在（外部实测 `main` 有 67 个节点）；按名字
+        `_find_node_by_name` 取首个匹配会把调用数算到另一个对象上。已按
+        文件限定到具体节点时，用本方法保证统计口径与该节点一致。
+        """
+        self._connect()
+        callers = self._conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE target=? AND type='CALLS'",
+            (node_id,)).fetchone()[0]
+        callees = self._conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE source=? AND type='CALLS'",
+            (node_id,)).fetchone()[0]
+        return {"callers": int(callers), "callees": int(callees)}
+
     def query_impact(self, file_path: str) -> KGQueryResult:
         """修改影响分析：修改某个文件会影响哪些模块"""
         self._connect()
@@ -1399,10 +1505,23 @@ class CodeKnowledgeGraph:
             "edge_count": edge_count,
             "node_types": type_counts,
             "edge_types": edge_type_counts,
+            "calls": int(edge_type_counts.get("CALLS", 0)),
             "built_at": built_at,
+            "built_by": self._get_meta("built_by"),
+            "built_mode": self._get_meta("built_mode"),
+            "ast_files": self._get_meta("ast_files"),
             "project_path": self.project_path,
             "db_path": self._db_path,
         }
+
+    def _get_meta(self, key: str) -> str:
+        """读取 meta 值（缺失返回空串，不抛异常）。"""
+        try:
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            return str(row["value"]) if row else ""
+        except Exception:  # noqa: BLE001
+            return ""
 
     def get_node_ids(self) -> List[str]:
         """返回全部节点 ID（供完整性校验等上层模块使用，避免直接访问私有 _conn）。"""
@@ -1501,11 +1620,13 @@ def build_knowledge_graph(project_path: str,
                           analysis=None,
                           ast_results=None,
                           gitnexus_dir=None,
-                          exclude_dirs=None) -> CodeKnowledgeGraph:
+                          exclude_dirs=None,
+                          builder: str = "unknown") -> CodeKnowledgeGraph:
     """构建并返回知识图谱实例"""
     kg = CodeKnowledgeGraph(project_path)
     kg.build(analysis=analysis, ast_results=ast_results,
-             gitnexus_dir=gitnexus_dir, exclude_dirs=exclude_dirs)
+             gitnexus_dir=gitnexus_dir, exclude_dirs=exclude_dirs,
+             builder=builder)
     return kg
 
 
