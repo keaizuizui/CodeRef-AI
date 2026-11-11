@@ -76,23 +76,23 @@ def _memory(a: dict) -> str:
 
 
 def _operation_memory(a: dict) -> str:
-    """操作记忆层（coderef_operation_memory，5.12.3 合并 6 工具）"""
-    from core.operation_memory import operation_memory
+    """操作记忆兼容入口（实际由梦系统统一维护：环境索引 + 语义笔记）"""
+    from core.dream_memory import dream_memory
     pp = a["project_path"]
     act = a.get("action", "sync")
     if act == "sync":
-        r = operation_memory.sync(pp, mode=a.get("mode", "full"),
-                                  with_llm=a.get("with_llm", True))
+        r = dream_memory.sync(pp, mode=a.get("mode", "full"),
+                              with_llm=a.get("with_llm", True))
     elif act == "query":
-        r = operation_memory.query(pp, query_type=a.get("query_type", "all"),
-                                   keyword=a.get("keyword", ""),
-                                   limit=a.get("limit", 10))
+        r = dream_memory.query(pp, query_type=a.get("query_type", "all"),
+                               keyword=a.get("keyword", ""),
+                               limit=a.get("limit", 10))
     elif act == "find":
-        r = operation_memory.find(pp, name=a.get("name", ""), limit=a.get("limit", 5))
+        r = dream_memory.find(pp, name=a.get("name", ""), limit=a.get("limit", 5))
     elif act == "status":
-        r = operation_memory.status(pp)
+        r = dream_memory.status(pp)
     elif act == "recover":
-        r = operation_memory.recover(pp, limit=int(a.get("limit", 8)))
+        r = dream_memory.recover(pp, limit=int(a.get("limit", 8)))
         # G-A 的事实来源：recover 成功即视为本次会话已恢复操作记忆
         if isinstance(r, dict) and r.get("status") == "ok":
             try:
@@ -101,7 +101,21 @@ def _operation_memory(a: dict) -> str:
             except Exception:  # noqa: BLE001
                 pass
     elif act == "export":
-        r = operation_memory.export_markdown(pp, output_path=a.get("output_path", ""))
+        r = dream_memory.export_markdown(pp, output_path=a.get("output_path", ""))
+    elif act in ("setup_status", "setup_install", "setup_upgrade", "setup_uninstall"):
+        from core import setup_rules
+        if act == "setup_status":
+            r = setup_rules.status(pp, include_global=bool(a.get("include_global")))
+        elif act == "setup_uninstall":
+            r = setup_rules.uninstall(
+                pp, include_global=bool(a.get("include_global")),
+                dry_run=bool(a.get("dry_run")))
+        else:
+            r = setup_rules.install(
+                pp, targets=a.get("targets", "project"),
+                include_global=bool(a.get("include_global")),
+                dry_run=bool(a.get("dry_run")),
+                create_missing=not bool(a.get("no_create")))
     else:
         raise ValueError(f"coderef_operation_memory: 未知 action={act}")
     r["tool"] = "coderef_operation_memory"
