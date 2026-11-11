@@ -303,26 +303,63 @@ class FindingsVerifier:
         return False
 
     # ─── 符号核验 ───
-    def _symbol_probe(self, symbol: str) -> Dict:
-        """核验单个符号：存在性 + 调用者数 + 被调用者数。"""
+    @staticmethod
+    def _same_file(node_path: str, file_hint: str) -> bool:
+        """节点路径是否命中论断给定文件（支持相对/绝对、正反斜杠、路径后缀）。"""
+        a = str(node_path or "").replace("\\", "/").strip("/").lower()
+        b = str(file_hint or "").replace("\\", "/").strip("/").lower()
+        if not a or not b:
+            return False
+        return a == b or a.endswith("/" + b) or b.endswith("/" + a)
+
+    def _symbol_probe(self, symbol: str, file_hint: str = "") -> Dict:
+        """核验单个符号：存在性 + 调用者数 + 被调用者数。
+
+        file_hint 非空时以文件为第一约束：同名符号在别的文件里存在，
+        不能算作「论断所指的符号已确证」（外部实测 `main` 全仓 67 个节点，
+        旧实现把 run_all.py 的论断确证到了 docs/legacy/...）。
+        """
         if self.kg is None:
             return {"symbol": symbol, "found": False, "callers": 0, "callees": 0,
-                    "node": None}
+                    "node": None, "file_constrained": bool(file_hint),
+                    "matched_in_file": False, "same_name_elsewhere": 0}
         try:
             ent = self.kg.query_entity(symbol)
-            found = ent.total > 0
+            nodes = list(ent.nodes or [])
+            # 偏好精确同名（query_entity 是 LIKE 模糊匹配）
+            exact = [n for n in nodes if getattr(n, "name", "") == symbol]
+            if exact:
+                nodes = exact
+            elsewhere = 0
+            if file_hint:
+                in_file = [n for n in nodes if self._same_file(
+                    getattr(n, "file_path", ""), file_hint)]
+                elsewhere = max(0, len(nodes) - len(in_file))
+                nodes = in_file
+            found = bool(nodes)
             node = None
-            if found and ent.nodes:
-                n = ent.nodes[0]
-                node = f"{getattr(n, 'name', symbol)} ({getattr(n, 'file_path', '')}:{getattr(n, 'start_line', 0)})"
-            callers = self.kg.query_callers(symbol).total if found else 0
-            callees = self.kg.query_callees(symbol).total if found else 0
+            callers = callees = 0
+            if found:
+                n = nodes[0]
+                node = (f"{getattr(n, 'name', symbol)} "
+                        f"({getattr(n, 'file_path', '')}:{getattr(n, 'start_line', 0)})")
+                try:
+                    counts = self.kg.query_call_counts(getattr(n, "id", ""))
+                    callers = counts.get("callers", 0)
+                    callees = counts.get("callees", 0)
+                except Exception:  # noqa: BLE001 —— 统计失败不影响存在性结论
+                    callers = self.kg.query_callers(symbol).total if found else 0
+                    callees = self.kg.query_callees(symbol).total if found else 0
             return {"symbol": symbol, "found": found, "callers": callers,
-                    "callees": callees, "node": node}
+                    "callees": callees, "node": node,
+                    "file_constrained": bool(file_hint),
+                    "matched_in_file": found,
+                    "same_name_elsewhere": elsewhere}
         except Exception as exc:
             _log(f"符号核验失败 {symbol}: {exc}")
             return {"symbol": symbol, "found": False, "callers": 0, "callees": 0,
-                    "node": None}
+                    "node": None, "file_constrained": bool(file_hint),
+                    "matched_in_file": False, "same_name_elsewhere": 0}
 
     # ─── 管线核验 ───
     def _in_pipeline(self, symbols: List[str], entry: str) -> Optional[bool]:
@@ -372,9 +409,9 @@ class FindingsVerifier:
             symbols_all = extract_symbols(title + " " + detail)
         return symbols_all
 
-    def _probe_symbols(self, symbols_all: List[str]):
+    def _probe_symbols(self, symbols_all: List[str], file_hint: str = ""):
         """逐符号核验，返回 (probes, 已找到符号, 未找到符号)。"""
-        probes = [self._symbol_probe(s) for s in symbols_all]
+        probes = [self._symbol_probe(s, file_hint=file_hint) for s in symbols_all]
         symbols_found = [p["symbol"] for p in probes if p["found"]]
         symbols_missing = [p["symbol"] for p in probes if not p["found"]]
         return probes, symbols_found, symbols_missing
@@ -389,11 +426,13 @@ class FindingsVerifier:
         # 显式 symbols 优先，否则启发式提取
         symbols_all = self._normalize_symbols(finding, title, detail)
 
-        # 文件核验
+        # 文件核验：给出 file 时它同时是符号匹配的第一约束
         file_found = self._file_found(file) if file else None
+        file_hint = file if file_found else ""
 
         # 符号核验
-        probes, symbols_found, symbols_missing = self._probe_symbols(symbols_all)
+        probes, symbols_found, symbols_missing = self._probe_symbols(
+            symbols_all, file_hint=file_hint)
 
         # 管线核验
         in_pipeline = self._in_pipeline(symbols_found, entry) if entry else None
@@ -409,6 +448,10 @@ class FindingsVerifier:
             entry=entry,
             graph_exists=self.graph_exists,
         )
+        elsewhere = sum(int(p.get("same_name_elsewhere") or 0) for p in probes)
+        if file_hint and symbols_missing and elsewhere:
+            reason += (f"；同名符号在文件外的其他位置存在 {elsewhere} 处，"
+                       f"按 file 限定不计为确证")
 
         evidence = {
             "graph_exists": self.graph_exists,
