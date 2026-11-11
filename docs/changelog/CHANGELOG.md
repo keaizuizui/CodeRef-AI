@@ -4,6 +4,19 @@
 
 ---
 
+### v5.21.15 — 外部第五轮反馈：建图确定性、file 限定核验、扫描口径与 Wiki 落盘
+
+> 背景：外部独立项目 AI 对 5.21.14 的第五轮实测报 5 条（D-1~D-5）+ 1 条低危。逐条归因：4 条工具缺陷已修，1 条属消费方定标过期（工具侧补提示），口径类已在报告与返回中写清。
+
+- **D-1 同一代码两次建图 CALLS 差 70**：复现证明两条纯顺序构建路径（analysis 全量 AST / `scan_directory` 全量 AST）结果完全一致（4,511 节点 / 17,535 边 / 13,211 CALLS），差异来自审计、memory sync、query 新鲜度刷新、flow_verify 补建在同一项目上并发建图——旧实现无互斥，后提交者可能用部分 AST 覆盖全量结果。`CodeKnowledgeGraph.build` 增加进程内锁 + 跨进程文件锁串行化（失败降级为进程内锁）；`meta` 写入 `built_by` / `built_mode` / `ast_files`，`query(stats)` 新增 `calls` / `built_by` / `built_mode` / `ast_files`，建图来源可追溯；各调用方分别标注 `audit_pipeline` / `audit_sync` / `query_refresh` / `mcp_memory_sync` / `memory_sync_*`。
+- **D-2 `verify_findings` 忽略 `file` 限定**：`_symbol_probe` 新增 `file_hint`，同名符号先按文件过滤；`file` 命中时以文件为第一约束，文件外同名只计入 `same_name_elsewhere` 并在 reason 明示「按 file 限定不计为确证」。新增 `query_call_counts(node_id)` 按具体节点统计调用数，避免 `main` 这类重名符号取首个节点算错。
+- **D-3 OWASP 取样含 `_refactor_backup`（391/674，58%）**：`asa_scan._collect_target_files` 读取 whitelist dir 条目并复用 `path_hits_excluded_dir`，与审计/图谱同口径；备份/镜像目录不再进入 Agent 安全扫描。
+- **D-5 定标路径前缀假阴性**：`arch_gap_analyzer._module_exists` 对含 `/` 的模块声明增加唯一后缀匹配（与 `_match_module_ids` 对齐）；多候选仍判缺失，避免跨子工程误配。旧定标按业务目录书写，需按当前结构重建后复跑。
+- **C10 `coderef_docs` 15 分钟零产物**：模块文档改为 `as_completed` 逐篇落盘，先写盘再回报进度（取消检查点在两篇之间生效），`shutdown(wait=False, cancel_futures=True)` 不再等待剩余 LLM；已生成文档不因后续模块慢/失败而丢失，`_write_doc` 补建输出目录。
+- **低危**：`arch_view.html` 补空 favicon（直开页不再 404）；报告置信度表补口径说明（本表为降噪/去重前命中数，API `summary` 与评估台为去重后，两者不等属正常）。
+- **未修项（诚实记录）**：定标过期属消费方输入，工具侧只在 `arch_gap` 结果提示需按当前目录结构重建；评估台「清空」缺二次确认属外部项目自身前端待办，不计入工具缺陷。
+- **验证**：全量 pytest **462 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.15）；`change_guard` 无退化。
+
 ### v5.21.14 — 复审整改：锁半径、构造拆分与展示口径
 
 > 背景：CodeRabbit 与 Brooks-Lint 对 `origin/master..5.21.13` 的全量复审。CodeRabbit 1 条 minor（画布导入导出丢模块组/泳道/阶段表头）已修；Brooks-Lint 报 2 条 warning + 3 条 suggestion，本轮逐条整改。
