@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.21.19** | Python 3.10+ | MCP Protocol | CodeRef 双轨授权协议
+**Version 5.21.20** | Python 3.10+ | MCP Protocol | CodeRef 双轨授权协议
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -591,9 +591,12 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 > 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.17.0）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.21.19 — Wiki 质量门禁与口径披露
+### 当前版本 v5.21.20 — docs 元数据与正文口径打通
 
 > 5.21.x 版本线：梦从单一 `pitfall` 扩到「记忆 / 叙事 / 草稿 / 维护」四类 job，并加工具面 profile。
+
+- **5.21.20（外部 v5.21.19 实测整改）**：`coderef_docs` 采样不再改写真实文件数（同一份 Wiki 曾出现 20/93/1/16/302 五种数字）；正文为空时不再写只有 front matter 的空壳，思考过程命中后先重试一次；元话语拦截扩展到「我们需要写 / 需要遵守规则 / 必须原样引用」；评估台 Wiki 时间改取目录内最新文件 mtime；入口文件判定扩展到 `web_/gui_/app_` 前缀与 `if __name__ == "__main__"`（修复「有 4098 行 HTTP 服务却写没有网页界面」）；`query(stats)` 新增 `function_scope`；`docs` 返回新增 `degraded_reasons` 拆开超时与内容丢弃。
+- **验证（5.21.20 发布门槛）**：全量 pytest **506 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0。
 
 - **5.21.19（外部第七轮）**：修三处 Wiki 质量缺陷——模块文件收集误用 30 条采样上限导致 327 文件的模块被写成「31 个文件」（现由 `MAX_COLLECT_FILES_PER_MODULE` 兜底，实测 31→302）、模型思考过程被当正文落盘（新增 `_looks_like_meta_talk` 门禁，命中即不落盘并计失败）、概览只写「已生成 N 篇」不带时间（现带生成时间，缺失写「生成时间未知」）；`query(stats)` 新增 `constant_scope` 披露常量判定口径；**修掉 `memory(sync)` 与 `audit` 建图 CALLS 不一致的根因**——`AstCodeImport.asnames` 未随状态序列化，别名调用边丢失（本仓实测 4,938 vs 5,122，修复后完全一致）。
 - **验证（5.21.19 发布门槛）**：全量 pytest **504 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0。
