@@ -4,6 +4,16 @@
 
 ---
 
+### v5.21.19 — Wiki 质量门禁与口径披露（外部第七轮）
+
+> 背景：外部按三步自检跑完，审计零污染（4,511 节点 / CALLS 13,211 前后一致）。但引用存量 Wiki 时发现：39 篇是 2 天前的草稿，其中 7 篇写「只识别出 1 个模块、31 个文件」（实际 327 个 `.py`），模块正文是模型思考过程原文。
+
+- **模块文件收集被采样上限截断**：`_collect_py_files` 用 `MAX_FILES_PER_MODULE(30)` 当收集上限，超过即 `break`，导致 327 文件的模块 `file_count=31`。新增 `MAX_COLLECT_FILES_PER_MODULE=2000` 仅作失控保护，采样交给 `LARGE_REPO_SAMPLE`。外部项目实测 `chonggou` 由 31 → **302 个文件**（模块数仍为 1，是该仓库只有一个一级目录的结构事实，非缺陷）。
+- **思考过程被当正文落盘**：`_llm_ask` 只判 `is_error_response`，模型把 reasoning 写进 content 时会直接落盘（`MODULES/chonggou.md` 出现「用户要求我为…这有点矛盾」）。新增 `_looks_like_meta_talk` 门禁：正文不以 Markdown 标题开头且前 400 字命中元话语 → 返回空串、计入失败统计，不写文件。
+- **Wiki 新鲜度不可见**：概览只写「Wiki 已生成，39 篇文档」，不带时间，外部据此误引用了旧草稿。`states["wiki"].hint` 现在带生成时间，缺失时写「生成时间未知」。
+- **常量口径披露**：`query(stats)` 新增 `constant_scope`，写明常量=全大写+下划线名且值为字面量，容器/表达式赋值不计，收不束的由白名单治理，不追求 100% 覆盖。
+- **验证**：全量 pytest **502 全绿**（新增 `tests/test_wiki_quality.py` 4 条）；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.19）。
+
 ### v5.21.18 — 路径归一：同一项目只有一套派生标识（登记册 U-71）
 
 > 背景：运行态复验发现，`coderef_query` 用小写盘符 `d:\...` 调用时同一响应内既报 `node_count=122` 又报 G-B「知识图谱不存在」；改用 `D:\...` 则正常。根因是路径哈希未归一，同一项目被拆成两套库。

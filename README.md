@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.21.18** | Python 3.10+ | MCP Protocol | CodeRef 双轨授权协议
+**Version 5.21.19** | Python 3.10+ | MCP Protocol | CodeRef 双轨授权协议
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -591,9 +591,12 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 > 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.17.0）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.21.18 — 路径归一：同一项目只有一套派生标识
+### 当前版本 v5.21.19 — Wiki 质量门禁与口径披露
 
 > 5.21.x 版本线：梦从单一 `pitfall` 扩到「记忆 / 叙事 / 草稿 / 维护」四类 job，并加工具面 profile。
+
+- **5.21.19（外部第七轮）**：修三处 Wiki 质量缺陷——模块文件收集误用 30 条采样上限导致 327 文件的模块被写成「31 个文件」（现由 `MAX_COLLECT_FILES_PER_MODULE` 兜底，实测 31→302）、模型思考过程被当正文落盘（新增 `_looks_like_meta_talk` 门禁，命中即不落盘并计失败）、概览只写「已生成 N 篇」不带时间（现带生成时间，缺失写「生成时间未知」）；`query(stats)` 新增 `constant_scope` 披露常量判定口径。
+- **验证（5.21.19 发布门槛）**：全量 pytest **502 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0。
 
 - **5.21.18（登记册 U-71）**：新增 `core/path_key.project_key`（`normcase(abspath)`），12 个模块的 13 处路径哈希统一走它。Windows 下 `D:\proj` 与 `d:\proj` 不再分裂成两套图谱库 / 审计发现 / 状态文件，`locate_kg_db` 口径一致，G-B「知识图谱不存在」误报消除。
 - **验证（5.21.18 发布门槛）**：全量 pytest **496 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；`Coderef-Test\coderef-src` 同步文件 SHA256 一致。
