@@ -595,8 +595,8 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 > 5.21.x 版本线：梦从单一 `pitfall` 扩到「记忆 / 叙事 / 草稿 / 维护」四类 job，并加工具面 profile。
 
-- **5.21.19（外部第七轮）**：修三处 Wiki 质量缺陷——模块文件收集误用 30 条采样上限导致 327 文件的模块被写成「31 个文件」（现由 `MAX_COLLECT_FILES_PER_MODULE` 兜底，实测 31→302）、模型思考过程被当正文落盘（新增 `_looks_like_meta_talk` 门禁，命中即不落盘并计失败）、概览只写「已生成 N 篇」不带时间（现带生成时间，缺失写「生成时间未知」）；`query(stats)` 新增 `constant_scope` 披露常量判定口径。
-- **验证（5.21.19 发布门槛）**：全量 pytest **502 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0。
+- **5.21.19（外部第七轮）**：修三处 Wiki 质量缺陷——模块文件收集误用 30 条采样上限导致 327 文件的模块被写成「31 个文件」（现由 `MAX_COLLECT_FILES_PER_MODULE` 兜底，实测 31→302）、模型思考过程被当正文落盘（新增 `_looks_like_meta_talk` 门禁，命中即不落盘并计失败）、概览只写「已生成 N 篇」不带时间（现带生成时间，缺失写「生成时间未知」）；`query(stats)` 新增 `constant_scope` 披露常量判定口径；**修掉 `memory(sync)` 与 `audit` 建图 CALLS 不一致的根因**——`AstCodeImport.asnames` 未随状态序列化，别名调用边丢失（本仓实测 4,938 vs 5,122，修复后完全一致）。
+- **验证（5.21.19 发布门槛）**：全量 pytest **504 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0。
 
 - **5.21.18（登记册 U-71）**：新增 `core/path_key.project_key`（`normcase(abspath)`），12 个模块的 13 处路径哈希统一走它。Windows 下 `D:\proj` 与 `d:\proj` 不再分裂成两套图谱库 / 审计发现 / 状态文件，`locate_kg_db` 口径一致，G-B「知识图谱不存在」误报消除。
 - **验证（5.21.18 发布门槛）**：全量 pytest **496 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；`Coderef-Test\coderef-src` 同步文件 SHA256 一致。

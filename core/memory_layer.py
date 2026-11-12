@@ -134,13 +134,15 @@ def _ast_to_dict(ar) -> dict:
         "imports": [
             {"module": i.module, "names": list(i.names),
              "is_from_import": i.is_from_import, "line": i.line,
-             "category": i.category}
+             "category": i.category,
+             "asnames": dict(getattr(i, "asnames", {}) or {})}
             for i in ar.imports
         ],
         "local_imports": [
             {"module": i.module, "names": list(i.names),
              "is_from_import": i.is_from_import, "line": i.line,
-             "category": i.category}
+             "category": i.category,
+             "asnames": dict(getattr(i, "asnames", {}) or {})}
             for i in getattr(ar, "local_imports", [])
         ],
         "functions": [_ast_func_to_dict(f) for f in ar.functions],
@@ -218,13 +220,15 @@ def _ast_from_dict(d: dict):
     result.imports = [
         AstCodeImport(module=i["module"], names=list(i.get("names", [])),
                       is_from_import=i.get("is_from_import", False),
-                      line=i.get("line", 0), category=i.get("category", "unknown"))
+                      line=i.get("line", 0), category=i.get("category", "unknown"),
+                      asnames=dict(i.get("asnames", {}) or {}))
         for i in d.get("imports", [])
     ]
     result.local_imports = [
         AstCodeImport(module=i["module"], names=list(i.get("names", [])),
                       is_from_import=i.get("is_from_import", False),
-                      line=i.get("line", 0), category=i.get("category", "unknown"))
+                      line=i.get("line", 0), category=i.get("category", "unknown"),
+                      asnames=dict(i.get("asnames", {}) or {}))
         for i in d.get("local_imports", [])
     ]
     result.calls = [

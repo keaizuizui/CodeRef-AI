@@ -12,7 +12,8 @@
 - **思考过程被当正文落盘**：`_llm_ask` 只判 `is_error_response`，模型把 reasoning 写进 content 时会直接落盘（`MODULES/chonggou.md` 出现「用户要求我为…这有点矛盾」）。新增 `_looks_like_meta_talk` 门禁：正文不以 Markdown 标题开头且前 400 字命中元话语 → 返回空串、计入失败统计，不写文件。
 - **Wiki 新鲜度不可见**：概览只写「Wiki 已生成，39 篇文档」，不带时间，外部据此误引用了旧草稿。`states["wiki"].hint` 现在带生成时间，缺失时写「生成时间未知」。
 - **常量口径披露**：`query(stats)` 新增 `constant_scope`，写明常量=全大写+下划线名且值为字面量，容器/表达式赋值不计，收不束的由白名单治理，不追求 100% 覆盖。
-- **验证**：全量 pytest **502 全绿**（新增 `tests/test_wiki_quality.py` 4 条）；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.19）。
+- **`memory(sync)` 与 `audit` 建图 CALLS 不一致（外部连续两轮的 13,141 vs 13,211）**：根因是 `AstCodeImport.asnames`（`from x import y as z` 的别名映射）没有进 `_ast_to_dict` / `_ast_from_dict`，状态还原后别名丢失，依赖别名的调用边整批解析不到。本仓实测同一份代码 audit 路径 5,122 条、memory 路径 4,938 条，补上 `asnames` 往返后两者完全一致（4,783 节点 / 9,619 边 / 5,122 CALLS）。
+- **验证**：全量 pytest **504 全绿**（新增 `tests/test_wiki_quality.py` 4 条、`AstImportAsnamesTest` 2 条）；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.19）。
 
 ### v5.21.18 — 路径归一：同一项目只有一套派生标识（登记册 U-71）
 
