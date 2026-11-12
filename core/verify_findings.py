@@ -324,7 +324,12 @@ class FindingsVerifier:
                     "node": None, "file_constrained": bool(file_hint),
                     "matched_in_file": False, "same_name_elsewhere": 0}
         try:
-            ent = self.kg.query_entity(symbol)
+            # 精确查询全部同名节点：query_entity 的 LIKE+LIMIT 50 会截掉
+            # 第 51 个之后的同名符号（外部实测 main 67 个，run_all.py 被截掉）。
+            try:
+                ent = self.kg.query_entities_exact(symbol)
+            except AttributeError:
+                ent = self.kg.query_entity(symbol)
             nodes = list(ent.nodes or [])
             # 偏好精确同名（query_entity 是 LIKE 模糊匹配）
             exact = [n for n in nodes if getattr(n, "name", "") == symbol]
