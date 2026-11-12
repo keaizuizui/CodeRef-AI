@@ -63,9 +63,6 @@ LARGE_REPO_THRESHOLD = 300
 # 大仓库采样上限
 LARGE_REPO_SAMPLE = 150
 
-# 每个模块最多采样的文件数（用于 LLM 上下文，不用于收集）
-MAX_FILES_PER_MODULE = 30
-
 # 每个模块收集阶段的失控保护上限。
 # 收集必须覆盖全部文件：file_count 与模块描述都依赖它；采样交给 LARGE_REPO_SAMPLE，
 # 旧实现把 MAX_FILES_PER_MODULE(30) 当成收集上限，导致 327 文件的模块被写成"31 个文件"。
