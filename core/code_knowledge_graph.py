@@ -1353,6 +1353,21 @@ class CodeKnowledgeGraph:
         nodes = [self._row_to_node(r) for r in rows]
         return KGQueryResult(nodes=nodes, total=len(nodes), query_type="entity")
 
+    def query_entities_exact(self, name: str, limit: int = 1000) -> KGQueryResult:
+        """按名称精确查询全部实体（不受 query_entity 的 LIMIT 50 截断）。
+
+        verify_findings 按 file 限定符号时需要看到全部同名节点；`main` 这类
+        常见名在真实项目有 60+ 个，旧的 LIKE+LIMIT 50 会把目标文件节点截掉，
+        造成“文件里明明有却判 found=False”的假阴性。
+        """
+        self._connect()
+        rows = self._conn.execute(
+            "SELECT * FROM nodes WHERE name=? LIMIT ?",
+            (name, max(1, int(limit)))).fetchall()
+        nodes = [self._row_to_node(r) for r in rows]
+        return KGQueryResult(nodes=nodes, total=len(nodes),
+                             query_type="entity_exact")
+
     def query_callers(self, func_name: str) -> KGQueryResult:
         """查询调用者：谁调用了这个函数"""
         self._connect()
