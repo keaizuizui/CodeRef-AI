@@ -201,8 +201,16 @@ def md_to_html(md_text: str) -> str:
     if not md_text:
         return "<p class='empty'>（空文档）</p>"
 
+    # 0. 剥离 YAML front matter：wiki 文档用它存 type/confidence/source，
+    # 不是正文；不剥会直接把 `type: "overview"` 渲染成可见文本。
+    text = md_text
+    if text.startswith("---"):
+        m = re.match(r"^---\s*\n.*?\n---\s*\n", text, re.DOTALL)
+        if m:
+            text = text[m.end():]
+
     # 1. 提取围栏代码块，占位保护
-    text, blocks = _extract_code_blocks(md_text)
+    text, blocks = _extract_code_blocks(text)
 
     # 2. 逐行渲染（标题/引用/列表/表格/分割线/段落）
     out_lines = _md_render_lines(text, blocks)
