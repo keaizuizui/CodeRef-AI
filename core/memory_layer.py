@@ -490,13 +490,16 @@ class MemoryLayer:
             logger.warning(f"[MemoryLayer] 记忆状态写入失败: {e}")
 
     def sync(self, project_path: str, mode: str = "full",
-             builder: str = "") -> dict:
+             builder: str = "", skip_kg: bool = False) -> dict:
         """全量或增量同步项目到代码记忆层。
 
         Args:
             project_path: 项目绝对路径
             mode: "full" 全量重建；"incr" 增量（基于 mtime+size 快照）
             builder: 建图溯源标签（写入图谱 meta.built_by），留空按模式生成
+            skip_kg: 跳过图谱重建，只同步记忆状态/语义库。审计管线已用
+                `_build_kg` 建过全量图时必须置 True——否则收尾的增量重建
+                会用局部 AST 覆盖全量结果（外部实测 CALLS 13,141 vs 13,211）。
 
         Returns:
             {"status", "mode", "synced_files", "changed_files", "unchanged_files",
@@ -557,7 +560,10 @@ class MemoryLayer:
             incremental = None
 
         # 更新知识图谱（结构记忆）
-        if mode != "full" and not changed and not deleted and kg_exists:
+        if skip_kg and kg_exists:
+            # 审计管线已建全量图：只读现状，绝不再用增量覆盖
+            kg_stats = self._kg_counts(project_path)
+        elif mode != "full" and not changed and not deleted and kg_exists:
             kg_stats = self._kg_counts(project_path)  # 无变更：不重建，只报现状
         else:
             kg_stats = self._update_knowledge_graph(project_path, analysis,

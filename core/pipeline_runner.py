@@ -662,9 +662,12 @@ class Pipe:
         try:
             from core.memory_layer import memory_layer
             strata = getattr(r, "audit_strategy", "full") or "full"
+            # 审计管线刚用 _build_kg 建过全量图：收尾只同步记忆状态/语义库，
+            # 不再用增量重建覆盖全量结果（外部实测 CALLS 13,141 vs 13,211）。
+            skip_kg = bool(getattr(r, "kg_built_at", ""))
             memory_layer.sync(project_path,
                               mode="incr" if strata == "incr" else "full",
-                              builder="audit_sync")
+                              builder="audit_sync", skip_kg=skip_kg)
         except Exception as e:
             r.errors.append(f"memory_sync: {e}")
 
