@@ -596,7 +596,7 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 > 5.21.x 版本线：梦从单一 `pitfall` 扩到「记忆 / 叙事 / 草稿 / 维护」四类 job，并加工具面 profile。
 
 - **5.21.16（记忆投递层）**：MCP `initialize.instructions` + 关键工具描述 + `coderef_version.memory_rule` 三路提示「改码前先 `coderef_operation_memory(action=recover)`」；新增 `core/setup_rules.py` 与 `tools/install_rules.py`，在 `AGENTS.md` / `CLAUDE.md` / `.cursor/rules` / copilot instructions 维护标记块（备份、幂等、可卸载），`setup.bat` 菜单 9；真实工程首次调用自动写项目规则；`change_guard` / `audit` / `docs` 增加 G-E 硬闸门（未 recover 返回 blocked）。`coderef_operation_memory` 统一走梦的数据层（环境索引 + 语义笔记），`sync` 不再做 LLM 提炼。
-- **验证（5.21.16 发布门槛）**：全量 pytest **478 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；G-E 实测未 recover 拦截、recover 后放行；`Coderef-Test\coderef-src` 同步文件 SHA256 一致。
+- **验证（5.21.16 发布门槛）**：全量 pytest **479 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；G-E 实测未 recover 拦截、recover 后放行；`Coderef-Test\coderef-src` 同步文件 SHA256 一致。
 
 - **5.21.15（外部第五轮反馈）**：建图加进程内 + 跨进程锁串行化，`query(stats)` 暴露 `calls` / `built_by` / `built_mode` / `ast_files`，同一代码两次建图不再因并发覆盖出现 CALLS 漂移；`verify_findings` 以 `file` 为符号匹配第一约束，文件外同名只计 `same_name_elsewhere` 不判确证；OWASP/Agent 安全扫描与审计同口径排除 whitelist 备份目录；`arch_gap` 支持唯一后缀匹配减少前缀假阴性；`coderef_docs` 模块文档逐篇落盘，取消可在两篇之间生效；画布导入校验泳道/阶段表头几何字段，畸形 JSON 直接拒绝并提示；画布页补空 favicon，报告置信度表补去重口径说明；`AGENTS.md` 收编 `CODEREF.md` 有效红线成为唯一必读入口，并修正 CodeRabbit 路径、测试归属与 push 闸门。
 - **验证（5.21.15 发布门槛）**：全量 pytest **466 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；`Coderef-Test\coderef-src` 同步文件 SHA256 一致。
