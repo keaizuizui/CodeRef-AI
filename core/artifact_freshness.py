@@ -17,6 +17,8 @@ from datetime import datetime
 
 from loguru import logger
 
+from core.path_key import project_key
+
 
 # (key, 中文名, 候选相对路径（支持 glob）, 建议过期天数, 刷新方式)
 _ARTIFACTS = (
@@ -111,7 +113,7 @@ def _artifact_item(key: str, name: str, patterns: tuple, stale_days: int,
     """
     candidates = _find_path(project_path, patterns)
     if strict_hash and key == "audit_findings" and candidates:
-        phash = hashlib.md5(project_path.encode()).hexdigest()[:12]
+        phash = hashlib.md5(project_key(project_path).encode()).hexdigest()[:12]
         kept = []
         for c in candidates:
             m = re.match(r"^audit_findings_([0-9a-f]{12})\.json$",

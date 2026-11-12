@@ -23,6 +23,8 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Set, Tuple
 from dataclasses import dataclass, field, asdict
 
+from core.path_key import project_key
+
 
 # ─── 缓存根目录（相对于项目根目录） ───
 _CACHE_ROOT = Path(__file__).parent.parent / "cache"
@@ -223,7 +225,7 @@ class CacheManager:
     @staticmethod
     def compute_project_hash(project_path: str) -> str:
         """计算项目路径的哈希值"""
-        return hashlib.md5(os.path.abspath(project_path).encode('utf-8')).hexdigest()[:12]
+        return hashlib.md5(project_key(project_path).encode('utf-8')).hexdigest()[:12]
 
     def get_hardcoded_dir(self, project_path: str) -> Path:
         """获取项目专属的硬编码缓存目录"""

@@ -25,6 +25,8 @@ from typing import Dict, List, Optional, Any
 
 from loguru import logger
 
+from core.path_key import project_key
+
 
 # ═══════════════════════════════════════════════════════════════
 # 模块级常量（magic number 收敛）
@@ -238,7 +240,7 @@ def _load_audit_findings(project_path: str) -> Optional[Dict]:
     命中时在返回 dict 中附 _source_path / _source_kind 供调用方输出 data_source。
     """
     import hashlib
-    phash = hashlib.md5(project_path.encode()).hexdigest()[:12]
+    phash = hashlib.md5(project_key(project_path).encode()).hexdigest()[:12]
     hashed_candidates = [
         # v5.18 起的项目侧隔离落点（U-51 写入端）：必须优先读取，否则
         # 新审计结论会被旧版 coderef-report/ 的历史快照掩盖（外部审计实测

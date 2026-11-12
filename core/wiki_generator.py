@@ -62,6 +62,8 @@ import core.wiki_constants as _wiki_constants
 _cfg = _wiki_constants._cfg
 _settings = _wiki_constants._settings
 
+from core.path_key import project_key
+
 
 # 交叉验证徽章渲染（可选导入：wiki_cross_verify 缺失时降级为空渲染，不阻断生成）
 def module_badge_md(status: str) -> str:
@@ -738,7 +740,7 @@ class _WikiMetaMixin:
 
     def _project_cache_path(self, project_path: str) -> str:
         """返回某项目的 cache 子目录"""
-        h = hashlib.md5(project_path.encode("utf-8")).hexdigest()[:8]
+        h = hashlib.md5(project_key(project_path).encode("utf-8")).hexdigest()[:8]
         p = os.path.join(self._coderef_cache_dir(), h)
         os.makedirs(p, exist_ok=True)
         return p
@@ -3044,7 +3046,7 @@ to_report = _WikiEmitMixin.to_report
 def _core_rules_path(project_path: str) -> str:
     """核心模块规则配置文件路径"""
     import hashlib
-    ph = hashlib.md5(os.path.abspath(project_path).encode()).hexdigest()[:12]
+    ph = hashlib.md5(project_key(project_path).encode()).hexdigest()[:12]
     d = os.path.join(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__))), "cache", "pipeline")
     os.makedirs(d, exist_ok=True)

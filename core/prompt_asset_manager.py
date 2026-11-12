@@ -51,6 +51,8 @@ from typing import Dict, Any, Optional
 
 from loguru import logger
 
+from core.path_key import project_key
+
 
 # ═══════════════════════════════════════════════════════════════
 # 模块级常量（magic number 收敛）
@@ -469,7 +471,7 @@ class PromptAssetManager:
     @staticmethod
     def _get_project(store: Dict[str, Any], project_path: str) -> Dict[str, Any]:
         abs_path = os.path.abspath(project_path)
-        phash = hashlib.md5(abs_path.encode("utf-8")).hexdigest()[:12]
+        phash = hashlib.md5(project_key(abs_path).encode("utf-8")).hexdigest()[:12]
         projects = store.setdefault("projects", {})
         proj = projects.get(phash)
         if proj is None:
