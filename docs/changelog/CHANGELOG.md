@@ -4,6 +4,18 @@
 
 ---
 
+### v5.21.17 — 外部第六轮：图谱一致性、核验截断与展示诚实
+
+> 背景：外部独立项目对 5.21.16 的第六轮实测：4 条已修（OWASP 备份目录、定标前缀、file 限定确证、favicon），另遗留/新增 4 条工具缺陷。
+
+- **CALLS 13,141 vs 13,211**：审计管线已用 `_build_kg` 建全量图，收尾 `memory_layer.sync` 又用增量重建覆盖，导致同一代码两次读数不同。`MemoryLayer.sync` 新增 `skip_kg`；`pipeline_runner._sync_memory_layer` 在 `r.kg_built_at` 非空时跳过图谱重建，只同步记忆状态/语义库。最终图保持全量结果与 `built_by=audit_pipeline`。
+- **`verify_findings` 文件限定假阴性**：`query_entity` 的 `LIKE ... LIMIT 50` 会把第 51 个之后的同名节点截掉（外部 `main` 共 67 个，`run_all.py` 的节点在截断外）。新增 `query_entities_exact(name)`（按名精确、上限 1000），`_symbol_probe` 在有 `file_hint` 时改用它；外部案例 `run_all.py:25 main` 现判 `confirmed`，`same_name_elsewhere=66`。
+- **`frontend` 把“未执行”包装成“已完成”**：LLM 不可用/降级时，21 条“待确认”占位被计入“共发现 21 条问题”且 `partial=false`。现在待确认占位不计入问题数，summary 明确写“LLM 审查未完成 / 待确认占位不计为问题数”，`partial=true`。
+- **`wiki.html` 显示 YAML front matter**：`md_to_html` 渲染前剥离 `---` 包裹的 YAML 头，`type/confidence/source` 不再作为正文出现。
+- **外部 `AGENTS.md` 被自动写入**：这是 5.21.16 记忆投递层的预期行为（写入 `CODEREF-MEMORY-RULE` 块 + 备份）；如不需要可 `git checkout -- AGENTS.md` 回滚，不影响工具。
+- **target_arch 系统名仍为旧名**：属消费方定标过期（`project` 字段 72 天前），工具侧已有 `target_health.stale` 提示，需重新定标，不计为工具缺陷。
+- **验证**：全量 pytest **485 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.17）；外部图谱实测 `run_all.py main` 由假阴性转为 confirmed。
+
 ### v5.21.16 — 记忆投递层：把「先 recover」送到编程 AI 眼前
 
 > 背景：外部实测确认，编程 AI 只在新建对话时读取 `AGENTS.md` / `CLAUDE.md`，MCP 服务端无法主动推送；记忆内容再全，不落规则文件就送不到。本版补三层投递与一条硬闸门。
