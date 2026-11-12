@@ -69,6 +69,8 @@ from core.path_key import project_key
 _META_TALK_MARKERS = (
     "用户要求我", "用户希望我", "用户让我", "让我仔细", "让我先", "让我看看",
     "我需要为", "这有点矛盾", "我注意到", "我先分析", "好的，我需要",
+    # 模型把「写作指令」原样当正文复述（外部实测 OVERVIEW.md 开头）
+    "我们需要写", "需要遵守规则", "必须原样引用",
 )
 
 
@@ -112,6 +114,10 @@ class WikiModule:
     file_count: int
     is_core: bool = False
     description: str = ""
+    # LLM 上下文采样清单（样本）。必须与 py_files / file_count 分开：
+    # 采样只决定「喂给模型哪些文件」，绝不能改写真实文件总数，
+    # 否则正文会把 302 个文件的模块写成「20 个文件」（外部实测 D-1）。
+    sample_files: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -905,9 +911,19 @@ class _WikiMetaMixin:
                         fm.has_main_block = True
                         break
 
-            # 是否入口文件
-            base = os.path.basename(rel_path)
-            fm.is_entry_point = base in ("main.py", "app.py", "server.py", "run.py")
+            # 是否入口文件：命名约定 + `if __name__ == "__main__"` 实证。
+            # 旧实现只认 4 个文件名，导致有 4098 行 HTTP 服务的 web_gui.py
+            # 不被当入口，LLM 据此写出「没有网页界面」（外部实测 D-5）。
+            base = os.path.basename(rel_path).lower()
+            stem = os.path.splitext(base)[0]
+            in_tests = "tests" in rel_path.replace("\\", "/").split("/")[:-1]
+            fm.is_entry_point = (
+                base in ("main.py", "app.py", "server.py", "run.py")
+                or stem in ("wsgi", "asgi", "manage", "cli", "gui", "web",
+                            "web_gui", "launch", "start", "startup")
+                or stem.startswith(("web_", "gui_", "app_"))
+                or (fm.has_main_block and not in_tests)
+            )
 
         except SyntaxError:
             # 语法错误文件保留默认元信息
@@ -1011,7 +1027,11 @@ class _WikiMetaMixin:
 
 
     def _sample_large_repo(self, modules: List[WikiModule]) -> List[WikiModule]:
-        """大仓库采样：优先核心模块，非核心模块采样"""
+        """大仓库采样：只挑「喂给 LLM 的样本文件」，不改真实文件总数。
+
+        旧实现直接改写 py_files / file_count，导致元数据 302、正文却写
+        「20 个文件」（外部实测 D-1：同一份 Wiki 出现 5 种文件数）。
+        """
         # 核心模块优先保留全部
         core_modules = [m for m in modules if m.is_core]
         non_core = [m for m in modules if not m.is_core]
@@ -1019,19 +1039,16 @@ class _WikiMetaMixin:
         import random
         random.seed(42)  # 确定性采样
 
-        # 对非核心模块采样
+        # 非核心模块：样本不超过 15
         for m in non_core:
             if len(m.py_files) > 15:
-                m.py_files = random.sample(m.py_files, 15)
-                m.file_count = len(m.py_files)
+                m.sample_files = random.sample(m.py_files, 15)
 
-        # 如果总文件数还是太多，对核心模块也采样
-        total = sum(m.file_count for m in modules)
-        if total > self.LARGE_REPO_SAMPLE:
+        # 总文件数过多时，核心模块样本不超过 20
+        if sum(m.file_count for m in modules) > self.LARGE_REPO_SAMPLE:
             for m in core_modules:
                 if len(m.py_files) > 20:
-                    m.py_files = random.sample(m.py_files, 20)
-                    m.file_count = len(m.py_files)
+                    m.sample_files = random.sample(m.py_files, 20)
 
         return modules
 
@@ -1393,9 +1410,11 @@ class _WikiDocMixin:
 
         for mod in modules:
             parts = [f"## 模块: {mod.name}\n"]
-            parts.append(f"文件数: {mod.file_count}\n")
+            # 文件数必须是真实总数：模型只能看到样本，不能把样本数当总数
+            parts.append(f"文件数: {mod.file_count}（以下仅列出样本，不是全部）\n")
 
-            for fpath in sorted(mod.py_files)[:20]:
+            listed = 0
+            for fpath in sorted(mod.sample_files or mod.py_files):
                 rel = os.path.relpath(fpath, mod.path)
                 try:
                     with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
@@ -1406,11 +1425,16 @@ class _WikiDocMixin:
                 # 提取关键信息
                 info = self._extract_file_info(content, rel)
                 parts.append(info)
+                listed += 1
 
                 # 控制总长度
                 if sum(len(p) for p in parts) > self.MAX_CONTEXT_CHARS:
-                    parts.append(f"\n...(还有 {len(mod.py_files) - 20} 个文件未列出)\n")
                     break
+
+            if mod.file_count > listed:
+                parts.append(
+                    f"\n...(共 {mod.file_count} 个文件，以上列出 {listed} 个样本；"
+                    f"写到文档时文件总数必须用 {mod.file_count}，不得用样本数)\n")
 
             summaries[mod.name] = "\n".join(parts)
 
@@ -1814,10 +1838,13 @@ class _WikiDocMixin:
             if self.llm.is_error_response(text):
                 self._last_llm_error = text
                 return ""
-            # 思考过程不得落盘：统一走空串 → _write_doc 跳过并计入失败统计
+            # 思考过程不得落盘：先重试一次，仍不合格再判失败（不写空壳文件）
             if _looks_like_meta_talk(text):
-                self._last_llm_error = "LLM 返回疑似思考过程，已丢弃"
-                return ""
+                text = self.llm.chat_completion(
+                    messages, max_tokens=4096, temperature=0.3)
+                if self.llm.is_error_response(text) or _looks_like_meta_talk(text):
+                    self._last_llm_error = "LLM 返回疑似思考过程，重试后仍不合格，已丢弃"
+                    return ""
             return text
         except Exception as e:
             self._last_llm_error = str(e)
@@ -1857,6 +1884,9 @@ class _WikiDocMixin:
             "4. 如果分析结果显示模块之间没有依赖关系，就说它们独立工作。\n"
             "5. 不要使用「平台」「系统」「架构分层」「数据流」等暗示统一产品的词语，除非分析结果证据确凿。\n"
             "6. 宁可保守（如实列出文件），不要夸张（编造模块间协作关系）。\n"
+            "7. 引用文件路径必须与分析结果中的相对路径逐字一致，不得省略中间目录"
+            "（例如 `pkg/sub/x.py` 不能写成 `pkg/x.py`）；分析清单未覆盖的文件不要编造路径。\n"
+            "8. 文件总数以「文件数: N」为准；正文只列了样本，不得把样本数当成总数。\n"
         )
 
 
@@ -2804,6 +2834,12 @@ class _WikiEmitMixin:
 
         R2：默认在文档顶部注入 front matter（可按文档类型显式传入覆盖）。
         """
+        # 正文为空时连 front matter 一起跳过：旧实现会写出「只有 front matter、
+        # 正文 0 字」的 155B 空壳，下游无法区分「没生成」与「生成失败」。
+        if not content or not content.strip():
+            if name not in self._failed_docs:
+                self._failed_docs.append(name)
+            return
         if front_matter is None:
             front_matter = self._auto_front_matter(name)
         full = (front_matter + content) if front_matter else content

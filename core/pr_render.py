@@ -182,8 +182,17 @@ def _collect_dimension_states(project_path: str,
     if wiki_dir:
         md_count = _count_md(wiki_dir)
         try:
-            ts = datetime.fromtimestamp(
-                os.path.getmtime(wiki_dir)).strftime("%Y-%m-%d %H:%M:%S")
+            # 取目录内最新文件时间：目录 mtime 只在增删条目时变化，
+            # 旧实现会让「篇数实时正确、时间停在一天前」（外部实测 D-4）。
+            latest = 0.0
+            for root, _dirs, files in os.walk(wiki_dir):
+                for fn in files:
+                    try:
+                        latest = max(latest, os.path.getmtime(os.path.join(root, fn)))
+                    except OSError:
+                        continue
+            ts = (datetime.fromtimestamp(latest).strftime("%Y-%m-%d %H:%M:%S")
+                  if latest else "")
         except Exception:
             ts = ""
         states["wiki"] = {
