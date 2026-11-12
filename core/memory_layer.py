@@ -50,6 +50,8 @@ except Exception:  # pragma: no cover
         _logger.setLevel(logging.INFO)
 logger = _logger
 
+from core.path_key import project_key
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 模块级常量（magic number 集中定义，不修改 config/settings.py）
@@ -264,7 +266,7 @@ class MemoryLayer:
 
     @staticmethod
     def _project_hash(project_path: str) -> str:
-        return hashlib.md5(os.path.abspath(project_path).encode("utf-8")).hexdigest()[:12]
+        return hashlib.md5(project_key(project_path).encode("utf-8")).hexdigest()[:12]
 
     def _state_path(self, project_path: str) -> str:
         return os.path.join(_MEMORY_STATE_DIR, f"{self._project_hash(project_path)}.json")
@@ -319,6 +321,20 @@ class MemoryLayer:
             return False
         return abs(old.get("mtime", 0) - cur.get("mtime", 0)) <= _MTIME_TOLERANCE and \
             old.get("size") == cur.get("size")
+
+    @classmethod
+    def _snapshots_match(cls, old: dict, cur: dict) -> bool:
+        """两份文件快照是否代表同一批内容（路径规范化后逐文件比对）。"""
+        def _norm(snap):
+            out = {}
+            for fp, st in (snap or {}).items():
+                if isinstance(st, dict):
+                    out[os.path.normcase(os.path.abspath(fp))] = st
+            return out
+        a, b = _norm(old), _norm(cur)
+        if a.keys() != b.keys():
+            return False
+        return all(cls._same_file(a[k], b[k]) for k in a)
 
     # ═══════════════════════════════════════════════════════════════
     # 1. sync
@@ -490,7 +506,8 @@ class MemoryLayer:
             logger.warning(f"[MemoryLayer] 记忆状态写入失败: {e}")
 
     def sync(self, project_path: str, mode: str = "full",
-             builder: str = "", skip_kg: bool = False) -> dict:
+             builder: str = "", skip_kg: bool = False,
+             kg_snapshot: dict = None) -> dict:
         """全量或增量同步项目到代码记忆层。
 
         Args:
@@ -500,6 +517,10 @@ class MemoryLayer:
             skip_kg: 跳过图谱重建，只同步记忆状态/语义库。审计管线已用
                 `_build_kg` 建过全量图时必须置 True——否则收尾的增量重建
                 会用局部 AST 覆盖全量结果（外部实测 CALLS 13,141 vs 13,211）。
+            kg_snapshot: 建图时刻的 mtime+size 快照。传入时只有当前快照与它
+                一致才真的跳过图谱更新；不一致说明建图后文件又被改过，
+                此时改用全量重建，避免"状态快照已更新、图仍停在旧版本"
+                之后增量同步再也修不回来。
 
         Returns:
             {"status", "mode", "synced_files", "changed_files", "unchanged_files",
@@ -561,8 +582,19 @@ class MemoryLayer:
 
         # 更新知识图谱（结构记忆）
         if skip_kg and kg_exists:
-            # 审计管线已建全量图：只读现状，绝不再用增量覆盖
-            kg_stats = self._kg_counts(project_path)
+            # 审计管线已建全量图：默认只读现状。但如果建图后文件又被改过，
+            # 图就不再代表磁盘现状，跳过会让图谱永久 stale（状态快照会被
+            # 本次写新，后续增量同步误判"无变更"），因此改为全量重建。
+            if kg_snapshot is not None:
+                kg_stale = not self._snapshots_match(kg_snapshot, current_snapshot)
+            else:
+                kg_stale = bool(changed or deleted)
+            if not kg_stale:
+                kg_stats = self._kg_counts(project_path)
+            else:
+                kg_stats = self._update_knowledge_graph(
+                    project_path, analysis, ast_results, None,
+                    builder=builder or "memory_sync_kg_stale")
         elif mode != "full" and not changed and not deleted and kg_exists:
             kg_stats = self._kg_counts(project_path)  # 无变更：不重建，只报现状
         else:

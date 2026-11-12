@@ -664,10 +664,13 @@ class Pipe:
             strata = getattr(r, "audit_strategy", "full") or "full"
             # 审计管线刚用 _build_kg 建过全量图：收尾只同步记忆状态/语义库，
             # 不再用增量重建覆盖全量结果（外部实测 CALLS 13,141 vs 13,211）。
+            # 传入建图时的文件快照：建图后若又有文件被改，sync 会改用全量重建，
+            # 避免图谱停在旧版本且后续增量再也修不回来。
             skip_kg = bool(getattr(r, "kg_built_at", ""))
             memory_layer.sync(project_path,
                               mode="incr" if strata == "incr" else "full",
-                              builder="audit_sync", skip_kg=skip_kg)
+                              builder="audit_sync", skip_kg=skip_kg,
+                              kg_snapshot=getattr(r, "file_snapshot", None))
         except Exception as e:
             r.errors.append(f"memory_sync: {e}")
 
