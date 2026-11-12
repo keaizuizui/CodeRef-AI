@@ -1537,6 +1537,14 @@ class CodeKnowledgeGraph:
             "ast_files": self._get_meta("ast_files"),
             "project_path": self.project_path,
             "db_path": self._db_path,
+            # 口径披露：常量覆盖率常被误读为漏收。这里写明判定边界，
+            # 让「388/1956」这类数字可解释，而不是当成缺陷。
+            "constant_scope": {
+                "rule": "全大写+下划线命名，且值为字面量（str/int/float/bool/None）",
+                "excluded": "容器字面量、函数调用等表达式赋值不计为常量",
+                "counted": int(type_counts.get("constant", 0)),
+                "note": "收不束的常量由项目白名单/文档口径治理，不追求 100% 覆盖",
+            },
         }
 
     def _get_meta(self, key: str) -> str:
