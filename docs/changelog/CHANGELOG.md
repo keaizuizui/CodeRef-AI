@@ -14,7 +14,7 @@
 - **G-E 硬闸门**：项目已安装记忆契约但本次会话未 `recover` 时，`change_guard` / `audit` / `docs` 返回 `blocked`（`gate=G-E` + `owner_actions`），必须补 `coderef_operation_memory(action=recover)`；未接入规则的旧项目保持原 warn 行为。默认 block，可按闸门显式配置。
 - **数据层收口**：新增 `core/dream_memory.py`，`coderef_operation_memory` 的 sync/query/find/status/recover/export 统一走梦（环境索引 `memory_index.json` + 语义笔记），`sync` 不再做 LLM 提炼；`memory_digest` 仍 dream-first。梦内 4 条 WSL/CODEREF 过期联想已标 `rejected`，并补 2 条新 seed（备份在 `交接/dream_data_bak_mem_merge_*`）。
 - **生效时机（诚实边界）**：新对话自动加载规则；已开工对话不热加载，需粘贴激活语 `请先调用 coderef_operation_memory(action=recover)`。服务端无法主动推送，这是 MCP 协议边界。
-- **验证**：全量 pytest **479 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.16）；`change_guard` 无退化；G-E 实测：未 recover 时 blocked（G-A + G-E），recover 后放行；安装器幂等/卸载/手写内容保留/全局目录创建均有回归。
+- **验证**：全量 pytest **480 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.16）；`change_guard` 无退化；G-E 实测：未 recover 时 blocked（G-A + G-E），recover 后放行；安装器幂等/卸载/手写内容保留/全局目录创建均有回归。
 
 ### v5.21.15 — 外部第五轮反馈：建图确定性、file 限定核验、扫描口径与 Wiki 落盘
 
