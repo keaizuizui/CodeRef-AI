@@ -4,6 +4,20 @@
 
 ---
 
+### v5.21.20 — docs 元数据与正文口径打通（外部 v5.21.19 实测）
+
+> 背景：外部实测 v5.21.19，审计/图谱/架构/OWASP 全部通过，问题集中在 `coderef_docs` 的「元数据 → 生成」这一段与评估台一个时间字段。
+
+- **同一份 Wiki 出现 5 种文件数（D-1，高）**：`_sample_large_repo` 直接改写 `py_files` 与 `file_count`，导致元数据 302、正文写「20 个文件」。新增 `WikiModule.sample_files`，采样只决定喂给 LLM 的样本，真实 `py_files` / `file_count` 不再被改；`_collect_code_summaries` 明确写「文件数: N（以下仅列样本）」并提示模型不得用样本数当总数。
+- **思考过程丢弃后留空壳（D-2，中高）**：`_emit` 在正文为空时仍拼 front matter 落盘，产出 155B 空壳。现在正文为空直接记失败、不写文件；`_llm_ask` 命中疑似思考过程时**重试一次**，仍不合格才丢弃并计入失败。
+- **拦截规则漏检 OVERVIEW（D-3，中）**：元话语标记扩展到「我们需要写 / 需要遵守规则 / 必须原样引用」，覆盖模型把写作指令当正文复述的情况。
+- **评估台 Wiki 时间取错（D-4，中）**：`states["wiki"].ts` 改用 wiki 目录内**最新文件 mtime**，不再用目录 mtime（目录只在增删条目时变化，导致篇数实时、时间停在一天前）。
+- **入口文件判定过窄（D-5，中）**：旧实现只认 `main/app/server/run.py`，导致 `web_gui.py`（4,098 行 HTTP 服务）不被当入口，LLM 写出「没有网页界面」。现在扩展到 `wsgi/asgi/manage/cli/gui/web/web_gui/launch/start/startup`、`web_/gui_/app_` 前缀，以及带 `if __name__ == "__main__"` 的非 tests 文件；prompt 事实约束新增「文件路径逐字引用、不得省略中间目录」「文件总数以『文件数: N』为准」。
+- **函数节点口径披露（D-7，低）**：`query(stats)` 新增 `function_scope`，说明 function 节点含类方法/嵌套函数/条件内定义，公有计数不等于顶层函数数。
+- **docs 状态拆分（B-2）**：返回新增 `degraded_reasons`，把「超时/预算」与「内容被丢弃」拆开，`status` 保持兼容。
+- **未纳入**：D-6（常量字面量 92.2% 召回，差 33 条，低；口径已披露）、B-1（`verify_findings` 对口径排除类型返回 `unverifiable`，属语义改善建议）。
+- **验证**：全量 pytest **506 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.20）；外部项目实测采样后 `chonggou` 仍为 302 文件、样本 20。
+
 ### v5.21.19 — Wiki 质量门禁与口径披露（外部第七轮）
 
 > 背景：外部按三步自检跑完，审计零污染（4,511 节点 / CALLS 13,211 前后一致）。但引用存量 Wiki 时发现：39 篇是 2 天前的草稿，其中 7 篇写「只识别出 1 个模块、31 个文件」（实际 327 个 `.py`），模块正文是模型思考过程原文。
