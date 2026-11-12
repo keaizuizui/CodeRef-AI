@@ -444,7 +444,9 @@ class AstParser:
         - hardcoded: 硬编码值（敏感变量名 + 字符串字面量）
         - expression: 表达式（无法判断的复杂表达式）
         """
-        var_is_upper = var_name == var_name.upper() and '_' in var_name
+        # 全大写即常量名，不要求带下划线：旧实现要求 '_' in name，
+        # 把 SOURCE / PLACEHOLDER / DROP 这类单词常量全漏掉（外部实测 D-6）。
+        var_is_upper = len(var_name) > 1 and var_name.isupper()
         var_is_sensitive = var_name.lower() in self.SENSITIVE_VAR_NAMES
 
         # 检查是否是配置读取

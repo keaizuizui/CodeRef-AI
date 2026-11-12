@@ -22,6 +22,7 @@ verify_findings — LLM / CodeRabbit 论断的确定性核验（驾驭翼咽喉�
 集成方式：作为 MCP 工具 coderef_verify_findings 暴露。
 """
 
+import ast
 import os
 import re
 from typing import Dict, List, Optional, Set, Tuple
@@ -355,11 +356,18 @@ class FindingsVerifier:
                 except Exception:  # noqa: BLE001 —— 统计失败不影响存在性结论
                     callers = self.kg.query_callers(symbol).total if found else 0
                     callees = self.kg.query_callees(symbol).total if found else 0
-            return {"symbol": symbol, "found": found, "callers": callers,
-                    "callees": callees, "node": node,
-                    "file_constrained": bool(file_hint),
-                    "matched_in_file": found,
-                    "same_name_elsewhere": elsewhere}
+            result = {"symbol": symbol, "found": found, "callers": callers,
+                      "callees": callees, "node": node,
+                      "file_constrained": bool(file_hint),
+                      "matched_in_file": found,
+                      "same_name_elsewhere": elsewhere}
+            # 图谱查不到、但源码里确实有该全大写常量且值不是字面量：
+            # 属于「按 constant_scope 口径被排除」，不是「不存在」。
+            if not found and file_hint and self._is_excluded_constant(symbol, file_hint):
+                result["out_of_scope"] = True
+                result["out_of_scope_reason"] = (
+                    "全大写容器/表达式赋值，按常量口径不进图谱")
+            return result
         except Exception as exc:
             _log(f"符号核验失败 {symbol}: {exc}")
             return {"symbol": symbol, "found": False, "callers": 0, "callees": 0,
@@ -367,6 +375,29 @@ class FindingsVerifier:
                     "matched_in_file": False, "same_name_elsewhere": 0}
 
     # ─── 管线核验 ───
+    def _is_excluded_constant(self, symbol: str, file_hint: str) -> bool:
+        """符号是否为「全大写、但值不是字面量」的常量（按 constant_scope 被排除）。
+
+        这类符号不进图谱是口径设计，不是缺失。判定时用源码实证，
+        避免让 `verify_findings` 把它算成「文件存在但符号查不到」。
+        """
+        if not symbol or len(symbol) < 2 or not symbol.isupper():
+            return False
+        path = (file_hint if os.path.isabs(file_hint)
+                else os.path.join(self.project_path, file_hint))
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                tree = ast.parse(f.read())
+        except Exception:  # noqa: BLE001 —— 读不到/语法错误一律按"不可判定"
+            return False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id == symbol:
+                    return not isinstance(node.value, ast.Constant)
+        return False
+
     def _in_pipeline(self, symbols: List[str], entry: str) -> Optional[bool]:
         """若指定 entry，判定符号是否在入口静态调用管线内。"""
         if not entry or not self.graph_exists:
@@ -418,7 +449,9 @@ class FindingsVerifier:
         """逐符号核验，返回 (probes, 已找到符号, 未找到符号)。"""
         probes = [self._symbol_probe(s, file_hint=file_hint) for s in symbols_all]
         symbols_found = [p["symbol"] for p in probes if p["found"]]
-        symbols_missing = [p["symbol"] for p in probes if not p["found"]]
+        # 口径排除的符号不算 missing：否则会被判成「文件存在但符号查不到」
+        symbols_missing = [p["symbol"] for p in probes
+                           if not p["found"] and not p.get("out_of_scope")]
         return probes, symbols_found, symbols_missing
 
     # ─── 单条核验 ───
@@ -457,6 +490,13 @@ class FindingsVerifier:
         if file_hint and symbols_missing and elsewhere:
             reason += (f"；同名符号在文件外的其他位置存在 {elsewhere} 处，"
                        f"按 file 限定不计为确证")
+        # 没有确证符号、只有「按口径被排除」的常量：判存疑而不是部分确证/仅文件存在
+        oos = [p for p in probes if p.get("out_of_scope")]
+        if oos and not symbols_found:
+            verdict = VERDICT_UNVERIFIABLE
+            names = "、".join(p["symbol"] for p in oos[:3])
+            reason = (f"符号 {names} 是全大写常量但值为容器/表达式，"
+                      f"按 constant_scope 口径不进图谱，无法确定性核验")
 
         evidence = {
             "graph_exists": self.graph_exists,
