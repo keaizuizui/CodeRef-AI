@@ -22,6 +22,8 @@ from typing import Dict, List, Optional, Tuple, Any
 
 from loguru import logger
 
+from core.path_key import project_key
+
 # ─── 建图串行化 ───────────────────────────────────────────────
 # 审计、memory sync、query 的新鲜度刷新、flow_verify 的自动补建可能在同一
 # 项目上并发触发建图。旧实现无互斥：两个 build 各自 _clear + 分批写入，
@@ -369,7 +371,9 @@ class CodeKnowledgeGraph:
 
     def __init__(self, project_path: str, db_path: Optional[str] = None):
         self.project_path = os.path.abspath(project_path)
-        self._phash = hashlib.md5(self.project_path.encode()).hexdigest()[:12]
+        # 路径哈希必须走 project_key 归一：Windows 下 D:\ 与 d:\ 是同一项目，
+        # 未归一会被算成两个库，查错库并触发 G-B 误报（登记册 U-71）。
+        self._phash = hashlib.md5(project_key(project_path).encode()).hexdigest()[:12]
         # 显式 db_path 优先（供 verify_findings 等跨项目复用图谱），缺省按 project_path 生成
         self._db_path = os.path.abspath(db_path) if db_path else self._make_db_path()
         self._conn: Optional[sqlite3.Connection] = None
@@ -566,7 +570,10 @@ class CodeKnowledgeGraph:
             # 增量构建后清理悬空边（被删文件的节点已移除；重命名/移动后
             # 旧调用方指向已不存在符号的边与全量重建口径一致地丢弃）
             self._prune_dangling_edges()
-            stats.update(self._counts())
+        # 返回的计数一律取落库真值。全量路径若沿用内存累加器，会把被
+        # INSERT OR REPLACE 覆盖的重复行、悬空边也算进去（外部实测返回
+        # 4222/17758，实际落库 4511/17465）。
+        stats.update(self._counts())
 
         self._set_meta("built_at", str(time.time()))
         # 建图溯源：谁建的、全量还是增量、AST 覆盖多少文件。
@@ -1353,17 +1360,20 @@ class CodeKnowledgeGraph:
         nodes = [self._row_to_node(r) for r in rows]
         return KGQueryResult(nodes=nodes, total=len(nodes), query_type="entity")
 
-    def query_entities_exact(self, name: str, limit: int = 1000) -> KGQueryResult:
+    def query_entities_exact(self, name: str, limit: int = 0) -> KGQueryResult:
         """按名称精确查询全部实体（不受 query_entity 的 LIMIT 50 截断）。
 
         verify_findings 按 file 限定符号时需要看到全部同名节点；`main` 这类
         常见名在真实项目有 60+ 个，旧的 LIKE+LIMIT 50 会把目标文件节点截掉，
-        造成“文件里明明有却判 found=False”的假阴性。
+        造成“文件里明明有却判 found=False”的假阴性。limit<=0 表示不设上限。
         """
         self._connect()
-        rows = self._conn.execute(
-            "SELECT * FROM nodes WHERE name=? LIMIT ?",
-            (name, max(1, int(limit)))).fetchall()
+        sql = "SELECT * FROM nodes WHERE name=?"
+        params = [name]
+        if limit and int(limit) > 0:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        rows = self._conn.execute(sql, params).fetchall()
         nodes = [self._row_to_node(r) for r in rows]
         return KGQueryResult(nodes=nodes, total=len(nodes),
                              query_type="entity_exact")
