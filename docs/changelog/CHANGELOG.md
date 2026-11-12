@@ -14,9 +14,10 @@
 - **评估台 Wiki 时间取错（D-4，中）**：`states["wiki"].ts` 改用 wiki 目录内**最新文件 mtime**，不再用目录 mtime（目录只在增删条目时变化，导致篇数实时、时间停在一天前）。
 - **入口文件判定过窄（D-5，中）**：旧实现只认 `main/app/server/run.py`，导致 `web_gui.py`（4,098 行 HTTP 服务）不被当入口，LLM 写出「没有网页界面」。现在扩展到 `wsgi/asgi/manage/cli/gui/web/web_gui/launch/start/startup`、`web_/gui_/app_` 前缀，以及带 `if __name__ == "__main__"` 的非 tests 文件；prompt 事实约束新增「文件路径逐字引用、不得省略中间目录」「文件总数以『文件数: N』为准」。
 - **函数节点口径披露（D-7，低）**：`query(stats)` 新增 `function_scope`，说明 function 节点含类方法/嵌套函数/条件内定义，公有计数不等于顶层函数数。
+- **单词全大写常量被漏收（D-6，低）**：`_classify_assignment` 要求常量名含下划线，`SOURCE` / `PLACEHOLDER` / `DROP` 这类单词全大写常量被判成 expression 不进图。改为 `len>1 and isupper()`；外部项目实测这几个常量已归为 `constant`。
+- **口径排除符号误判（B-1，建议项）**：`verify_findings` 新增 `_is_excluded_constant`（源码 AST 反查「全大写但值非字面量」），这类符号不再计入 `symbols_missing`；当一条论断只有这类符号时判 `unverifiable` 并说明「按 constant_scope 口径不进图谱」，不再给 `partially_confirmed` / `file_exists_only`。
 - **docs 状态拆分（B-2）**：返回新增 `degraded_reasons`，把「超时/预算」与「内容被丢弃」拆开，`status` 保持兼容。
-- **未纳入**：D-6（常量字面量 92.2% 召回，差 33 条，低；口径已披露）、B-1（`verify_findings` 对口径排除类型返回 `unverifiable`，属语义改善建议）。
-- **验证**：全量 pytest **506 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.20）；外部项目实测采样后 `chonggou` 仍为 302 文件、样本 20。
+- **验证**：全量 pytest **508 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.20）；外部项目实测采样后 `chonggou` 仍为 302 文件、样本 20。
 
 ### v5.21.19 — Wiki 质量门禁与口径披露（外部第七轮）
 
