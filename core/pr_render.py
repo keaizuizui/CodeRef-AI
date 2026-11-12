@@ -188,7 +188,10 @@ def _collect_dimension_states(project_path: str,
             ts = ""
         states["wiki"] = {
             "status": "done", "ts": ts, "docs": md_count,
-            "hint": f"Wiki 已生成，{md_count} 篇文档",
+            # 必须带生成时间：只写"已生成 N 篇"会让旧 wiki 看起来像刚生成，
+            # 外部实测据此误引用了 2 天前的 39 篇草稿。
+            "hint": (f"Wiki 已生成，{md_count} 篇文档（{ts}）" if ts
+                     else f"Wiki 已生成，{md_count} 篇文档（生成时间未知）"),
         }
     else:
         states["wiki"] = {

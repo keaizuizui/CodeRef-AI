@@ -48,8 +48,8 @@ logger = logging.getLogger(__name__)
 from core.wiki_constants import (
     BADGE_MD, CITE_IGNORE, CORE_RULES_FILE, DEFAULT_ENTRY_FILES,
     DEFAULT_MIN_FILES, EXCLUDE_DIRS, LARGE_REPO_SAMPLE,
-    LARGE_REPO_THRESHOLD, MAX_CONTEXT_CHARS, MAX_ENTRY_DOCS,
-    MAX_FILES_PER_MODULE, MAX_FLOW_DOCS, METADATA_MAX_CLASSES,
+    LARGE_REPO_THRESHOLD, MAX_COLLECT_FILES_PER_MODULE, MAX_CONTEXT_CHARS,
+    MAX_ENTRY_DOCS, MAX_FILES_PER_MODULE, MAX_FLOW_DOCS, METADATA_MAX_CLASSES,
     METADATA_MAX_FILES, METADATA_MAX_FUNCS, SUBPROJECT_INDICATORS,
     WIKI_AGENT_POINTER_END, WIKI_AGENT_POINTER_START,
     WIKI_CONFIDENCE_MAP, WIKI_INCREMENTAL_MAX_CHANGED_FILES,
@@ -63,6 +63,22 @@ _cfg = _wiki_constants._cfg
 _settings = _wiki_constants._settings
 
 from core.path_key import project_key
+
+# 正文门禁：模型偶尔把「思考过程」当成正文返回。这类文本不是文档，
+# 落盘会产出「用户要求我为…嗯，这有点矛盾」这种草稿（外部实测 chonggou.md）。
+_META_TALK_MARKERS = (
+    "用户要求我", "用户希望我", "用户让我", "让我仔细", "让我先", "让我看看",
+    "我需要为", "这有点矛盾", "我注意到", "我先分析", "好的，我需要",
+)
+
+
+def _looks_like_meta_talk(text: str) -> bool:
+    """正文应以 Markdown 标题开头；不以标题开头且命中元话语，判定为思考过程。"""
+    body = (text or "").lstrip()
+    if not body or body.startswith("#"):
+        return False
+    head = body[:400]
+    return any(marker in head for marker in _META_TALK_MARKERS)
 
 
 # 交叉验证徽章渲染（可选导入：wiki_cross_verify 缺失时降级为空渲染，不阻断生成）
@@ -687,7 +703,7 @@ class _WikiMetaMixin:
             for f in files:
                 if f.endswith(".py") and not f.startswith("_"):
                     py_files.append(os.path.join(root, f))
-            if len(py_files) > self.MAX_FILES_PER_MODULE:
+            if len(py_files) > self.MAX_COLLECT_FILES_PER_MODULE:
                 break
         return py_files
 
@@ -1797,6 +1813,10 @@ class _WikiDocMixin:
             # 统一判定后返回空串（由 _write_doc 跳过落盘并计入失败统计）。
             if self.llm.is_error_response(text):
                 self._last_llm_error = text
+                return ""
+            # 思考过程不得落盘：统一走空串 → _write_doc 跳过并计入失败统计
+            if _looks_like_meta_talk(text):
+                self._last_llm_error = "LLM 返回疑似思考过程，已丢弃"
                 return ""
             return text
         except Exception as e:
@@ -3116,6 +3136,7 @@ class WikiGenerator(_WikiGitMixin, _WikiMetaMixin, _WikiDocMixin, _WikiEmitMixin
     LARGE_REPO_THRESHOLD = LARGE_REPO_THRESHOLD
     LARGE_REPO_SAMPLE = LARGE_REPO_SAMPLE
     MAX_FILES_PER_MODULE = MAX_FILES_PER_MODULE
+    MAX_COLLECT_FILES_PER_MODULE = MAX_COLLECT_FILES_PER_MODULE
     MAX_CONTEXT_CHARS = MAX_CONTEXT_CHARS
     MAX_ENTRY_DOCS = MAX_ENTRY_DOCS
     MAX_FLOW_DOCS = MAX_FLOW_DOCS
