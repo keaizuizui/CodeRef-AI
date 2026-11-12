@@ -561,17 +561,22 @@ class FrontendInspector:
         else:
             logger.warning("LLM 不可用，仅完成静态枚举，未进行 AI 审查")
 
-        summary = self._build_static_summary(html_files, buttons, menu_nodes, findings)
+        summary = self._build_static_summary(
+            html_files, buttons, menu_nodes, findings,
+            pending_count=sum(1 for f in findings
+                              if f.get("category") == "待确认"))
         coverage_note = str(enum.get("coverage_note") or "")
         if coverage_note:
             summary = coverage_note + "\n" + summary
 
+        degraded = (not self._llm_available()) or any(
+            f.get("category") == "待确认" for f in findings)
         return {
             "buttons": [b.to_dict() for b in buttons],
             "menu_tree": self._serialize_menu(menu_roots, check_levels),
             "findings": findings,
             "summary": summary,
-            "partial": bool(enum.get("partial")),
+            "partial": bool(enum.get("partial")) or degraded,
         }
 
     def _runtime_unavailable_result(self, static_result: Dict[str, Any],
@@ -1016,10 +1021,16 @@ class FrontendInspector:
         buttons: List[ButtonItem],
         menu_nodes: List[MenuNode],
         findings: List[Dict[str, Any]],
+        pending_count: int = 0,
     ) -> str:
         lines: List[str] = []
-        if not self._llm_available():
-            lines.append("LLM 不可用（未配置 API Key 或客户端未初始化），仅完成静态枚举，未进行 AI 审查；findings 为空或仅含降级结论。")
+        if not self._llm_available() or pending_count:
+            # 待确认占位不是“问题”：不能计入 findings 数，也不能写“审查完成”
+            reason = ("LLM 不可用（未配置 API Key 或客户端未初始化）"
+                      if not self._llm_available() else
+                      f"{pending_count} 条条目降级为待确认")
+            lines.append(f"LLM 审查未完成：{reason}；仅完成静态枚举，"
+                         f"待确认占位不计为问题数。")
         else:
             high = sum(1 for f in findings if f.get("severity") == "high")
             medium = sum(1 for f in findings if f.get("severity") == "medium")
