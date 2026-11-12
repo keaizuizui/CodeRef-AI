@@ -1087,14 +1087,24 @@ class Server:
                             # ：docs 也透传阶段进度回调，取消检查点覆盖扫描/图谱/wiki 生成阶段
                             progress_cb=progress_cb)
             wr = getattr(r, "wiki_result", None)
+            _errs = getattr(r, "errors", [])
             # 结构化返回：携带输出目录/文档清单/失败明细，让调用方能区分"全量成功"与"部分失败"，
             # 避免部分文档生成失败时仍被当作 fully completed。
+            # degraded_reasons 把「超时/预算」与「内容被丢弃」拆开：两者修复动作不同
+            # （前者调预算或增量重跑，后者重试生成），混在一个 status 里无法分派。
+            _joined = " ".join(str(e) for e in _errs).lower()
             return json.dumps({
-                "status": "completed" if not getattr(r, "errors", []) else "partial_failed",
+                "status": "completed" if not _errs else "partial_failed",
                 "tool": n,
                 "project_path": p,
                 "report": getattr(r, "report", ""),
-                "errors": getattr(r, "errors", []),
+                "errors": _errs,
+                "degraded_reasons": {
+                    "timeout_or_budget": any(
+                        k in _joined for k in ("超时", "timeout", "预算", "budget")),
+                    "content_dropped": any(
+                        k in _joined for k in ("思考过程", "丢弃", "meta_talk")),
+                },
                 "wiki": {
                     "output_dir": getattr(wr, "output_dir", "") if wr else "",
                     "documents": getattr(wr, "documents", []) if wr else [],

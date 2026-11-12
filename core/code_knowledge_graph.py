@@ -1545,6 +1545,14 @@ class CodeKnowledgeGraph:
                 "counted": int(type_counts.get("constant", 0)),
                 "note": "收不束的常量由项目白名单/文档口径治理，不追求 100% 覆盖",
             },
+            # 口径披露：function 节点包含类方法、嵌套函数与条件内定义，
+            # 因此公有/私有计数不等于「顶层函数数」（外部实测 D-7：1309 vs 704）。
+            "function_scope": {
+                "rule": "function 节点含顶层函数、类方法、嵌套函数与条件内定义",
+                "counted": int(type_counts.get("function", 0)),
+                "note": ("存在性判定请用 node 的 file_path + start_line 复核；"
+                         "不要把公有函数计数当作顶层函数数"),
+            },
         }
 
     def _get_meta(self, key: str) -> str:
