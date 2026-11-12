@@ -181,12 +181,17 @@ def install(project_path: str, targets: str = "project",
 
     written: List[dict] = []
     skipped: List[dict] = []
+    global_set = {os.path.normcase(p) for p in _global_targets()}
     for path in paths:
         exists = os.path.isfile(path)
+        key = os.path.normcase(os.path.abspath(path))
         is_agents = os.path.basename(path) == "AGENTS.md" and \
             os.path.dirname(path) == pp
-        # 项目级：AGENTS.md 可新建；其余只在文件已存在时更新，避免造噪音
-        if not exists and not (create_missing and is_agents):
+        is_global = key in global_set
+        # 项目级：AGENTS.md 可新建；其余只在文件已存在时更新，避免造噪音。
+        # 全局级：编辑器目录已存在即可创建（目录就是“编辑器已安装”的信号）。
+        if not exists and not (create_missing and is_agents) and not (
+                is_global and os.path.isdir(os.path.dirname(path))):
             skipped.append({"path": path, "reason": "文件不存在"})
             continue
         old = _read(path) if exists else ""
