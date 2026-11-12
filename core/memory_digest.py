@@ -129,13 +129,21 @@ def _entry_text(entry) -> str:
     return str(entry)
 
 
-def _candidates(recover_data: dict) -> List[Tuple[str, str]]:
-    """按优先级把 recover 返回值摊平成 (kind, text) 候选序列"""
+def _candidates(recover_data: dict,
+                skip_semantic: bool = False) -> List[Tuple[str, str]]:
+    """按优先级把 recover 返回值摊平成 (kind, text) 候选序列。
+
+    skip_semantic=True 用于 source=dream 的兼容返回：梦笔记已由
+    `_dream_digest` 注入，decisions/conventions/pitfalls/notes 再取一次会重复。
+    """
     out: List[Tuple[str, str]] = []
     consumed: Set[str] = set()
+    if skip_semantic:
+        consumed.update({"decisions", "conventions", "pitfalls",
+                         "pending_items", "notes"})
 
     for key, label in _PRIMARY_SOURCES:
-        if key not in recover_data:
+        if key in consumed or key not in recover_data:
             continue
         consumed.add(key)
         for entry in _as_list(recover_data.get(key)):
@@ -249,7 +257,8 @@ def build_digest(project_path: str, max_tokens: int = 800) -> dict:
         digest["recovered_from"] = ("dream+operation_memory" if dream_items
                                     else "operation_memory")
         digest["updated_at"] = str(data.get("last_sync") or "")
-        for kind, raw in _candidates(data):
+        for kind, raw in _candidates(
+                data, skip_semantic=(data.get("source") == "dream")):
             if not _add_item(kind, raw):
                 break
     elif dream_items:
