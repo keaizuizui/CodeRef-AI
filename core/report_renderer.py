@@ -196,6 +196,28 @@ def _wrap_list_items(html_body: str) -> str:
     return html_body
 
 
+def _looks_like_yaml_meta(body: str) -> bool:
+    """判断 `---` 区块内容是否为 YAML 元数据映射（而非普通正文）。
+
+    要求：至少一行 `key: value`，且所有非空行都是注释、key 行、列表项
+    或缩进续行。普通 Markdown（如 `# 警告` + 顶格正文）不满足，保持原样渲染。
+    """
+    has_key = False
+    for raw in (body or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if raw[:1] in (" ", "\t") or line.startswith("- ") or line == "-":
+            continue
+        if line.startswith("#"):
+            continue
+        if re.match(r"^[A-Za-z_][\w.\-]*\s*:", line):
+            has_key = True
+            continue
+        return False
+    return has_key
+
+
 def md_to_html(md_text: str) -> str:
     """把 markdown 子集转成 HTML（HTML 转义处理，防止注入）。"""
     if not md_text:
@@ -203,10 +225,11 @@ def md_to_html(md_text: str) -> str:
 
     # 0. 剥离 YAML front matter：wiki 文档用它存 type/confidence/source，
     # 不是正文；不剥会直接把 `type: "overview"` 渲染成可见文本。
+    # 只剥离确认是元数据映射的块——普通 Markdown 的 `---` 分割线区块要照常渲染。
     text = md_text
     if text.startswith("---"):
-        m = re.match(r"^---\s*\n.*?\n---\s*\n", text, re.DOTALL)
-        if m:
+        m = re.match(r"^---[ \t]*\n(?P<body>.*?)\n---[ \t]*(?:\n|$)", text, re.DOTALL)
+        if m and _looks_like_yaml_meta(m.group("body")):
             text = text[m.end():]
 
     # 1. 提取围栏代码块，占位保护

@@ -620,6 +620,7 @@ class FrontendInspector:
             result["findings"].append(self._pending_finding(
                 "运行时", f"runtime url 未通过白名单校验（{url_err}），已拒绝访问并降级为静态分析"))
             result["summary"] = f"runtime 模式：url 未通过白名单校验（{url_err}），已拒绝访问并降级为静态分析。\n" + result["summary"]
+            result["partial"] = True
             return result
 
         runtime_ok = False
@@ -654,6 +655,7 @@ class FrontendInspector:
             result["findings"].append(self._pending_finding(
                 "运行时", "浏览器自动化不可用或运行失败，返回的是静态分析结论，请人工复核关键路径"))
             result["summary"] = "runtime 模式：浏览器自动化不可用或运行失败，已降级为静态分析结论。\n" + result["summary"]
+            result["partial"] = True
         else:
             result["findings"].extend(runtime_findings)
             result["summary"] = "已执行浏览器自动化抽查关键路径。\n" + result["summary"]
