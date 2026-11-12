@@ -28,6 +28,8 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from loguru import logger
 
+from core.path_key import project_key
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 模块级常量（集中管理 magic number）
@@ -137,7 +139,7 @@ class ReviewAdvisor:
 
     @staticmethod
     def _project_hash(project_path: str) -> str:
-        return hashlib.md5(os.path.abspath(project_path).encode("utf-8")).hexdigest()[:12]
+        return hashlib.md5(project_key(project_path).encode("utf-8")).hexdigest()[:12]
 
     def _state_path(self, project_path: str) -> str:
         return os.path.join(_MEMORY_STATE_DIR, f"{self._project_hash(project_path)}.json")

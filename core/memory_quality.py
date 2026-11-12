@@ -42,6 +42,7 @@ from loguru import logger
 
 from core.prompt_extractor import PromptExtractor
 from core.code_knowledge_graph import CodeKnowledgeGraph
+from core.path_key import project_key
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -428,7 +429,7 @@ class MemoryQuality:
             except Exception as e:
                 # 状态文件不可读时按空数据处理
                 logger.warning(f"读取状态文件失败: {e}")
-        phash = hashlib.md5(project_path.encode("utf-8")).hexdigest()[:12]
+        phash = hashlib.md5(project_key(project_path).encode("utf-8")).hexdigest()[:12]
         proj = data.get("projects", {}).get(phash)
         if proj is None:
             proj = {"path": project_path, "entries": {}}
@@ -440,7 +441,7 @@ class MemoryQuality:
                                  root: Dict[str, Any]):
         """把更新后的项目条目容器写回完整存储。root 为 loader 返回的完整存储根。"""
         data = root
-        phash = hashlib.md5(project_path.encode("utf-8")).hexdigest()[:12]
+        phash = hashlib.md5(project_key(project_path).encode("utf-8")).hexdigest()[:12]
         data.setdefault("projects", {})[phash] = proj
         self._atomic_write_json(self._auto_summary_path(project_path), data)
 

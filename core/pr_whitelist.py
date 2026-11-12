@@ -16,6 +16,7 @@ from typing import List, Optional
 
 from core import tool_registry
 from core.pr_models import Finding, PipeResult, Tier
+from core.path_key import project_key
 
 
 def _match_whitelist(f: Finding, wl: list) -> bool:
@@ -445,7 +446,8 @@ def _cdir() -> str:
     return d
 
 def _phash(p: str) -> str:
-    return hashlib.md5(p.encode()).hexdigest()[:12]
+    # 归一后再哈希：Windows 下盘符/路径大小写变体必须落到同一份产物（U-71）
+    return hashlib.md5(project_key(p).encode()).hexdigest()[:12]
 
 def _compute_health(r: 'PipeResult') -> Optional[int]:
     """统一健康分计算入口（0-100）。空项目（0 代码文件）返回 None（N/A）。

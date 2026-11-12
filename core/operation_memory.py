@@ -70,6 +70,8 @@ except Exception:  # pragma: no cover
         _logger.setLevel(logging.INFO)
 logger = _logger
 
+from core.path_key import project_key
+
 # ─── 阈值常量（集中管理，不散落 magic number） ───
 from config import settings
 
@@ -140,7 +142,7 @@ _KIND_LABELS = {"decision": "决策", "convention": "约定", "pitfall": "踩坑
 
 def _project_hash(project_path: str) -> str:
     """项目路径 → 稳定短 hash（用于隔离每项目记忆目录）"""
-    return hashlib.md5(os.path.abspath(project_path).encode("utf-8")).hexdigest()[:12]
+    return hashlib.md5(project_key(project_path).encode("utf-8")).hexdigest()[:12]
 
 
 def _omem_dir(project_path: str) -> str:
