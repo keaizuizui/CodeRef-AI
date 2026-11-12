@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.21.17** | Python 3.10+ | MCP Protocol | CodeRef 双轨授权协议
+**Version 5.21.18** | Python 3.10+ | MCP Protocol | CodeRef 双轨授权协议
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -591,12 +591,16 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 > 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.17.0）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.21.17 — 外部第六轮：图谱一致性、核验截断与展示诚实
+### 当前版本 v5.21.18 — 路径归一：同一项目只有一套派生标识
 
 > 5.21.x 版本线：梦从单一 `pitfall` 扩到「记忆 / 叙事 / 草稿 / 维护」四类 job，并加工具面 profile。
 
-- **5.21.17（外部第六轮）**：审计收尾不再用增量重建覆盖 `_build_kg` 的全量图（CALLS 13,141/13,211 漂移消除）；`verify_findings` 改用 `query_entities_exact`，同名符号不再被 `LIMIT 50` 截断（`run_all.py main` 假阴性修复）；`frontend` 待确认占位不再计为问题、`partial=true`；`wiki.html` 剥离 YAML front matter。
-- **验证（5.21.17 发布门槛）**：全量 pytest **485 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；外部图谱实测 `run_all.py main` 判 confirmed；`Coderef-Test\coderef-src` 同步文件 SHA256 一致。
+- **5.21.18（登记册 U-71）**：新增 `core/path_key.project_key`（`normcase(abspath)`），12 个模块的 13 处路径哈希统一走它。Windows 下 `D:\proj` 与 `d:\proj` 不再分裂成两套图谱库 / 审计发现 / 状态文件，`locate_kg_db` 口径一致，G-B「知识图谱不存在」误报消除。
+- **验证（5.21.18 发布门槛）**：全量 pytest **496 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；`Coderef-Test\coderef-src` 同步文件 SHA256 一致。
+- **升级提示（5.21.17 及更早 → 5.21.18）**：旧的白名单、知识图谱、记忆状态都需要重建。请告诉你的编程 AI ——「我把 CodeRef 升级到了 5.21.18，旧的白名单和图谱已失效。请先帮我重建白名单（备份/镜像等排除目录），再对当前项目跑一次 `coderef_audit`，并跑 `coderef_operation_memory(action=sync, mode=full)` 重建知识图谱与记忆。」旧哈希命名的产物不会被自动读取，但文件仍在磁盘，不会删除。
+
+- **5.21.17（外部第六轮 + CodeRabbit 复审）**：审计收尾不再用增量重建覆盖 `_build_kg` 的全量图（CALLS 13,141/13,211 漂移消除）；`verify_findings` 改用 `query_entities_exact`，同名符号不再被 `LIMIT 50` 截断（`run_all.py main` 假阴性修复）；`frontend` 待确认占位不再计为问题、`partial=true`；`wiki.html` 剥离 YAML front matter；复审整改：建图后文件被改时按快照走全量重建（不再永久 stale）、front matter 仅剥离真实元数据、runtime 降级补 `partial=true`、精确查询取消 1000 上限。
+- **验证（5.21.17 发布门槛）**：全量 pytest **490 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；外部图谱实测 `run_all.py main` 判 confirmed；`Coderef-Test\coderef-src` 同步文件 SHA256 一致。
 
 - **5.21.16（记忆投递层）**：MCP `initialize.instructions` + 关键工具描述 + `coderef_version.memory_rule` 三路提示「改码前先 `coderef_operation_memory(action=recover)`」；新增 `core/setup_rules.py` 与 `tools/install_rules.py`，在 `AGENTS.md` / `CLAUDE.md` / `.cursor/rules` / copilot instructions 维护标记块（备份、幂等、可卸载），`setup.bat` 菜单 9；真实工程首次调用自动写项目规则；`change_guard` / `audit` / `docs` 增加 G-E 硬闸门（未 recover 返回 blocked）。`coderef_operation_memory` 统一走梦的数据层（环境索引 + 语义笔记），`sync` 不再做 LLM 提炼。
 - **验证（5.21.16 发布门槛）**：全量 pytest **480 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；G-E 实测未 recover 拦截、recover 后放行；`Coderef-Test\coderef-src` 同步文件 SHA256 一致。

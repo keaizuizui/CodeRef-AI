@@ -4,17 +4,27 @@
 
 ---
 
+### v5.21.18 — 路径归一：同一项目只有一套派生标识（登记册 U-71）
+
+> 背景：运行态复验发现，`coderef_query` 用小写盘符 `d:\...` 调用时同一响应内既报 `node_count=122` 又报 G-B「知识图谱不存在」；改用 `D:\...` 则正常。根因是路径哈希未归一，同一项目被拆成两套库。
+
+- **根因**：`CodeKnowledgeGraph._phash`、`pr_whitelist._phash` 等直接对 `os.path.abspath(path)` 做 md5，Windows 下 `D:\proj` 与 `d:\proj` 得到两个哈希；`arch_audit.locate_kg_db` 复算后定位不到另一套库，`freshness_guard` 据此判「图谱不存在」。
+- **修复**：新增 `core/path_key.py::project_key`（`os.path.normcase(os.path.abspath(p))`），12 个模块的 13 处路径哈希统一走它：`code_knowledge_graph`（库名）、`pr_whitelist`（audit_findings / 报告 / ckpt）、`artifact_freshness`（归属判定）、`memory_layer`（状态与 kb）、`operation_memory`（记忆目录）、`interpretation_platform`（读取落点）、`memory_quality`（内部键）、`review_strategy`（策略状态）、`wiki_generator`（项目缓存与核心规则）、`cache_manager`、`prompt_asset_manager`。
+- **升级提示（5.21.17 及更早 → 5.21.18）**：旧的白名单、知识图谱、记忆状态都需要重建。请告诉你的编程 AI ——「我把 CodeRef 升级到了 5.21.18，旧的白名单和图谱已失效。请先帮我重建白名单（备份/镜像等排除目录），再对当前项目跑一次 `coderef_audit`，并跑 `coderef_operation_memory(action=sync, mode=full)` 重建知识图谱与记忆。」旧哈希命名的产物不会被自动读取，但文件仍在磁盘，不会删除；梦内语义记忆不受影响（`dream` 早已用 normcase 作内部键）。
+- **验证**：全量 pytest **496 全绿**（新增 `tests/test_path_key.py` 6 条）；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.18）；`change_guard` 无退化。
+
 ### v5.21.17 — 外部第六轮：图谱一致性、核验截断与展示诚实
 
 > 背景：外部独立项目对 5.21.16 的第六轮实测：4 条已修（OWASP 备份目录、定标前缀、file 限定确证、favicon），另遗留/新增 4 条工具缺陷。
 
 - **CALLS 13,141 vs 13,211**：审计管线已用 `_build_kg` 建全量图，收尾 `memory_layer.sync` 又用增量重建覆盖，导致同一代码两次读数不同。`MemoryLayer.sync` 新增 `skip_kg`；`pipeline_runner._sync_memory_layer` 在 `r.kg_built_at` 非空时跳过图谱重建，只同步记忆状态/语义库。最终图保持全量结果与 `built_by=audit_pipeline`。
-- **`verify_findings` 文件限定假阴性**：`query_entity` 的 `LIKE ... LIMIT 50` 会把第 51 个之后的同名节点截掉（外部 `main` 共 67 个，`run_all.py` 的节点在截断外）。新增 `query_entities_exact(name)`（按名精确、上限 1000），`_symbol_probe` 在有 `file_hint` 时改用它；外部案例 `run_all.py:25 main` 现判 `confirmed`，`same_name_elsewhere=66`。
+- **`verify_findings` 文件限定假阴性**：`query_entity` 的 `LIKE ... LIMIT 50` 会把第 51 个之后的同名节点截掉（外部 `main` 共 67 个，`run_all.py` 的节点在截断外）。新增 `query_entities_exact(name)`（按名精确、默认不设上限），`_symbol_probe` 在有 `file_hint` 时改用它；外部案例 `run_all.py:25 main` 现判 `confirmed`，`same_name_elsewhere=66`。
 - **`frontend` 把“未执行”包装成“已完成”**：LLM 不可用/降级时，21 条“待确认”占位被计入“共发现 21 条问题”且 `partial=false`。现在待确认占位不计入问题数，summary 明确写“LLM 审查未完成 / 待确认占位不计为问题数”，`partial=true`。
 - **`wiki.html` 显示 YAML front matter**：`md_to_html` 渲染前剥离 `---` 包裹的 YAML 头，`type/confidence/source` 不再作为正文出现。
-- **外部 `AGENTS.md` 被自动写入**：这是 5.21.16 记忆投递层的预期行为（写入 `CODEREF-MEMORY-RULE` 块 + 备份）；如不需要可 `git checkout -- AGENTS.md` 回滚，不影响工具。
+- **外部 `AGENTS.md` 被自动写入**：这是 5.21.16 记忆投递层的预期行为（写入 `CODEREF-MEMORY-RULE` 块 + 备份）；如不需要，请从备份（`.coderef/backups/`）恢复，或只删除 `CODEREF-MEMORY-RULE` 标记块，**不要整体回滚文件**（会连手写改动一起丢掉）。
 - **target_arch 系统名仍为旧名**：属消费方定标过期（`project` 字段 72 天前），工具侧已有 `target_health.stale` 提示，需重新定标，不计为工具缺陷。
-- **验证**：全量 pytest **485 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.17）；外部图谱实测 `run_all.py main` 由假阴性转为 confirmed。
+- **复审整改（CodeRabbit 5 条）**：①建图后文件又被改时 `skip_kg` 会让图谱永久 stale——`sync` 新增 `kg_snapshot` 与 `_snapshots_match`，快照不一致改用全量重建；②CHANGELOG / 响应册不再推荐 `git checkout --` 局部回滚；③front matter 剥离收窄为"确认是 YAML 元数据才剥"，普通 `---` 分割线区块照常渲染；④runtime 降级分支补 `partial=true`；⑤`query_entities_exact` 取消 1000 条上限。
+- **验证**：全量 pytest **490 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.17）；`change_guard` 无退化；外部图谱实测 `run_all.py main` 由假阴性转为 confirmed。
 
 ### v5.21.16 — 记忆投递层：把「先 recover」送到编程 AI 眼前
 
