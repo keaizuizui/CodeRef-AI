@@ -247,6 +247,17 @@ def _version(a: dict) -> str:
         }
     except Exception as e:  # noqa: BLE001
         out["memory_rule"] = {"error": str(e)}
+    # 升级提示：5.21.18 路径归一后，旧哈希命名的图谱/记忆/白名单需重建一次。
+    # 不做自动迁移——直接给用户一句话，让他转告编程 AI（用户规模小，简单直接）。
+    out["upgrade_note"] = {
+        "applies_to": "从 5.21.17 及更早版本升级的项目",
+        "tell_your_ai": ("我把 CodeRef 升级到了 5.21.18，旧的白名单和图谱已失效。"
+                         "请先帮我重建白名单（备份/镜像等排除目录），再对当前项目跑一次 "
+                         "coderef_audit，并跑 coderef_operation_memory(action=sync, "
+                         "mode=full) 重建知识图谱与记忆。"),
+        "why": "5.21.18 统一了项目路径标识；旧版本按旧哈希存的图谱、记忆与白名单都不会被自动读取。",
+        "must_rebuild": ["白名单（缓存 pipeline/wl_*.json）", "知识图谱", "记忆状态"],
+    }
     return json.dumps(out, ensure_ascii=False)
 
 
