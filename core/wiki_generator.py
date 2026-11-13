@@ -99,6 +99,21 @@ _META_TALK_STRONG = (
 )
 
 
+# 行级清洗额外覆盖：只收录明确是模型自我对话、且不会出现在正常正文中的
+# 中文短语。不并入「我们应 / 需要想 / 必须原样引用」等宽泛表达，避免把
+# 合法说明误删（CodeRabbit minor / Brooks Knowledge Duplication）。
+_META_TALK_LINE_EXTRA = (
+    "用户希望我", "用户让我", "让我先", "让我看看", "我注意到",
+    "我先分析", "好的，我需要", "这有点矛盾",
+)
+
+# 行级清洗的唯一词表：强特征 + 英文推理链 + 安全的中文自我对话。
+# 整篇判定仍用 _META_TALK_MARKERS（可含更宽的中文短语，因为只在前 2000 字
+# 且不以 # 开头时生效，误伤面更小）。
+_META_TALK_LINE_MARKERS = (_META_TALK_STRONG + _META_TALK_MARKERS_EN
+                           + _META_TALK_LINE_EXTRA)
+
+
 def _looks_like_meta_talk(text: str) -> bool:
     """整篇判定：开头是否就是思考过程（命中则整篇重试）。
 
@@ -133,8 +148,7 @@ def _sanitize_meta_talk(text: str) -> str:
         low = line.lower()
         # 统一按小写比较：外部实测 `Hmm.` 大写 H 漏检，因为它和业务内容同行，
         # 按原样大小写比较时命不中强特征。
-        if (any(m in low for m in _META_TALK_STRONG)
-                or any(m in low for m in _META_TALK_MARKERS_EN)):
+        if any(m in low for m in _META_TALK_LINE_MARKERS):
             removed += 1
             continue
         kept.append(line)
@@ -1360,8 +1374,13 @@ class _WikiDocMixin:
         if result.large_repo:
             code_metadata = self._sample_metadata(code_metadata)
 
-        # Stage 2: LLM 逐模块归纳描述（从全量元数据写，不丢失信息）
-        module_descriptions = self._generate_module_descriptions(code_metadata, wiki_style)
+        # Stage 2: LLM 逐模块归纳描述（从全量元数据写，不丢失信息）。
+        # 全量重建强制重算全部描述：元数据可能被采样截断，指纹无法覆盖样本外
+        # 的源码变化；若复用旧描述，mode=full 后 ARCHITECTURE/OVERVIEW 仍可能
+        # 描述旧实现（Brooks-Lint / 缺陷跟踪 U-86）。
+        module_descriptions = self._generate_module_descriptions(
+            code_metadata, wiki_style,
+            invalidate=[m.name for m in code_metadata.modules])
 
         # Stage 2.5: 静态交叉验证（可选，熔断降级）
         # 给每篇模块文档打"确证徽章"，让非技术人员能区分"确被调用"与"LLM 推测"。
@@ -1411,7 +1430,10 @@ class _WikiDocMixin:
                 if sub_result.large_repo:
                     sub_meta = self._sample_metadata(sub_meta)
                 # Stage 2
-                sub_descriptions = self._generate_module_descriptions(sub_meta, wiki_style)
+                # 子项目同样按全量重建处理：描述必须随本次扫描重算
+                sub_descriptions = self._generate_module_descriptions(
+                    sub_meta, wiki_style,
+                    invalidate=[m.name for m in sub_meta.modules])
                 # Stage 3
                 sub_docs = self._generate_all_documents(
                     sub_name, sub_modules, sub_meta, sub_descriptions,
@@ -1429,69 +1451,95 @@ class _WikiDocMixin:
             })
 
 
-    def _generate_module_descriptions(self, meta: ProjectCodeMetadata,
-                                       style: str,
-                                       invalidate: Optional[List[str]] = None
-                                       ) -> Dict[str, str]:
-        """Stage 2：对每个模块，LLM 从全量元数据归纳出模块描述
-
-        元数据比原始代码紧凑 10-20 倍，因此 LLM 可以看到所有文件。
-        输出缓存到 CodeRef cache 避免重复调用。
-        invalidate: 需要失效重算的模块名列表（增量路径下受影响模块），
-        其余模块复用缓存，避免全量重复调用 LLM。
-        """
-        invalidate = invalidate or []
-        cache_dir = self._project_cache_path(meta.project_path)
+    def _load_stage2_cache(self, cache_dir: str, style: str,
+                           module_names: set) -> Tuple[Dict[str, str], Dict[str, str]]:
+        """读取描述缓存与指纹缓存，并剔除已删除/改名模块的残留项。"""
         cache_file = os.path.join(cache_dir, f"stage2_descriptions_{style}.json")
         fp_file = os.path.join(cache_dir, f"stage2_fingerprints_{style}.json")
         cached: Dict[str, str] = {}
-        if os.path.exists(cache_file):
-            try:
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    cached = json.load(f)
-            except Exception:
-                cached = {}
-        # 描述指纹：模块元数据文本变化 → 该模块描述必须重算。
-        # 旧实现只按模块名命中缓存，改代码后重跑仍复用旧描述（缺陷跟踪 U-86）。
         saved_fps: Dict[str, str] = {}
-        if os.path.exists(fp_file):
+        for path, target in ((cache_file, "desc"), (fp_file, "fp")):
+            if not os.path.exists(path):
+                continue
             try:
-                with open(fp_file, "r", encoding="utf-8") as f:
-                    saved_fps = json.load(f)
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
             except Exception:
-                saved_fps = {}
-        current_fps = {
+                data = {}
+            if target == "desc":
+                cached = {k: v for k, v in data.items() if k in module_names}
+            else:
+                saved_fps = {k: v for k, v in data.items() if k in module_names}
+        return cached, saved_fps
+
+    def _description_fingerprints(self, meta: ProjectCodeMetadata) -> Dict[str, str]:
+        """模块元数据文本 → md5 指纹；文本变化即要求重算描述。"""
+        return {
             m.name: hashlib.md5(
                 self._module_metadata_to_text(m).encode("utf-8")).hexdigest()
             for m in meta.modules
         }
 
-        # 只保留仍存在于元数据中的模块描述，排除已删除/改名模块的残留缓存
-        module_names = {m.name for m in meta.modules}
-        cached = {k: v for k, v in cached.items() if k in module_names}
+    def _description_prompts(self, mod: ModuleCodeMetadata, style: str,
+                             md_text: str) -> Tuple[str, str]:
+        """按风格构造单个模块描述的 system/user prompt。"""
+        guidelines = self._style_guidelines(style)
+        if style in ("reference", "plain"):
+            system_prompt = (
+                f"你是一个代码分析助手。基于下方元数据，用中文简要描述此模块。"
+                f"{guidelines}"
+                "输出纯 Markdown，直接列出关键信息。"
+            )
+        else:
+            system_prompt = (
+                f"你是一个代码分析助手。基于下方元数据，用通俗语言描述此模块。"
+                f"{guidelines}"
+                "要求：基于事实归纳，不要虚构任何类/函数/依赖。"
+                "输出纯 Markdown。"
+            )
+        user_prompt = (
+            f"请描述模块 **{mod.name}** ({mod.total_files} 个 Python 文件, "
+            f"{len(md_text)} 字符元数据)。\n\n"
+            f"元数据：\n```\n{md_text[:20000]}\n```\n\n"
+            f"输出模块描述（不要包含 '基于元数据' 之类的前缀，直接输出内容）。"
+        )
+        return system_prompt, user_prompt
 
-        # 命中缓存的条件：描述存在、不在失效列表，且元数据指纹未变
-        # （增量路径下受影响模块的描述来自改动前的元数据，必须重算）。
+    def _save_stage2_cache(self, cache_dir: str, style: str,
+                           descriptions: Dict[str, str],
+                           fingerprints: Dict[str, str]) -> None:
+        """写回描述与指纹缓存；失败只记日志，不影响本次生成。"""
+        try:
+            with open(os.path.join(cache_dir, f"stage2_descriptions_{style}.json"),
+                      "w", encoding="utf-8") as f:
+                json.dump(descriptions, f, ensure_ascii=False, indent=1)
+            with open(os.path.join(cache_dir, f"stage2_fingerprints_{style}.json"),
+                      "w", encoding="utf-8") as f:
+                json.dump(fingerprints, f, ensure_ascii=False, indent=1)
+        except Exception as e:
+            logger.warning(f"写入描述缓存失败，忽略: {e}")
+
+    def _generate_module_descriptions(self, meta: ProjectCodeMetadata,
+                                       style: str,
+                                       invalidate: Optional[List[str]] = None
+                                       ) -> Dict[str, str]:
+        """Stage 2：对每个模块，LLM 从元数据归纳出模块描述。
+
+        缓存命中条件：描述存在、不在 invalidate、且模块元数据指纹未变。
+        全量路径由调用方传 invalidate=全部模块，确保 mode=full 真正重算。
+        """
+        invalidate = invalidate or []
+        cache_dir = self._project_cache_path(meta.project_path)
+        module_names = {m.name for m in meta.modules}
+        cached, saved_fps = self._load_stage2_cache(cache_dir, style, module_names)
+        current_fps = self._description_fingerprints(meta)
+
         missing = [m.name for m in meta.modules
                    if m.name not in cached or m.name in invalidate
                    or saved_fps.get(m.name) != current_fps[m.name]]
         if not missing and len(cached) == len(meta.modules):
             return cached
 
-        # 生成项目级概览元数据（紧凑形式）
-        overview_lines = [f"项目: {os.path.basename(meta.project_path)}"]
-        overview_lines.append(f"总文件数: {meta.total_files}, 模块数: {len(meta.modules)}")
-        overview_lines.append(f"Web 框架: {'检测到' if meta.has_web_framework else '未检测到'}")
-        overview_lines.append("")
-
-        for mod in meta.modules:
-            # 计算元数据行数判断是否超限
-            md_text = self._module_metadata_to_text(mod)
-            overview_lines.append(f"--- 模块: {mod.name} ({mod.total_files} 文件) ---")
-            overview_lines.append(md_text)
-            overview_lines.append("")
-
-        guidelines = self._style_guidelines(style)
         # 复用缓存仅限「指纹未变且未被失效」的模块：指纹变化的旧描述必须丢弃，
         # 否则 missing 判了差异、循环里又命中旧描述跳过 LLM（U-86 半修）。
         descriptions = {
@@ -1499,47 +1547,15 @@ class _WikiDocMixin:
             if k not in invalidate
             and saved_fps.get(k) == current_fps.get(k)
         }
-
         for mod in meta.modules:
             if mod.name in descriptions:
                 continue
             md_text = self._module_metadata_to_text(mod)
+            system_prompt, user_prompt = self._description_prompts(
+                mod, style, md_text)
+            descriptions[mod.name] = self._llm_ask(system_prompt, user_prompt)
 
-            # 风格区分
-            if style in ("reference", "plain"):
-                # 硬核/极简：直接让 LLM 从元数据浓缩
-                system_prompt = (
-                    f"你是一个代码分析助手。基于下方元数据，用中文简要描述此模块。"
-                    f"{guidelines}"
-                    "输出纯 Markdown，直接列出关键信息。"
-                )
-            else:
-                # comprehensive / tutorial：归纳为通俗语言
-                system_prompt = (
-                    f"你是一个代码分析助手。基于下方元数据，用通俗语言描述此模块。"
-                    f"{guidelines}"
-                    "要求：基于事实归纳，不要虚构任何类/函数/依赖。"
-                    "输出纯 Markdown。"
-                )
-
-            user_prompt = (
-                f"请描述模块 **{mod.name}** ({mod.total_files} 个 Python 文件, {len(md_text)} 字符元数据)。\n\n"
-                f"元数据：\n```\n{md_text[:20000]}\n```\n\n"
-                f"输出模块描述（不要包含 '基于元数据' 之类的前缀，直接输出内容）。"
-            )
-
-            desc = self._llm_ask(system_prompt, user_prompt)
-            descriptions[mod.name] = desc
-
-        # 缓存（描述 + 元数据指纹）
-        try:
-            with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump(descriptions, f, ensure_ascii=False, indent=1)
-            with open(fp_file, "w", encoding="utf-8") as f:
-                json.dump(current_fps, f, ensure_ascii=False, indent=1)
-        except Exception as e:
-            logger.warning(f"写入描述缓存失败，忽略: {e}")
-
+        self._save_stage2_cache(cache_dir, style, descriptions, current_fps)
         return descriptions
 
 
@@ -1948,6 +1964,19 @@ class _WikiDocMixin:
         return "\n\n".join(parts)
 
 
+    def _retry_llm(self, messages, accept, fail_msg: str) -> str:
+        """重试一次 LLM 调用；仍不满足 accept 时记失败并返回空串。
+
+        思考过程与截断两类失败共用同一条重试/预算路径（Brooks-Lint：
+        三段复制粘贴的重试会让参数与预算口径漂移）。
+        """
+        retry = self.llm.chat_completion(messages, max_tokens=4096, temperature=0.3)
+        if not self.llm.is_error_response(retry) and retry and accept(retry):
+            return retry
+        self._last_llm_error = fail_msg
+        return ""
+
+
     def _llm_ask(self, system_prompt: str, user_prompt: str) -> str:
         """调用 LLM 生成内容。
 
@@ -1979,10 +2008,11 @@ class _WikiDocMixin:
                 return ""
             # 思考过程不得落盘：先重试一次，仍不合格再判失败（不写空壳文件）
             if _looks_like_meta_talk(text):
-                text = self.llm.chat_completion(
-                    messages, max_tokens=4096, temperature=0.3)
-                if self.llm.is_error_response(text) or _looks_like_meta_talk(text):
-                    self._last_llm_error = "LLM 返回疑似思考过程，重试后仍不合格，已丢弃"
+                text = self._retry_llm(
+                    messages,
+                    lambda t: not _looks_like_meta_talk(t),
+                    "LLM 返回疑似思考过程，重试后仍不合格，已丢弃")
+                if not text:
                     return ""
             # 尾句截断不得静默落盘（缺陷跟踪 U-82）：重试一次，仍不完整则判失败
             if _looks_truncated(text):
@@ -1991,14 +2021,12 @@ class _WikiDocMixin:
                     "content": ("上一次输出在结尾被截断了。请从开头完整输出全文，"
                                 "不要省略、不要续写。"),
                 }]
-                retry = self.llm.chat_completion(
-                    retry_messages, max_tokens=4096, temperature=0.3)
-                if (not self.llm.is_error_response(retry) and retry
-                        and not _looks_truncated(retry)
-                        and not _looks_like_meta_talk(retry)):
-                    text = retry
-                else:
-                    self._last_llm_error = "LLM 输出疑似截断，重试后仍不完整，已丢弃"
+                text = self._retry_llm(
+                    retry_messages,
+                    lambda t: (not _looks_truncated(t)
+                               and not _looks_like_meta_talk(t)),
+                    "LLM 输出疑似截断，重试后仍不完整，已丢弃")
+                if not text:
                     return ""
             return text
         except Exception as e:
@@ -2805,54 +2833,74 @@ class _WikiEmitMixin:
         if enable_agent_pointer:
             self._write_agent_pointer(project_path, output_dir)
 
-        # 清理旧版本残留：输出目录里带 CodeRef front matter、但不属于本次产物
-        # 的 md，是上一版模板生成的旧结论（外部实测 18:47 的 93 文件旧页一直留着）。
-        # 只删带 front matter 的文件，用户手写的 md（无 front matter）一律不动。
-        #
-        # 只在全量重建时执行：增量模式本次只重写受影响文档，其余页面仍是有效产物，
-        # 按「本次没写」判旧页会把它们整批误删（外部 v5.21.22 实测：增量运行后
-        # 子项目 Wiki 9 篇 → 0 篇、USAGE.md 消失）。
+        # 清理旧版本残留（只在全量路径；增量模式未重写的页面仍是有效产物）
         if full_run:
-            generated = set(self._written_paths)
-            removed = []
-            for root, dirs, files in os.walk(output_dir):
-                # include_subprojects=False 时不动子项目产物：调用方只是关掉更新，
-                # 不等于要求删除已有子项目 Wiki。
-                if (not include_subprojects
-                        and os.path.abspath(root) == os.path.abspath(output_dir)):
-                    dirs[:] = [d for d in dirs if d != "subprojects"]
-                for fn in files:
-                    if not fn.endswith(".md") or fn == WIKI_INSTRUCTIONS_FILE:
-                        continue
-                    fp = os.path.abspath(os.path.join(root, fn))
-                    if fp in generated:
-                        continue
-                    try:
-                        with open(fp, "r", encoding="utf-8",
-                                  errors="ignore") as f:
-                            head = f.read(2048)
-                        # 只删「有 CodeRef 生成签名」的旧页：同时含 type/
-                        # confidence/generated_at 三个字段。用户手写的 YAML
-                        # front matter（Hugo/Jekyll 等）不满足该组合，不能被
-                        # 当成旧产物删除（CodeRabbit major）。
-                        if not head.lstrip().startswith("---"):
-                            continue
-                        if ("confidence:" not in head
-                                or "generated_at:" not in head):
-                            continue
-                    except OSError:
-                        continue
-                    try:
-                        os.remove(fp)
-                        removed.append(os.path.relpath(fp, output_dir))
-                    except OSError:
-                        continue
-            if removed:
-                result.warnings.append(
-                    f"已清理 {len(removed)} 篇旧版本残留文档: {', '.join(removed[:10])}"
-                    + (" ..." if len(removed) > 10 else ""))
+            self._cleanup_stale_docs(output_dir, include_subprojects, result)
 
         # 汇总本次生成失败（主项目 + 子项目），让调用方感知"部分文档生成失败"
+        self._summarize_failures(result)
+
+        # R1: 生成结束后更新增量同步状态文件（写当前 HEAD；仅无错误时更新，
+        # 避免把"生成失败"误记为"已同步到 HEAD"导致下次增量漏更）。
+        # 无 git 环境时 gitHead 记为 null，状态文件仍生成（记录更新时间/文档数）。
+        if not result.errors:
+            head = self._git_head(git_bin, project_path) if git_bin else None
+            self._save_last_update(output_dir, head, len(result.documents))
+
+        # R3: Last-good 门控（本次无错误则备份当前产物；有错误保留上次可用版本）
+        if not result.errors:
+            self._save_last_good(output_dir)
+        else:
+            result.warnings.append("本次生成未通过校验，已保留上次可用版本（.last-good）。")
+
+
+    def _cleanup_stale_docs(self, output_dir: str, include_subprojects: bool,
+                            result: WikiResult) -> None:
+        """删除带 CodeRef 生成签名、但不属于本次产物的旧页。
+
+        只在全量重建时调用：增量模式本次只重写受影响文档，其余页面仍是有效
+        产物，按「本次没写」判旧页会把它们整批误删（外部 v5.21.22 实测）。
+        """
+        generated = set(self._written_paths)
+        removed = []
+        for root, dirs, files in os.walk(output_dir):
+            # include_subprojects=False 时不动子项目产物：调用方只是关掉更新，
+            # 不等于要求删除已有子项目 Wiki。
+            if (not include_subprojects
+                    and os.path.abspath(root) == os.path.abspath(output_dir)):
+                dirs[:] = [d for d in dirs if d != "subprojects"]
+            for fn in files:
+                if not fn.endswith(".md") or fn == WIKI_INSTRUCTIONS_FILE:
+                    continue
+                fp = os.path.abspath(os.path.join(root, fn))
+                if fp in generated:
+                    continue
+                try:
+                    with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                        head = f.read(2048)
+                    # 只删「有 CodeRef 生成签名」的旧页：同时含 confidence 与
+                    # generated_at。用户手写 YAML front matter（Hugo/Jekyll）
+                    # 不满足该组合，不能被当成旧产物删除（CodeRabbit major）。
+                    if not head.lstrip().startswith("---"):
+                        continue
+                    if ("confidence:" not in head
+                            or "generated_at:" not in head):
+                        continue
+                except OSError:
+                    continue
+                try:
+                    os.remove(fp)
+                    removed.append(os.path.relpath(fp, output_dir))
+                except OSError:
+                    continue
+        if removed:
+            result.warnings.append(
+                f"已清理 {len(removed)} 篇旧版本残留文档: {', '.join(removed[:10])}"
+                + (" ..." if len(removed) > 10 else ""))
+
+
+    def _summarize_failures(self, result: WikiResult) -> None:
+        """把失败文档汇总进 result.errors（占位已写与未能落盘分开表述）。"""
         if self._failed_docs:
             result.errors.append(
                 f"以下 {len(self._failed_docs)} 个文档生成失败（LLM 返回空内容），已写失败占位: "
@@ -2867,19 +2915,6 @@ class _WikiEmitMixin:
             )
         if self._last_llm_error:
             result.errors.append(f"LLM 调用异常: {self._last_llm_error}")
-
-        # R1: 生成结束后更新增量同步状态文件（写当前 HEAD；仅无错误时更新，
-        # 避免把"生成失败"误记为"已同步到 HEAD"导致下次增量漏更）。
-        # 无 git 环境时 gitHead 记为 null，状态文件仍生成（记录更新时间/文档数）。
-        if not result.errors:
-            head = self._git_head(git_bin, project_path) if git_bin else None
-            self._save_last_update(output_dir, head, len(result.documents))
-
-        # R3: Last-good 门控（本次无错误则备份当前产物；有错误保留上次可用版本）
-        if not result.errors:
-            self._save_last_good(output_dir)
-        else:
-            result.warnings.append("本次生成未通过校验，已保留上次可用版本（.last-good）。")
 
 
     def _build_module_index(self, modules: List[WikiModule],

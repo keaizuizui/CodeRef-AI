@@ -102,7 +102,9 @@ def _degraded_reasons(errors) -> dict:
             k in joined for k in ("超时", "timeout", "timed out", "time out",
                                   "预算", "budget")),
         "content_dropped": any(
-            k in joined for k in ("思考过程", "丢弃", "meta_talk")),
+            # 「已写失败占位 / 生成失败」也是内容被丢弃（占位不算正文）
+            k in joined for k in ("思考过程", "丢弃", "meta_talk",
+                                  "失败占位", "生成失败")),
     }
 
 

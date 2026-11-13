@@ -1162,8 +1162,8 @@ class CodeKnowledgeGraph:
             return None
         # 点号调用只接受「点号边界」后缀（node name 形如 Cls.method），
         # 不做裸名/子串回退；无法确定作用域的调用宁可漏边，不可建假边。
-        candidates = self._conn.execute(
-            "SELECT id FROM nodes WHERE name LIKE ?", (f"%.{short}",)).fetchall()
+        # LIKE 通配符必须转义：方法名里的 `_` 不能匹配任意字符（CodeRabbit）。
+        candidates = self._suffix_rows(short)
         if len(candidates) == 1:
             return candidates[0]["id"]
         return None
@@ -1389,25 +1389,34 @@ class CodeKnowledgeGraph:
         # verify_findings 按裸名核验方法不能变成 found=False（CodeRabbit major）。
         if (not limit or int(limit) <= 0) and "." not in name:
             seen = {r["id"] for r in rows}
-            extra = self._conn.execute(
-                "SELECT * FROM nodes WHERE name LIKE ? ESCAPE '\\'",
-                (self._suffix_like(name),)).fetchall()
-            rows = list(rows) + [r for r in extra if r["id"] not in seen]
+            rows = list(rows) + [r for r in self._suffix_rows(name)
+                                 if r["id"] not in seen]
         nodes = [self._row_to_node(r) for r in rows]
         return KGQueryResult(nodes=nodes, total=len(nodes),
                              query_type="entity_exact")
 
     @staticmethod
-    def _suffix_like(name: str) -> str:
-        """构造「点号边界后缀」LIKE 模式，转义 `%`/`_` 通配符。
+    def _escape_like(text: str) -> str:
+        """转义 SQL LIKE 的通配符，配合 `ESCAPE '\\'` 使用。"""
+        return (text.replace("\\", "\\\\")
+                    .replace("%", "\\%")
+                    .replace("_", "\\_"))
 
-        方法名常含下划线；不转义时 `get_data` 会匹配 `Cache.getXdata`
-        （CodeRabbit major），把无关方法的调用者聚合进来。
-        """
-        esc = (name.replace("\\", "\\\\")
-                   .replace("%", "\\%")
-                   .replace("_", "\\_"))
-        return f"%.{esc}"
+    @classmethod
+    def _suffix_like(cls, name: str) -> str:
+        """构造「点号边界后缀」LIKE 模式，转义 `%`/`_` 通配符。"""
+        return f"%.{cls._escape_like(name)}"
+
+    @classmethod
+    def _contains_like(cls, name: str) -> str:
+        """构造子串 LIKE 模式（仅最后手段回退用），同样转义通配符。"""
+        return f"%{cls._escape_like(name)}%"
+
+    def _suffix_rows(self, name: str):
+        """按点号边界后缀查节点行；所有点号名解析共用这一处。"""
+        return self._conn.execute(
+            "SELECT * FROM nodes WHERE name LIKE ? ESCAPE '\\'",
+            (self._suffix_like(name),)).fetchall()
 
     def _resolve_node_ids(self, name: str) -> List[str]:
         """裸名/短名 → 全部候选节点 id（同名函数与方法聚合，缺陷跟踪 U-81）。
@@ -1426,9 +1435,7 @@ class CodeKnowledgeGraph:
         for row in self._conn.execute(
                 "SELECT id FROM nodes WHERE name=?", (name,)).fetchall():
             ids.append(row["id"])
-        for row in self._conn.execute(
-                "SELECT id FROM nodes WHERE name LIKE ? ESCAPE '\\'",
-                (self._suffix_like(name),)).fetchall():
+        for row in self._suffix_rows(name):
             if row["id"] not in ids:
                 ids.append(row["id"])
         return ids
@@ -1438,10 +1445,10 @@ class CodeKnowledgeGraph:
         self._connect()
         targets = self._resolve_node_ids(func_name)
         if not targets:
-            # 模糊匹配（保留旧回退，最后手段）
+            # 模糊匹配（保留旧回退，最后手段）；通配符同样转义
             row = self._conn.execute(
-                "SELECT id FROM nodes WHERE name LIKE ? LIMIT 1",
-                (f"%{func_name}%",)).fetchone()
+                "SELECT id FROM nodes WHERE name LIKE ? ESCAPE '\\' LIMIT 1",
+                (self._contains_like(func_name),)).fetchone()
             if not row:
                 return KGQueryResult(total=0, query_type="callers")
             targets = [row["id"]]
@@ -1462,8 +1469,8 @@ class CodeKnowledgeGraph:
         sources = self._resolve_node_ids(func_name)
         if not sources:
             row = self._conn.execute(
-                "SELECT id FROM nodes WHERE name LIKE ? LIMIT 1",
-                (f"%{func_name}%",)).fetchone()
+                "SELECT id FROM nodes WHERE name LIKE ? ESCAPE '\\' LIMIT 1",
+                (self._contains_like(func_name),)).fetchone()
             if not row:
                 return KGQueryResult(total=0, query_type="callees")
             sources = [row["id"]]
@@ -1665,8 +1672,8 @@ class CodeKnowledgeGraph:
         start = self._find_node_by_name(func_name)
         if not start:
             row = self._conn.execute(
-                "SELECT id FROM nodes WHERE name LIKE ? LIMIT 1",
-                (f"%{func_name}%",)).fetchone()
+                "SELECT id FROM nodes WHERE name LIKE ? ESCAPE '\\' LIMIT 1",
+                (self._contains_like(func_name),)).fetchone()
             if not row:
                 return KGQueryResult(total=0, query_type="call_graph")
             start = row["id"]

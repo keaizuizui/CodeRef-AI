@@ -526,15 +526,8 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
             break
 
     # —— 语义判定（可选，缺 LLM 只给静态信号）——
-    degraded = False
-    semantic_note = None
-    if semantic and issues:
-        semantic_note = _semantic_confirm(project_path, issues[:15])
-        if not semantic_note or not semantic_note.get("enabled"):
-            # U-84：语义层未生效必须显式降级，且候选不得比静态层更自信
-            degraded = True
-            for it in issues + hints:
-                it["uncertainty"] = "high"
+    semantic_note, degraded = _apply_semantic_outcome(
+        project_path, issues, hints, semantic)
     if modules_scanned == 0:
         # U-85：没有可比对的模块不是「通过」，必须显式 no_target
         result["no_target"] = True
@@ -550,28 +543,53 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
 
     result["boundary_issues"] = issues
     result["call_hints"] = hints
-    _msg = ("符号级职责越界：boundary_issues 仅报 definition 型真越界（顶层"
-            "类/函数定义名命中非本角色 role_keywords，且未命中本角色职责词"
-            "锚点、本角色关键词可匹配英文符号）；方法级撞词与跨角色调用是"
-            "分层协作常态，降级为独立 call_hints 弱信号（不占越界主输出）。"
-            "semantic=False 时仅静态信号（uncertainty=high），不硬阻断。")
+    result["summary"] = _summary_payload(
+        modules_scanned, symbols_scanned, issues, hints, by_role, degraded)
+    result["semantic_note"] = semantic_note
+    result["ok"] = True
+    return result
+
+
+def _apply_semantic_outcome(project_path: str, issues: List[Dict[str, Any]],
+                            hints: List[Dict[str, Any]], semantic: bool):
+    """执行可选语义判定；未生效时显式降级并把候选置信回退为 high。
+
+    返回 (semantic_note, degraded)。无候选或无 semantic 时不调用 LLM。
+    """
+    if not (semantic and issues):
+        return None, False
+    note = _semantic_confirm(project_path, issues[:15])
+    if note and note.get("enabled"):
+        return note, False
+    for it in issues + hints:
+        it["uncertainty"] = "high"
+    return note, True
+
+
+def _summary_payload(modules_scanned: int, symbols_scanned: int,
+                     issues: List[Dict[str, Any]],
+                     hints: List[Dict[str, Any]],
+                     by_role: Dict[str, int], degraded: bool) -> Dict[str, Any]:
+    """拼装 summary；no_target / degraded 的文案在这里统一。"""
+    msg = ("符号级职责越界：boundary_issues 仅报 definition 型真越界（顶层"
+           "类/函数定义名命中非本角色 role_keywords，且未命中本角色职责词"
+           "锚点、本角色关键词可匹配英文符号）；方法级撞词与跨角色调用是"
+           "分层协作常态，降级为独立 call_hints 弱信号（不占越界主输出）。"
+           "semantic=False 时仅静态信号（uncertainty=high），不硬阻断。")
     if modules_scanned == 0:
-        _msg = ("没有任何模块匹配目标架构的 target_modules/角色关键词，"
-                "未执行符号级职责判定（no_target）；请先在 target_arch 中补齐 target_modules。")
+        msg = ("没有任何模块匹配目标架构的 target_modules/角色关键词，"
+               "未执行符号级职责判定（no_target）；请先在 target_arch 中补齐 target_modules。")
     elif degraded:
-        _msg += (" semantic=True 但 LLM 不可用，语义判定未执行（degraded）；"
-                 "候选 uncertainty 已回退为 high。")
-    result["summary"] = {
+        msg += (" semantic=True 但 LLM 不可用，语义判定未执行（degraded）；"
+                "候选 uncertainty 已回退为 high。")
+    return {
         "modules_scanned": modules_scanned,
         "symbols_scanned": symbols_scanned,
         "boundary_issues": len(issues),
         "call_hints": len(hints),
         "by_role": by_role,
-        "message": _msg,
+        "message": msg,
     }
-    result["semantic_note"] = semantic_note
-    result["ok"] = True
-    return result
 
 
 def _semantic_confirm(project_path: str, issues: List[Dict[str, Any]]):

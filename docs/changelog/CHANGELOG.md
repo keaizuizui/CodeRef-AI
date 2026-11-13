@@ -24,6 +24,18 @@
 - **失败文案区分（判据 2）**：生成失败但占位已落盘 → `已写失败占位`；真正写不进文件 → `未能落盘（写文件失败）`。不再一律说「未落盘」，避免外部据此误判文件缺失。
 - **验证**：`tests/test_wiki_quality.py` 19 条全绿（新增大小写 `Hmm.` 清洗、增量不清理、全量清理保留手写页与子项目、失败/未落盘文案区分、mode schema 5 条）；`core/ tools/` pyflakes 0。
 
+### v5.21.22 验收修订（第四轮）— Code Review Report + Brooks-Lint 复审整改
+
+> code-review-report-plugin 报 4 条（均 minor，2/2 验证）；brooks-lint PR Review 报 5 Warning + 2 Suggestion（Health 73/100）。有效项全部整改，其余为“发布范围过大”的过程建议。
+
+- **符号名解析统一**：新增 `_escape_like` / `_suffix_like` / `_contains_like` / `_suffix_rows`；`_find_node_by_name`、`query_callers/callees` 回退、`get_call_graph` 全部使用 `ESCAPE '\'`，方法名里的 `_` 不再当通配符误匹配形近节点。
+- **全量描述强制重算**：`mode=full` 与子项目全量路径向 `_generate_module_descriptions` 传 `invalidate=全部模块`，避免元数据采样截断后指纹不变、描述继续复用旧缓存。
+- **content_dropped 补占位**：把「失败占位 / 生成失败」纳入判定，内容被丢弃但写占位时不再返回 false。
+- **中文自我对话清洗**：新增行级清洗唯一词表 `_META_TALK_LINE_MARKERS`，补「用户希望我 / 我注意到 / 好的，我需要」等安全中文短语；「我们应 / 必须原样引用」等宽泛表达仍只用于整篇判定，避免误删正文。
+- **结构整改（Brooks-Lint）**：`_finalize_generation` 拆出 `_cleanup_stale_docs` / `_summarize_failures`；`_generate_module_descriptions` 拆出缓存加载、指纹、提示词、保存 4 个 helper；`_llm_ask` 的两段重试统一为 `_retry_llm`；`role_boundary.detect` 拆出 `_apply_semantic_outcome` / `_summary_payload`。
+- **发布范围建议（不改历史）**：25 个提交混合 6 个主题，本轮不重写历史；自测与独立回归按「路径 / 文档 / 图谱 / 审计 / 角色边界 / 报告」分主题复测。
+- **验证**：全量 pytest **539 全绿**（新增 2 条）；`core/ tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；4 个整改文件同步测试副本 SHA256 **SAME**。
+
 ### v5.21.22 验收修订（第三轮）— CodeRabbit 25 提交复审（eec4d4d..8f53a7f）
 
 > 背景：上次 CodeRabbit 基线为 `eec4d4d`（5.21.16），其后 25 个提交未复审。本轮 CodeRabbit 报 **13 条（9 major / 4 minor）**：10 条有效已修，3 条为 5.21.18 已定的「不做自动迁移」口径（见下）。
