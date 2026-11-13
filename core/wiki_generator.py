@@ -87,11 +87,18 @@ _META_TALK_MARKERS_EN = (
 _META_TALK_STRONG = (
     "we shouldn't claim", "we should not claim", "作为校对专家",
     "must only use", "用户要求我", "我需要为", "让我仔细",
+    # 外部 v5.21.21 实测 FLOWS 泄漏的推理链
+    "我们作为", "只能猜测", "我们需要选择", "需要保留文档结构",
+    "we can remove", "better remove", "hmm.",
 )
 
 
 def _looks_like_meta_talk(text: str) -> bool:
-    """正文应以 Markdown 标题开头；命中元话语即判定为思考过程。"""
+    """整篇判定：开头是否就是思考过程（命中则整篇重试）。
+
+    只看前 2000 字：中段零散泄漏由 _sanitize_meta_talk 行级清洗，
+    避免因一句残留就重试整篇、把耗时翻倍。
+    """
     body = (text or "").lstrip()
     if not body:
         return False
@@ -104,6 +111,36 @@ def _looks_like_meta_talk(text: str) -> bool:
     if any(marker in head for marker in _META_TALK_MARKERS):
         return True
     return any(marker in lower for marker in _META_TALK_MARKERS_EN)
+
+
+def _sanitize_meta_talk(text: str) -> str:
+    """行级清洗：删掉泄漏推理链的行，保留正文其余部分。
+
+    统一输出后处理：所有生成入口（根级/FLOWS/MODULES/子项目）都过这道门，
+    而不是只在 _llm_ask 里按入口逐个接入（外部 v5.21.21：FLOWS 未接入）。
+    清洗后正文过短（<200 字）视为整篇不可用，返回空串走失败占位。
+    """
+    if not text:
+        return text
+    kept, removed = [], 0
+    for line in text.splitlines():
+        low = line.lower()
+        if (any(m in line for m in _META_TALK_STRONG)
+                or any(m in low for m in _META_TALK_MARKERS_EN)):
+            removed += 1
+            continue
+        kept.append(line)
+    if not removed:
+        return text
+    body = "\n".join(kept).strip()
+    return body if len(body) >= 200 else ""
+
+
+_FAILED_DOC_PLACEHOLDER = (
+    "> ⚠️ 本文档生成失败：模型返回了推理过程或空内容，重试后仍不合格。\n"
+    ">\n"
+    "> 请重新运行 `coderef_docs` 生成本文档；若持续失败，请检查 LLM 配置与预算。\n"
+)
 
 
 # 交叉验证徽章渲染（可选导入：wiki_cross_verify 缺失时降级为空渲染，不阻断生成）
@@ -2896,12 +2933,15 @@ class _WikiEmitMixin:
 
         R2：默认在文档顶部注入 front matter（可按文档类型显式传入覆盖）。
         """
-        # 正文为空时连 front matter 一起跳过：旧实现会写出「只有 front matter、
-        # 正文 0 字」的 155B 空壳，下游无法区分「没生成」与「生成失败」。
+        # 统一输出后处理：所有生成入口（根级/FLOWS/MODULES/子项目）都过同一道
+        # 推理链清洗，而不是只在 _llm_ask 里按入口逐个接入（外部 v5.21.21：FLOWS 未接入）。
+        content = _sanitize_meta_talk(content)
         if not content or not content.strip():
+            # 写明确占位而不是留空/不写：下游要能区分「没生成」与「生成失败」，
+            # 目录也不会因为缺文件而变成空目录（外部 N-2 / N-3）。
+            content = _FAILED_DOC_PLACEHOLDER
             if name not in self._failed_docs:
                 self._failed_docs.append(name)
-            return
         if front_matter is None:
             front_matter = self._auto_front_matter(name)
         full = (front_matter + content) if front_matter else content
