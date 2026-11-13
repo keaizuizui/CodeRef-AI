@@ -125,7 +125,9 @@ def _sanitize_meta_talk(text: str) -> str:
     kept, removed = [], 0
     for line in text.splitlines():
         low = line.lower()
-        if (any(m in line for m in _META_TALK_STRONG)
+        # 统一按小写比较：外部实测 `Hmm.` 大写 H 漏检，因为它和业务内容同行，
+        # 按原样大小写比较时命不中强特征。
+        if (any(m in low for m in _META_TALK_STRONG)
                 or any(m in low for m in _META_TALK_MARKERS_EN)):
             removed += 1
             continue
@@ -1217,7 +1219,8 @@ class _WikiDocMixin:
                  cross_verify: bool = True,
                  cross_entry_spec: str = "class:pipeline_runner:Pipe",
                  enable_agent_pointer: bool = False,
-                 progress_cb=None) -> WikiResult:
+                 progress_cb=None,
+                 mode: str = "auto") -> WikiResult:
         """生成项目 Wiki（编排入口）
 
         拆分说明：原 220+ 行长函数按阶段拆为 _generate_prepare / _decide_incremental /
@@ -1233,12 +1236,14 @@ class _WikiDocMixin:
             cross_verify: 是否对模块描述做静态交叉验证（给每篇模块文档打确证徽章）
             cross_entry_spec: 交叉验证的入口（入口调用闭包为确证依据）
             enable_agent_pointer: 是否在项目根维护 AGENTS.md 的 CodeRef Wiki 指针区块（R7）
+            mode: auto（默认，有上次状态且变更少则增量）/ full（强制全量）/ incremental（强制增量，不可行时回退全量）
 
         Returns:
             WikiResult: 生成结果
         """
         # 重置本次生成失败统计（实例可能被复用，需保证每次 generate 独立）
         self._failed_docs = []
+        self._unwritten_docs = []
         self._written_paths = set()
         self._last_llm_error = ""
 
@@ -1252,11 +1257,21 @@ class _WikiDocMixin:
         git_bin, incremental_mode, changed_files = _decide_incremental(
             self, output_dir, project_path, result)
 
+        # mode 显式覆盖增量判定：此前接口没有 mode 参数，用户只能删 wiki 目录
+        # 才能触发全量（外部 v5.21.22 实测），且不同调用方式会得到不同结果。
+        if mode == "full" and incremental_mode:
+            result.warnings.append("mode=full：忽略增量判定，强制全量重建。")
+            incremental_mode = False
+        elif mode == "incremental" and not incremental_mode:
+            result.warnings.append(
+                "mode=incremental 但当前无法增量（无 git / 无上次状态 / 变更过多），"
+                "已回退全量重建。")
+
         if incremental_mode:
             # ─── 增量路径（R1）：只重新生成受影响模块的文档，全局文档按需重建 ───
-            if include_subprojects:
-                result.warnings.append(
-                    "增量同步模式暂不处理子项目，如需更新子项目请使用全量生成。")
+            result.warnings.append(
+                "增量模式：仅更新受影响模块与全局文档；未重新生成的页面保持原样，"
+                "不清理旧页、不更新子项目。如需完整重建请传 mode=full。")
             docs = self._incremental_update(
                 project_path, output_dir, changed_files, wiki_style,
                 cross_verify, cross_entry_spec, result, progress_cb=progress_cb,
@@ -1276,7 +1291,9 @@ class _WikiDocMixin:
 
         # 阶段 4：Git hook / Agent 指针 / 失败汇总 / 增量状态与 Last-good 门控
         _finalize_generation(self, project_path, output_dir, enable_git_hook,
-                             enable_agent_pointer, git_bin, result)
+                             enable_agent_pointer, git_bin, result,
+                             full_run=not incremental_mode,
+                             include_subprojects=include_subprojects)
         return result
 
 
@@ -2697,7 +2714,9 @@ class _WikiDocMixin:
 class _WikiEmitMixin:
     def _finalize_generation(self, project_path: str, output_dir: str,
                              enable_git_hook: bool, enable_agent_pointer: bool,
-                             git_bin, result: WikiResult):
+                             git_bin, result: WikiResult,
+                             full_run: bool = True,
+                             include_subprojects: bool = False):
         """阶段 4：Git hook / Agent 指针（R7）/ 失败汇总 / 增量状态（R1）与 Last-good 门控（R3）。"""
         # 6. Git hook 配置
         if enable_git_hook:
@@ -2710,37 +2729,53 @@ class _WikiEmitMixin:
         # 清理旧版本残留：输出目录里带 CodeRef front matter、但不属于本次产物
         # 的 md，是上一版模板生成的旧结论（外部实测 18:47 的 93 文件旧页一直留着）。
         # 只删带 front matter 的文件，用户手写的 md（无 front matter）一律不动。
-        generated = set(self._written_paths)
-        removed = []
-        for root, _dirs, files in os.walk(output_dir):
-            for fn in files:
-                if not fn.endswith(".md") or fn == WIKI_INSTRUCTIONS_FILE:
-                    continue
-                fp = os.path.abspath(os.path.join(root, fn))
-                if fp in generated:
-                    continue
-                try:
-                    with open(fp, "r", encoding="utf-8", errors="ignore") as f:
-                        if not f.read(8).lstrip().startswith("---"):
-                            continue
-                except OSError:
-                    continue
-                try:
-                    os.remove(fp)
-                    removed.append(os.path.relpath(fp, output_dir))
-                except OSError:
-                    continue
-        if removed:
-            result.warnings.append(
-                f"已清理 {len(removed)} 篇旧版本残留文档: {', '.join(removed[:10])}"
-                + (" ..." if len(removed) > 10 else ""))
+        #
+        # 只在全量重建时执行：增量模式本次只重写受影响文档，其余页面仍是有效产物，
+        # 按「本次没写」判旧页会把它们整批误删（外部 v5.21.22 实测：增量运行后
+        # 子项目 Wiki 9 篇 → 0 篇、USAGE.md 消失）。
+        if full_run:
+            generated = set(self._written_paths)
+            removed = []
+            for root, dirs, files in os.walk(output_dir):
+                # include_subprojects=False 时不动子项目产物：调用方只是关掉更新，
+                # 不等于要求删除已有子项目 Wiki。
+                if (not include_subprojects
+                        and os.path.abspath(root) == os.path.abspath(output_dir)):
+                    dirs[:] = [d for d in dirs if d != "subprojects"]
+                for fn in files:
+                    if not fn.endswith(".md") or fn == WIKI_INSTRUCTIONS_FILE:
+                        continue
+                    fp = os.path.abspath(os.path.join(root, fn))
+                    if fp in generated:
+                        continue
+                    try:
+                        with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                            if not f.read(8).lstrip().startswith("---"):
+                                continue
+                    except OSError:
+                        continue
+                    try:
+                        os.remove(fp)
+                        removed.append(os.path.relpath(fp, output_dir))
+                    except OSError:
+                        continue
+            if removed:
+                result.warnings.append(
+                    f"已清理 {len(removed)} 篇旧版本残留文档: {', '.join(removed[:10])}"
+                    + (" ..." if len(removed) > 10 else ""))
 
         # 汇总本次生成失败（主项目 + 子项目），让调用方感知"部分文档生成失败"
         if self._failed_docs:
             result.errors.append(
-                f"以下 {len(self._failed_docs)} 个文档生成失败（LLM 返回空内容），未落盘: "
+                f"以下 {len(self._failed_docs)} 个文档生成失败（LLM 返回空内容），已写失败占位: "
                 f"{', '.join(self._failed_docs[:20])}"
                 + (" ..." if len(self._failed_docs) > 20 else "")
+            )
+        if self._unwritten_docs:
+            result.errors.append(
+                f"以下 {len(self._unwritten_docs)} 个文档未能落盘（写文件失败）: "
+                f"{', '.join(self._unwritten_docs[:20])}"
+                + (" ..." if len(self._unwritten_docs) > 20 else "")
             )
         if self._last_llm_error:
             result.errors.append(f"LLM 调用异常: {self._last_llm_error}")
@@ -2936,18 +2971,24 @@ class _WikiEmitMixin:
         # 统一输出后处理：所有生成入口（根级/FLOWS/MODULES/子项目）都过同一道
         # 推理链清洗，而不是只在 _llm_ask 里按入口逐个接入（外部 v5.21.21：FLOWS 未接入）。
         content = _sanitize_meta_talk(content)
+        placeholder = False
         if not content or not content.strip():
             # 写明确占位而不是留空/不写：下游要能区分「没生成」与「生成失败」，
             # 目录也不会因为缺文件而变成空目录（外部 N-2 / N-3）。
             content = _FAILED_DOC_PLACEHOLDER
-            if name not in self._failed_docs:
-                self._failed_docs.append(name)
+            placeholder = True
         if front_matter is None:
             front_matter = self._auto_front_matter(name)
         full = (front_matter + content) if front_matter else content
         fp = self._write_doc(output_dir, name, full)
         if fp:
             docs.append(fp)
+            # 占位落盘成功才算「已写失败占位」；真正写不进去的另记 unwritten，
+            # 错误文案不能把两者混成「未落盘」。
+            if placeholder and name not in self._failed_docs:
+                self._failed_docs.append(name)
+        elif name not in self._unwritten_docs:
+            self._unwritten_docs.append(name)
 
 
     def _write_doc(self, output_dir: str, filename: str, content: str) -> str:
@@ -3308,6 +3349,7 @@ class WikiGenerator(_WikiGitMixin, _WikiMetaMixin, _WikiDocMixin, _WikiEmitMixin
         # 记录本次生成失败明细，供 generate() 末尾汇总进 result.errors，
         # 让外层能感知"部分文档生成失败"，避免失败被静默吞掉却标记任务 completed。
         self._failed_docs: List[str] = []
+        self._unwritten_docs: List[str] = []
         self._written_paths = set()
         self._last_llm_error: str = ""
         # R6 用户授权层：项目根 INSTRUCTIONS.md 解析结果（generate() 时加载）

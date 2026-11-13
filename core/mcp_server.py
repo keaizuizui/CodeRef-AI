@@ -1078,6 +1078,15 @@ class Server:
                     "error": (f"非法 wiki_style: {ws!r}；允许的取值为 "
                               "comprehensive / reference / tutorial / plain"),
                 }, ensure_ascii=False)
+            # mode=full 让用户显式触发全量重建，不再需要手动删除 wiki 目录；
+            # auto 保持原有「有状态且变更少则增量」的判定。
+            dm = a["mode"] if "mode" in a else "auto"
+            if dm not in ("auto", "full", "incremental"):
+                return json.dumps({
+                    "status": "error",
+                    "tool": n,
+                    "error": f"非法 mode: {dm!r}；允许的取值为 auto / full / incremental",
+                }, ensure_ascii=False)
             r = Pipe().docs(p, output_dir=o,
                             wiki_style=ws,
                             include_subprojects=True if a.get("include_subprojects", True) else False,
@@ -1085,7 +1094,8 @@ class Server:
                             cross_verify=True if a.get("cross_verify", True) else False,
                             cross_entry_spec=a.get("cross_entry_spec") or "class:pipeline_runner:Pipe",
                             # ：docs 也透传阶段进度回调，取消检查点覆盖扫描/图谱/wiki 生成阶段
-                            progress_cb=progress_cb)
+                            progress_cb=progress_cb,
+                            mode=dm)
             wr = getattr(r, "wiki_result", None)
             _errs = getattr(r, "errors", [])
             # 结构化返回：携带输出目录/文档清单/失败明细，让调用方能区分"全量成功"与"部分失败"，

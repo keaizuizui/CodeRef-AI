@@ -173,7 +173,8 @@ def _wiki(p: str, r: PipeResult, done: set, output_dir: str = None,
           enable_agent_pointer: bool = False,
           cross_verify: bool = True,
           cross_entry_spec: str = "class:pipeline_runner:Pipe",
-          progress_cb=None):
+          progress_cb=None,
+          mode: str = "auto"):
     if "wiki" in done: return
     # 延迟 import：TaskCancelled 定义于主文件，运行时主文件已加载完成，避免模块级循环
     from core.pipeline_runner import TaskCancelled
@@ -194,7 +195,10 @@ def _wiki(p: str, r: PipeResult, done: set, output_dir: str = None,
                            cross_entry_spec=cross_entry_spec,
                            # /CodeRabbit major：透传 progress_cb，使 wiki 逐模块
                            # 生成循环内置的取消检查点可触达，取消后不再跑到底。
-                           progress_cb=progress_cb)
+                           progress_cb=progress_cb,
+                           # auto / full / incremental：显式控制增量或全量重建，
+                           # 不再需要用户手动删除 wiki 目录才能触发全量。
+                           mode=mode)
         # 把 Wiki 生成失败明细带入管线结果，让 _fmt / MCP 层能感知"部分文档生成失败"，
         # 避免部分阶段失败却仍对外标记为 fully completed。
         for e in getattr(gres, "errors", []) or []:

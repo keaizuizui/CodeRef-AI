@@ -232,6 +232,9 @@ BUILTIN_TOOLS: List[Dict] = [
                             "三级管线：AST元数据(全量)→LLM归纳→编校验证(无幻觉)。\n"
                             "wiki_style 可选 comprehensive/reference/tutorial/plain；"
                             "include_subprojects 控制是否同时为子项目生成独立 Wiki。\n"
+                            "mode 控制增量/全量：auto（默认，有上次状态且变更少则增量）/ "
+                            "full（强制全量重建，子项目与旧页清理只在全量路径发生）/ "
+                            "incremental（强制增量，不可行时回退全量）。\n"
                             "enable_agent_pointer 控制在项目根维护 AGENTS.md 的 CodeRef Wiki 指针区块（R7）；"
                             "cross_verify 控制是否对模块描述做静态交叉验证（确证徽章）。\n"
                             "自动发现子项目并生成独立 Wiki。\n"
@@ -247,6 +250,7 @@ BUILTIN_TOOLS: List[Dict] = [
                             "project_path": {"type": "string", "description": "目标项目路径"},
                             "output_dir": {"type": "string", "description": "输出目录（默认 txt/）"},
                             "wiki_style": {"type": "string", "enum": ["comprehensive","reference","tutorial","plain"], "default": "comprehensive"},
+                            "mode": {"type": "string", "enum": ["auto","full","incremental"], "default": "auto", "description": "auto=有状态且变更少则增量；full=强制全量重建；incremental=强制增量（不可行时回退全量）"},
                             "include_subprojects": {"type": "boolean", "default": True},
                             "enable_agent_pointer": {"type": "boolean", "default": False, "description": "在项目根维护 AGENTS.md 的 CodeRef Wiki 指针区块（R7）"},
                             "cross_verify": {"type": "boolean", "default": True, "description": "对模块描述做静态交叉验证（确证徽章）"},

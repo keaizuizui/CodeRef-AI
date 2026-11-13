@@ -313,7 +313,8 @@ def docs(project_path: str, output_dir: str = None,
          enable_agent_pointer: bool = False,
          cross_verify: bool = True,
          cross_entry_spec: str = "class:pipeline_runner:Pipe",
-         progress_cb=None) -> PipeResult:
+         progress_cb=None,
+         mode: str = "auto") -> PipeResult:
     """文档探查管线：Wiki
 
     wiki_style: Wiki 风格 (comprehensive / reference / tutorial / plain)
@@ -321,6 +322,7 @@ def docs(project_path: str, output_dir: str = None,
     enable_agent_pointer: 是否在项目根维护 AGENTS.md 的 CodeRef Wiki 指针区块（R7）
     cross_verify: 是否对模块描述做静态交叉验证（确证徽章）
     cross_entry_spec: 交叉验证的入口（入口调用闭包为确证依据）
+    mode: auto / full / incremental，控制是否强制全量重建（此前只能删 wiki 目录触发）
     """
     t0 = time.time()
     r = PipeResult(project_path=project_path)
@@ -352,7 +354,8 @@ def docs(project_path: str, output_dir: str = None,
                    enable_agent_pointer=enable_agent_pointer,
                    cross_verify=cross_verify,
                    cross_entry_spec=cross_entry_spec,
-                   progress_cb=progress_cb)
+                   progress_cb=progress_cb,
+                   mode=mode)
 
         r.report = _fmt(r, "文档探查报告")
         # 报告目录按项目隔离（U-51）：docs 也渲染 index.html，落共享目录会覆盖
@@ -899,8 +902,11 @@ class Pipe:
 
     def docs(self, project_path, output_dir=None, resume=False, wiki_style="comprehensive",
              include_subprojects=True, enable_agent_pointer=False, cross_verify=True,
-             cross_entry_spec="class:pipeline_runner:Pipe", progress_cb=None):
-        return docs(project_path, output_dir, resume, wiki_style, include_subprojects, enable_agent_pointer, cross_verify, cross_entry_spec, progress_cb)
+             cross_entry_spec="class:pipeline_runner:Pipe", progress_cb=None,
+             mode="auto"):
+        return docs(project_path, output_dir, resume, wiki_style, include_subprojects,
+                    enable_agent_pointer, cross_verify, cross_entry_spec, progress_cb,
+                    mode=mode)
 
     def docs_read(self, project_path, doc=None, output_dir=None, max_chars=20000):
         return docs_read(project_path, doc, output_dir, max_chars)
