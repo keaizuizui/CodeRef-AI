@@ -9,12 +9,14 @@ import os
 
 
 def project_key(project_path) -> str:
-    """返回归一后的项目路径（绝对路径 + normcase）。
+    """返回归一后的项目路径（展开 ~ + 绝对路径 + normcase）。
 
     Windows：去大小写差异、统一分隔符；Linux/macOS：仅绝对化。
     非法路径退回原字符串，不中断调用方。
     """
     try:
-        return os.path.normcase(os.path.abspath(str(project_path)))
+        # 先展开 ~：否则 `~/proj` 会被当成 <cwd>/~\proj，与 $HOME/proj 分裂
+        # 成两个 key（缺陷跟踪 U-88，U-71 同类）。
+        return os.path.normcase(os.path.abspath(os.path.expanduser(str(project_path))))
     except Exception:  # noqa: BLE001
         return str(project_path)

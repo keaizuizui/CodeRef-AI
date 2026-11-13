@@ -341,9 +341,48 @@ def _build_scope_text(project_path: str, total_files: int) -> str:
     except Exception as e:
         return f"分析 {total_files} 个代码文件（范围统计失败: {e}）"
 
+def _apply_whitelist_dirs(project_path: str, analysis) -> None:
+    """白名单 dir 条目必须在最外层文件统计生效（缺陷跟踪 U-78）。
+
+    旧实现只在建图/分析工具里消费 dir 排除，`audit` 的 total_files/total_lines
+    与 file_snapshot 仍把备份目录算进去，报告规模虚高、派生指标分母被污染。
+    """
+    try:
+        dirs = []
+        for e in whitelist_list(project_path):
+            d = (e.get("dir") or "").replace("\\", "/").strip("/")
+            if d:
+                dirs.append(d)
+        if not dirs:
+            return
+        kept, excluded = [], 0
+        for cf in getattr(analysis, "files", []) or []:
+            fp = getattr(cf, "file_path", "") or ""
+            try:
+                rel = os.path.relpath(fp, project_path).replace("\\", "/")
+            except ValueError:
+                rel = fp.replace("\\", "/")
+            hit = any(rel == d or rel.startswith(d + "/")
+                      or ("/" + d + "/") in ("/" + rel + "/")
+                      for d in dirs)
+            if hit:
+                excluded += 1
+                continue
+            kept.append(cf)
+        if excluded:
+            analysis.files = kept
+            analysis.total_files = len(kept)
+            analysis.total_lines = sum(
+                len((getattr(cf, "raw_content", "") or "").splitlines())
+                for cf in kept)
+    except Exception as e:  # noqa: BLE001 —— 过滤失败保持原统计并如实告警
+        logger.warning(f"白名单 dir 过滤失败（统计保持原值）: {e}")
+
+
 def _scan(p: str, file_cb=None) -> tuple:
     from core.code_analyzer import CodeAnalyzer
     a = CodeAnalyzer().analyze_project(p, file_progress_cb=file_cb)
+    _apply_whitelist_dirs(p, a)
     return (getattr(a, "total_files", 0) or 0, getattr(a, "total_lines", 0) or 0, a)
 
 def core_rules_reset(project_path: str) -> dict:

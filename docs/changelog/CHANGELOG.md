@@ -24,6 +24,23 @@
 - **失败文案区分（判据 2）**：生成失败但占位已落盘 → `已写失败占位`；真正写不进文件 → `未能落盘（写文件失败）`。不再一律说「未落盘」，避免外部据此误判文件缺失。
 - **验证**：`tests/test_wiki_quality.py` 19 条全绿（新增大小写 `Hmm.` 清洗、增量不清理、全量清理保留手写页与子项目、失败/未落盘文案区分、mode schema 5 条）；`core/ tools/` pyflakes 0。
 
+### v5.21.22 验收修订（第二轮）— 缺陷跟踪 U-73~U-90 整改
+
+> 背景：独立回归按主链与大仓产物复测，新开 U-73~U-90（含 U-73 推理链残留、U-80 校对提示词落盘、U-78 备份目录计数、U-79 audit 主链 wiki 空壳、U-81 方法双节点、U-86 缓存不失效等）。按 5.X 冻结口径不升版，改动并入 5.21.22 基线。
+
+- **U-73 / U-76 推理链残留**：`_sanitize_meta_talk` 统一 `line.lower()` 比较（上一轮已修），本轮补 `任务：文档校对专家 / 输出修正后的全文 / 不存在的标识符 / 请将它们替换为文中合理 / 我们需要回答中文` 等校对提示词强特征，覆盖整段提示词被回传的情况。
+- **U-80 校对提示词落盘**：`_cite_fix` 在 LLM 返回后做提示词回显检测，命中即保留原文，绝不把内部指令写进文档；`_emit` 的统一清洗继续兜底。
+- **U-74 MODULES 缺件 / 空目录**：`_generate_module_docs` 不再因模块描述为空 `continue`（描述只是风格参考，事实数据仍来自元数据），模块文档必出或写失败占位；子项目不再预创建空 `MODULES/` 目录。
+- **U-77 / U-81 图谱函数口径**：建图时跳过「类方法在 `cf.functions` 里的副本」，同一 `def` 不再同时产出 `func:` 与 `method:`；`query_callers/callees` 对裸名聚合精确同名节点与 `%.name` 后缀方法节点；`function_scope.rule` 改为与行为一致（仅模块顶层函数，方法为独立节点，嵌套/条件内定义不收录）。
+- **U-78 备份目录计入统计**：`_scan` 后按白名单 `dir` 条目过滤 `analysis.files` 并重算 `total_files/total_lines`，audit 报告与 `file_snapshot` 不再把 `_refactor_backup` 等备份目录算进规模。
+- **U-79 audit 主链 wiki 空壳**：`_render_html` 在 `r` 无 `wiki_result` 时回退 `detect_wiki_output_dir(project_path)`，`audit` 内部渲染也能带出已有 Wiki，不再降级为「未提供 Wiki 目录」。
+- **U-82 README 截断 / 悬空章节**：`_llm_ask` 新增截断检测（未闭合反引号/代码围栏、末句半句标点）→ 重试一次，仍不完整则判失败写占位；事实约束新增「不得引用本文不存在的章节编号」。
+- **U-83 / U-84 / U-85 role_boundary**：`llm_integration` 补 `get_llm_client()`（原导入符号不存在导致语义层恒不可用）；`semantic=True` 但 LLM 不可用时返回 `semantic_note.enabled=false`、`status=DEGRADED`，并把候选 `uncertainty` 回退为 `high`；`modules_scanned=0` 时显式 `no_target=true` + `status=SKIP`，不再静默成功。
+- **U-86 wiki 缓存不失效**：全量路径 `_build_code_metadata(skip_cache=True)`；Stage 2 描述缓存新增「模块元数据指纹」，指纹变化即重算（仅按模块名命中会永久复用旧描述）。
+- **U-87 / U-88 / U-89 / U-90**：`_same_file` 优先比较 `mtime_ns`（0.1s 内同尺寸改写可检出，旧快照仍走容差兼容）；`project_key` 先 `expanduser` 再归一（`~/proj` 与 home 路径同 key）；`degraded_reasons` 补 `timed out` / `time out`；画布空项目显示「暂无架构数据」空态而非空白。
+- **U-72 / U-75**：U-72 已在上一条修复；U-75 是判据冲突（257B 失败占位 vs「无 <300B 空壳」），按内容特征区分——占位含「生成失败 + 重跑指引」，测试侧已单列 `placeholders`，产品文案不变。
+- **验证**：全量 pytest **535 全绿**（新增 14 条）；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.22）；`change_guard` 无退化。
+
 ### v5.21.21 — docs 残留三处：真实总数传导、入口优先采样、旧页清理（外部 v5.21.20 实测）
 
 > 背景：外部 v5.21.20 实测 5 项判据 4 项通过，②③④⑨ 全过；残留 ① 根级 5 篇仍写 20 个文件、③ 3 篇泄漏英文推理链、⑤ README 仍称「没有网页界面」。

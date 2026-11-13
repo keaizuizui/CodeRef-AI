@@ -314,7 +314,9 @@ class MemoryLayer:
         snap = {}
         for fp in files:
             try:
-                snap[fp] = {"mtime": os.path.getmtime(fp), "size": os.path.getsize(fp)}
+                st = os.stat(fp)
+                snap[fp] = {"mtime": st.st_mtime, "mtime_ns": st.st_mtime_ns,
+                            "size": st.st_size}
             except OSError as e:
                 logger.warning(f"读取文件快照失败，跳过 {fp}: {e}")
         return snap
@@ -323,6 +325,11 @@ class MemoryLayer:
     def _same_file(old: dict, cur: dict) -> bool:
         if not old or not cur:
             return False
+        # 优先用纳秒级 mtime 精确比较：旧实现 0.1s 容差会把「0.1s 内同尺寸
+        # 改写」永久判为未变（缺陷跟踪 U-87，20 轮实测 CALLS 停在第 15 轮）。
+        if old.get("mtime_ns") is not None and cur.get("mtime_ns") is not None:
+            return (old.get("mtime_ns") == cur.get("mtime_ns")
+                    and old.get("size") == cur.get("size"))
         return abs(old.get("mtime", 0) - cur.get("mtime", 0)) <= _MTIME_TOLERANCE and \
             old.get("size") == cur.get("size")
 

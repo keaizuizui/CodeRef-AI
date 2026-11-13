@@ -1100,3 +1100,15 @@ class LLMIntegration:
             reason = "LLM 返回的数组元素结构不完整（缺少必需字段或类型错误）"
         logger.warning(f"extract_reference_points 结果降级: {reason}; 响应片段: {response[:200]}")
         return []
+
+
+def get_llm_client():
+    """返回可用的 OpenAI 兼容客户端；未配置 Key / 初始化失败返回 None。
+
+    供 role_boundary 等可选语义能力复用（缺陷跟踪 U-83：旧代码导入了不存在的
+    符号，导致语义层恒不可用却静默降级）。
+    """
+    try:
+        return LLMIntegration().client
+    except Exception:  # noqa: BLE001 —— 缺依赖/配置异常一律视为不可用
+        return None

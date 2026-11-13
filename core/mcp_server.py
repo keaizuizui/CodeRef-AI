@@ -91,6 +91,21 @@ MEMORY_CONTRACT = (
     "请用户粘贴：请先调用 coderef_operation_memory(action=recover)。"
 )
 
+def _degraded_reasons(errors) -> dict:
+    """失败原因拆分：超时/预算 vs 内容被丢弃（两者修复动作不同）。
+
+    `Request timed out.` 不含 timeout 子串，必须单列 `timed out`（缺陷跟踪 U-89）。
+    """
+    joined = " ".join(str(e) for e in (errors or [])).lower()
+    return {
+        "timeout_or_budget": any(
+            k in joined for k in ("超时", "timeout", "timed out", "time out",
+                                  "预算", "budget")),
+        "content_dropped": any(
+            k in joined for k in ("思考过程", "丢弃", "meta_talk")),
+    }
+
+
 # 逐工具边界提示（追加到 tools/list 对应工具的 description 末尾）
 TOOL_BOUNDARY_NOTES = {
     "coderef_operation_memory": (
@@ -1102,7 +1117,6 @@ class Server:
             # 避免部分文档生成失败时仍被当作 fully completed。
             # degraded_reasons 把「超时/预算」与「内容被丢弃」拆开：两者修复动作不同
             # （前者调预算或增量重跑，后者重试生成），混在一个 status 里无法分派。
-            _joined = " ".join(str(e) for e in _errs).lower()
             _warns = list(getattr(wr, "warnings", []) or []) if wr else []
             return json.dumps({
                 "status": "completed" if not _errs else "partial_failed",
@@ -1113,12 +1127,7 @@ class Server:
                 # warnings 必须回传：旧页清理、引用修复这类「成功但有动作」的记录
                 # 只在 warnings 里，缺字段会让调用方以为什么都没发生（外部 N-4）。
                 "warnings": _warns,
-                "degraded_reasons": {
-                    "timeout_or_budget": any(
-                        k in _joined for k in ("超时", "timeout", "预算", "budget")),
-                    "content_dropped": any(
-                        k in _joined for k in ("思考过程", "丢弃", "meta_talk")),
-                },
+                "degraded_reasons": _degraded_reasons(_errs),
                 "wiki": {
                     "output_dir": getattr(wr, "output_dir", "") if wr else "",
                     "documents": getattr(wr, "documents", []) if wr else [],

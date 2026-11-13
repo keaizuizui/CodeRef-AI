@@ -87,9 +87,13 @@ _META_TALK_MARKERS_EN = (
 _META_TALK_STRONG = (
     "we shouldn't claim", "we should not claim", "作为校对专家",
     "must only use", "用户要求我", "我需要为", "让我仔细",
-    # 外部 v5.21.21 实测 FLOWS 泄漏的推理链
+    # 外部 v5.21.22 实测 FLOWS 泄漏的推理链
     "我们作为", "只能猜测", "我们需要选择", "需要保留文档结构",
     "we can remove", "better remove", "hmm.",
+    # 缺陷跟踪 U-80：校对环节的提示词被模型当正文回传（整段系统提示词落盘）
+    "任务：文档校对专家", "文档校对专家", "输出修正后的全文", "输出修正后全文",
+    "不存在的标识符", "请将它们替换为文中合理", "我们需要回答中文",
+    "不要改变文章的整体结构", "不要改变整体结构和写作风格",
 )
 
 
@@ -143,6 +147,22 @@ _FAILED_DOC_PLACEHOLDER = (
     ">\n"
     "> 请重新运行 `coderef_docs` 生成本文档；若持续失败，请检查 LLM 配置与预算。\n"
 )
+
+
+def _looks_truncated(text: str) -> bool:
+    """粗判模型输出是否在结尾被截断（缺陷跟踪 U-82：README 断在半句）。
+
+    只认确定性特征，避免误伤正常文档：未闭合的代码围栏、末行以未闭合的
+    反引号/半句标点结尾。正常以列表项、表格行、句号结尾的文档不受影响。
+    """
+    body = (text or "").rstrip()
+    if not body:
+        return False
+    # 未闭合的代码围栏 / 行内反引号：反引号总数为奇数即视为截断
+    if body.count("`") % 2 == 1:
+        return True
+    last = body.splitlines()[-1].rstrip()
+    return last.endswith(("`", "，", ",", "、", "：", ":", "（", "(", "…"))
 
 
 # 交叉验证徽章渲染（可选导入：wiki_cross_verify 缺失时降级为空渲染，不阻断生成）
@@ -1326,8 +1346,11 @@ class _WikiDocMixin:
 
         # ─── 三级管线 ───
 
-        # Stage 1: 全量代码元数据提取（AST，无 LLM）
-        code_metadata = self._build_code_metadata(modules, project_path)
+        # Stage 1: 全量代码元数据提取（AST，无 LLM）。
+        # 全量重建必须跳过缓存：缓存只校验项目路径与模块数，源码改了但模块数
+        # 不变时会复用旧元数据，导致重跑 mode=full 文档逐字节不变（缺陷跟踪 U-86）。
+        code_metadata = self._build_code_metadata(
+            modules, project_path, skip_cache=True)
 
         # 超大仓库时对元数据采样降级（但仍比原始代码采样损失小得多）
         if result.large_repo:
@@ -1360,8 +1383,9 @@ class _WikiDocMixin:
         for sub_path in subprojects:
             sub_name = os.path.basename(sub_path)
             sub_output = os.path.join(output_dir, "subprojects", sub_name)
+            # MODULES 目录由落盘时按需创建：没有可生成文档时不留空壳目录
+            # （缺陷跟踪 U-74：subprojects/<name>/MODULES 为空）。
             os.makedirs(sub_output, exist_ok=True)
-            os.makedirs(os.path.join(sub_output, "MODULES"), exist_ok=True)
 
             sub_result = WikiResult(
                 project_path=sub_path,
@@ -1415,6 +1439,7 @@ class _WikiDocMixin:
         invalidate = invalidate or []
         cache_dir = self._project_cache_path(meta.project_path)
         cache_file = os.path.join(cache_dir, f"stage2_descriptions_{style}.json")
+        fp_file = os.path.join(cache_dir, f"stage2_fingerprints_{style}.json")
         cached: Dict[str, str] = {}
         if os.path.exists(cache_file):
             try:
@@ -1422,15 +1447,30 @@ class _WikiDocMixin:
                     cached = json.load(f)
             except Exception:
                 cached = {}
+        # 描述指纹：模块元数据文本变化 → 该模块描述必须重算。
+        # 旧实现只按模块名命中缓存，改代码后重跑仍复用旧描述（缺陷跟踪 U-86）。
+        saved_fps: Dict[str, str] = {}
+        if os.path.exists(fp_file):
+            try:
+                with open(fp_file, "r", encoding="utf-8") as f:
+                    saved_fps = json.load(f)
+            except Exception:
+                saved_fps = {}
+        current_fps = {
+            m.name: hashlib.md5(
+                self._module_metadata_to_text(m).encode("utf-8")).hexdigest()
+            for m in meta.modules
+        }
 
         # 只保留仍存在于元数据中的模块描述，排除已删除/改名模块的残留缓存
         module_names = {m.name for m in meta.modules}
         cached = {k: v for k, v in cached.items() if k in module_names}
 
-        # 命中缓存的条件：缓存 key 命中了全部模块，且这些模块不在失效列表中
+        # 命中缓存的条件：描述存在、不在失效列表，且元数据指纹未变
         # （增量路径下受影响模块的描述来自改动前的元数据，必须重算）。
         missing = [m.name for m in meta.modules
-                   if m.name not in cached or m.name in invalidate]
+                   if m.name not in cached or m.name in invalidate
+                   or saved_fps.get(m.name) != current_fps[m.name]]
         if not missing and len(cached) == len(meta.modules):
             return cached
 
@@ -1448,8 +1488,13 @@ class _WikiDocMixin:
             overview_lines.append("")
 
         guidelines = self._style_guidelines(style)
-        # 先复用缓存中仍有效的描述，仅对缺失 / 被失效的模块重新调用 LLM
-        descriptions = {k: v for k, v in cached.items() if k not in invalidate}
+        # 复用缓存仅限「指纹未变且未被失效」的模块：指纹变化的旧描述必须丢弃，
+        # 否则 missing 判了差异、循环里又命中旧描述跳过 LLM（U-86 半修）。
+        descriptions = {
+            k: v for k, v in cached.items()
+            if k not in invalidate
+            and saved_fps.get(k) == current_fps.get(k)
+        }
 
         for mod in meta.modules:
             if mod.name in descriptions:
@@ -1482,10 +1527,12 @@ class _WikiDocMixin:
             desc = self._llm_ask(system_prompt, user_prompt)
             descriptions[mod.name] = desc
 
-        # 缓存
+        # 缓存（描述 + 元数据指纹）
         try:
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(descriptions, f, ensure_ascii=False, indent=1)
+            with open(fp_file, "w", encoding="utf-8") as f:
+                json.dump(current_fps, f, ensure_ascii=False, indent=1)
         except Exception as e:
             logger.warning(f"写入描述缓存失败，忽略: {e}")
 
@@ -1933,6 +1980,22 @@ class _WikiDocMixin:
                 if self.llm.is_error_response(text) or _looks_like_meta_talk(text):
                     self._last_llm_error = "LLM 返回疑似思考过程，重试后仍不合格，已丢弃"
                     return ""
+            # 尾句截断不得静默落盘（缺陷跟踪 U-82）：重试一次，仍不完整则判失败
+            if _looks_truncated(text):
+                retry_messages = messages + [{
+                    "role": "user",
+                    "content": ("上一次输出在结尾被截断了。请从开头完整输出全文，"
+                                "不要省略、不要续写。"),
+                }]
+                retry = self.llm.chat_completion(
+                    retry_messages, max_tokens=4096, temperature=0.3)
+                if (not self.llm.is_error_response(retry) and retry
+                        and not _looks_truncated(retry)
+                        and not _looks_like_meta_talk(retry)):
+                    text = retry
+                else:
+                    self._last_llm_error = "LLM 输出疑似截断，重试后仍不完整，已丢弃"
+                    return ""
             return text
         except Exception as e:
             self._last_llm_error = str(e)
@@ -1975,6 +2038,8 @@ class _WikiDocMixin:
             "7. 引用文件路径必须与分析结果中的相对路径逐字一致，不得省略中间目录"
             "（例如 `pkg/sub/x.py` 不能写成 `pkg/x.py`）；分析清单未覆盖的文件不要编造路径。\n"
             "8. 文件总数以「文件数: N」为准；正文只列了样本，不得把样本数当成总数。\n"
+            "9. 不得引用本文不存在的章节编号（如「见第四节」）；只能引用本文实际包含的标题，"
+            "或直接给出命令/路径。\n"
         )
 
 
@@ -2217,8 +2282,9 @@ class _WikiDocMixin:
             if affected_set is not None and mod.name not in affected_set:
                 continue
             desc = descriptions.get(mod.name, "")
-            if not desc:
-                continue
+            # 模块描述缺失也必须出模块文档：旧实现直接 continue，导致
+            # MODULES/<模块>.md 静默缺件（缺陷跟踪 U-74）。描述只是风格参考，
+            # 事实数据仍来自元数据，空描述时照常生成。
 
             # 交叉验证徽章：有铁证时注入文档顶部，供非技术人员核验描述可信度
             badge_md = ""
@@ -2669,7 +2735,16 @@ class _WikiDocMixin:
             f"请修正后输出全文。"
         )
         fixed = self._llm_ask(system_prompt, user_prompt)
-        return fixed if fixed and len(fixed) > 100 else doc_text
+        if not fixed or len(fixed) <= 100:
+            return doc_text
+        # 模型可能把校对提示词/推理过程当正文回传（缺陷跟踪 U-80）：
+        # 命中提示词特征时保留原文，绝不把内部指令交付给用户。
+        if _looks_like_meta_talk(fixed) or any(
+                m in fixed for m in ("任务：文档校对专家", "不存在的标识符",
+                                     "输出修正后", "请将它们替换为文中合理")):
+            logger.warning(f"[cite-fix] {doc_name}: 返回疑似提示词回显，保留原文")
+            return doc_text
+        return fixed
 
 
     def _generate_api_doc(self, project_name: str, summary: str,

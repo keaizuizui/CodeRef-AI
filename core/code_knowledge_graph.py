@@ -699,8 +699,19 @@ class CodeKnowledgeGraph:
             self._upsert_node(_kg_module_node(cf, rel, module_key, module_name))
             n += 1
 
-            # 函数节点 + CONTAINS 边
+            # 函数节点 + CONTAINS 边。
+            # CodeAnalyzer 把类方法同时放进 cf.functions 与 cf.classes[].methods，
+            # 两边都建节点会让同一 def 产出 func: 与 method: 两份，裸名 callers
+            # 命中 func: 节点返回 0，AI 会误判死代码（缺陷跟踪 U-81）。这里跳过方法副本。
+            _method_keys = {
+                (m.name, getattr(m, "start_line", 0), getattr(m, "end_line", 0))
+                for _cls in getattr(cf, "classes", [])
+                for m in getattr(_cls, "methods", [])
+            }
             for func in getattr(cf, "functions", []):
+                if (func.name, getattr(func, "start_line", 0),
+                        getattr(func, "end_line", 0)) in _method_keys:
+                    continue
                 fid = f"func:{module_key}:{func.name}"
                 self._upsert_node(_kg_function_node(rel, module_key, func))
                 n += 1
@@ -1378,45 +1389,70 @@ class CodeKnowledgeGraph:
         return KGQueryResult(nodes=nodes, total=len(nodes),
                              query_type="entity_exact")
 
+    def _resolve_node_ids(self, name: str) -> List[str]:
+        """裸名/短名 → 全部候选节点 id（同名函数与方法聚合，缺陷跟踪 U-81）。
+
+        方法节点 name 为 `Class.method`，只按 `name=?` 精确匹配会漏掉；裸名
+        查询必须同时收集精确同名节点与点号边界后缀节点，避免 AI 查到 0 个
+        调用者就误判死代码。
+        """
+        name = (name or "").strip()
+        if not name:
+            return []
+        ids: List[str] = []
+        if "." in name:
+            hit = self._find_node_by_name(name)
+            return [hit] if hit else []
+        for row in self._conn.execute(
+                "SELECT id FROM nodes WHERE name=?", (name,)).fetchall():
+            ids.append(row["id"])
+        for row in self._conn.execute(
+                "SELECT id FROM nodes WHERE name LIKE ?", (f"%.{name}",)).fetchall():
+            if row["id"] not in ids:
+                ids.append(row["id"])
+        return ids
+
     def query_callers(self, func_name: str) -> KGQueryResult:
         """查询调用者：谁调用了这个函数"""
         self._connect()
-        target = self._find_node_by_name(func_name)
-        if not target:
-            # 模糊匹配
+        targets = self._resolve_node_ids(func_name)
+        if not targets:
+            # 模糊匹配（保留旧回退，最后手段）
             row = self._conn.execute(
                 "SELECT id FROM nodes WHERE name LIKE ? LIMIT 1",
                 (f"%{func_name}%",)).fetchone()
             if not row:
                 return KGQueryResult(total=0, query_type="callers")
-            target = row["id"]
+            targets = [row["id"]]
 
-        # 反向追踪 CALLS 边
+        # 反向追踪 CALLS 边（同名符号/方法聚合）
+        marks = ",".join("?" for _ in targets)
         rows = self._conn.execute(
-            """SELECT n.* FROM nodes n
+            f"""SELECT DISTINCT n.* FROM nodes n
                JOIN edges e ON e.source = n.id
-               WHERE e.target = ? AND e.type = 'CALLS'
-               LIMIT 50""", (target,)).fetchall()
+               WHERE e.target IN ({marks}) AND e.type = 'CALLS'
+               LIMIT 50""", tuple(targets)).fetchall()
         nodes = [self._row_to_node(r) for r in rows]
         return KGQueryResult(nodes=nodes, total=len(nodes), query_type="callers")
 
     def query_callees(self, func_name: str) -> KGQueryResult:
         """查询被调用者：这个函数调用了谁"""
         self._connect()
-        source = self._find_node_by_name(func_name)
-        if not source:
+        sources = self._resolve_node_ids(func_name)
+        if not sources:
             row = self._conn.execute(
                 "SELECT id FROM nodes WHERE name LIKE ? LIMIT 1",
                 (f"%{func_name}%",)).fetchone()
             if not row:
                 return KGQueryResult(total=0, query_type="callees")
-            source = row["id"]
+            sources = [row["id"]]
 
+        marks = ",".join("?" for _ in sources)
         rows = self._conn.execute(
-            """SELECT n.* FROM nodes n
+            f"""SELECT DISTINCT n.* FROM nodes n
                JOIN edges e ON e.target = n.id
-               WHERE e.source = ? AND e.type = 'CALLS'
-               LIMIT 50""", (source,)).fetchall()
+               WHERE e.source IN ({marks}) AND e.type = 'CALLS'
+               LIMIT 50""", tuple(sources)).fetchall()
         nodes = [self._row_to_node(r) for r in rows]
         return KGQueryResult(nodes=nodes, total=len(nodes), query_type="callees")
 
@@ -1545,10 +1581,11 @@ class CodeKnowledgeGraph:
                 "counted": int(type_counts.get("constant", 0)),
                 "note": "收不束的常量由项目白名单/文档口径治理，不追求 100% 覆盖",
             },
-            # 口径披露：function 节点包含类方法、嵌套函数与条件内定义，
-            # 因此公有/私有计数不等于「顶层函数数」（外部实测 D-7：1309 vs 704）。
+            # 口径披露：function 节点仅含模块顶层函数（含 import 失败的兜底定义）；
+            # 类方法见 method 节点；函数体内嵌套/条件内定义不收录（缺陷跟踪 U-77）。
             "function_scope": {
-                "rule": "function 节点含顶层函数、类方法、嵌套函数与条件内定义",
+                "rule": ("function 节点仅含模块顶层函数；类方法为独立 method 节点；"
+                         "函数体内嵌套与条件内定义不收录"),
                 "counted": int(type_counts.get("function", 0)),
                 "note": ("存在性判定请用 node 的 file_path + start_line 复核；"
                          "不要把公有函数计数当作顶层函数数"),

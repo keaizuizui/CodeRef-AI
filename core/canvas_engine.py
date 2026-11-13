@@ -577,6 +577,11 @@ body { font-family:"Segoe UI","Noto Sans CJK SC",sans-serif; background:#0F172A;
     <div id="nodeLayer"></div>
   </div>
 </div>
+<div id="emptyState" style="display:none; position:fixed; top:45px; left:0; right:0; bottom:0; z-index:120; align-items:center; justify-content:center; flex-direction:column; gap:8px; color:#94A3B8; font-size:14px; text-align:center; background:rgba(15,23,42,.6); pointer-events:none;">
+  <div style="font-size:32px;">🗺</div>
+  <div>暂无架构数据：未发现可绘制的模块或调用关系</div>
+  <div style="font-size:12px;color:#64748B;">请先运行 coderef_architecture 构建知识图谱，或确认项目内有可解析的代码文件</div>
+</div>
 <div id="miniMap"><div class="mm-title">导航</div><canvas id="mmCanvas"></canvas></div>
 <div id="contextMenu"></div>
 <div id="propPanel"></div>
@@ -1138,6 +1143,9 @@ function edgeColor(e){
   return e.color || '#94A3B8';
 }
 function render(){
+  // 缺陷跟踪 U-90：空项目画布区必须有空态文案，而不是只剩工具栏「节点 0」
+  const emptyEl = document.getElementById('emptyState');
+  if (emptyEl) emptyEl.style.display = nodes.length ? 'none' : 'flex';
   renderNodes(); renderEdges(); renderLanes(); renderStats(); renderMiniMap();
 }
 function renderMiniMap(){

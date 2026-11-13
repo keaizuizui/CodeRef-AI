@@ -462,6 +462,7 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
         result["summary"]["message"] = ("目标架构未配置任何角色 role_keywords，"
                                         "无法做符号级职责判定；请在 tech_roles 中补 "
                                         "role_keywords（角色职责关键词表）")
+        result["status"] = "SKIP"
         result["ok"] = True
         return result
 
@@ -525,9 +526,22 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
             break
 
     # —— 语义判定（可选，缺 LLM 只给静态信号）——
+    degraded = False
     semantic_note = None
     if semantic and issues:
         semantic_note = _semantic_confirm(project_path, issues[:15])
+        if not semantic_note or not semantic_note.get("enabled"):
+            # U-84：语义层未生效必须显式降级，且候选不得比静态层更自信
+            degraded = True
+            for it in issues + hints:
+                it["uncertainty"] = "high"
+    if modules_scanned == 0:
+        # U-85：没有可比对的模块不是「通过」，必须显式 no_target
+        result["no_target"] = True
+        result["status"] = "SKIP"
+    elif degraded:
+        result["degraded"] = True
+        result["status"] = "DEGRADED"
 
     by_role: Dict[str, int] = {}
     for it in issues:
@@ -536,17 +550,24 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
 
     result["boundary_issues"] = issues
     result["call_hints"] = hints
+    _msg = ("符号级职责越界：boundary_issues 仅报 definition 型真越界（顶层"
+            "类/函数定义名命中非本角色 role_keywords，且未命中本角色职责词"
+            "锚点、本角色关键词可匹配英文符号）；方法级撞词与跨角色调用是"
+            "分层协作常态，降级为独立 call_hints 弱信号（不占越界主输出）。"
+            "semantic=False 时仅静态信号（uncertainty=high），不硬阻断。")
+    if modules_scanned == 0:
+        _msg = ("没有任何模块匹配目标架构的 target_modules/角色关键词，"
+                "未执行符号级职责判定（no_target）；请先在 target_arch 中补齐 target_modules。")
+    elif degraded:
+        _msg += (" semantic=True 但 LLM 不可用，语义判定未执行（degraded）；"
+                 "候选 uncertainty 已回退为 high。")
     result["summary"] = {
         "modules_scanned": modules_scanned,
         "symbols_scanned": symbols_scanned,
         "boundary_issues": len(issues),
         "call_hints": len(hints),
         "by_role": by_role,
-        "message": ("符号级职责越界：boundary_issues 仅报 definition 型真越界（顶层"
-                    "类/函数定义名命中非本角色 role_keywords，且未命中本角色职责词"
-                    "锚点、本角色关键词可匹配英文符号）；方法级撞词与跨角色调用是"
-                    "分层协作常态，降级为独立 call_hints 弱信号（不占越界主输出）。"
-                    "semantic=False 时仅静态信号（uncertainty=high），不硬阻断。"),
+        "message": _msg,
     }
     result["semantic_note"] = semantic_note
     result["ok"] = True
@@ -556,17 +577,18 @@ def detect(project_path: str, target_arch: Optional[Dict[str, Any]] = None,
 def _semantic_confirm(project_path: str, issues: List[Dict[str, Any]]):
     """可选语义判定接口：对 top 候选做语义确认。
 
-    依赖 LLM；缺 API Key / LLM 不可用时返回 None（不硬阻断，保留静态信号）。
+    依赖 LLM；缺 API Key / LLM 不可用时返回 enabled=False 的显式降级说明，
+    不硬阻断，也不把未执行伪装成已执行（缺陷跟踪 U-83 / U-84）。
     """
     try:
         from core.llm_integration import get_llm_client
         client = get_llm_client()
     except Exception:  # noqa: BLE001
         logger.info("role_boundary: LLM 不可用，仅返回静态信号")
-        return None
+        return {"enabled": False, "reason": "LLM 不可用（导入失败）"}
     if client is None:
         logger.info("role_boundary: 未配置 LLM API Key，仅返回静态信号")
-        return None
+        return {"enabled": False, "reason": "LLM 不可用（未配置 API Key）"}
     prompt = ("你是软件架构师。以下代码符号被判定为'职责越界'（定义于某角色的模块，"
               "但符号名命中另一角色的职责关键词）。请逐条判断：它是否确实越界（应在"
               "归属角色实现），还是可接受（命名歧义/工具函数/被授权调用）。只输出 "
