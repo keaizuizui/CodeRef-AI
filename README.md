@@ -3,7 +3,7 @@
 
 # CodeRef-AI — 编程 AI 的治理外脑，非编程人员的技术助理
 
-**Version 5.21.20** | Python 3.10+ | MCP Protocol | CodeRef 双轨授权协议
+**Version 5.21.21** | Python 3.10+ | MCP Protocol | CodeRef 双轨授权协议
 
 > 给编程 AI 一双确定性的眼睛，给非编程人员一张看得懂的工程体检单。
 
@@ -591,9 +591,12 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 
 > 3.X 与 5.X 系列的完整逐版本更新日志（v3.0 – v5.17.0）统一归档至 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)；线上 README 只保留当前版本状态。
 
-### 当前版本 v5.21.20 — docs 元数据与正文口径打通
+### 当前版本 v5.21.21 — docs 残留收口
 
 > 5.21.x 版本线：梦从单一 `pitfall` 扩到「记忆 / 叙事 / 草稿 / 维护」四类 job，并加工具面 profile。
+
+- **5.21.21（外部 v5.21.20 实测整改）**：模块元数据文本显式写「文件总数: N（仅列样本）」并让 README/OVERVIEW 不再继承 20；`_sample_metadata` 改为入口文件优先保留，避免 `web_gui.py` 被截掉后写出「没有网页界面」；元话语拦截补英文推理链（`we shouldn't claim` / `must only use` 等）与中文自我对话，且以 `#` 开头的正文命中强特征也拦；`generate()` 收尾清理带 CodeRef front matter 的旧版本残留页（用户手写 md 与 `INSTRUCTIONS.md` 不动）；报告首行改为「扫描耗时」，与整条管线耗时区分。
+- **验证（5.21.21 发布门槛）**：全量 pytest **512 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0。
 
 - **5.21.20（外部 v5.21.19 实测整改）**：`coderef_docs` 采样不再改写真实文件数（同一份 Wiki 曾出现 20/93/1/16/302 五种数字）；正文为空时不再写只有 front matter 的空壳，思考过程命中后先重试一次；元话语拦截扩展到「我们需要写 / 需要遵守规则 / 必须原样引用」；评估台 Wiki 时间改取目录内最新文件 mtime；入口文件判定扩展到 `web_/gui_/app_` 前缀与 `if __name__ == "__main__"`（修复「有 4098 行 HTTP 服务却写没有网页界面」）；单词全大写常量（`SOURCE` / `DROP`）不再被漏收；`verify_findings` 对「按常量口径排除」的符号改判 `unverifiable`；`query(stats)` 新增 `function_scope`；`docs` 返回新增 `degraded_reasons` 拆开超时与内容丢弃。
 - **验证（5.21.20 发布门槛）**：全量 pytest **508 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0。
