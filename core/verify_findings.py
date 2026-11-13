@@ -332,8 +332,12 @@ class FindingsVerifier:
             except AttributeError:
                 ent = self.kg.query_entity(symbol)
             nodes = list(ent.nodes or [])
-            # 偏好精确同名（query_entity 是 LIKE 模糊匹配）
-            exact = [n for n in nodes if getattr(n, "name", "") == symbol]
+            # 偏好精确同名（query_entity 是 LIKE 模糊匹配）；方法节点 name 为
+            # `Class.method`，裸名核验时按点号边界后缀接受（U-81 去重后不能
+            # 把存在的 Worker.run 判成不存在）。
+            exact = [n for n in nodes if getattr(n, "name", "") == symbol
+                     or ("." not in symbol
+                         and getattr(n, "name", "").endswith("." + symbol))]
             if exact:
                 nodes = exact
             elsewhere = 0

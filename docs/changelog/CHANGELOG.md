@@ -24,6 +24,21 @@
 - **失败文案区分（判据 2）**：生成失败但占位已落盘 → `已写失败占位`；真正写不进文件 → `未能落盘（写文件失败）`。不再一律说「未落盘」，避免外部据此误判文件缺失。
 - **验证**：`tests/test_wiki_quality.py` 19 条全绿（新增大小写 `Hmm.` 清洗、增量不清理、全量清理保留手写页与子项目、失败/未落盘文案区分、mode schema 5 条）；`core/ tools/` pyflakes 0。
 
+### v5.21.22 验收修订（第三轮）— CodeRabbit 25 提交复审（eec4d4d..8f53a7f）
+
+> 背景：上次 CodeRabbit 基线为 `eec4d4d`（5.21.16），其后 25 个提交未复审。本轮 CodeRabbit 报 **13 条（9 major / 4 minor）**：10 条有效已修，3 条为 5.21.18 已定的「不做自动迁移」口径（见下）。
+
+- **常量口径文案**：`constant_scope.rule` 与 `_classify_assignment` 实际规则对齐——`len(name)>1 and isupper()`，不要求下划线。
+- **方法裸名查询**：`query_entities_exact` 对裸名补充点号边界后缀（`Worker.run`），`verify_findings` 按裸名核验方法不再误判不存在；`_suffix_like` 对 `%`/`_` 做 `ESCAPE`，避免 `get_data` 匹配 `Cache.getXdata`。
+- **敏感常量优先级**：`PASSWORD = "example-secret"` 先判 `hardcoded` 再判 `constant`，不再被全大写常量分支吞掉。
+- **图谱失败不推进快照**：`MemoryLayer.sync` 在图谱重建失败时保留旧快照并返回 `partial_failed`，下次增量可重试，不会永久 stale。
+- **图谱快照纳秒级**：`Pipe._snapshot_files` 补 `mtime_ns`，与 `MemoryLayer._same_file` 精确比较口径一致。
+- **语义失败即降级**：`role_boundary._semantic_confirm` 异常时返回 `enabled=False`，调用方进入 `DEGRADED` 并把候选 `uncertainty` 回退 `high`。
+- **旧页清理所有权**：只删同时含 `confidence:` + `generated_at:` 的 CodeRef 生成页；用户自带的 YAML front matter（Hugo/Jekyll）不再被误删。
+- **清洗词表收窄**：移除过宽的 `must not use`（正常使用说明可能含该短语）；截断检测不再把「闭合代码围栏/行内代码结尾」判为截断。
+- **不修的 3 条（by design）**：`operation_memory` / `pr_whitelist` / `prompt_asset_manager` 的旧哈希目录不做自动迁移——5.21.18 已明确「升级后重建、旧产物不读不删」，`upgrade_note` 给用户一句话重建；CodeRabbit 建议的迁移机制与冻结口径冲突。
+- **验证**：全量 pytest **537 全绿**（新增 CodeRabbit 回归 2 条）；`core/ tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化。
+
 ### v5.21.22 验收修订（第二轮）— 缺陷跟踪 U-73~U-90 整改
 
 > 背景：独立回归按主链与大仓产物复测，新开 U-73~U-90（含 U-73 推理链残留、U-80 校对提示词落盘、U-78 备份目录计数、U-79 audit 主链 wiki 空壳、U-81 方法双节点、U-86 缓存不失效等）。按 5.X 冻结口径不升版，改动并入 5.21.22 基线。

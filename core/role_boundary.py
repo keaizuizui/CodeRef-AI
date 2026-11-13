@@ -607,4 +607,6 @@ def _semantic_confirm(project_path: str, issues: List[Dict[str, Any]]):
         return {"enabled": True, "raw": out[:2000]}
     except Exception as e:  # noqa: BLE001
         logger.warning(f"role_boundary 语义判定失败: {e}")
-        return {"enabled": True, "error": str(e)}
+        # 失败即未生效：不能返回 enabled=True 让调用方以为语义层已参与
+        # （CodeRabbit：否则 status 不降级、uncertainty 仍是 medium）。
+        return {"enabled": False, "error": str(e)}

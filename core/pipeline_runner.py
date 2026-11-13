@@ -640,7 +640,9 @@ class Pipe:
                     continue
                 try:
                     st = os.stat(fp)
-                    snapshot[fp] = {"mtime": st.st_mtime, "size": st.st_size}
+                    snapshot[fp] = {"mtime": st.st_mtime,
+                                    "mtime_ns": st.st_mtime_ns,
+                                    "size": st.st_size}
                 except Exception as e:
                     logger.warning(f"读取文件状态用于快照失败，跳过 {fp}: {e}")
             return snapshot

@@ -459,6 +459,13 @@ class AstParser:
                 if value_node.func.id in ('getenv', 'get_config'):
                     return "config"
 
+        # 敏感字符串优先判硬编码：PASSWORD = "example-secret" 也是全大写，
+        # 若先走常量分支会被归为 constant，漏掉安全信号（CodeRabbit major）。
+        if var_is_sensitive and isinstance(value_node, ast.Constant):
+            val = getattr(value_node, 'value', None)
+            if isinstance(val, str) and len(val) > 4:
+                return "hardcoded"
+
         # 常量定义：全大写变量名 + 字符串/数字常量
         if var_is_upper and isinstance(value_node, ast.Constant):
             val = getattr(value_node, 'value', None)
@@ -470,12 +477,6 @@ class AstParser:
                 if val == val.upper() and '_' in val:
                     return "constant"
             return "constant"
-
-        # 硬编码值：敏感变量名 + 字符串字面量
-        if var_is_sensitive and isinstance(value_node, ast.Constant):
-            val = getattr(value_node, 'value', None)
-            if isinstance(val, str) and len(val) > 4:
-                return "hardcoded"
 
         return "expression"
 

@@ -1385,9 +1385,29 @@ class CodeKnowledgeGraph:
             sql += " LIMIT ?"
             params.append(int(limit))
         rows = self._conn.execute(sql, params).fetchall()
+        # 裸名补充点号边界后缀（方法节点 name=Class.method）：删除 func 副本后，
+        # verify_findings 按裸名核验方法不能变成 found=False（CodeRabbit major）。
+        if (not limit or int(limit) <= 0) and "." not in name:
+            seen = {r["id"] for r in rows}
+            extra = self._conn.execute(
+                "SELECT * FROM nodes WHERE name LIKE ? ESCAPE '\\'",
+                (self._suffix_like(name),)).fetchall()
+            rows = list(rows) + [r for r in extra if r["id"] not in seen]
         nodes = [self._row_to_node(r) for r in rows]
         return KGQueryResult(nodes=nodes, total=len(nodes),
                              query_type="entity_exact")
+
+    @staticmethod
+    def _suffix_like(name: str) -> str:
+        """构造「点号边界后缀」LIKE 模式，转义 `%`/`_` 通配符。
+
+        方法名常含下划线；不转义时 `get_data` 会匹配 `Cache.getXdata`
+        （CodeRabbit major），把无关方法的调用者聚合进来。
+        """
+        esc = (name.replace("\\", "\\\\")
+                   .replace("%", "\\%")
+                   .replace("_", "\\_"))
+        return f"%.{esc}"
 
     def _resolve_node_ids(self, name: str) -> List[str]:
         """裸名/短名 → 全部候选节点 id（同名函数与方法聚合，缺陷跟踪 U-81）。
@@ -1407,7 +1427,8 @@ class CodeKnowledgeGraph:
                 "SELECT id FROM nodes WHERE name=?", (name,)).fetchall():
             ids.append(row["id"])
         for row in self._conn.execute(
-                "SELECT id FROM nodes WHERE name LIKE ?", (f"%.{name}",)).fetchall():
+                "SELECT id FROM nodes WHERE name LIKE ? ESCAPE '\\'",
+                (self._suffix_like(name),)).fetchall():
             if row["id"] not in ids:
                 ids.append(row["id"])
         return ids
@@ -1576,7 +1597,10 @@ class CodeKnowledgeGraph:
             # 口径披露：常量覆盖率常被误读为漏收。这里写明判定边界，
             # 让「388/1956」这类数字可解释，而不是当成缺陷。
             "constant_scope": {
-                "rule": "全大写+下划线命名，且值为字面量（str/int/float/bool/None）",
+                # 与 ast_parser._classify_assignment 实际规则一致：长度>1 且 isupper()
+                # 即可，不要求带下划线（SOURCE / DROP 这类单词常量也计入）。
+                "rule": ("全大写命名（len(name)>1 且 name.isupper()，不要求下划线），"
+                         "且值为字面量（str/int/float/bool/None）"),
                 "excluded": "容器字面量、函数调用等表达式赋值不计为常量",
                 "counted": int(type_counts.get("constant", 0)),
                 "note": "收不束的常量由项目白名单/文档口径治理，不追求 100% 覆盖",

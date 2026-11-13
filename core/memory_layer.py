@@ -628,12 +628,22 @@ class MemoryLayer:
         coverage = round(indexed / total_files * 100, 1) if total_files else 0.0
         confidence = self._overall_confidence(new_ast, total_files)
 
+        # 图谱重建失败时不提交新快照：否则下次增量同步会误判「无变更」，
+        # 永远不再重试，图谱停在旧版本（CodeRabbit major）。状态不推进 → 可重试。
+        kg_errors = []
+        if isinstance(kg_stats, dict) and kg_stats.get("errors"):
+            kg_errors = [str(e) for e in kg_stats["errors"]]
+
         # 持久化新的记忆状态（原子写）
-        self._persist_state(project_path, mode, current_snapshot, new_ast,
-                            kg_stats, kb_status)
+        if not kg_errors:
+            self._persist_state(project_path, mode, current_snapshot, new_ast,
+                                kg_stats, kb_status)
+        else:
+            logger.warning(
+                f"[MemoryLayer] 图谱重建失败，保留旧快照以便下次重试: {kg_errors}")
 
         return {
-            "status": "ok",
+            "status": "partial_failed" if kg_errors else "ok",
             "mode": mode,
             "synced_files": len(changed),
             "changed_files": changed,
@@ -645,6 +655,7 @@ class MemoryLayer:
             "confidence": confidence,
             "kg": kg_stats,
             "kb": kb_status,
+            "errors": kg_errors,
         }
 
     def _index_kb(self, project_path: str) -> dict:

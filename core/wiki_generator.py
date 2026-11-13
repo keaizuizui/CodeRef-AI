@@ -80,7 +80,9 @@ _META_TALK_MARKERS = (
 _META_TALK_MARKERS_EN = (
     "we shouldn't claim", "we should not claim", "we must not claim",
     "let me write", "let me check", "let me see", "i need to write",
-    "i'll write", "must only use", "must not use", "hmm,",
+    "i'll write", "must only use", "hmm,",
+    # 不收录 "must not use"：正常使用说明也可能出现该短语，行级清洗会误删
+    # 合法正文（CodeRabbit minor）。
 )
 
 # 强特征：即使正文以 # 开头也要拦（推理链常出现在正文中段）
@@ -162,7 +164,9 @@ def _looks_truncated(text: str) -> bool:
     if body.count("`") % 2 == 1:
         return True
     last = body.splitlines()[-1].rstrip()
-    return last.endswith(("`", "，", ",", "、", "：", ":", "（", "(", "…"))
+    # 不再用 endswith("`")：正常以闭合代码围栏（```）或行内代码结尾的完整
+    # 文档也会命中；未闭合反引号已由上面的奇数判断覆盖（CodeRabbit major）。
+    return last.endswith(("，", ",", "、", "：", ":", "（", "(", "…"))
 
 
 # 交叉验证徽章渲染（可选导入：wiki_cross_verify 缺失时降级为空渲染，不阻断生成）
@@ -2824,9 +2828,18 @@ class _WikiEmitMixin:
                     if fp in generated:
                         continue
                     try:
-                        with open(fp, "r", encoding="utf-8", errors="ignore") as f:
-                            if not f.read(8).lstrip().startswith("---"):
-                                continue
+                        with open(fp, "r", encoding="utf-8",
+                                  errors="ignore") as f:
+                            head = f.read(2048)
+                        # 只删「有 CodeRef 生成签名」的旧页：同时含 type/
+                        # confidence/generated_at 三个字段。用户手写的 YAML
+                        # front matter（Hugo/Jekyll 等）不满足该组合，不能被
+                        # 当成旧产物删除（CodeRabbit major）。
+                        if not head.lstrip().startswith("---"):
+                            continue
+                        if ("confidence:" not in head
+                                or "generated_at:" not in head):
+                            continue
                     except OSError:
                         continue
                     try:
