@@ -71,16 +71,39 @@ _META_TALK_MARKERS = (
     "我需要为", "这有点矛盾", "我注意到", "我先分析", "好的，我需要",
     # 模型把「写作指令」原样当正文复述（外部实测 OVERVIEW.md 开头）
     "我们需要写", "需要遵守规则", "必须原样引用",
+    # 中文自我对话 / 校对残留（外部实测 INSTALLATION.md）
+    "作为校对专家", "我们应", "需要想",
+)
+
+# 英文推理链标记：外部实测 ARCHITECTURE / MODULES 正文出现
+# "We shouldn't claim…"、"Must only use class/function names from data"。
+_META_TALK_MARKERS_EN = (
+    "we shouldn't claim", "we should not claim", "we must not claim",
+    "let me write", "let me check", "let me see", "i need to write",
+    "i'll write", "must only use", "must not use", "hmm,",
+)
+
+# 强特征：即使正文以 # 开头也要拦（推理链常出现在正文中段）
+_META_TALK_STRONG = (
+    "we shouldn't claim", "we should not claim", "作为校对专家",
+    "must only use", "用户要求我", "我需要为", "让我仔细",
 )
 
 
 def _looks_like_meta_talk(text: str) -> bool:
-    """正文应以 Markdown 标题开头；不以标题开头且命中元话语，判定为思考过程。"""
+    """正文应以 Markdown 标题开头；命中元话语即判定为思考过程。"""
     body = (text or "").lstrip()
-    if not body or body.startswith("#"):
+    if not body:
         return False
-    head = body[:400]
-    return any(marker in head for marker in _META_TALK_MARKERS)
+    head = body[:2000]
+    lower = head.lower()
+    if any(m in head for m in _META_TALK_STRONG) or any(m in lower for m in _META_TALK_STRONG):
+        return True
+    if body.startswith("#"):
+        return False
+    if any(marker in head for marker in _META_TALK_MARKERS):
+        return True
+    return any(marker in lower for marker in _META_TALK_MARKERS_EN)
 
 
 # 交叉验证徽章渲染（可选导入：wiki_cross_verify 缺失时降级为空渲染，不阻断生成）
@@ -988,10 +1011,16 @@ class _WikiMetaMixin:
 
 
     def _sample_metadata(self, meta: ProjectCodeMetadata) -> ProjectCodeMetadata:
-        """超大项目时对元数据进行采样（比采样原始代码损失小得多）"""
+        """超大项目时对元数据进行采样（比采样原始代码损失小得多）。
+
+        采样必须先保留入口文件：随机截断会把 web_gui.py 这类入口挤掉，
+        模型据此写出「没有网页界面 / 无入口」（外部 D-5 残留）。
+        """
         for mod in meta.modules:
             if mod.total_files > self.METADATA_MAX_FILES:
-                mod.files = mod.files[:self.METADATA_MAX_FILES]
+                entries = [f for f in mod.files if f.is_entry_point]
+                rest = [f for f in mod.files if not f.is_entry_point]
+                mod.files = (entries + rest)[:self.METADATA_MAX_FILES]
             for f in mod.files:
                 if len(f.classes) > self.METADATA_MAX_CLASSES:
                     f.classes = f.classes[:self.METADATA_MAX_CLASSES]
@@ -1002,7 +1031,11 @@ class _WikiMetaMixin:
 
     def _module_metadata_to_text(self, mod: ModuleCodeMetadata) -> str:
         """将模块元数据转为紧凑文本"""
-        lines = []
+        # 必须显式给出真实总数：meta.files 会被 _sample_metadata 截断成样本，
+        # 旧实现只列样本，模型据此把 302 文件写成「20 个文件」（外部 D-1 残留）。
+        lines = [f"文件总数: {mod.total_files}"
+                 f"（以下仅列出 {len(mod.files)} 个样本文件；写到文档时总数必须用 "
+                 f"{mod.total_files}）"]
         for f in mod.files:
             parts = [f"## {f.rel_path}"]
             if f.docstring:
@@ -1169,6 +1202,7 @@ class _WikiDocMixin:
         """
         # 重置本次生成失败统计（实例可能被复用，需保证每次 generate 独立）
         self._failed_docs = []
+        self._written_paths = set()
         self._last_llm_error = ""
 
         # 阶段 0：路径标准化 / 风格校验 / 目录准备 / LLM 可用性硬阻断
@@ -2636,6 +2670,34 @@ class _WikiEmitMixin:
         if enable_agent_pointer:
             self._write_agent_pointer(project_path, output_dir)
 
+        # 清理旧版本残留：输出目录里带 CodeRef front matter、但不属于本次产物
+        # 的 md，是上一版模板生成的旧结论（外部实测 18:47 的 93 文件旧页一直留着）。
+        # 只删带 front matter 的文件，用户手写的 md（无 front matter）一律不动。
+        generated = set(self._written_paths)
+        removed = []
+        for root, _dirs, files in os.walk(output_dir):
+            for fn in files:
+                if not fn.endswith(".md") or fn == WIKI_INSTRUCTIONS_FILE:
+                    continue
+                fp = os.path.abspath(os.path.join(root, fn))
+                if fp in generated:
+                    continue
+                try:
+                    with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                        if not f.read(8).lstrip().startswith("---"):
+                            continue
+                except OSError:
+                    continue
+                try:
+                    os.remove(fp)
+                    removed.append(os.path.relpath(fp, output_dir))
+                except OSError:
+                    continue
+        if removed:
+            result.warnings.append(
+                f"已清理 {len(removed)} 篇旧版本残留文档: {', '.join(removed[:10])}"
+                + (" ..." if len(removed) > 10 else ""))
+
         # 汇总本次生成失败（主项目 + 子项目），让调用方感知"部分文档生成失败"
         if self._failed_docs:
             result.errors.append(
@@ -2875,6 +2937,7 @@ class _WikiEmitMixin:
             return ""
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
+        self._written_paths.add(os.path.abspath(filepath))
         return filepath
 
 
@@ -3205,6 +3268,7 @@ class WikiGenerator(_WikiGitMixin, _WikiMetaMixin, _WikiDocMixin, _WikiEmitMixin
         # 记录本次生成失败明细，供 generate() 末尾汇总进 result.errors，
         # 让外层能感知"部分文档生成失败"，避免失败被静默吞掉却标记任务 completed。
         self._failed_docs: List[str] = []
+        self._written_paths = set()
         self._last_llm_error: str = ""
         # R6 用户授权层：项目根 INSTRUCTIONS.md 解析结果（generate() 时加载）
         self._instructions: Dict[str, str] = {}

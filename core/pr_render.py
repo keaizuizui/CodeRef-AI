@@ -277,7 +277,7 @@ def _fmt(r: PipeResult, title: str, t0: float = 0.0) -> str:
     adv = [f for f in r.findings if f.kind == "advice"]
     lines = [
         f"# CodeRef {title}",
-        f"项目: `{r.project_path}` | 文件: {r.total_files} | 行: {r.total_lines} | {r.elapsed}s",
+        f"项目: `{r.project_path}` | 文件: {r.total_files} | 行: {r.total_lines} | 扫描耗时: {r.elapsed}s",
         f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
         "",
         "## 统计口径",
