@@ -1093,12 +1093,16 @@ class Server:
             # degraded_reasons 把「超时/预算」与「内容被丢弃」拆开：两者修复动作不同
             # （前者调预算或增量重跑，后者重试生成），混在一个 status 里无法分派。
             _joined = " ".join(str(e) for e in _errs).lower()
+            _warns = list(getattr(wr, "warnings", []) or []) if wr else []
             return json.dumps({
                 "status": "completed" if not _errs else "partial_failed",
                 "tool": n,
                 "project_path": p,
                 "report": getattr(r, "report", ""),
                 "errors": _errs,
+                # warnings 必须回传：旧页清理、引用修复这类「成功但有动作」的记录
+                # 只在 warnings 里，缺字段会让调用方以为什么都没发生（外部 N-4）。
+                "warnings": _warns,
                 "degraded_reasons": {
                     "timeout_or_budget": any(
                         k in _joined for k in ("超时", "timeout", "预算", "budget")),
@@ -1110,6 +1114,7 @@ class Server:
                     "documents": getattr(wr, "documents", []) if wr else [],
                     "module_count": getattr(wr, "module_count", 0) if wr else 0,
                     "subprojects": getattr(wr, "subproject_results", []) if wr else [],
+                    "warnings": _warns,
                 },
             }, ensure_ascii=False)
         elif n == "coderef_review":
