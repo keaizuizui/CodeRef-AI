@@ -165,22 +165,71 @@ _FAILED_DOC_PLACEHOLDER = (
 )
 
 
-def _looks_truncated(text: str) -> bool:
-    """粗判模型输出是否在结尾被截断（缺陷跟踪 U-82：README 断在半句）。
+def _unfenced_text(text: str) -> str:
+    """去掉代码围栏块（含围栏行）后的正文，用于统计行内标记。
 
-    只认确定性特征，避免误伤正常文档：未闭合的代码围栏、末行以未闭合的
-    反引号/半句标点结尾。正常以列表项、表格行、句号结尾的文档不受影响。
+    围栏内的孤立括号、单反引号属于示例语法，不参与截断判定，否则代码示例
+    会把完整文档误判成截断。
+    """
+    kept, in_fence = [], False
+    for line in (text or "").splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            continue
+        if not in_fence:
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def _looks_truncated(text: str) -> bool:
+    """判定模型输出是否在结尾被截断（缺陷跟踪 U-82）。
+
+    只认确定性特征，避免误伤正常文档：
+      1. 代码围栏（``` / ~~~）行数为奇数 → 未闭合；
+      2. 围栏外的行内反引号数为奇数 → 未闭合行内代码；
+      3. 围栏外成对符号左多于右（圆括号/方括号/中文引号书名号）→ 句子断开；
+      4. 末行以半句标点结尾（，、：等）；
+      5. 末行是空标题 / 空列表项（`###`、`1.`、`-`）→ 正文被切断。
+    正常以句号、表格行、列表项正文、闭合围栏结尾的文档不受影响。
     """
     body = (text or "").rstrip()
     if not body:
         return False
-    # 未闭合的代码围栏 / 行内反引号：反引号总数为奇数即视为截断
-    if body.count("`") % 2 == 1:
+    lines = body.splitlines()
+    fence_lines = sum(1 for ln in lines
+                      if ln.lstrip().startswith(("```", "~~~")))
+    if fence_lines % 2 == 1:
         return True
-    last = body.splitlines()[-1].rstrip()
-    # 不再用 endswith("`")：正常以闭合代码围栏（```）或行内代码结尾的完整
-    # 文档也会命中；未闭合反引号已由上面的奇数判断覆盖（CodeRabbit major）。
-    return last.endswith(("，", ",", "、", "：", ":", "（", "(", "…"))
+    outside = _unfenced_text(body)
+    if outside.count("`") % 2 == 1:
+        return True
+    for left, right in (("(", ")"), ("[", "]"), ("（", "）"),
+                        ("「", "」"), ("“", "”"), ("《", "》")):
+        if outside.count(left) > outside.count(right):
+            return True
+    last = lines[-1].rstrip()
+    if last.endswith(("，", ",", "、", "：", ":", "（", "(", "…")):
+        return True
+    if re.fullmatch(r"#{1,6}\s*", last) or re.fullmatch(r"[-*+]\s*", last) \
+            or re.fullmatch(r"\d+[.、)]\s*", last):
+        return True
+    # 6) 末行是叙事半句：既没有句末标点/闭合符号，也不是标题、表格、列表、
+    #    引用、加粗收尾（这些正常写法会满足至少一项）。
+    tail = last.strip()
+    if tail:
+        if tail.count("**") % 2 == 1:      # 未闭合的加粗（如 `**调研相关入口`）
+            return True
+        # 引用行剥掉 `>` 前缀再判内容闭合：`> 说明：下表…在数据` 的引用结构完整，
+        # 但引用正文本身已断在半句（独立回归 2026-11-14 第 3 例）。
+        content_tail = re.sub(r"^(>\s*)+", "", tail)
+        structured = (tail.startswith(("#", "|"))
+                      or re.match(r"[-*+]\s+", tail) is not None
+                      or re.match(r"\d+[.、)]\s+", tail) is not None)
+        closed = re.search(r"[。！？.!?|）)\]】》”’\"'`*]$", content_tail) is not None
+        if content_tail and not structured and not closed:
+            return True
+    return False
 
 
 # 交叉验证徽章渲染（可选导入：wiki_cross_verify 缺失时降级为空渲染，不阻断生成）
@@ -1281,6 +1330,7 @@ class _WikiDocMixin:
         """
         # 重置本次生成失败统计（实例可能被复用，需保证每次 generate 独立）
         self._failed_docs = []
+        self._truncated_docs = []
         self._unwritten_docs = []
         self._written_paths = set()
         self._last_llm_error = ""
@@ -1682,8 +1732,14 @@ class _WikiDocMixin:
             if uv:
                 fixed = self._cite_fix(body, doc_name, uv, meta)
                 if fixed and len(fixed) > 100:
-                    with open(doc_path, "w", encoding="utf-8") as f:
-                        f.write(prefix + fixed)
+                    if _looks_truncated(fixed):
+                        # 校对回写同样过截断门禁：宁可保留校对前完整正文，
+                        # 也不能用二次截断的文本覆盖已落盘文档（独立回归 2026-11-14）。
+                        result.warnings.append(
+                            f"- {doc_name}: 校对回写被判截断，已保留校对前正文")
+                    else:
+                        with open(doc_path, "w", encoding="utf-8") as f:
+                            f.write(prefix + fixed)
                 cite_warnings.append(f"- {doc_name}: 修复了 {len(uv)} 个未验证标识符: {', '.join(uv[:8])}")
 
         # =============================================================
@@ -2851,7 +2907,16 @@ class _WikiEmitMixin:
         if not result.errors:
             self._save_last_good(output_dir)
         else:
-            result.warnings.append("本次生成未通过校验，已保留上次可用版本（.last-good）。")
+            absp = os.path.abspath(output_dir)
+            last_good = os.path.join(os.path.dirname(absp),
+                                     os.path.basename(absp) + WIKI_LAST_GOOD_DIR)
+            # 全新输出目录并没有「上次可用版本」，不能给出与实际不符的保留承诺
+            # （独立回归 2026-11-14：首次生成失败也提示「已保留上次可用版本」）。
+            if os.path.isdir(last_good):
+                result.warnings.append("本次生成未通过校验，已保留上次可用版本（.last-good）。")
+            else:
+                result.warnings.append(
+                    "本次生成未通过校验，且尚无上次可用版本；请按 errors 修复后重跑。")
 
 
     def _cleanup_stale_docs(self, output_dir: str, include_subprojects: bool,
@@ -2906,6 +2971,13 @@ class _WikiEmitMixin:
                 f"以下 {len(self._failed_docs)} 个文档生成失败（LLM 返回空内容），已写失败占位: "
                 f"{', '.join(self._failed_docs[:20])}"
                 + (" ..." if len(self._failed_docs) > 20 else "")
+            )
+        if self._truncated_docs:
+            result.errors.append(
+                f"以下 {len(self._truncated_docs)} 个文档在落盘前被判为截断"
+                f"（半句/未闭合围栏/括号/引号），已写失败占位: "
+                f"{', '.join(self._truncated_docs[:20])}"
+                + (" ..." if len(self._truncated_docs) > 20 else "")
             )
         if self._unwritten_docs:
             result.errors.append(
@@ -3094,6 +3166,13 @@ class _WikiEmitMixin:
         # 统一输出后处理：所有生成入口（根级/FLOWS/MODULES/子项目）都过同一道
         # 推理链清洗，而不是只在 _llm_ask 里按入口逐个接入（外部 v5.21.21：FLOWS 未接入）。
         content = _sanitize_meta_talk(content)
+        # 最终落盘门禁：cite-fix 等后处理之后的正文也可能断在半句/未闭合围栏。
+        # 截断内容交付给用户比失败占位更糟（缺陷跟踪 U-82），统一改写占位并披露。
+        truncated = bool(content) and _looks_truncated(content)
+        if truncated:
+            if name not in self._truncated_docs:
+                self._truncated_docs.append(name)
+            content = ""
         placeholder = False
         if not content or not content.strip():
             # 写明确占位而不是留空/不写：下游要能区分「没生成」与「生成失败」，
@@ -3108,7 +3187,9 @@ class _WikiEmitMixin:
             docs.append(fp)
             # 占位落盘成功才算「已写失败占位」；真正写不进去的另记 unwritten，
             # 错误文案不能把两者混成「未落盘」。
-            if placeholder and name not in self._failed_docs:
+            if truncated:
+                pass  # 已记入 _truncated_docs，避免与「真空内容」重复计数
+            elif placeholder and name not in self._failed_docs:
                 self._failed_docs.append(name)
         elif name not in self._unwritten_docs:
             self._unwritten_docs.append(name)
@@ -3472,6 +3553,7 @@ class WikiGenerator(_WikiGitMixin, _WikiMetaMixin, _WikiDocMixin, _WikiEmitMixin
         # 记录本次生成失败明细，供 generate() 末尾汇总进 result.errors，
         # 让外层能感知"部分文档生成失败"，避免失败被静默吞掉却标记任务 completed。
         self._failed_docs: List[str] = []
+        self._truncated_docs: List[str] = []
         self._unwritten_docs: List[str] = []
         self._written_paths = set()
         self._last_llm_error: str = ""

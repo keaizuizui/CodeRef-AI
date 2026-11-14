@@ -377,8 +377,41 @@ class CodeKnowledgeGraph:
         # 显式 db_path 优先（供 verify_findings 等跨项目复用图谱），缺省按 project_path 生成
         self._db_path = os.path.abspath(db_path) if db_path else self._make_db_path()
         self._conn: Optional[sqlite3.Connection] = None
+        self._migrate_legacy_index_dbs()
 
     # ─── 路径 ───
+
+    def _migrate_legacy_index_dbs(self) -> None:
+        """把 `.coderef/index/coderef_kg_*.db` 历史库移入 `legacy/` 子目录（U-92）。
+
+        该前缀是旧版本落点，当前代码只在 `<project>/cache/kg/<hash>.db` 读写，
+        但旧库与现行库同名不同文件、体积相近，调用方/后续 AI 可能误读旧结论。
+        这里只做目录内移动（不删除），Windows 下被占用时跳过，绝不阻断建图。
+        """
+        legacy_dir = os.path.join(self.project_path, ".coderef", "index")
+        if not os.path.isdir(legacy_dir):
+            return
+        dst_dir = os.path.join(legacy_dir, "legacy")
+        try:
+            names = os.listdir(legacy_dir)
+        except OSError:
+            return
+        moved = False
+        for fn in names:
+            if not re.fullmatch(r"coderef_kg_[0-9a-f]{6,}\.db", fn):
+                continue
+            for suffix in ("", "-wal", "-shm"):
+                src = os.path.join(legacy_dir, fn + suffix)
+                if not os.path.exists(src):
+                    continue
+                try:
+                    os.makedirs(dst_dir, exist_ok=True)
+                    os.replace(src, os.path.join(dst_dir, fn + suffix))
+                    moved = True
+                except OSError as exc:  # 被进程占用时保留原位，下次再试
+                    logger.debug(f"[KG] 旧索引库迁移跳过 {src}: {exc}")
+        if moved:
+            logger.info(f"[KG] 已将历史索引库移入 {dst_dir}")
 
     @staticmethod
     def _kg_dir() -> str:
