@@ -2122,13 +2122,18 @@ class _WikiDocMixin:
                 if rounds == 2:
                     hint += "如果篇幅过长，请压缩到 3000 字以内，确保一次输出完整。"
                 retry_messages = messages + [{"role": "user", "content": hint}]
-                text = self._retry_llm(
+                retried = self._retry_llm(
                     retry_messages,
                     lambda t: (not _looks_truncated(t)
                                and not _looks_like_meta_talk(t)),
-                    "LLM 输出疑似截断，重试两次后仍不完整，已丢弃")
-                if not text:
-                    return ""
+                    "LLM 输出疑似截断，重试后仍不完整")
+                # 本轮失败不立即返回：否则 rounds==2 的压缩重试永不可达
+                # （缺陷跟踪 U-97）。两轮都失败后才按失败处理。
+                if retried:
+                    text = retried
+            if _looks_truncated(text) or _looks_like_meta_talk(text):
+                self._last_llm_error = "LLM 输出疑似截断，重试两次后仍不完整，已丢弃"
+                return ""
             return text
         except Exception as e:
             self._last_llm_error = str(e)
