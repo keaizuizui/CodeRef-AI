@@ -2057,6 +2057,9 @@ class _WikiDocMixin:
         retry = self.llm.chat_completion(messages, max_tokens=_WIKI_MAX_TOKENS,
                                          temperature=0.3)
         if not self.llm.is_error_response(retry) and retry and accept(retry):
+            # 中间失败已被重试覆盖：清空诊断字段，避免「40/40 成功仍报 errors」
+            # 并阻断 .last-good / .last-update.json（缺陷跟踪 U-96）。
+            self._last_llm_error = ""
             return retry
         self._last_llm_error = fail_msg
         return ""
@@ -2747,6 +2750,37 @@ class _WikiDocMixin:
         return "\n".join(lines)
 
 
+    def _project_string_literals(self, meta: ProjectCodeMetadata) -> set:
+        """项目源码中的字符串字面量集合（常量 / 字典 key），按项目缓存。
+
+        缺陷跟踪 U-94：`DIMENSIONS = {"keyword_completeness": ...}` 这类业务词在
+        文档里应视为已知，但它们不是类/函数/文件名，旧 known 集合收不到，
+        cite-fix 会把它们当错名改写掉。AST 只扫一次，40 篇文档复用缓存。
+        """
+        pp = getattr(meta, "project_path", "") or ""
+        cache = getattr(self, "_str_literals_cache", None)
+        if cache and cache[0] == pp:
+            return cache[1]
+        lits = set()
+        if pp and os.path.isdir(pp):
+            for mod in meta.modules:
+                for f in mod.files:
+                    fp = os.path.join(pp, f.rel_path)
+                    try:
+                        with open(fp, encoding="utf-8", errors="ignore") as fh:
+                            tree = ast.parse(fh.read())
+                    except Exception:  # noqa: BLE001 —— 单文件解析失败跳过
+                        continue
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.Constant) and \
+                                isinstance(node.value, str):
+                            v = node.value.strip()
+                            if 2 <= len(v) <= 80 and " " not in v and "\n" not in v:
+                                lits.add(v)
+        self._str_literals_cache = (pp, lits)
+        return lits
+
+
     def _cite_verify(self, text: str, meta: ProjectCodeMetadata,
                      doc_name: str) -> List[str]:
         """从生成的文本中提取反引号标识符，与元数据交叉核对
@@ -2826,6 +2860,8 @@ class _WikiDocMixin:
 
         # 小写化用于忽略大小写匹配
         known_lower = {k.lower() for k in known}
+        # 字符串常量 / 字典 key 也是项目里真实存在的名字（缺陷跟踪 U-94）
+        known_lower |= {v.lower() for v in self._project_string_literals(meta)}
 
         # 3. 校验
         unverified = []
@@ -3076,7 +3112,10 @@ class _WikiEmitMixin:
                 f"{', '.join(self._unwritten_docs[:20])}"
                 + (" ..." if len(self._unwritten_docs) > 20 else "")
             )
-        if self._last_llm_error:
+        # 只有存在最终失败文档时，才把最后一次异常作为诊断附加：被重试覆盖的
+        # 中间失败不得进入 errors，更不能阻断 last-good 与增量状态（缺陷跟踪 U-96）。
+        if self._last_llm_error and (
+                self._failed_docs or self._truncated_docs or self._unwritten_docs):
             result.errors.append(f"LLM 调用异常: {self._last_llm_error}")
 
 
