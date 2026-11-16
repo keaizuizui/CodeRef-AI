@@ -188,16 +188,14 @@ def _unfenced_text(text: str) -> str:
 
 
 # 列表/编号前缀剥离后，句末落在这些虚词上几乎必然是被模型切断的半句；
-# 只收「正常中文句子结尾不会出现」的单字，避免把 `- 支持自定义` 这类
-# 短列表项误判成截断（独立回归 2026-11-16：列表行整体豁免又导致 4 篇漏判）。
-_HALF_SENTENCE_TAILS = tuple(dict.fromkeys((
+# 只收「正常中文句子结尾不会出现」的连接/助动词，方位时间词（中/里/后/前/时）
+# 在完整短句末尾很常见，不能作为截断证据（CodeRabbit major：
+# `- 所有任务均在运行中` 曾被误判）。
+_HALF_SENTENCE_TAILS = (
     "并", "和", "与", "或", "但", "而", "则", "因", "由", "把", "被", "让",
-    "使", "给", "向", "往", "于", "中", "里", "后", "前", "时", "的", "地",
-    "得", "能", "可", "会", "要", "是", "在", "为", "对", "将", "已", "再",
-    "又", "也", "就", "都", "还", "更", "最", "很", "较", "及", "如", "若",
-    "虽", "该", "其", "这", "那", "些", "每", "各", "某", "以", "按", "依",
-    "据", "需", "须", "应", "共", "第", "从", "至", "到",
-)))
+    "使", "给", "向", "往", "于", "的", "地", "得", "能", "可", "会", "要",
+    "是",
+)
 
 
 def _ends_half_sentence(text: str) -> bool:
@@ -242,11 +240,18 @@ def _looks_truncated(text: str) -> bool:
     outside = _unfenced_text(body)
     if outside.count("`") % 2 == 1:
         return True
+    # 括号平衡只看散文：行内代码里的 `[`、`(` 是字面量，不是 Markdown 结构
+    # （CodeRabbit major：`使用 `[` 表示左方括号。` 曾被误判为截断）。
+    prose = re.sub(r"`[^`]*`", "", outside)
     for left, right in (("(", ")"), ("[", "]"), ("（", "）"),
                         ("「", "」"), ("“", "”"), ("《", "》")):
-        if outside.count(left) > outside.count(right):
+        if prose.count(left) > prose.count(right):
             return True
     last = lines[-1].rstrip()
+    # 末行是闭合围栏（``` / ~~~）：围栏已在上面确认成对，文档结构完整。
+    # `~~~` 不以正文标点收尾，若不提前放行会被当成叙事半句（CodeRabbit major）。
+    if last.lstrip().startswith(("```", "~~~")):
+        return False
     if last.endswith(("，", ",", "、", "：", ":", "（", "(", "…")):
         return True
     if re.fullmatch(r"#{1,6}\s*", last) or re.fullmatch(r"[-*+]\s*", last) \
@@ -1387,6 +1392,9 @@ class _WikiDocMixin:
         self._unwritten_docs = []
         self._written_paths = set()
         self._last_llm_error = ""
+        # 字面量缓存按项目路径命中；同一实例再次 generate（源码可能已变）
+        # 必须重算，否则新增/删除的字典 key 会沿用旧集合（CodeRabbit minor）。
+        self._str_literals_cache = None
 
         # 阶段 0：路径标准化 / 风格校验 / 目录准备 / LLM 可用性硬阻断
         result, project_path, project_name, output_dir, wiki_style, llm_ready = \
@@ -1528,8 +1536,11 @@ class _WikiDocMixin:
                     sub_result.large_repo = True
                     sub_modules = self._sample_large_repo(sub_modules)
 
-                # Stage 1
-                sub_meta = self._build_code_metadata(sub_modules, sub_path)
+                # Stage 1（全量：子项目元数据同样不能复用旧缓存，否则
+                # invalidate 描述会用旧元数据重写，删掉的符号仍被写进文档；
+                # CodeRabbit major）
+                sub_meta = self._build_code_metadata(sub_modules, sub_path,
+                                                     skip_cache=True)
                 if sub_result.large_repo:
                     sub_meta = self._sample_metadata(sub_meta)
                 # Stage 2
@@ -2769,8 +2780,15 @@ class _WikiDocMixin:
         lits = set()
         if pp and os.path.isdir(pp):
             for mod in meta.modules:
+                # rel_path 是相对**模块目录**（_build_code_metadata 用
+                # relpath(fpath, mod.path)），必须再拼回 mod.path 才能读到源码
+                # （CodeRabbit minor：旧实现按项目根拼，真实仓全部读不到）。
+                base = mod.path or ""
+                if base and not os.path.isabs(base):
+                    base = os.path.join(pp, base)
+                base = base or pp
                 for f in mod.files:
-                    fp = os.path.join(pp, f.rel_path)
+                    fp = os.path.join(base, f.rel_path)
                     try:
                         with open(fp, encoding="utf-8", errors="ignore") as fh:
                             tree = ast.parse(fh.read())
@@ -3075,13 +3093,16 @@ class _WikiEmitMixin:
                 try:
                     with open(fp, "r", encoding="utf-8", errors="ignore") as f:
                         head = f.read(2048)
-                    # 只删「有 CodeRef 生成签名」的旧页：同时含 confidence 与
-                    # generated_at。用户手写 YAML front matter（Hugo/Jekyll）
-                    # 不满足该组合，不能被当成旧产物删除（CodeRabbit major）。
+                    # 只删「有 CodeRef 生成签名」的旧页：只看第一个 front matter
+                    # 块，并要求 type + confidence + generated_at 三者同在。
+                    # 用户手写 front matter 或正文示例里的同名键不能被当成签名
+                    # 删除（CodeRabbit major）。
                     if not head.lstrip().startswith("---"):
                         continue
-                    if ("confidence:" not in head
-                            or "generated_at:" not in head):
+                    fm_end = head.find("\n---", 3)
+                    fm = head[:fm_end] if fm_end != -1 else head
+                    if ("type:" not in fm or "confidence:" not in fm
+                            or "generated_at:" not in fm):
                         continue
                 except OSError:
                     continue

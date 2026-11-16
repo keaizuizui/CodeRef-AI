@@ -545,6 +545,12 @@ class MemoryLayer:
                     "message": "项目路径不存在", "total_files": 0,
                     "coverage": 0.0, "confidence": 0.0}
 
+        # 上次建图失败留下的 dirty 标记：源文件未变也必须重试，否则 incr 会走
+        # no-change 分支永不重建（CodeRabbit major）。成功后清除标记。
+        dirty_marker = self._state_path(project_path) + ".kg_dirty"
+        if mode != "full" and os.path.exists(dirty_marker):
+            mode = "full"
+
         analyzer = None
         try:
             from core.code_analyzer import CodeAnalyzer
@@ -656,9 +662,23 @@ class MemoryLayer:
         if not kg_errors:
             self._persist_state(project_path, mode, current_snapshot, new_ast,
                                 kg_stats, kb_status)
+            # 建图已恢复：清除 dirty 标记，后续 incr 恢复正常增量
+            try:
+                if os.path.exists(dirty_marker):
+                    os.remove(dirty_marker)
+            except OSError:
+                pass
         else:
             logger.warning(
                 f"[MemoryLayer] 图谱重建失败，保留旧快照以便下次重试: {kg_errors}")
+            # 只保留旧快照还不够：源文件未变时 incr 会走 no-change 分支。
+            # 落一个 dirty 标记，强制下一次 sync 走全量重建（CodeRabbit major）。
+            try:
+                os.makedirs(os.path.dirname(dirty_marker) or ".", exist_ok=True)
+                with open(dirty_marker, "w", encoding="utf-8") as f:
+                    f.write("; ".join(kg_errors)[:2000])
+            except OSError as exc:
+                logger.warning(f"[MemoryLayer] 写入图谱 dirty 标记失败: {exc}")
 
         return {
             "status": "partial_failed" if kg_errors else "ok",

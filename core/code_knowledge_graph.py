@@ -390,6 +390,9 @@ class CodeKnowledgeGraph:
         只做目录内移动（不删除），Windows 下被占用时跳过，绝不阻断建图。
         """
         cur_db = os.path.abspath(self._db_path)
+        # canonical 库永远不迁移：即使调用方用 db_path 显式指向旧库，也不能
+        # 把默认落点的现行库归档（CodeRabbit major）。
+        protected = {cur_db, os.path.abspath(self._make_db_path())}
         targets = (
             (os.path.join(self.project_path, ".coderef", "index"),
              r"coderef_kg_[0-9a-f]{6,}\.db"),
@@ -408,7 +411,13 @@ class CodeKnowledgeGraph:
             for fn in names:
                 if not re.fullmatch(pattern, fn):
                     continue
-                if os.path.abspath(os.path.join(src_dir, fn)) == cur_db:
+                if os.path.abspath(os.path.join(src_dir, fn)) in protected:
+                    continue
+                # 存在 -wal/-shm 说明可能有活跃连接：先不移动，避免与写入并发
+                # （迁移不持有 build_guard，靠活跃日志探测降低风险）。
+                if any(os.path.exists(os.path.join(src_dir, fn + s))
+                       for s in ("-wal", "-shm")):
+                    logger.debug(f"[KG] 库存在活跃日志，暂不迁移 {fn}")
                     continue
                 for suffix in ("", "-wal", "-shm", ".lock"):
                     src = os.path.join(src_dir, fn + suffix)
