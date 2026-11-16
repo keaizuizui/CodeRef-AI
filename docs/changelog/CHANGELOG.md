@@ -167,7 +167,7 @@
 - **验证**：全量 pytest **453 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0（5.21.14）；独立回归 STRICT 定向复跑全绿：U-63（重工具首调带 procedure_card）、U-64（schema 负例全拒绝）、U-65（增量 vs 全量边集合相等）、U-67（8 进程 seed 40 行 / 2 进程 run 两条笔记），另加并发回归 t01（两线程 run 同屏障下都保留笔记）、t02（20 线程 × 5 seed 不丢行）、t03（`os.replace` 失败保留旧 notes）。
 - **复审收敛**：CodeRabbit 对本批次共 3 轮——第 1 轮（`bfd6048..2ba6814`）3 条（1 major：seed 仍等进程内锁；2 minor：`audit_after` 可能回退、`None` 渲染成 "None"）；第 2 轮（`2ba6814..21e47ec`）1 条 major（SKIP/失败/草稿/维护路径仍整对象写 state，会回退并发 run 的游标）；第 3 轮（`21e47ec..16ef717`）**findings=0**。
 
-### v5.21.13 — 测试缺陷跟踪 U-63~U-68 修复
+### v5.21.13 — 缺陷跟踪 U-63~U-68 修复
 
 > 背景：独立回归对 v5.21.12 回测，缺陷跟踪新增 U-63~U-68 六条（3 中 / 3 低），均为确定性行为边界；逐条修复后按 STRICT 定向复跑。
 
@@ -246,9 +246,9 @@
 - **修复**：两条 paused 返回路径与最终返回路径统一，若 `trace.get("trace_error")` 存在则带回 `trace_error` 字段；未失败时返回结构不变。
 - **验证**：`tests/test_dispatcher.py` 14 例全绿；全量 pytest **437 全绿**；`core/ tools/` pyflakes 0；`check_version` EXIT=0。
 
-### v5.21.5 — 独立回归缺陷跟踪 11 条边界缺陷修复
+### v5.21.5 — 缺陷跟踪 11 条边界缺陷修复
 
-> 背景：测试 AI 按 5.18.11–5.21.4 全量实测后，在 `内部记录/缺陷跟踪/缺陷跟踪.md` 登记 U-52–U-62；本版逐条修复，并用其 STRICT 模式复测通过。
+> 背景：测试 AI 按 5.18.11–5.21.4 全量实测后，在 `内部交接记录` 登记 U-52–U-62；本版逐条修复，并用其 STRICT 模式复测通过。
 
 - **U-52 旧梦复核降级**：`false_memory_check` 对 `ok=None`（空引用、格式非法、git 不可用）的 verified 笔记降级为 `hypothesis`；无 evidence 的 verified 同样降级；格式非法的 `audit:` 引用（如 `audit:../../etc/passwd`）按失败处理，只有合法工具名才落入「7 天窗口外 unknown」。
 - **U-53 审计产物归属**：`artifact_freshness` 对 `audit_findings` 增加项目哈希过滤，不再把其他项目残留的 `audit_findings_<旧哈希>.json` 当成本项目产物；直接传入具体路径的 `_artifact_item` 调用保持原语义。
@@ -426,7 +426,7 @@
 
 ### v5.19.0 — 纪律代码化地基：自动变更守卫 + 记忆摘要前置注入
 
-> 5.19.x 版本线第一版（实施真源 `docs/5.19.x-版本线开发文档.md`）。针对「AI 不读 CODEREF.md、不跑 change_guard、不 recover 记忆」三个反复出现的失效，把纪律从文字移进服务端。
+> 5.19.x 版本线第一版。针对「AI 不读 CODEREF.md、不跑 change_guard、不 recover 记忆」三个反复出现的失效，把纪律从文字移进服务端。
 
 - **自动变更守卫**（`core/session_guard.py`）：重工具（audit / scan / query / report / interpret / arch_gap / arch_verify）被调用时，服务端自动比对 git 指纹（HEAD + 工作区变更数）；指纹变化才跑 `ChangeGuard.guard`，结果写入 `<project>/.coderef/session_state.json` 并附在返回体 `context.guard`。同一指纹不重复跑；守卫异常只记 error，不阻断审计。
 - **记忆摘要前置注入**（`core/memory_digest.py`）：每项目进程内首次调用重工具时，自动 `operation_memory.recover` 并压成 ≤800 token 的摘要（活跃任务 / 关键结论 / 未决事项等，最多 12 条），附在 `context.memory_digest`。记忆为空也返回 `available=false` + 原因，不冒充"没这项"。
@@ -483,7 +483,7 @@
 
 ### v5.18.9 — 陈旧输入防呆：`coderef_version` 附带派生产物新鲜度快报
 
-> 承接「对方输入陈旧」课题。不做内容指纹/不改评分，只在版本探针上增加一份只读快报，让调用 AI 一行确认「哪些产物、生成于何时、代码是否已比它新」，自行决定是否先重跑。
+> 承接「对方输入陈旧」事项。不做内容指纹/不改评分，只在版本探针上增加一份只读快报，让调用 AI 一行确认「哪些产物、生成于何时、代码是否已比它新」，自行决定是否先重跑。
 
 - **`coderef_version` 可选传 `project_path`**：返回新增 `artifacts_report`——target_arch / 治理库 / audit findings / scorecard / 图谱 / 评估台 / Wiki / 产品契合 / UX 走查 / 业务语义标注，逐项给出是否存在、生成时间、`age_days`、约定时效 `suggested_max_age_days`、`stale_by_age`、`code_newer`（代码最后修改晚于产物）与 `refresh_hint`。不传路径时行为不变（仍只返回版本号，零副作用）。
 - **代码修改时间复用统一扫描范围**：`latest_code_mtime` 通过 `CodeAnalyzer.scan_directory` 计算，与审计同一套忽略规则，不重复造口径。
@@ -584,7 +584,7 @@
 
 - **产品证据包（`core/product_evidence.py`，确定性、无 LLM）**：能力清单自动枚举——业务架构树（`arch_framework`）+ 前端菜单/表单（`FrontendInspector.enumerate_static`）+ 路由/接口 + CLI 子命令；声称（README/文档）、首次价值路径、许可/付费/路线图信号全部带 `file:line` / 路由 / 命令锚点。推不出的写 `unknown`，不写 0、不编造；枚举摘要明确「可能遗漏，不宣称全量」。
 - **F 轨五问矩阵（`core/product_eval.py`）**：逐能力核对①支撑哪个决策 ②输入现实性 ③输出可行动性 ④数据诚实度 ⑤频率匹配；**②强制 `proxy=true`**（代码只能推「有无上游数据源」）；F2 优先用知识图谱 CALLS 边核验上下游消费，无图谱时降级并标注；三档结论 Go / Validate-first / No-go + 待验证假设清单；**无 LLM Key 只回证据包 `status="SKIP"`**；LLM 输出含市场/竞品数字整份拒收；E4 必须进假设清单；业务不支撑决策的能力进「砍/改清单」。
-- **U 轨人格走查（`core/personas.json` + `core/ux_eval.py`）**：内置 3 人格（低耐心新手 / 谨慎比价者 / 时间紧迫决策者），7 项必填且放弃触发 ≥3 条，禁止「普通用户」；只输出 `blocking` / `partial` / `non_blocking`；Rage Map 必带业务后果列（愤怒 ≥4 且任务中断 → P0/P1，否则最高 P2）；无锚点不输出；全部 `simulated=true` + E4；只评 1280/1440/1920 桌面视口，不产出窄屏课题。
+- **U 轨人格走查（`core/personas.json` + `core/ux_eval.py`）**：内置 3 人格（低耐心新手 / 谨慎比价者 / 时间紧迫决策者），7 项必填且放弃触发 ≥3 条，禁止「普通用户」；只输出 `blocking` / `partial` / `non_blocking`；Rage Map 必带业务后果列（愤怒 ≥4 且任务中断 → P0/P1，否则最高 P2）；无锚点不输出；全部 `simulated=true` + E4；只评 1280/1440/1920 桌面视口，不产出窄屏事项。
 - **页面与工具接入**：`POST /api/evaluate` 真实现（`scene=product|ux`，同项目同场景串行，写 `.coderef/product_fit.json` / `.coderef/ux_fit.json` 后自动重渲染评估台）；产品/UX Tab 展示结论、五问矩阵、Rage Map 与证据锚点，并带「运行评估」按钮（离线时如实提示）；`coderef_frontend` 新增可选 `persona` / `journey`，复用 `ux_eval`，不新增工具（仍 52）。
 - **业务流程视图（`core/business_semantics.py` + `core/arch_flow.py`）**：在「图谱事实」与「画布布局」之间补一层业务叙事标注——`actor`（泳道）/`stage`（流程阶段）/`handoff`（跨泳道或跨阶段调用）/`value_node`（写库·导出·发布·扣款等交付点）。静态启发式提供事实锚点（模块路径 + 调用边），LLM 只做命名与归类；**无 Key 或判不出的模块进「未归类」泳道 / 「未归类阶段」列并计数，不假装已归类、不阻断出图**。布局确定性：X 轴 = 阶段（触发→准入校验→执行→落库→通知→交付），Y 轴 = 角色泳道，跨格调用标为交接点，同一份标注必然渲染同一张图。`coderef_arch_canvas` 新增 `with_flow`（默认开）/ `flow_use_llm`，一次调用同时产出业务树画布与流程泳道画布，标注落 `.coderef/business_semantics.json`；评估台架构 Tab 支持「业务流程视图 / 业务树视图」切换。
 - **U-49 修复（评估后页面不重渲染）**：根因不在 `render_report`，而在写入端——`_reuse_no_change` 只要有知识图谱就短路复用，首轮不跑审计、不落 `audit_findings_<hash>.json`、不写 `report_path`。修复：① 复用前必须能读到可解析的 findings JSON，否则降级 full；② findings JSON 同写项目侧 `<project>/.coderef/`（权威副本）+ 调用方输出目录，`render_report` 与审计状态探测双路径查找；③ `/api/evaluate` 新增 `page_refreshed` / `page_refresh_error`，重渲染未产出新页面时页面显式提示"刷新失败，请手动重跑"，不再假装成功。
@@ -653,12 +653,12 @@
   - `mcp_server.py` 3110 → 978 行：BUILTIN_TOOLS 外置 `tools_manifest` + handler 分组 `handlers_arch`/`handlers_engine`/`handlers_misc`；Server 构造冒烟 52 工具全注册 + MCP stdio 端到端验证通过。
 - **CodeRabbit 复审修复**：asa_scan 移除 4 处模块级 `@staticmethod`（跨版本可调用）；`_finding_to_dict` 补 `count`/`locations` 序列化（防 round-trip 丢聚合）；handlers_misc 两处 error `json.dumps` 补 `ensure_ascii=False`（中文不转义）。
 - **覆盖率补写（第 1 批）**：新增 `test_coverage_gap_1.py`（95 用例，output_evaluator/verify_findings/governance_store/llm_integration）；整仓总覆盖率 17.70% → 20.76%；fail_under=15 仍达标（提升路径待后续批次）。
-- **测试归属约定变更**：独立回归用例迁至 `测试副本\独立测试\tests`；开发方测试自持（本地 + coderef-src 同步，**不入 git、严禁推送 GitHub**）；验收口径改为三方绿（开发自测 + 独立回归独立仓回归 + 运行态）。
+- **测试归属约定变更**：独立回归用例迁至 `测试副本`；开发方测试自持（本地 + coderef-src 同步，**不入 git、严禁推送 GitHub**）；验收口径改为三方绿（开发自测 + 独立回归独立仓回归 + 运行态）。
 - **验证**：开发自测 **259 全绿**；pyflakes 本轮改动文件 0 告警；CodeRabbit 全链复审通过；Brooks-Lint 整仓 Health 97 无 A/B 级；MCP 起服 52 工具 + stdio 端到端通过。
 
-### v5.14.3 — 外部审查 9 项修复 + 结构性债务治理（4 课题）
+### v5.14.3 — 外部审查 9 项修复 + 结构性债务治理（4 事项）
 
-> 承接外部审查清单（版本漂移 / pyflakes / 上帝模块 / 文档漂移 / shell=True / 声明边界 9 项）+ 后续 3 个留档课题治理；CodeRabbit 复审 0 finding。版本按 SOP 升末位 patch（5.14.2 → 5.14.3）。
+> 承接外部审查清单（版本漂移 / pyflakes / 上帝模块 / 文档漂移 / shell=True / 声明边界 9 项）+ 后续 3 个留档事项治理；CodeRabbit 复审 0 finding。版本按 SOP 升末位 patch（5.14.2 → 5.14.3）。
 
 - **A 级（正确性/发布一致）**：
   - `pyproject.toml` version `4.9.6` → `5.14.3`（与 `__init__.py` 同步，消除 `pip install .` 与运行时版本漂移）；
@@ -667,13 +667,13 @@
   - `core/ast_parser.py` 清理 `_get_stdlib_modules() if False else {...}` 死代码残留（短路保护不崩，重构遗留）；
   - `core/gitnexus_client.py` 3 处 `shell=True` 改列表参数 + `shell=False`（命令硬编码无注入面，消除 shell 冗余）。
 - **B 级（静态清理）**：pyflakes 未使用 import 清理 **~90 → 15 处**（保留 `from core/config` 等跨模块隐式加载导入 15 处，含 `health_dashboard.Tier` 局部重定义模式）；删除 76 处纯 stdlib/第三方未用导入，零功能变更。
-- **课题 1 · 版本号收敛（用户提问驱动）**：版本号从「多文件写死」收敛为**单一真源 `core/version.py`**——`__init__.py` 导入、`pyproject.toml` 用 `[tool.setuptools.dynamic] version = {attr="core.version.__version__"}` 动态读取、`mcp_server._pkg_version()` 直接 import（弃文本解析）。**升版本只改 `core/version.py` 一处**。文档快照（README/MCP_SETUP/CHANGELOG）由新增 `tools/check_version.py` 发布前校验防漂移（CodeRabbit minor 修订后精确定位版本字段）。**顺修预存缺陷**：pyproject `license = {text=...}` 被新 setuptools 拒绝致 `pip install .` 构建失败 → 改 SPDX 字符串。
-- **课题 2 · 上帝模块检测维度（填自身盲区）**：`tech_debt_detector` 新增「文件过大（上帝模块）」检测维度——`TECH_DEBT_OVERSIZED_FILE_THRESHOLD=1000` 行分级（>1000 medium / >2000 high / >3000 critical），与过长函数（函数级）互补查文件级。实测命中 Coderef 自身 **20 个**上帝模块（含外部审查点名的 4 个 2900+ 行文件全部命中）。
-- **课题 3 · f-string 无占位清理**：清理 **111 处**冗余 f 前缀（`f"..."`→`"..."`），AST 语义等价验证（26 文件全 PASS）+ 164 测试无回归。
-- **课题 4 · 覆盖率监控**：新增 `requirements-dev.txt`（pytest-cov，dev 依赖不污染运行时零依赖红线）+ `pyproject.toml [tool.coverage]` 配置（omit 入口/外部依赖文件，`fail_under=15` 诚实起点随覆盖提升逐步上调）+ `tools/coverage_report.py` 一键脚本。当前基线 **17.7%**（独立回归 164 回归用例非全量覆盖，属趋势追踪起点）。
-- **课题 5 · 860s 超时（记录决策，不改码）**：验证现有兜底已可操作——partial 结果含 `progress_text`（阶段进度）+ `suggestion`（明确指引：incr 策略/分维度扫描/产物已落盘可先用）。超大仓资源限制非缺陷，维持不修。
+- **事项 1 · 版本号收敛（用户提问驱动）**：版本号从「多文件写死」收敛为**单一真源 `core/version.py`**——`__init__.py` 导入、`pyproject.toml` 用 `[tool.setuptools.dynamic] version = {attr="core.version.__version__"}` 动态读取、`mcp_server._pkg_version()` 直接 import（弃文本解析）。**升版本只改 `core/version.py` 一处**。文档快照（README/MCP_SETUP/CHANGELOG）由新增 `tools/check_version.py` 发布前校验防漂移（CodeRabbit minor 修订后精确定位版本字段）。**顺修预存缺陷**：pyproject `license = {text=...}` 被新 setuptools 拒绝致 `pip install .` 构建失败 → 改 SPDX 字符串。
+- **事项 2 · 上帝模块检测维度（填自身盲区）**：`tech_debt_detector` 新增「文件过大（上帝模块）」检测维度——`TECH_DEBT_OVERSIZED_FILE_THRESHOLD=1000` 行分级（>1000 medium / >2000 high / >3000 critical），与过长函数（函数级）互补查文件级。实测命中 Coderef 自身 **20 个**上帝模块（含外部审查点名的 4 个 2900+ 行文件全部命中）。
+- **事项 3 · f-string 无占位清理**：清理 **111 处**冗余 f 前缀（`f"..."`→`"..."`），AST 语义等价验证（26 文件全 PASS）+ 164 测试无回归。
+- **覆盖率监控**：新增 `requirements-dev.txt`（pytest-cov，dev 依赖不污染运行时零依赖红线）+ `pyproject.toml [tool.coverage]` 配置（omit 入口/外部依赖文件，`fail_under=15` 诚实起点随覆盖提升逐步上调）+ `tools/coverage_report.py` 一键脚本。当前基线 **17.7%**（独立回归 164 回归用例非全量覆盖，属趋势追踪起点）。
+- **事项 5 · 860s 超时（记录决策，不改码）**：验证现有兜底已可操作——partial 结果含 `progress_text`（阶段进度）+ `suggestion`（明确指引：incr 策略/分维度扫描/产物已落盘可先用）。超大仓资源限制非缺陷，维持不修。
 - **自测**：master 全量 **164 用例通过** + `py_compile` 全绿 + pyflakes 收敛 + 覆盖率脚本 15% 阈值达标。
-- **版本号**：5.14.2 → 5.14.3（4 课题合并，patch 升位；按 SOP 不打 release 包，push master + tag）。
+- **版本号**：5.14.2 → 5.14.3（4 事项合并，patch 升位；按 SOP 不打 release 包，push master + tag）。
 
 ---
 
@@ -785,7 +785,7 @@
 
 ---
 
-### v5.13.6 — U-39/U-40 双课题修复（图谱层排除口径 + workflow_graph 接入白名单 dir 排除）
+### v5.13.6 — U-39/U-40 双事项修复（图谱层排除口径 + workflow_graph 接入白名单 dir 排除）
 
 > 承接缺陷跟踪 U-39、U-40（2026-09-03 独立回归开立）。v5.13.5 的 memory_layer 排除因过滤条件错误未真正生效（假修复被复测识破），本轮修正口径并补齐 workflow_graph 链路。
 
@@ -822,7 +822,7 @@
 
 ### v5.13.2 — U-37 外部反馈三工具问题修复（arch_gap 白名单豁免 + flow_verify 实例化调用建边）
 
-> 承接独立回归交接清单（`内部记录\20260903-v5.13.1-U37-外部反馈三工具问题交接\交接清单.md`）：U-37① `arch_gap` 不消费白名单 `rule=duplicate` 豁免、U-37② `flow_verify` 对「import（模块级/方法体内）+ 实例化对象方法调用」建边缺口，2 项真实缺陷（测试 7 RED 留证）修复；U-37③ 规则层排除已修复仅防回归。
+> 承接独立回归交接清单（`内部交接记录`）：U-37① `arch_gap` 不消费白名单 `rule=duplicate` 豁免、U-37② `flow_verify` 对「import（模块级/方法体内）+ 实例化对象方法调用」建边缺口，2 项真实缺陷（测试 7 RED 留证）修复；U-37③ 规则层排除已修复仅防回归。
 > - **fix（U-37① arch_gap 消费白名单 rule=duplicate 豁免）**：`arch_gap_analyzer._detect_duplicates` 此前仅按 `semantic_kind`（true/designed_parallel）过滤，不读取 whitelist 的 `rule=duplicate` 条目 → 已人工豁免的"设计并存"符号被重新点名收敛。修复：新增 `_whitelist_duplicate_exemptions` 读取真实 schema（`file`+`rule`+`category`），簇的任一副本文件命中豁免条目即不再产出 duplicate gap；未豁免真重复 / `designed_parallel` 语义保留不受影响。
 > - **fix（U-37② flow_verify 实例化对象方法调用建边）**：`code_knowledge_graph._build_from_ast` 对 `svc.run()` 仅做「全名精确 / self-cls / 短名 LIKE 回退」三档解析，无法回推变量宿主类 → 边漏建 → verify 把真连通步骤判 `outside`/`missing`；且构造调用 `Res()` 被 LIKE 碰巧匹配到 `Res.run` 掩盖缺边。修复：① `ast_parser` 新增 `local_imports`/`local_assignments` 字段，递归提取方法体/类体内局部 import 与赋值（模块级 import 仍在 `imports`），`memory_layer` 序列化同步；② `_build_from_ast` 新增 `_collect_var_host_classes` 从两档 import + 实例化赋值推导「变量名 → (宿主类, 模块)」映射；③ 调用解析新增实例化档 `_resolve_instance_call`（`tool=ResearchTool(cfg)` → `tool.run` → `method:<宿主类模块>:ResearchTool.run`，精确主键匹配防跨类同名误绑），置于短名 LIKE 回退之前，杜绝伪 CALLS 边冒充真边；④ caller 定位新增 `_ast_containing_method_id` AST 结构兜底（nodes 表行号缺失时用 AstFileResult 真实行号定位调用所在方法）。
 > - **回归测试**：`tests/test_feedback_fixes.py` 新增 `ArchGapDuplicateExemptionTest`（豁免符号不报 / 未豁免真重复仍报 / designed_parallel 保留）×3、`InstanceCallResolveTest`（局部 import 实例化建边 / verify 不判 outside-missing / 不误绑跨类同名）×3、`SelfSiblingCallResolveTest`（self 兄弟调用建边保护）×1、`ModuleLevelImportInstanceCallTest`（模块级 import 实例化建边 / 兄弟+实例化双边 / 不误绑 / verify 闭环）×4；宿主 suite 58 用例 7 RED 全转绿，全量 154 用例通过（Python 3.10）。
@@ -867,7 +867,7 @@
 
 ### v5.12.7 — 新增轻量版本探针 coderef_version
 
-> 承接独立回归建议课题（缺陷跟踪 §4）：靠「结果字段反推版本」会因进程未重启加载旧代码而误判进程新旧（v5.12.6 首探即因此误判），需一行调用即可断言 版本==target。
+> 承接独立回归建议事项（缺陷跟踪 §4）：靠「结果字段反推版本」会因进程未重启加载旧代码而误判进程新旧（v5.12.6 首探即因此误判），需一行调用即可断言 版本==target。
 > - **新增 `coderef_version` 只读工具**：返回当前进程加载的版本号（`version`）+ 工具名（`name`）+ 状态，零副作用、不触发任何扫描/图谱构建、无需 project_path，秒级返回。工具总数 50 → 51。
 > - **版本号**：5.12.6 → 5.12.7（patch，新增只读探针，不改既有工具暴露面）。
 
@@ -1734,7 +1734,7 @@
 
 ### v4.8 — 新增 AI 操作记忆层
 
-- **操作记忆层（`coderef_operation_memory_sync` / `query` / `find` / `status`）**：为 AI 辅助编程提供"东西在哪儿、从哪儿来、到哪儿去、过去规范是什么"的持久记忆。解决对话过多后上下文丢失的课题——主要存资源位置（git 便携包、模型权重、测试工具、API 存放处、开发背景报告、外部依赖来源），而非存具体代码
+- **操作记忆层（`coderef_operation_memory_sync` / `query` / `find` / `status`）**：为 AI 辅助编程提供"东西在哪儿、从哪儿来、到哪儿去、过去规范是什么"的持久记忆。解决对话过多后上下文丢失的事项——主要存资源位置（git 便携包、模型权重、测试工具、API 存放处、开发背景报告、外部依赖来源），而非存具体代码
 - **静态审计 + LLM 提炼混合**：资源发现走确定性静态审计（`operation_memory.py`），隐性知识（决策/约定/踩坑）由 LLM 从文档提炼，无 API Key 时诚实降级为待人工确认
 - **旁目录探测**：除主开发目录外，探测家目录 / 数据目录等旁目录下的资源位置，仅记录位置不记录内容，兼顾隐私
 - **增量同步**：基于 mtime+size 快照比较，文件无变更时跳过全量扫描，大幅提升同步速度

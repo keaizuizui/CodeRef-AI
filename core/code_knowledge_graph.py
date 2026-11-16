@@ -372,7 +372,7 @@ class CodeKnowledgeGraph:
     def __init__(self, project_path: str, db_path: Optional[str] = None):
         self.project_path = os.path.abspath(project_path)
         # 路径哈希必须走 project_key 归一：Windows 下 D:\ 与 d:\ 是同一项目，
-        # 未归一会被算成两个库，查错库并触发 G-B 误报（缺陷跟踪 U-71）。
+        # 未归一会被算成两个库，查错库并触发 G-B 误报。
         self._phash = hashlib.md5(project_key(project_path).encode()).hexdigest()[:12]
         # 显式 db_path 优先（供 verify_findings 等跨项目复用图谱），缺省按 project_path 生成
         self._db_path = os.path.abspath(db_path) if db_path else self._make_db_path()
@@ -754,7 +754,7 @@ class CodeKnowledgeGraph:
             # 函数节点 + CONTAINS 边。
             # CodeAnalyzer 把类方法同时放进 cf.functions 与 cf.classes[].methods，
             # 两边都建节点会让同一 def 产出 func: 与 method: 两份，裸名 callers
-            # 命中 func: 节点返回 0，AI 会误判死代码（缺陷跟踪 U-81）。这里跳过方法副本。
+            # 命中 func: 节点返回 0，AI 会误判死代码。这里跳过方法副本。
             _method_keys = {
                 (m.name, getattr(m, "start_line", 0), getattr(m, "end_line", 0))
                 for _cls in getattr(cf, "classes", [])
@@ -1471,7 +1471,7 @@ class CodeKnowledgeGraph:
             (self._suffix_like(name),)).fetchall()
 
     def _resolve_node_ids(self, name: str) -> List[str]:
-        """裸名/短名 → 全部候选节点 id（同名函数与方法聚合，缺陷跟踪 U-81）。
+        """裸名/短名 → 全部候选节点 id（同名函数与方法聚合，回归记录）。
 
         方法节点 name 为 `Class.method`，只按 `name=?` 精确匹配会漏掉；裸名
         查询必须同时收集精确同名节点与点号边界后缀节点，避免 AI 查到 0 个
@@ -1665,7 +1665,7 @@ class CodeKnowledgeGraph:
                 "note": "收不束的常量由项目白名单/文档口径治理，不追求 100% 覆盖",
             },
             # 口径披露：function 节点仅含模块顶层函数（含 import 失败的兜底定义）；
-            # 类方法见 method 节点；函数体内嵌套/条件内定义不收录（缺陷跟踪 U-77）。
+            # 类方法见 method 节点；函数体内嵌套/条件内定义不收录。
             "function_scope": {
                 "rule": ("function 节点仅含模块顶层函数；类方法为独立 method 节点；"
                          "函数体内嵌套与条件内定义不收录"),

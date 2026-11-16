@@ -326,7 +326,7 @@ class MemoryLayer:
         if not old or not cur:
             return False
         # 优先用纳秒级 mtime 精确比较：旧实现 0.1s 容差会把「0.1s 内同尺寸
-        # 改写」永久判为未变（缺陷跟踪 U-87，20 轮实测 CALLS 停在第 15 轮）。
+        # 改写」永久判为未变。
         if old.get("mtime_ns") is not None and cur.get("mtime_ns") is not None:
             return (old.get("mtime_ns") == cur.get("mtime_ns")
                     and old.get("size") == cur.get("size"))
@@ -415,14 +415,13 @@ class MemoryLayer:
             from core.code_knowledge_graph import CodeKnowledgeGraph
             kg = CodeKnowledgeGraph(project_path)
             # 图谱构建接入 whitelist dir 排除，避免备份目录（如 _refactor_backup）
-            # 污染符号级真身判定、循环与重复匹配（缺陷跟踪 U-38 观察项：
-            # 图谱重建时备份目录仍入图）。与 pipeline_runner._build_kg 口径一致。
+            # 污染符号级真身判定、循环与重复匹配。与 pipeline_runner._build_kg 口径一致。
             exclude_dirs = []
             try:
                 from core.pipeline_runner import whitelist_list
                 # U-39：只判 dir 字段、不看 rule。真实白名单 dir 排除条目的
                 # rule 字段缺失（以 dir 标志）；v5.13.5 误加 rule=="dir" 让
-                # exclude_dirs 恒空（缺陷跟踪 U-39 实证），与 _build_kg 口径同源。
+                # exclude_dirs 恒空，与 _build_kg 口径同源。
                 exclude_dirs = [e["dir"] for e in whitelist_list(project_path)
                                 if e.get("dir")]
             except Exception:  # pragma: no cover
@@ -556,7 +555,7 @@ class MemoryLayer:
             from core.code_analyzer import CodeAnalyzer
             analyzer = CodeAnalyzer()
             files = analyzer.scan_directory(project_path)
-            # 白名单 dir 与 audit/图谱同源过滤（缺陷跟踪 U-78）：sync 旧实现把
+            # 白名单 dir 与 audit/图谱同源过滤：sync 旧实现把
             # `_refactor_backup` 的 171 个备份文件计入 total_files/changed_files/
             # ast_files，导致覆盖率分母与增量变更判定被污染。
             from core.pr_whitelist import (
@@ -592,7 +591,7 @@ class MemoryLayer:
         analysis = self._analyze_structure(analyzer, project_path, mode,
                                            files, changed)
         # analyze_project 是独立全量扫描，不会继承上面的 files 过滤；这里再按
-        # 白名单重算一次，与 audit `_scan` / status() 同口径（缺陷跟踪 U-78）。
+        # 白名单重算一次，与 audit `_scan` / status() 同口径。
         if analysis is not None:
             try:
                 from core.pr_whitelist import _apply_whitelist_dirs

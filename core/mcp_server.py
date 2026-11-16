@@ -94,7 +94,7 @@ MEMORY_CONTRACT = (
 def _degraded_reasons(errors) -> dict:
     """失败原因拆分：超时/预算 vs 内容被丢弃（两者修复动作不同）。
 
-    `Request timed out.` 不含 timeout 子串，必须单列 `timed out`（缺陷跟踪 U-89）。
+    `Request timed out.` 不含 timeout 子串，必须单列 `timed out`。
     """
     joined = " ".join(str(e) for e in (errors or [])).lower()
     return {

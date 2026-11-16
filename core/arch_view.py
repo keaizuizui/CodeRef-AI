@@ -162,7 +162,7 @@ def _build_flows(target_arch: dict) -> List[dict]:
 def _build_summary(gap_result: Optional[dict], gaps: List[dict],
                    module_names: List[str], modules: List[dict],
                    cycle_mods: set) -> dict:
-    """汇总口径：空图谱/无代码态走 no_code（U-46）。"""
+    """汇总口径：空图谱/无代码态走 no_code。"""
     s = (gap_result or {}).get("summary") or {}
     a = (gap_result or {}).get("alignment") or {}
     no_code = len(module_names) == 0

@@ -596,7 +596,7 @@ def _semantic_confirm(project_path: str, issues: List[Dict[str, Any]]):
     """可选语义判定接口：对 top 候选做语义确认。
 
     依赖 LLM；缺 API Key / LLM 不可用时返回 enabled=False 的显式降级说明，
-    不硬阻断，也不把未执行伪装成已执行（缺陷跟踪 U-83 / U-84）。
+    不硬阻断，也不把未执行伪装成已执行。
     """
     try:
         from core.llm_integration import get_llm_client

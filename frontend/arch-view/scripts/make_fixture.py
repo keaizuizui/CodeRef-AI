@@ -15,11 +15,14 @@ sys.path.insert(0, ROOT)
 
 from core.arch_view import build_arch_data
 
-VIMAX = r"D:\本地工作区\测试副本\coderef-positive-test\samples\workspace\vimax"
+# 前端联调样本项目：由使用者通过环境变量指定，仓库不内置任何本地路径
+VIMAX = os.environ.get("CODEREF_FIXTURE_PROJECT", "")
 OUT = os.path.join(HERE, "..", "src", "fixtures", "vimax.json")
 
 
 def main() -> None:
+    if not VIMAX or not os.path.isdir(VIMAX):
+        raise SystemExit("请先用 CODEREF_FIXTURE_PROJECT 指定一个真实项目路径")
     data = build_arch_data(VIMAX)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as f:

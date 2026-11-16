@@ -301,7 +301,7 @@ export CODEREF_TOOL_PROFILE=lite
 }
 ```
 
-详细设计见 [docs/dream.md](docs/dream.md) 与 [docs/dream-jobs.md](docs/dream-jobs.md)。
+梦系统的对外能力见 README 的「MCP 工具」章节。
 
 ---
 

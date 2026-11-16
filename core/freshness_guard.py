@@ -288,7 +288,7 @@ def _compute_staleness(project_path: str) -> dict:
     mtimes = _code_mtimes(project_path)
     latest = max(mtimes) if mtimes else None
     # 图谱是否存在以「实时磁盘」为准：同一响应里的 freshness 块也走实时条目，
-    # 避免 60s 盘点缓存与 raw 查询结果自相矛盾（独立回归 D-1 复发）。
+    # 避免 60s 盘点缓存与 raw 查询结果自相矛盾。
     item = _live_kg_item(project_path, latest)
     kg_db = ""
     if item.get("exists"):

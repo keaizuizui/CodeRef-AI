@@ -3,7 +3,7 @@
 
 Windows 下 `D:\\proj` 与 `d:\\proj` 是同一项目，但直接对 abspath 做 md5
 会得到两个哈希，导致同一项目分裂出两套图谱库 / 审计发现 / 状态文件
-（缺陷跟踪 U-71）。这里统一 abspath + normcase，保证同一项目只有一份标识。
+。这里统一 abspath + normcase，保证同一项目只有一份标识。
 """
 import os
 
@@ -16,7 +16,7 @@ def project_key(project_path) -> str:
     """
     try:
         # 先展开 ~：否则 `~/proj` 会被当成 <cwd>/~\proj，与 $HOME/proj 分裂
-        # 成两个 key（缺陷跟踪 U-88，U-71 同类）。
+        # 成两个 key。
         return os.path.normcase(os.path.abspath(os.path.expanduser(str(project_path))))
     except Exception:  # noqa: BLE001
         return str(project_path)

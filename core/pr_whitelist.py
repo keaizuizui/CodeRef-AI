@@ -342,7 +342,7 @@ def _build_scope_text(project_path: str, total_files: int) -> str:
         return f"分析 {total_files} 个代码文件（范围统计失败: {e}）"
 
 def _apply_whitelist_dirs(project_path: str, analysis) -> None:
-    """白名单 dir 条目必须在最外层文件统计生效（缺陷跟踪 U-78）。
+    """白名单 dir 条目必须在最外层文件统计生效。
 
     旧实现只在建图/分析工具里消费 dir 排除，`audit` 的 total_files/total_lines
     与 file_snapshot 仍把备份目录算进去，报告规模虚高、派生指标分母被污染。

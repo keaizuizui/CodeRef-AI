@@ -452,7 +452,7 @@ def _exempt_match(copy_file: str, exempt_file: str) -> bool:
 
     真实豁免条目 `file` 为裸文件名（`smart_data_hub.py`），而重复簇
     `copies[].file` 为带目录前缀的相对路径（`技能库/smart_data_hub.py`）——
-    精确相等永不命中导致豁免失效（缺陷跟踪 U-37① RED 留证）。统一正斜杠后
+    精确相等永不命中导致豁免失效（回归留证）。统一正斜杠后
     按「精确相等 或 目录分隔尾段相等」判定，既容忍目录前缀又不误伤不同目录
     下的同名文件（须带 `/` 层级边界）。
     """

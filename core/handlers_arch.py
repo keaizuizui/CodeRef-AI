@@ -18,7 +18,7 @@ _ARCH_SERVE = {}
 
 class _ArchViewHandler(SimpleHTTPRequestHandler):
     """arch 产物目录静态服务：根路径返回引导页（列出产物 + 直达最新），
-    替代默认目录列表（v5.14.5/v5.15.0 独立回归观察点 1）。"""
+    替代默认目录列表（v5.14.5/v5.15.0 观察点 1）。"""
 
     def do_GET(self):  # noqa: N802
         # 原始路径含 `..`（含 %2e%2e）时直接 404：SimpleHTTPRequestHandler 会先

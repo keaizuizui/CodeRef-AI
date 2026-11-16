@@ -216,7 +216,7 @@ class ArchAlignmentVerifier:
                       ) -> Tuple[float, Optional[float]]:
         """复用 arch_audit 健康度归一化为 0-1，返回 (归一分数, 原始0-10健康分)。
 
-        U-41（独立回归 2026-09-04）：此前读 `r.get("health_score")` 该字段不存在，
+        回归记录（2026-09-04）：此前读 `r.get("health_score")` 该字段不存在，
         health 维度恒落默认 0.5（arch_health_raw 恒 null），与 arch_audit 真实健康严重
         不符。audit 的健康分实际在 `r["summary"]["health"]`（0-10）。改为读该字段；
         no_code 时 health=None（原始缺失），raw 显式透出 None，score 保留保守默认。

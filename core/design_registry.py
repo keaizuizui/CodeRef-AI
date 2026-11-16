@@ -133,7 +133,7 @@ def _default_registry_path() -> str:
     return os.path.join(root, "data", "design_registry.json")
 
 
-# U-43（独立回归 2026-09-04）：design 登记的 description 若含「采用数声明」，须经
+# U-43：design 登记的 description 若含「采用数声明」，须经
 # coderef_asset(action=commit) 固化并由 adopters/callers 数据支撑；designs 区不承载
 # 核验证据，禁止在 add 登记里写入未经核验的采用数 claim（防「登记假设当事实」）。
 _ADOPTION_DECL_RE = re.compile(

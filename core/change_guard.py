@@ -81,7 +81,7 @@ HEALTH_GIT_NAME = "CodeRef-AI"
 HEALTH_GIT_EMAIL = "coderef@local"
 # 健康基线 commit/tag 的临时身份参数（-c 覆盖，不写 git config）。
 # 已存在仓库可能未配置 user.name/email（如 Coderef-Ai-master 用临时身份提交），
-# 直接 `git tag -a` 会报 Committer identity unknown（缺陷跟踪 #3 实证），
+# 直接 `git tag -a` 会报 Committer identity unknown，
 # 统一带临时身份即可在任意仓库锚定，且不违反「NEVER update git config」铁律。
 _HEALTH_IDENTITY = ["-c", f"user.name={HEALTH_GIT_NAME}",
                     "-c", f"user.email={HEALTH_GIT_EMAIL}"]

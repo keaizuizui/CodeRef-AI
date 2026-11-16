@@ -12,7 +12,7 @@
 
 下面以 CodeRef 自己为例，复制后请替换为你项目的流程：
 
-- **发布 SOP**：`pyflakes` 0 → `pytest` 全绿 → `python tools/check_version.py` EXIT=0 → 同步测试副本（SHA256 一致）→ 独立回归回归/运行态通过并给"可 push"回执 → 报告写入 `交接/交接记录.md` → 与维护者确认后 push。
+- **发布 SOP**：`lint` 0 → `pytest` 全绿 → 版本检查 EXIT=0 → 同步测试副本（SHA256 一致）→ 独立回归与运行态验证通过并给出"可 push"结论 → 报告写入项目内的交接文件 → 与维护者确认后 push。
 - **记忆契约**：改码 / 审计 / 发布前先 `coderef_operation_memory(action=recover)`；规则缺失用 `action=setup_install` 写入 AGENTS.md / CLAUDE.md；改码后 `coderef_change_guard`。
 - **审计全流程**：`recover` → `audit` → `architecture` → `report` → 产品 / UX 评估 → `change_guard` → lint / 测试 / 版本检查 → 同步副本 → 交接记录。
 - **CodeRabbit**：可能装在 Windows（`%LOCALAPPDATA%\Programs\coderabbit\coderabbit.exe`），也可能装在 WSL（如 `/root/.local/bin/coderabbit`）；两者登录状态可能不同，选**已登录**的那个。不在 PATH 时用完整路径。`where` / `which` 找不到不代表没装，实际位置以 `recover` 返回的 `env_tools` 为准。

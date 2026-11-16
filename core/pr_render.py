@@ -102,7 +102,7 @@ def _render_html(project_path: str, r: PipeResult,
             wiki_dir = getattr(wr, "output_dir", None) or None
         if not wiki_dir:
             # audit 主链内部渲染时 r 没有 wiki_result，旧实现直接传 None，
-            # wiki.html 降级成「未提供 Wiki 目录」空壳（缺陷跟踪 U-79）。
+            # wiki.html 降级成「未提供 Wiki 目录」空壳。
             # 与维度状态同口径探测已存在的 Wiki 产物目录。
             try:
                 wiki_dir = detect_wiki_output_dir(project_path) or None

@@ -14,7 +14,7 @@ logger = logging.getLogger("coderef")
 
 PROFILE_ENV = "CODEREF_TOOL_PROFILE"
 
-# lite 清单（与 docs/dream-jobs.md 6.3 同源，严格 12 个）
+# lite 清单（严格 12 个）
 LITE_TOOLS = frozenset({
     "coderef_version",
     "coderef_plan",

@@ -92,7 +92,7 @@ _META_TALK_STRONG = (
     # 外部 v5.21.22 实测 FLOWS 泄漏的推理链
     "我们作为", "只能猜测", "我们需要选择", "需要保留文档结构",
     "we can remove", "better remove", "hmm.",
-    # 缺陷跟踪 U-80：校对环节的提示词被模型当正文回传（整段系统提示词落盘）
+    # 回归记录：校对环节的提示词被模型当正文回传（整段系统提示词落盘）
     "任务：文档校对专家", "文档校对专家", "输出修正后的全文", "输出修正后全文",
     "不存在的标识符", "请将它们替换为文中合理", "我们需要回答中文",
     "不要改变文章的整体结构", "不要改变整体结构和写作风格",
@@ -165,7 +165,7 @@ _FAILED_DOC_PLACEHOLDER = (
 )
 
 # 单篇文档输出预算：4096 tokens 对 README/OVERVIEW/MODULES 主文档偏紧，
-# 长文极易在结尾被切断（缺陷跟踪 U-95：5 篇核心文档连续两轮失败）。
+# 长文极易在结尾被切断（5 篇核心文档连续两轮失败）。
 # DeepSeek 支持 8192，统一提到该上限；截断重试仍保留两道兜底。
 _WIKI_MAX_TOKENS = 8192
 
@@ -218,7 +218,7 @@ def _ends_half_sentence(text: str) -> bool:
 
 
 def _looks_truncated(text: str) -> bool:
-    """判定模型输出是否在结尾被截断（缺陷跟踪 U-82）。
+    """判定模型输出是否在结尾被截断。
 
     只认确定性特征，避免误伤正常文档：
       1. 代码围栏（``` / ~~~）行数为奇数 → 未闭合；
@@ -227,7 +227,7 @@ def _looks_truncated(text: str) -> bool:
       4. 末行以半句标点结尾（，、：等）；
       5. 末行是空标题 / 空列表项（`###`、`1.`、`-`）→ 正文被切断；
       6. 末行是叙事半句：普通行/引用行无句末闭合即判；列表行剥掉
-         `- / * / 1.` 前缀后按「半句标点 / 句末虚词」判（独立回归 2026-11-16）。
+         `- / * / 1.` 前缀后按「半句标点 / 句末虚词」判。
     """
     body = (text or "").rstrip()
     if not body:
@@ -278,7 +278,7 @@ def _looks_truncated(text: str) -> bool:
                     return True
             elif content_tail.endswith("`"):
                 # 行内代码收尾：剥掉代码后若停在半句标点，说明句子被切断
-                # （独立回归 2026-11-16：`…；\`测试\``）；其余视为正常收尾。
+                # ；其余视为正常收尾。
                 bare = re.sub(r"`[^`]*`", "", content_tail).rstrip()
                 if bare.endswith(("，", "、", "：", "；", "…", ",", ":", ";")):
                     return True
@@ -1477,7 +1477,7 @@ class _WikiDocMixin:
 
         # Stage 1: 全量代码元数据提取（AST，无 LLM）。
         # 全量重建必须跳过缓存：缓存只校验项目路径与模块数，源码改了但模块数
-        # 不变时会复用旧元数据，导致重跑 mode=full 文档逐字节不变（缺陷跟踪 U-86）。
+        # 不变时会复用旧元数据，导致重跑 mode=full 文档逐字节不变。
         code_metadata = self._build_code_metadata(
             modules, project_path, skip_cache=True)
 
@@ -1488,7 +1488,7 @@ class _WikiDocMixin:
         # Stage 2: LLM 逐模块归纳描述（从全量元数据写，不丢失信息）。
         # 全量重建强制重算全部描述：元数据可能被采样截断，指纹无法覆盖样本外
         # 的源码变化；若复用旧描述，mode=full 后 ARCHITECTURE/OVERVIEW 仍可能
-        # 描述旧实现（Brooks-Lint / 缺陷跟踪 U-86）。
+        # 描述旧实现（Brooks-Lint / 回归记录）。
         module_descriptions = self._generate_module_descriptions(
             code_metadata, wiki_style,
             invalidate=[m.name for m in code_metadata.modules])
@@ -1518,7 +1518,7 @@ class _WikiDocMixin:
             sub_name = os.path.basename(sub_path)
             sub_output = os.path.join(output_dir, "subprojects", sub_name)
             # MODULES 目录由落盘时按需创建：没有可生成文档时不留空壳目录
-            # （缺陷跟踪 U-74：subprojects/<name>/MODULES 为空）。
+            # （subprojects/<name>/MODULES 为空）。
             os.makedirs(sub_output, exist_ok=True)
 
             sub_result = WikiResult(
@@ -1748,7 +1748,7 @@ class _WikiDocMixin:
 
     @staticmethod
     def _module_doc_count(docs: List[str]) -> int:
-        """模块文档数：排除 `MODULES/_index.md` 索引页（缺陷跟踪 U-93）。"""
+        """模块文档数：排除 `MODULES/_index.md` 索引页。"""
         return sum(1 for d in docs
                    if "MODULES" in d and os.path.basename(d) != "_index.md")
 
@@ -2069,7 +2069,7 @@ class _WikiDocMixin:
                                          temperature=0.3)
         if not self.llm.is_error_response(retry) and retry and accept(retry):
             # 中间失败已被重试覆盖：清空诊断字段，避免「40/40 成功仍报 errors」
-            # 并阻断 .last-good / .last-update.json（缺陷跟踪 U-96）。
+            # 并阻断 .last-good / .last-update.json。
             self._last_llm_error = ""
             return retry
         self._last_llm_error = fail_msg
@@ -2107,7 +2107,7 @@ class _WikiDocMixin:
                 self._last_llm_error = text
                 return ""
             # 偶发空内容（非结构化错误）再给一次机会：核心文档直接落占位
-            # 的代价过高（缺陷跟踪 U-95）。
+            # 的代价过高。
             if not text or not text.strip():
                 text = self._retry_llm(
                     messages,
@@ -2123,7 +2123,7 @@ class _WikiDocMixin:
                     "LLM 返回疑似思考过程，重试后仍不合格，已丢弃")
                 if not text:
                     return ""
-            # 尾句截断不得静默落盘（缺陷跟踪 U-82 / U-95）：最多重试两次；
+            # 尾句截断不得静默落盘：最多重试两次；
             # 第二次要求压缩篇幅，避免同样的长文再次被切断；仍不完整才判失败。
             rounds = 0
             while _looks_truncated(text) and rounds < 2:
@@ -2139,7 +2139,7 @@ class _WikiDocMixin:
                                and not _looks_like_meta_talk(t)),
                     "LLM 输出疑似截断，重试后仍不完整")
                 # 本轮失败不立即返回：否则 rounds==2 的压缩重试永不可达
-                # （缺陷跟踪 U-97）。两轮都失败后才按失败处理。
+                # 。两轮都失败后才按失败处理。
                 if retried:
                     text = retried
             if _looks_truncated(text) or _looks_like_meta_talk(text):
@@ -2432,7 +2432,7 @@ class _WikiDocMixin:
                 continue
             desc = descriptions.get(mod.name, "")
             # 模块描述缺失也必须出模块文档：旧实现直接 continue，导致
-            # MODULES/<模块>.md 静默缺件（缺陷跟踪 U-74）。描述只是风格参考，
+            # MODULES/<模块>.md 静默缺件。描述只是风格参考，
             # 事实数据仍来自元数据，空描述时照常生成。
 
             # 交叉验证徽章：有铁证时注入文档顶部，供非技术人员核验描述可信度
@@ -2769,7 +2769,7 @@ class _WikiDocMixin:
     def _project_string_literals(self, meta: ProjectCodeMetadata) -> set:
         """项目源码中的字符串字面量集合（常量 / 字典 key），按项目缓存。
 
-        缺陷跟踪 U-94：`DIMENSIONS = {"keyword_completeness": ...}` 这类业务词在
+        回归记录：`DIMENSIONS = {"keyword_completeness": ...}` 这类业务词在
         文档里应视为已知，但它们不是类/函数/文件名，旧 known 集合收不到，
         cite-fix 会把它们当错名改写掉。AST 只扫一次，40 篇文档复用缓存。
         """
@@ -2883,7 +2883,7 @@ class _WikiDocMixin:
 
         # 小写化用于忽略大小写匹配
         known_lower = {k.lower() for k in known}
-        # 字符串常量 / 字典 key 也是项目里真实存在的名字（缺陷跟踪 U-94）
+        # 字符串常量 / 字典 key 也是项目里真实存在的名字
         known_lower |= {v.lower() for v in self._project_string_literals(meta)}
 
         # 3. 校验
@@ -2905,7 +2905,7 @@ class _WikiDocMixin:
             if base2.lower() in known_lower:
                 continue
             # 前缀族：`research_` / `search_` / `beh_` 是文件名前缀而非符号，
-            # 文档用它们指代一族文件属正常内容（缺陷跟踪 U-94）。
+            # 文档用它们指代一族文件属正常内容。
             if t.endswith("_") and len(t) >= 3 and any(
                     k.startswith(t.lower()) for k in known_lower):
                 continue
@@ -2940,7 +2940,7 @@ class _WikiDocMixin:
         fixed = self._llm_ask(system_prompt, user_prompt)
         if not fixed or len(fixed) <= 100:
             return doc_text
-        # 模型可能把校对提示词/推理过程当正文回传（缺陷跟踪 U-80）：
+        # 模型可能把校对提示词/推理过程当正文回传：
         # 命中提示词特征时保留原文，绝不把内部指令交付给用户。
         if _looks_like_meta_talk(fixed) or any(
                 m in fixed for m in ("任务：文档校对专家", "不存在的标识符",
@@ -2953,7 +2953,7 @@ class _WikiDocMixin:
     def _cite_repair(self, doc_text: str, doc_name: str,
                      meta: ProjectCodeMetadata,
                      cite_warnings: List[str]) -> str:
-        """cite-verify → fix → 复验 → 门禁 的统一收口（缺陷跟踪 U-94）。
+        """cite-verify → fix → 复验 → 门禁 的统一收口。
 
         7 个全局文档入口原先各自复制 verify/fix/warning，导致两个问题：
           - cite-fix 回写前没有截断门禁（二次截断会把原文变成占位）；
@@ -3061,7 +3061,7 @@ class _WikiEmitMixin:
             last_good = os.path.join(os.path.dirname(absp),
                                      os.path.basename(absp) + WIKI_LAST_GOOD_DIR)
             # 全新输出目录并没有「上次可用版本」，不能给出与实际不符的保留承诺
-            # （独立回归 2026-11-14：首次生成失败也提示「已保留上次可用版本」）。
+            # 。
             if os.path.isdir(last_good):
                 result.warnings.append("本次生成未通过校验，已保留上次可用版本（.last-good）。")
             else:
@@ -3139,7 +3139,7 @@ class _WikiEmitMixin:
                 + (" ..." if len(self._unwritten_docs) > 20 else "")
             )
         # 只有存在最终失败文档时，才把最后一次异常作为诊断附加：被重试覆盖的
-        # 中间失败不得进入 errors，更不能阻断 last-good 与增量状态（缺陷跟踪 U-96）。
+        # 中间失败不得进入 errors，更不能阻断 last-good 与增量状态。
         if self._last_llm_error and (
                 self._failed_docs or self._truncated_docs or self._unwritten_docs):
             result.errors.append(f"LLM 调用异常: {self._last_llm_error}")
@@ -3323,7 +3323,7 @@ class _WikiEmitMixin:
         # 推理链清洗，而不是只在 _llm_ask 里按入口逐个接入（外部 v5.21.21：FLOWS 未接入）。
         content = _sanitize_meta_talk(content)
         # 最终落盘门禁：cite-fix 等后处理之后的正文也可能断在半句/未闭合围栏。
-        # 截断内容交付给用户比失败占位更糟（缺陷跟踪 U-82），统一改写占位并披露。
+        # 截断内容交付给用户比失败占位更糟，统一改写占位并披露。
         truncated = bool(content) and _looks_truncated(content)
         if truncated:
             if name not in self._truncated_docs:

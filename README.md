@@ -628,30 +628,26 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 - **5.21.19（外部第七轮）**：修三处 Wiki 质量缺陷——模块文件收集误用 30 条采样上限导致 327 文件的模块被写成「31 个文件」（现由 `MAX_COLLECT_FILES_PER_MODULE` 兜底，实测 31→302）、模型思考过程被当正文落盘（新增 `_looks_like_meta_talk` 门禁，命中即不落盘并计失败）、概览只写「已生成 N 篇」不带时间（现带生成时间，缺失写「生成时间未知」）；`query(stats)` 新增 `constant_scope` 披露常量判定口径；**修掉 `memory(sync)` 与 `audit` 建图 CALLS 不一致的根因**——`AstCodeImport.asnames` 未随状态序列化，别名调用边丢失（本仓实测 4,938 vs 5,122，修复后完全一致）。
 - **验证（5.21.19 发布门槛）**：全量 pytest **504 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0。
 
-- **5.21.18（缺陷跟踪 U-71）**：新增 `core/path_key.project_key`（`normcase(abspath)`），12 个模块的 13 处路径哈希统一走它。Windows 下 `D:\proj` 与 `d:\proj` 不再分裂成两套图谱库 / 审计发现 / 状态文件，`locate_kg_db` 口径一致，G-B「知识图谱不存在」误报消除。
-- **验证（5.21.18 发布门槛）**：全量 pytest **496 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；`测试副本\coderef-src` 同步文件 SHA256 一致。
+- **5.21.18（路径哈希统一）**：新增 `core/path_key.project_key`（`normcase(abspath)`），12 个模块的 13 处路径哈希统一走它。Windows 下 `D:\proj` 与 `d:\proj` 不再分裂成两套图谱库 / 审计发现 / 状态文件，`locate_kg_db` 口径一致，G-B「知识图谱不存在」误报消除。
+- **验证（5.21.18 发布门槛）**：全量 pytest **496 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；测试副本同步文件 SHA256 一致。
 - **升级提示（5.21.17 及更早 → 5.21.18）**：旧的白名单、知识图谱、记忆状态都需要重建。请告诉你的编程 AI ——「我把 CodeRef 升级到了 5.21.18，旧的白名单和图谱已失效。请先帮我重建白名单（备份/镜像等排除目录），再对当前项目跑一次 `coderef_audit`，并跑 `coderef_operation_memory(action=sync, mode=full)` 重建知识图谱与记忆。」旧哈希命名的产物不会被自动读取，但文件仍在磁盘，不会删除。
 
 - **5.21.17（外部第六轮 + CodeRabbit 复审）**：审计收尾不再用增量重建覆盖 `_build_kg` 的全量图（CALLS 13,141/13,211 漂移消除）；`verify_findings` 改用 `query_entities_exact`，同名符号不再被 `LIMIT 50` 截断（`run_all.py main` 假阴性修复）；`frontend` 待确认占位不再计为问题、`partial=true`；`wiki.html` 剥离 YAML front matter；复审整改：建图后文件被改时按快照走全量重建（不再永久 stale）、front matter 仅剥离真实元数据、runtime 降级补 `partial=true`、精确查询取消 1000 上限。
-- **验证（5.21.17 发布门槛）**：全量 pytest **490 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；外部图谱实测 `run_all.py main` 判 confirmed；`测试副本\coderef-src` 同步文件 SHA256 一致。
+- **验证（5.21.17 发布门槛）**：全量 pytest **490 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；外部图谱实测 `run_all.py main` 判 confirmed；测试副本同步文件 SHA256 一致。
 
 - **5.21.16（记忆投递层）**：MCP `initialize.instructions` + 关键工具描述 + `coderef_version.memory_rule` 三路提示「改码前先 `coderef_operation_memory(action=recover)`」；新增 `core/setup_rules.py` 与 `tools/install_rules.py`，在 `AGENTS.md` / `CLAUDE.md` / `.cursor/rules` / copilot instructions 维护标记块（备份、幂等、可卸载），`setup.bat` 菜单 9；真实工程首次调用自动写项目规则；`change_guard` / `audit` / `docs` 增加 G-E 硬闸门（未 recover 返回 blocked）。`coderef_operation_memory` 统一走梦的数据层（环境索引 + 语义笔记），`sync` 不再做 LLM 提炼。
-- **验证（5.21.16 发布门槛）**：全量 pytest **480 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；G-E 实测未 recover 拦截、recover 后放行；`测试副本\coderef-src` 同步文件 SHA256 一致。
+- **验证（5.21.16 发布门槛）**：全量 pytest **480 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；G-E 实测未 recover 拦截、recover 后放行；测试副本同步文件 SHA256 一致。
 
 - **5.21.15（外部第五轮反馈）**：建图加进程内 + 跨进程锁串行化，`query(stats)` 暴露 `calls` / `built_by` / `built_mode` / `ast_files`，同一代码两次建图不再因并发覆盖出现 CALLS 漂移；`verify_findings` 以 `file` 为符号匹配第一约束，文件外同名只计 `same_name_elsewhere` 不判确证；OWASP/Agent 安全扫描与审计同口径排除 whitelist 备份目录；`arch_gap` 支持唯一后缀匹配减少前缀假阴性；`coderef_docs` 模块文档逐篇落盘，取消可在两篇之间生效；画布导入校验泳道/阶段表头几何字段，畸形 JSON 直接拒绝并提示；画布页补空 favicon，报告置信度表补去重口径说明；`AGENTS.md` 收编 `CODEREF.md` 有效红线成为唯一必读入口，并修正 CodeRabbit 路径、测试归属与 push 闸门。
-- **验证（5.21.15 发布门槛）**：全量 pytest **466 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；`测试副本\coderef-src` 同步文件 SHA256 一致。
+- **验证（5.21.15 发布门槛）**：全量 pytest **466 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；测试副本同步文件 SHA256 一致。
 
 - **5.21.14（Brooks-Lint / CodeRabbit 复审整改）**：`dream.run` 不再整轮持锁（LLM 期间不阻塞 `seed` 与并发 `run`），改为 seeds / notes / DREAM·state 三段短锁，`state.json` 统一由 `_save_state` 在锁内按磁盘值合并游标与轮次（SKIP / 失败 / 草稿 / 维护四条路径共用）；业务流程画布构造拆为聚合、格子、边、泳道四个纯函数；删除只做委托的 `Server._schema_error`；记分卡原始分项的展示格式化统一由服务端预生成，前端不再自带一套规则；画布导出再导入不丢模块组、泳道与阶段表头。
-- **验证（5.21.14 发布门槛）**：全量 pytest **453 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；独立回归 STRICT 定向复跑全绿（U-63~U-68，另加并发 t01「两线程 run 都保留笔记」、t02「20 线程 × 5 seed 不丢行」、t03「`os.replace` 失败保留旧 notes」）；CodeRabbit 对本批次 3 轮复审最终 **findings=0**；`测试副本\coderef-src` 同步文件 SHA256 一致。
+- **验证（5.21.14 发布门槛）**：全量 pytest **453 全绿**；`core/` `tools/` pyflakes 0；`check_version` EXIT=0；`change_guard` 无退化；独立回归定向复跑全绿（另加并发用例 t01「两线程 run 都保留笔记」、t02「20 线程 × 5 seed 不丢行」、t03「`os.replace` 失败保留旧 notes」）；CodeRabbit 对本批次 3 轮复审最终 **findings=0**；测试副本同步文件 SHA256 一致。
 
-- **5.21.13（独立回归缺陷跟踪 U-63~U-68）**：MCP 入口按 `inputSchema` 统一校验 `required`/`enum`；注入判定与后台化重工具取并集，`architecture` / `change_guard` / `docs` 首调也带 `procedure_card`；增量图谱保留未变依赖方指向变更模块的入边；大文件内容哈希改为全量读取；dream 的 `seed` / `run` 加跨进程文件锁；画布模板补空 favicon，直开画布页不再有 `/favicon.ico` 404。
+- **5.21.13（边界缺陷修复）**：MCP 入口按 `inputSchema` 统一校验 `required`/`enum`；注入判定与后台化重工具取并集，`architecture` / `change_guard` / `docs` 首调也带 `procedure_card`；增量图谱保留未变依赖方指向变更模块的入边；大文件内容哈希改为全量读取；dream 的 `seed` / `run` 加跨进程文件锁；画布模板补空 favicon，直开画布页不再有 `/favicon.ico` 404。
 
-- **梦 job 契约**：`pitfall/recap/routing/triage`（记忆）+ `change_narrative/failure_postmortem`（叙事），每条 note 带 `claim_type`；advice 永不 `verified`。
-- **草稿链（P2）**：`review_draft/refactor_draft/asset_candidate/noise_proposal` 只写 `drafts/`，必须用户确认后走 `next_tools` 的确定性工具。
-- **P3 维护**：`false_memory_check` 确定性复核证据引用（audit 窗口外如实记 `unknown`），`eval_replay` 指标落盘 `evals/`。
-- **工具面与梦协议**：`CODEREF_TOOL_PROFILE=lite|full` 只控制 `tools/list` 暴露面；`DREAM.md` 固定六节。
-- **本版修复（5.21.5–5.21.12）**：独立回归缺陷跟踪 U-52–U-62 共 11 条边界缺陷（证据降级、并发补梦、BOM、缓存内容指纹等）；CodeRabbit 复审 minor（paused 轨迹错误回传、增量漂移补内容哈希）；5.21.8 修复评估台画布 iframe 404 与 `coderef_query(stats)` 图谱新鲜度自相矛盾；5.21.9–5.21.11 修复画布首次不自动适配、业务流程单元格过高、本地服务误显示离线、表头竖排，并让 `coderef_report` 自动跑产品与 UX 评估；5.21.12 让图谱新鲜度绕过 60 秒盘点缓存实时纠偏，统一 Wiki 口径、统计口径与记分卡 720/736 差异说明；修复画布泳道/连线被 SVG 尺寸裁剪、从未显示的根因，把业务流程画布改为 actor×stage 汇总视图（307 模块 → 17 个非空格子 + 42 条聚合边），技术分区图改为可下钻的模块组卡片；同时把发布/审计/CodeRabbit 入口卡放进 AGENTS.md 并随 recover 与首次重工具注入，解决入口卡不被默认加载的断链。
-- 设计真源见 [docs/dream.md](docs/dream.md) / [docs/dream-jobs.md](docs/dream-jobs.md)；完整逐版本记录见 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
+- **本版修复（5.21.5–5.21.12）**：11 条边界缺陷（证据降级、并发补梦、BOM、缓存内容指纹等）；CodeRabbit 复审 minor（paused 轨迹错误回传、增量漂移补内容哈希）；5.21.8 修复评估台画布 iframe 404 与 `coderef_query(stats)` 图谱新鲜度自相矛盾；5.21.9–5.21.11 修复画布首次不自动适配、业务流程单元格过高、本地服务误显示离线、表头竖排，并让 `coderef_report` 自动跑产品与 UX 评估；5.21.12 让图谱新鲜度绕过 60 秒盘点缓存实时纠偏，统一 Wiki 口径、统计口径与记分卡 720/736 差异说明；修复画布泳道/连线被 SVG 尺寸裁剪、从未显示的根因，把业务流程画布改为 actor×stage 汇总视图（307 模块 → 17 个非空格子 + 42 条聚合边），技术分区图改为可下钻的模块组卡片；同时把发布/审计/CodeRabbit 入口卡放进 AGENTS.md 并随 recover 与首次重工具注入，解决入口卡不被默认加载的断链。
+- 完整逐版本记录见 [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md)。
 
 #### v5.18.13 — 结论信封、CALLS 作用域与陈旧输入防呆
 
@@ -674,9 +670,9 @@ CodeRef-AI 从「一份看得懂的项目简报」出发，一步步长出静态
 > - **U 轨人格走查**（`core/personas.json` + `core/ux_eval.py`）：3 个内置人格（低耐心新手 / 谨慎比价者 / 时间紧迫决策者），7 项必填（身份/目标/行为特征/耐心/信任与验证习惯/价格敏感/放弃触发 ≥3 条/第一人称口吻），禁止「普通用户」；只输出 `blocking` / `partial` / `non_blocking`；**Rage Map 必带业务后果列**（愤怒 ≥4 且任务中断 → P0/P1，否则最高 P2）；无锚点不输出；全部 `simulated=true` + E4；只评 1280/1440/1920 桌面视口。
 > - **页面与工具接入**：`POST /api/evaluate` 真实现（同项目同场景串行，写 `.coderef/product_fit.json` / `ux_fit.json` 后自动重渲染页面）；产品/UX Tab 直接展示结论、五问矩阵、Rage Map 与锚点；`coderef_frontend` 新增可选 `persona` / `journey`（不新增工具，工具总数仍 52）。
 > - **业务流程视图**（`core/business_semantics.py` + `core/arch_flow.py`）：在图谱事实与画布之间补一层业务叙事标注——`actor`（泳道）/ `stage`（流程阶段）/ `handoff`（交接点）/ `value_node`（交付点）。静态启发式给事实锚点，LLM 只做命名与归类；**判不出的进「未归类」并计数，不假装已归类**。布局确定性：X=阶段（触发→校验→执行→落库→通知→交付），Y=角色泳道，同一份标注必出同一张图。`coderef_arch_canvas` 默认同时产出业务树与流程泳道两张画布，架构 Tab 可切换。
-> - **U-49 修复**：根因在写入端——`_reuse_no_change` 只要图谱存在就短路复用，首轮不跑审计、不落 findings JSON。已改为「必须能读到 findings 才复用」，findings 同写项目侧 `.coderef/`，`/api/evaluate` 返回 `page_refreshed` 让页面在刷新失败时显式提示。
-> - **U-50 修复**：评估台与画布静态服务在路径规范化**前**拒绝含 `..` 的原始请求（含 `%2e%2e` / 双重编码），`GET /.coderef/../index.html` 返回 404，不再看起来像目录穿越未拦截。
-> - **U-51 修复**：报告产物按项目隔离——默认目录由工具仓共享的 `coderef-report/html/` 改为 `<project>/.coderef/report/html/`，`report` / `audit` / `docs` / 回环服务 / `interpret(dashboard)` 同源，多项目交替跑不再互相顶掉入口。
+> - **评估台复用修复**：根因在写入端——`_reuse_no_change` 只要图谱存在就短路复用，首轮不跑审计、不落 findings JSON。已改为「必须能读到 findings 才复用」，findings 同写项目侧 `.coderef/`，`/api/evaluate` 返回 `page_refreshed` 让页面在刷新失败时显式提示。
+> - **路径穿越拦截**：评估台与画布静态服务在路径规范化**前**拒绝含 `..` 的原始请求（含 `%2e%2e` / 双重编码），`GET /.coderef/../index.html` 返回 404，不再看起来像目录穿越未拦截。
+> - **报告产物隔离**：默认目录由工具仓共享的 `coderef-report/html/` 改为 `<project>/.coderef/report/html/`，`report` / `audit` / `docs` / 回环服务 / `interpret(dashboard)` 同源，多项目交替跑不再互相顶掉入口。
 > - **审查与验证**：三层审查（pyflakes → Brooks-Lint → CodeRabbit）0 新增 finding；全量 pytest **265 全绿**；`check_version` 通过；`coderef-src` 同步 SHA256 一致。
 
 ### 历史版本

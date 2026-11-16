@@ -7,9 +7,9 @@
     python tools/coverage_report.py --html     # 额外生成 HTML 报告
 退出码：0=覆盖率达标；1=低于 fail_under 阈值或测试失败
 
-测试目录自动探测（2026-09-18 起，测试归属约定变更）：
-  1) 本地 tests/（开发方自持，优先）
-  2) 独立回归独立仓 ..\\独立测试\\tests（coderef-src 副本无本地 tests 时回退）
+测试目录探测：
+  1) 环境变量 CODEREF_TESTS_DIR 指定的目录（可选）
+  2) 本地 tests/
 """
 import os
 import subprocess
@@ -19,14 +19,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _locate_tests() -> str:
-    """返回可用的测试目录（绝对路径）；均不存在时返回本地 tests（报错清晰）。"""
-    local = os.path.join(ROOT, "tests")
-    if os.path.isdir(local):
-        return local
-    fallback = os.path.join(ROOT, "..", "独立测试", "tests")
-    if os.path.isdir(fallback):
-        return fallback
-    return local
+    """返回可用的测试目录（绝对路径）；优先环境变量，其次本地 tests/。"""
+    env = os.environ.get("CODEREF_TESTS_DIR", "").strip()
+    if env and os.path.isdir(env):
+        return os.path.abspath(env)
+    return os.path.join(ROOT, "tests")
 
 
 def main() -> int:

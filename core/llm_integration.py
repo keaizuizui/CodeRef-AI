@@ -1105,7 +1105,7 @@ class LLMIntegration:
 def get_llm_client():
     """返回可用的 OpenAI 兼容客户端；未配置 Key / 初始化失败返回 None。
 
-    供 role_boundary 等可选语义能力复用（缺陷跟踪 U-83：旧代码导入了不存在的
+    供 role_boundary 等可选语义能力复用（旧代码导入了不存在的
     符号，导致语义层恒不可用却静默降级）。
     """
     try:

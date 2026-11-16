@@ -1143,7 +1143,7 @@ function edgeColor(e){
   return e.color || '#94A3B8';
 }
 function render(){
-  // 缺陷跟踪 U-90：空项目画布区必须有空态文案，而不是只剩工具栏「节点 0」
+  // 回归记录：空项目画布区必须有空态文案，而不是只剩工具栏「节点 0」
   const emptyEl = document.getElementById('emptyState');
   if (emptyEl) emptyEl.style.display = nodes.length ? 'none' : 'flex';
   renderNodes(); renderEdges(); renderLanes(); renderStats(); renderMiniMap();
