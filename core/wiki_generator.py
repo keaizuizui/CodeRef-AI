@@ -164,6 +164,11 @@ _FAILED_DOC_PLACEHOLDER = (
     "> 请重新运行 `coderef_docs` 生成本文档；若持续失败，请检查 LLM 配置与预算。\n"
 )
 
+# 单篇文档输出预算：4096 tokens 对 README/OVERVIEW/MODULES 主文档偏紧，
+# 长文极易在结尾被切断（缺陷跟踪 U-95：5 篇核心文档连续两轮失败）。
+# DeepSeek 支持 8192，统一提到该上限；截断重试仍保留两道兜底。
+_WIKI_MAX_TOKENS = 8192
+
 
 def _unfenced_text(text: str) -> str:
     """去掉代码围栏块（含围栏行）后的正文，用于统计行内标记。
@@ -182,6 +187,38 @@ def _unfenced_text(text: str) -> str:
     return "\n".join(kept)
 
 
+# 列表/编号前缀剥离后，句末落在这些虚词上几乎必然是被模型切断的半句；
+# 只收「正常中文句子结尾不会出现」的单字，避免把 `- 支持自定义` 这类
+# 短列表项误判成截断（独立回归 2026-11-16：列表行整体豁免又导致 4 篇漏判）。
+_HALF_SENTENCE_TAILS = tuple(dict.fromkeys((
+    "并", "和", "与", "或", "但", "而", "则", "因", "由", "把", "被", "让",
+    "使", "给", "向", "往", "于", "中", "里", "后", "前", "时", "的", "地",
+    "得", "能", "可", "会", "要", "是", "在", "为", "对", "将", "已", "再",
+    "又", "也", "就", "都", "还", "更", "最", "很", "较", "及", "如", "若",
+    "虽", "该", "其", "这", "那", "些", "每", "各", "某", "以", "按", "依",
+    "据", "需", "须", "应", "共", "第", "从", "至", "到",
+)))
+
+
+def _ends_half_sentence(text: str) -> bool:
+    """末行（已剥列表/引用前缀）是否断在半句：半句标点或句末虚词。
+
+    行内代码先剥掉再看结构：`…；\\`测试\\`` 的 `；` 才是真正的句子断点。
+    """
+    t = (text or "").rstrip()
+    if not t:
+        return False
+    half_punct = ("，", "、", "：", "；", "…", ",", ":", ";")
+    if t.endswith(half_punct):
+        return True
+    bare = re.sub(r"`[^`]*`", "", t).rstrip()
+    if not bare:
+        return False
+    if bare.endswith(half_punct):
+        return True
+    return any(bare.endswith(w) for w in _HALF_SENTENCE_TAILS)
+
+
 def _looks_truncated(text: str) -> bool:
     """判定模型输出是否在结尾被截断（缺陷跟踪 U-82）。
 
@@ -190,8 +227,9 @@ def _looks_truncated(text: str) -> bool:
       2. 围栏外的行内反引号数为奇数 → 未闭合行内代码；
       3. 围栏外成对符号左多于右（圆括号/方括号/中文引号书名号）→ 句子断开；
       4. 末行以半句标点结尾（，、：等）；
-      5. 末行是空标题 / 空列表项（`###`、`1.`、`-`）→ 正文被切断。
-    正常以句号、表格行、列表项正文、闭合围栏结尾的文档不受影响。
+      5. 末行是空标题 / 空列表项（`###`、`1.`、`-`）→ 正文被切断；
+      6. 末行是叙事半句：普通行/引用行无句末闭合即判；列表行剥掉
+         `- / * / 1.` 前缀后按「半句标点 / 句末虚词」判（独立回归 2026-11-16）。
     """
     body = (text or "").rstrip()
     if not body:
@@ -214,21 +252,36 @@ def _looks_truncated(text: str) -> bool:
     if re.fullmatch(r"#{1,6}\s*", last) or re.fullmatch(r"[-*+]\s*", last) \
             or re.fullmatch(r"\d+[.、)]\s*", last):
         return True
-    # 6) 末行是叙事半句：既没有句末标点/闭合符号，也不是标题、表格、列表、
-    #    引用、加粗收尾（这些正常写法会满足至少一项）。
+    # 6) 末行是叙事半句：先剥引用/列表前缀，再对正文内容判闭合。
     tail = last.strip()
     if tail:
         if tail.count("**") % 2 == 1:      # 未闭合的加粗（如 `**调研相关入口`）
             return True
-        # 引用行剥掉 `>` 前缀再判内容闭合：`> 说明：下表…在数据` 的引用结构完整，
-        # 但引用正文本身已断在半句（独立回归 2026-11-14 第 3 例）。
-        content_tail = re.sub(r"^(>\s*)+", "", tail)
-        structured = (tail.startswith(("#", "|"))
-                      or re.match(r"[-*+]\s+", tail) is not None
-                      or re.match(r"\d+[.、)]\s+", tail) is not None)
-        closed = re.search(r"[。！？.!?|）)\]】》”’\"'`*]$", content_tail) is not None
-        if content_tail and not structured and not closed:
-            return True
+        quote = re.match(r"^(?:>\s*)+", tail)
+        listp = None if quote else re.match(r"^(?:[-*+]\s+|\d+[.、)]\s+)", tail)
+        if quote:
+            content_tail = tail[quote.end():]
+        elif listp:
+            content_tail = tail[listp.end():]
+        else:
+            content_tail = tail
+        structured = tail.startswith(("#", "|"))
+        if content_tail and not structured:
+            if listp:
+                # 列表行：短列表项本身可以无句号，只有断在半句才判
+                if _ends_half_sentence(content_tail):
+                    return True
+            elif content_tail.endswith("`"):
+                # 行内代码收尾：剥掉代码后若停在半句标点，说明句子被切断
+                # （独立回归 2026-11-16：`…；\`测试\``）；其余视为正常收尾。
+                bare = re.sub(r"`[^`]*`", "", content_tail).rstrip()
+                if bare.endswith(("，", "、", "：", "；", "…", ",", ":", ";")):
+                    return True
+            else:
+                closed = re.search(
+                    r"[。！？.!?|）)\]】》”’\"'`*]$", content_tail) is not None
+                if not closed:
+                    return True
     return False
 
 
@@ -1490,7 +1543,7 @@ class _WikiDocMixin:
                     sub_output, sub_result, progress_cb=progress_cb,
                 )
                 sub_result.documents = sub_docs
-                sub_result.module_count = sum(1 for d in sub_docs if "MODULES" in d)
+                sub_result.module_count = self._module_doc_count(sub_docs)
 
             result.subproject_results.append({
                 "name": sub_name,
@@ -1682,6 +1735,12 @@ class _WikiDocMixin:
         return prefix, body
 
 
+    @staticmethod
+    def _module_doc_count(docs: List[str]) -> int:
+        """模块文档数：排除 `MODULES/_index.md` 索引页（缺陷跟踪 U-93）。"""
+        return sum(1 for d in docs
+                   if "MODULES" in d and os.path.basename(d) != "_index.md")
+
     def _generate_all_documents(self, project_name: str, modules: List[WikiModule],
                                  meta: ProjectCodeMetadata,
                                  descriptions: Dict[str, str],
@@ -1714,7 +1773,7 @@ class _WikiDocMixin:
                                                  affected_modules=affected_modules,
                                                  progress_cb=progress_cb)
         docs.extend(module_docs)
-        result.module_count = len(module_docs)
+        result.module_count = self._module_doc_count(module_docs)
 
         # cite-verify 模块文档
         for doc_path in module_docs:
@@ -1728,19 +1787,10 @@ class _WikiDocMixin:
             # 只对 LLM body 做 cite-verify/fix，保留确定性前缀（front matter/
             # 徽章/证据锚定）不被 LLM 重写覆盖；修复后原子拼回前缀与修复后的 body。
             prefix, body = self._strip_deterministic_prefix(content)
-            uv = self._cite_verify(body, meta, doc_name)
-            if uv:
-                fixed = self._cite_fix(body, doc_name, uv, meta)
-                if fixed and len(fixed) > 100:
-                    if _looks_truncated(fixed):
-                        # 校对回写同样过截断门禁：宁可保留校对前完整正文，
-                        # 也不能用二次截断的文本覆盖已落盘文档（独立回归 2026-11-14）。
-                        result.warnings.append(
-                            f"- {doc_name}: 校对回写被判截断，已保留校对前正文")
-                    else:
-                        with open(doc_path, "w", encoding="utf-8") as f:
-                            f.write(prefix + fixed)
-                cite_warnings.append(f"- {doc_name}: 修复了 {len(uv)} 个未验证标识符: {', '.join(uv[:8])}")
+            fixed = self._cite_repair(body, doc_name, meta, cite_warnings)
+            if fixed != body:
+                with open(doc_path, "w", encoding="utf-8") as f:
+                    f.write(prefix + fixed)
 
         # =============================================================
         # 第二轮：跨模块文档（README、ARCHITECTURE 等）
@@ -1777,19 +1827,13 @@ class _WikiDocMixin:
         # 1. README.md（元数据作为事实源，描述作为风格参考）
         readme = self._generate_readme(project_name, project_summary, modules, style,
                                        descriptions, meta)
-        uv = self._cite_verify(readme, meta, "README.md")
-        if uv:
-            readme = self._cite_fix(readme, "README.md", uv, meta)
-            cite_warnings.append(f"- README.md: 修复了 {len(uv)} 个未验证标识符: {', '.join(uv[:8])}")
+        readme = self._cite_repair(readme, "README.md", meta, cite_warnings)
         self._emit(docs, output_dir, "README.md", readme)
 
         # 2. OVERVIEW.md（业务视角，面向非技术读者，与技术文档分层）
         overview = self._generate_overview(project_name, modules, style,
                                            descriptions, meta)
-        uv = self._cite_verify(overview, meta, "OVERVIEW.md")
-        if uv:
-            overview = self._cite_fix(overview, "OVERVIEW.md", uv, meta)
-            cite_warnings.append(f"- OVERVIEW.md: 修复了 {len(uv)} 个未验证标识符")
+        overview = self._cite_repair(overview, "OVERVIEW.md", meta, cite_warnings)
         self._emit(docs, output_dir, "OVERVIEW.md", overview,
                    front_matter=self._build_front_matter(
                        "overview", title="业务概览",
@@ -1820,10 +1864,8 @@ class _WikiDocMixin:
             for entry in entries:
                 chain = self._extract_entry_chain(entry, fv)
                 edoc = self._generate_entry_doc(project_name, entry, chain, style, meta)
-                uv = self._cite_verify(edoc, meta, f"ENTRIES/{entry['key']}.md")
-                if uv:
-                    edoc = self._cite_fix(edoc, f"ENTRIES/{entry['key']}.md", uv, meta)
-                    cite_warnings.append(f"- ENTRIES/{entry['key']}.md: 修复了 {len(uv)} 个未验证标识符")
+                edoc = self._cite_repair(
+                    edoc, f"ENTRIES/{entry['key']}.md", meta, cite_warnings)
                 os.makedirs(os.path.join(output_dir, "ENTRIES"), exist_ok=True)
                 # R2：入口文档带 source/description（从入口元数据回填）
                 entry_src = (entry.get("files") or [""])[0] or entry.get("module", "")
@@ -1845,10 +1887,8 @@ class _WikiDocMixin:
                 fs = self._sanitize_doc_name(flow["source"])
                 ft = self._sanitize_doc_name(flow["target"])
                 fdoc = self._generate_flow_doc(project_name, flow, style)
-                uv = self._cite_verify(fdoc, meta, f"FLOWS/{fs}__{ft}.md")
-                if uv:
-                    fdoc = self._cite_fix(fdoc, f"FLOWS/{fs}__{ft}.md", uv, meta)
-                    cite_warnings.append(f"- FLOWS/{fs}__{ft}.md: 修复了 {len(uv)} 个未验证标识符")
+                fdoc = self._cite_repair(
+                    fdoc, f"FLOWS/{fs}__{ft}.md", meta, cite_warnings)
                 os.makedirs(os.path.join(output_dir, "FLOWS"), exist_ok=True)
                 # R2：数据流文档带 source/description（源→目标 模块名回填）
                 ffm = self._build_front_matter(
@@ -1862,10 +1902,7 @@ class _WikiDocMixin:
         # 3. ARCHITECTURE.md
         arch = self._generate_architecture(project_name, project_summary, modules, style,
                                            descriptions, meta)
-        uv = self._cite_verify(arch, meta, "ARCHITECTURE.md")
-        if uv:
-            arch = self._cite_fix(arch, "ARCHITECTURE.md", uv, meta)
-            cite_warnings.append(f"- ARCHITECTURE.md: 修复了 {len(uv)} 个未验证标识符: {', '.join(uv[:8])}")
+        arch = self._cite_repair(arch, "ARCHITECTURE.md", meta, cite_warnings)
         self._emit(docs, output_dir, "ARCHITECTURE.md", arch,
                    front_matter=self._build_front_matter(
                        "architecture", title="架构设计",
@@ -1875,10 +1912,7 @@ class _WikiDocMixin:
 
         # 3. INSTALLATION.md
         install = self._generate_installation(project_name, project_summary, modules, style, meta)
-        uv = self._cite_verify(install, meta, "INSTALLATION.md")
-        if uv:
-            install = self._cite_fix(install, "INSTALLATION.md", uv, meta)
-            cite_warnings.append(f"- INSTALLATION.md: 修复了 {len(uv)} 个未验证标识符")
+        install = self._cite_repair(install, "INSTALLATION.md", meta, cite_warnings)
         self._emit(docs, output_dir, "INSTALLATION.md", install,
                    front_matter=self._build_front_matter(
                        "installation", title="安装指南",
@@ -1889,19 +1923,13 @@ class _WikiDocMixin:
         # 4. USAGE.md
         usage = self._generate_usage(project_name, project_summary, modules, style,
                                      descriptions, meta)
-        uv = self._cite_verify(usage, meta, "USAGE.md")
-        if uv:
-            usage = self._cite_fix(usage, "USAGE.md", uv, meta)
-            cite_warnings.append(f"- USAGE.md: 修复了 {len(uv)} 个未验证标识符")
+        usage = self._cite_repair(usage, "USAGE.md", meta, cite_warnings)
         self._emit(docs, output_dir, "USAGE.md", usage)
 
         # 5. API.md (如果有 Web 框架)
         if meta.has_web_framework:
             api = self._generate_api_doc(project_name, project_summary, modules, style, meta)
-            uv = self._cite_verify(api, meta, "API.md")
-            if uv:
-                api = self._cite_fix(api, "API.md", uv, meta)
-                cite_warnings.append(f"- API.md: 修复了 {len(uv)} 个未验证标识符")
+            api = self._cite_repair(api, "API.md", meta, cite_warnings)
             self._emit(docs, output_dir, "API.md", api)
 
         # 6. WIKI_INDEX.md（纯模板，无需 cite-verify）
@@ -2026,7 +2054,8 @@ class _WikiDocMixin:
         思考过程与截断两类失败共用同一条重试/预算路径（Brooks-Lint：
         三段复制粘贴的重试会让参数与预算口径漂移）。
         """
-        retry = self.llm.chat_completion(messages, max_tokens=4096, temperature=0.3)
+        retry = self.llm.chat_completion(messages, max_tokens=_WIKI_MAX_TOKENS,
+                                         temperature=0.3)
         if not self.llm.is_error_response(retry) and retry and accept(retry):
             return retry
         self._last_llm_error = fail_msg
@@ -2056,12 +2085,22 @@ class _WikiDocMixin:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ]
-            text = self.llm.chat_completion(messages, max_tokens=4096, temperature=0.3)
+            text = self.llm.chat_completion(messages, max_tokens=_WIKI_MAX_TOKENS,
+                                            temperature=0.3)
             # fix9：预算拒绝/缺Key/调用失败等结构化错误串不得写入文档，
             # 统一判定后返回空串（由 _write_doc 跳过落盘并计入失败统计）。
             if self.llm.is_error_response(text):
                 self._last_llm_error = text
                 return ""
+            # 偶发空内容（非结构化错误）再给一次机会：核心文档直接落占位
+            # 的代价过高（缺陷跟踪 U-95）。
+            if not text or not text.strip():
+                text = self._retry_llm(
+                    messages,
+                    lambda t: bool(t and t.strip()),
+                    "LLM 返回空内容，重试后仍为空，已丢弃")
+                if not text:
+                    return ""
             # 思考过程不得落盘：先重试一次，仍不合格再判失败（不写空壳文件）
             if _looks_like_meta_talk(text):
                 text = self._retry_llm(
@@ -2070,18 +2109,21 @@ class _WikiDocMixin:
                     "LLM 返回疑似思考过程，重试后仍不合格，已丢弃")
                 if not text:
                     return ""
-            # 尾句截断不得静默落盘（缺陷跟踪 U-82）：重试一次，仍不完整则判失败
-            if _looks_truncated(text):
-                retry_messages = messages + [{
-                    "role": "user",
-                    "content": ("上一次输出在结尾被截断了。请从开头完整输出全文，"
-                                "不要省略、不要续写。"),
-                }]
+            # 尾句截断不得静默落盘（缺陷跟踪 U-82 / U-95）：最多重试两次；
+            # 第二次要求压缩篇幅，避免同样的长文再次被切断；仍不完整才判失败。
+            rounds = 0
+            while _looks_truncated(text) and rounds < 2:
+                rounds += 1
+                hint = ("上一次输出在结尾被截断了。请从开头完整输出全文，"
+                        "不要省略、不要续写。")
+                if rounds == 2:
+                    hint += "如果篇幅过长，请压缩到 3000 字以内，确保一次输出完整。"
+                retry_messages = messages + [{"role": "user", "content": hint}]
                 text = self._retry_llm(
                     retry_messages,
                     lambda t: (not _looks_truncated(t)
                                and not _looks_like_meta_talk(t)),
-                    "LLM 输出疑似截断，重试后仍不完整，已丢弃")
+                    "LLM 输出疑似截断，重试两次后仍不完整，已丢弃")
                 if not text:
                     return ""
             return text
@@ -2762,6 +2804,15 @@ class _WikiDocMixin:
                 if d and d != ".":
                     known.add(d)
                     known.add(d.replace("\\", "/"))
+                # 逐级目录名：文档里常单独引用 `_skills` 这类目录片段，
+                # 只登记完整相对路径会把合法路径片段判成未验证（U-94）。
+                for part in re.split(r"[\\/]+", d or ""):
+                    if part and part != ".":
+                        known.add(part)
+                # 文件名词干（去扩展名）：`chonggou`、`research_engine` 等
+                stem = os.path.splitext(os.path.basename(f.rel_path))[0]
+                if stem:
+                    known.add(stem)
         # 依赖库名
         for mod in meta.modules:
             for f in mod.files:
@@ -2793,6 +2844,11 @@ class _WikiDocMixin:
             # 去掉可能的 () 后缀（函数调用）
             base2 = re.sub(r'\(.*\)$', '', t)
             if base2.lower() in known_lower:
+                continue
+            # 前缀族：`research_` / `search_` / `beh_` 是文件名前缀而非符号，
+            # 文档用它们指代一族文件属正常内容（缺陷跟踪 U-94）。
+            if t.endswith("_") and len(t) >= 3 and any(
+                    k.startswith(t.lower()) for k in known_lower):
                 continue
             unverified.append(token)
 
@@ -2832,6 +2888,41 @@ class _WikiDocMixin:
                                      "输出修正后", "请将它们替换为文中合理")):
             logger.warning(f"[cite-fix] {doc_name}: 返回疑似提示词回显，保留原文")
             return doc_text
+        return fixed
+
+
+    def _cite_repair(self, doc_text: str, doc_name: str,
+                     meta: ProjectCodeMetadata,
+                     cite_warnings: List[str]) -> str:
+        """cite-verify → fix → 复验 → 门禁 的统一收口（缺陷跟踪 U-94）。
+
+        7 个全局文档入口原先各自复制 verify/fix/warning，导致两个问题：
+          - cite-fix 回写前没有截断门禁（二次截断会把原文变成占位）；
+          - 修复后不复验，warnings 仍宣称「修复了 N 个」。
+        这里统一为：修复稿必须非空、不截断；回写前复跑 `_cite_verify`，
+        未清零时如实记录剩余项，不把「已修复」当质量信号。
+        """
+        uv = self._cite_verify(doc_text, meta, doc_name)
+        if not uv:
+            return doc_text
+        fixed = self._cite_fix(doc_text, doc_name, uv, meta)
+        if not fixed or len(fixed) <= 100:
+            cite_warnings.append(
+                f"- {doc_name}: 校对未产出可用修复稿，保留原文（{len(uv)} 个待核）")
+            return doc_text
+        if _looks_truncated(fixed):
+            cite_warnings.append(
+                f"- {doc_name}: 校对回写被判截断，保留原文（{len(uv)} 个待核）")
+            return doc_text
+        remain = self._cite_verify(fixed, meta, doc_name)
+        if remain:
+            cite_warnings.append(
+                f"- {doc_name}: 校对后仍有 {len(remain)} 个未验证标识符: "
+                f"{', '.join(remain[:8])}")
+        else:
+            cite_warnings.append(
+                f"- {doc_name}: 修复了 {len(uv)} 个未验证标识符: "
+                f"{', '.join(uv[:8])}")
         return fixed
 
 

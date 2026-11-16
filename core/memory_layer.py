@@ -550,6 +550,16 @@ class MemoryLayer:
             from core.code_analyzer import CodeAnalyzer
             analyzer = CodeAnalyzer()
             files = analyzer.scan_directory(project_path)
+            # 白名单 dir 与 audit/图谱同源过滤（缺陷跟踪 U-78）：sync 旧实现把
+            # `_refactor_backup` 的 171 个备份文件计入 total_files/changed_files/
+            # ast_files，导致覆盖率分母与增量变更判定被污染。
+            from core.pr_whitelist import (
+                whitelist_exclude_dirs, path_hits_excluded_dir)
+            excl_dirs = whitelist_exclude_dirs(project_path)
+            if excl_dirs:
+                files = [fp for fp in files
+                         if not path_hits_excluded_dir(
+                             os.path.relpath(fp, project_path), excl_dirs)]
         except Exception as e:
             return {"status": "error", "mode": mode,
                     "message": f"扫描项目失败: {e}", "total_files": 0,
@@ -575,6 +585,14 @@ class MemoryLayer:
         # 结构分析（复用 CodeAnalyzer 自身缓存；full 强制重建）
         analysis = self._analyze_structure(analyzer, project_path, mode,
                                            files, changed)
+        # analyze_project 是独立全量扫描，不会继承上面的 files 过滤；这里再按
+        # 白名单重算一次，与 audit `_scan` / status() 同口径（缺陷跟踪 U-78）。
+        if analysis is not None:
+            try:
+                from core.pr_whitelist import _apply_whitelist_dirs
+                _apply_whitelist_dirs(project_path, analysis)
+            except Exception as e:  # noqa: BLE001 —— 过滤失败保持原统计并留痕
+                logger.warning(f"[MemoryLayer] 白名单统计过滤失败: {e}")
 
         # 文件级增量：变更 + 已删除 + 依赖方（5.19.1）
         deleted = [] if mode == "full" else [

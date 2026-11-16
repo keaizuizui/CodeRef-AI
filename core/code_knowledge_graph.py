@@ -382,36 +382,46 @@ class CodeKnowledgeGraph:
     # ─── 路径 ───
 
     def _migrate_legacy_index_dbs(self) -> None:
-        """把 `.coderef/index/coderef_kg_*.db` 历史库移入 `legacy/` 子目录（U-92）。
+        """把历史 / 旧 key 图谱库移入同目录 `legacy/` 子目录（U-92）。
 
-        该前缀是旧版本落点，当前代码只在 `<project>/cache/kg/<hash>.db` 读写，
-        但旧库与现行库同名不同文件、体积相近，调用方/后续 AI 可能误读旧结论。
-        这里只做目录内移动（不删除），Windows 下被占用时跳过，绝不阻断建图。
+        两个落点都要覆盖：
+          1. `.coderef/index/coderef_kg_*.db`：旧版本前缀，当前代码不再读写；
+          2. `cache/kg/<hash>.db`：U-71 路径归一前生成的旧 key 库，与现行库并存。
+        只做目录内移动（不删除），Windows 下被占用时跳过，绝不阻断建图。
         """
-        legacy_dir = os.path.join(self.project_path, ".coderef", "index")
-        if not os.path.isdir(legacy_dir):
-            return
-        dst_dir = os.path.join(legacy_dir, "legacy")
-        try:
-            names = os.listdir(legacy_dir)
-        except OSError:
-            return
-        moved = False
-        for fn in names:
-            if not re.fullmatch(r"coderef_kg_[0-9a-f]{6,}\.db", fn):
+        cur_db = os.path.abspath(self._db_path)
+        targets = (
+            (os.path.join(self.project_path, ".coderef", "index"),
+             r"coderef_kg_[0-9a-f]{6,}\.db"),
+            (os.path.join(self.project_path, "cache", "kg"),
+             r"[0-9a-f]{6,}\.db"),
+        )
+        for src_dir, pattern in targets:
+            if not os.path.isdir(src_dir):
                 continue
-            for suffix in ("", "-wal", "-shm"):
-                src = os.path.join(legacy_dir, fn + suffix)
-                if not os.path.exists(src):
+            dst_dir = os.path.join(src_dir, "legacy")
+            try:
+                names = os.listdir(src_dir)
+            except OSError:
+                continue
+            moved = False
+            for fn in names:
+                if not re.fullmatch(pattern, fn):
                     continue
-                try:
-                    os.makedirs(dst_dir, exist_ok=True)
-                    os.replace(src, os.path.join(dst_dir, fn + suffix))
-                    moved = True
-                except OSError as exc:  # 被进程占用时保留原位，下次再试
-                    logger.debug(f"[KG] 旧索引库迁移跳过 {src}: {exc}")
-        if moved:
-            logger.info(f"[KG] 已将历史索引库移入 {dst_dir}")
+                if os.path.abspath(os.path.join(src_dir, fn)) == cur_db:
+                    continue
+                for suffix in ("", "-wal", "-shm", ".lock"):
+                    src = os.path.join(src_dir, fn + suffix)
+                    if not os.path.exists(src):
+                        continue
+                    try:
+                        os.makedirs(dst_dir, exist_ok=True)
+                        os.replace(src, os.path.join(dst_dir, fn + suffix))
+                        moved = True
+                    except OSError as exc:  # 被进程占用时保留原位，下次再试
+                        logger.debug(f"[KG] 旧索引库迁移跳过 {src}: {exc}")
+            if moved:
+                logger.info(f"[KG] 已将历史索引库移入 {dst_dir}")
 
     @staticmethod
     def _kg_dir() -> str:
