@@ -41,8 +41,7 @@ generate/
 docs/wiki/
 txt/
 
-# ─── 开发方本地测试（暂不随仓库公开；原因见 README「测试与验证：公开什么、不公开什么」）───
-tests/
+# ─── 测试缓存（用例本身已入库：tests/ 与 tests/external/）───
 
 # ─── 修改前备份（不入库）───
 backup_*/
